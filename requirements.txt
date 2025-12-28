@@ -1,0 +1,12 @@
+flask
+gunicorn
+pandas
+requests
+pytz
+pandas_market_calendars
+google-cloud-secret-manager
+
+google-auth
+longport
+matplotlib
+yfinance
