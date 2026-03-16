@@ -45,7 +45,9 @@ def get_project_id():
         return os.getenv("GOOGLE_CLOUD_PROJECT")
 
 PROJECT_ID = get_project_id()
-SECRET_NAME = "longport_token"
+SECRET_NAME = os.getenv("LONGPORT_SECRET_NAME", "longport_token")
+ACCOUNT_PREFIX = os.getenv("ACCOUNT_PREFIX", "DEFAULT")
+SERVICE_NAME = os.getenv("SERVICE_NAME", "longbridge-quant")
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -67,19 +69,23 @@ INCOME_LAYER_MAX_RATIO = 0.15
 INCOME_LAYER_QQQI_WEIGHT = 0.70
 INCOME_LAYER_SPYI_WEIGHT = 0.30
 
+def with_prefix(message: str) -> str:
+    return f"[{ACCOUNT_PREFIX}/{SERVICE_NAME}] {message}"
+
 def send_tg_message(message):
     """Send text to Telegram; no-op if token or chat_id missing."""
     if not TG_TOKEN or not TG_CHAT_ID: return
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     try:
-        print(f"TG:\n{message}", flush=True)
-        requests.post(url, json={"chat_id": TG_CHAT_ID, "text": message}, timeout=10)
+        prefixed = with_prefix(message)
+        print(f"TG:\n{prefixed}", flush=True)
+        requests.post(url, json={"chat_id": TG_CHAT_ID, "text": prefixed}, timeout=10)
     except: pass
 
 def notify_issue(title, detail):
     """Log and send to Telegram (alerts for order/API failures)."""
     message = f"{title}\n{detail}"
-    print(message, flush=True)
+    print(with_prefix(message), flush=True)
     send_tg_message(message)
 
 
@@ -173,7 +179,7 @@ def submit_order_with_alert(t_ctx, symbol, order_type, side, quantity, logs, log
         )
         order_id = getattr(resp, "order_id", "")
         log_with_order_id = f"{log_message} [order_id={order_id}]" if order_id else log_message
-        print(f"OK {log_with_order_id}", flush=True)
+        print(with_prefix(f"OK {log_with_order_id}"), flush=True)
         logs.append(log_with_order_id)
         monitor_submitted_order_status(t_ctx, symbol, side_text, quantity, order_id)
         return True
@@ -250,7 +256,7 @@ def refresh_token_logic(current_token):
     app_secret = os.getenv("LONGPORT_APP_SECRET")
     
     if not all([app_key, app_secret]): 
-        print("LONGPORT_APP_KEY or LONGPORT_APP_SECRET not set; skip refresh.")
+        print(with_prefix("LONGPORT_APP_KEY or LONGPORT_APP_SECRET not set; skip refresh."), flush=True)
         send_tg_message("LONGPORT_APP_KEY or LONGPORT_APP_SECRET not set; token refresh skipped.")
         return current_token
 
@@ -264,7 +270,7 @@ def refresh_token_logic(current_token):
             if (payload.get('exp', 0) - time.time()) / 86400 > 30: 
                 return current_token
         
-        print("Token expiry < 30 days; refreshing...")
+        print(with_prefix("Token expiry < 30 days; refreshing..."), flush=True)
         
         headers = {
             "X-Api-Key": app_key, 
@@ -289,7 +295,7 @@ def refresh_token_logic(current_token):
             new_version = client.add_secret_version(
                 request={"parent": parent, "payload": {"data": new_token.encode("UTF-8")}}
             )
-            print(f"Token refreshed and saved to Secret Manager: {new_version.name}")
+            print(with_prefix(f"Token refreshed and saved to Secret Manager: {new_version.name}"), flush=True)
             
             try:
                 versions = client.list_secret_versions(request={"parent": parent})
@@ -299,17 +305,17 @@ def refresh_token_logic(current_token):
                     
                     if version.state != secret_manager.SecretVersion.State.DESTROYED:
                         client.destroy_secret_version(request={"name": version.name})
-                        print(f"Destroyed old secret version: {version.name}")
+                        print(with_prefix(f"Destroyed old secret version: {version.name}"), flush=True)
             except Exception as e:
-                print(f"Error cleaning old secret versions: {e}")
+                print(with_prefix(f"Error cleaning old secret versions: {e}"), flush=True)
                 
             return new_token
         else:
-            print(f"LongPort token refresh API error: {resp}")
+            print(with_prefix(f"LongPort token refresh API error: {resp}"), flush=True)
             return current_token
 
     except Exception as e:
-        print(f"Token refresh error:\n{traceback.format_exc()}")
+        print(with_prefix(f"Token refresh error:\n{traceback.format_exc()}"), flush=True)
         send_tg_message(f"LongPort token refresh failed.\n{e}")
         return current_token
 
@@ -323,7 +329,7 @@ def calculate_dynamic_indicators(q_ctx):
     soxx_bars = q_ctx.candlesticks("SOXX.US", Period.Day, 20, AdjustType.ForwardAdjust)
     
     if not soxl_bars or not soxx_bars:
-        print("No quote data from API")
+        print(with_prefix("No quote data from API"), flush=True)
         return None
 
     df_soxl = pd.DataFrame([{
@@ -333,7 +339,7 @@ def calculate_dynamic_indicators(q_ctx):
     df_soxx = pd.DataFrame([float(k.close) for k in soxx_bars], columns=['close'])
 
     if len(df_soxl) < TREND_MA_WINDOW or len(df_soxx) < 1:
-        print(f"Insufficient bars: SOXL {len(df_soxl)}, SOXX {len(df_soxx)}")
+        print(with_prefix(f"Insufficient bars: SOXL {len(df_soxl)}, SOXX {len(df_soxx)}"), flush=True)
         return None
     df_soxl['ma_trend'] = df_soxl['close'].rolling(TREND_MA_WINDOW).mean()
     
@@ -353,7 +359,7 @@ def calculate_dynamic_indicators(q_ctx):
 # ---------------------------------------------------------------------------
 def run_strategy():
     try:
-        print(f"[{datetime.now()}] Starting strategy...")
+        print(with_prefix(f"[{datetime.now()}] Starting strategy..."), flush=True)
 
         token = refresh_token_logic(fetch_token_strict())
         os.environ["LONGPORT_ACCESS_TOKEN"] = token
@@ -369,7 +375,7 @@ def run_strategy():
         except: is_normal = False
 
         if not is_normal:
-            print("Outside market hours; skip.")
+            print(with_prefix("Outside market hours; skip."), flush=True)
             return
 
         ind = calculate_dynamic_indicators(q_ctx)
@@ -554,11 +560,11 @@ def run_strategy():
             )
             send_tg_message(tg_msg)
         else: 
-            print(f"No trades. Signal: {msg}") 
+            print(with_prefix(f"No trades. Signal: {msg}"), flush=True) 
         
     except Exception:
         err = traceback.format_exc()
-        print(f"Strategy error:\n{err}")
+        print(with_prefix(f"Strategy error:\n{err}"), flush=True)
         send_tg_message(f"Strategy error:\n{err}")
 
 @app.route("/", methods=["POST", "GET"])
