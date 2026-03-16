@@ -37,15 +37,26 @@ Quant system on LongPort OpenAPI and Google Cloud Run.
 | `TELEGRAM_CHAT_ID` | Yes | Chat or user ID to receive messages |
 | `LONGPORT_APP_KEY` | Yes | LongPort OpenAPI app key (for token refresh) |
 | `LONGPORT_APP_SECRET` | Yes | LongPort OpenAPI app secret (for token refresh) |
+| `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token`) |
+| `ACCOUNT_PREFIX` | No | Alert/log prefix for account/environment (default: `DEFAULT`) |
+| `SERVICE_NAME` | No | Alert/log prefix for service identity (default: `longbridge-quant`) |
 | `GOOGLE_CLOUD_PROJECT` | No | GCP project ID (defaults to ADC project when unset) |
 
-Secret Manager must contain `longport_token` (latest version = active access token). The app refreshes it when expiry is within 30 days.
+Secret Manager must contain the secret named by `LONGPORT_SECRET_NAME` (default: `longport_token`), where the **latest version = active access token**. The app refreshes it when expiry is within 30 days.
+
+### Multi-deployment isolation (HK/SG, etc.)
+
+Deploy the same codebase as multiple Cloud Run services (e.g. `HK` and `SG`) by setting different values per service:
+
+- `LONGPORT_SECRET_NAME`: point to different secrets (e.g. `longport_token_hk`, `longport_token_sg`)
+- `ACCOUNT_PREFIX`: e.g. `HK`, `SG` (all Telegram/log alerts will include `[ACCOUNT_PREFIX/SERVICE_NAME]`)
+- `SERVICE_NAME`: e.g. `longbridge-quant-hk`, `longbridge-quant-sg`
 
 ## Quick deploy
 
 1. Enable **Cloud Run** and **Secret Manager API** in GCP.
-2. Create secret `longport_token` in Secret Manager and add your LongPort access token as the first version.
-3. Set the four required env vars above (Telegram + LongPort app key/secret) on the Cloud Run service.
+2. Create secret `longport_token` (or your custom `LONGPORT_SECRET_NAME`) in Secret Manager and add your LongPort access token as the first version.
+3. Set the required env vars above on the Cloud Run service.
 4. Deploy the app to Cloud Run (e.g. `gcloud run deploy` from repo root with Dockerfile or buildpack).
 5. Create a Cloud Scheduler job that POSTs to the Cloud Run URL on a schedule (e.g. `45 15 * * 1-5` for ~15 min before US market close on weekdays).
 
