@@ -597,8 +597,23 @@ def run_strategy():
                 f"{formatted_logs}"
             )
             send_tg_message(tg_msg)
-        else: 
-            print(with_prefix(f"No trades. Signal: {msg}"), flush=True) 
+        else:
+            no_trade_msg = (
+                f"Heartbeat\n"
+                f"Market: {market_status}\n"
+                f"Equity: ${total_strategy_equity:,.2f}\n"
+                f"SOXL: ${mv['SOXL']:,.2f}  SOXX: ${mv['SOXX']:,.2f}\n"
+                f"QQQI: ${mv['QQQI']:,.2f}  SPYI: ${mv['SPYI']:,.2f}\n"
+                f"BOXX: ${mv['BOXX']:,.2f}  Cash: ${available_cash:,.2f}\n"
+                f"Risk: {deploy_ratio_text}\n"
+                f"Income target: {income_ratio_text}\n"
+                f"Income locked: {income_locked_ratio_text}\n"
+                f"Signal: {msg}\n"
+                f"---\n"
+                f"No trades needed"
+            )
+            print(with_prefix(no_trade_msg), flush=True)
+            send_tg_message(no_trade_msg)
         
     except Exception:
         err = traceback.format_exc()
