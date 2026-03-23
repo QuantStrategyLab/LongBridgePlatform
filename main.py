@@ -48,6 +48,7 @@ PROJECT_ID = get_project_id()
 SECRET_NAME = os.getenv("LONGPORT_SECRET_NAME", "longport_token")
 ACCOUNT_PREFIX = os.getenv("ACCOUNT_PREFIX", "DEFAULT")
 SERVICE_NAME = os.getenv("SERVICE_NAME", "longbridge-quant")
+NOTIFY_LANG = os.getenv("NOTIFY_LANG", "en")
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -80,6 +81,73 @@ INCOME_LAYER_START_USD = 150000.0
 INCOME_LAYER_MAX_RATIO = 0.15
 INCOME_LAYER_QQQI_WEIGHT = 0.70
 INCOME_LAYER_SPYI_WEIGHT = 0.30
+
+SEPARATOR = "━━━━━━━━━━━━━━━━━━"
+
+I18N = {
+    "zh": {
+        "rebalance_title": "🔔 【调仓指令】",
+        "market_status": "📊 市场状态: {status}",
+        "risk_position": "💼 交易层风险仓位: {ratio}",
+        "income_target": "💰 收入层目标: {ratio}",
+        "income_locked": "🏦 收入层锁定占比: {ratio}",
+        "signal": "🎯 触发信号: {msg}",
+        "heartbeat_title": "💓 【心跳检测】",
+        "equity": "💰 净值: ${value}",
+        "cash_label": "现金",
+        "heartbeat_signal": "🎯 信号: {msg}",
+        "no_trades": "✅ 无需调仓",
+        "order_filled": "✅ 订单成交 | {symbol} {side} {qty}股 均价 ${price} (ID: {order_id})",
+        "order_partial": "⚠️ 订单部分成交 | {symbol} {side} 已成交 {executed}/{qty}股 均价 ${price} (ID: {order_id})",
+        "order_error": "❌ 订单异常 | {symbol} {side} {qty}股 已{status} (ID: {order_id}) 原因: {reason}",
+        "error_title": "🚨 【策略异常】",
+        "limit_buy": "📈 [限价买入] {symbol}: {qty}股 @ ${price}",
+        "market_buy": "📈 [市价买入] {symbol}: {qty}股 @ ${price}",
+        "limit_sell": "📉 [限价卖出] {symbol}: {qty}股 @ ${price}",
+        "market_sell": "📉 [市价卖出] {symbol}: {qty}股 @ ${price}",
+        "side_buy": "买入",
+        "side_sell": "卖出",
+        "status_rejected": "拒绝",
+        "status_canceled": "取消",
+        "status_expired": "过期",
+        "signal_risk_on": "SOXL 站上 {window} 日均线，持有 SOXL，交易层风险仓位 {ratio}",
+        "signal_delever": "SOXL 跌破 {window} 日均线，切换至 SOXX，交易层风险仓位 {ratio}",
+    },
+    "en": {
+        "rebalance_title": "🔔 【Trade Execution Report】",
+        "market_status": "📊 Market: {status}",
+        "risk_position": "💼 Risk Position: {ratio}",
+        "income_target": "💰 Income Target: {ratio}",
+        "income_locked": "🏦 Income Locked: {ratio}",
+        "signal": "🎯 Signal: {msg}",
+        "heartbeat_title": "💓 【Heartbeat】",
+        "equity": "💰 Equity: ${value}",
+        "cash_label": "Cash",
+        "heartbeat_signal": "🎯 Signal: {msg}",
+        "no_trades": "✅ No trades needed",
+        "order_filled": "✅ Order Filled | {symbol} {side} {qty} shares avg ${price} (ID: {order_id})",
+        "order_partial": "⚠️ Partial Fill | {symbol} {side} filled {executed}/{qty} shares avg ${price} (ID: {order_id})",
+        "order_error": "❌ Order Error | {symbol} {side} {qty} shares {status} (ID: {order_id}) reason: {reason}",
+        "error_title": "🚨 【Strategy Error】",
+        "limit_buy": "📈 [Limit buy] {symbol}: {qty} shares @ ${price}",
+        "market_buy": "📈 [Market buy] {symbol}: {qty} shares @ ${price}",
+        "limit_sell": "📉 [Limit sell] {symbol}: {qty} shares @ ${price}",
+        "market_sell": "📉 [Market sell] {symbol}: {qty} shares @ ${price}",
+        "side_buy": "Buy",
+        "side_sell": "Sell",
+        "status_rejected": "Rejected",
+        "status_canceled": "Canceled",
+        "status_expired": "Expired",
+        "signal_risk_on": "SOXL above {window}d MA, hold SOXL, risk {ratio}",
+        "signal_delever": "SOXL below {window}d MA, switch to SOXX, risk {ratio}",
+    },
+}
+
+def t(key, **kwargs):
+    """Get translated string for current LANG."""
+    lang = NOTIFY_LANG if NOTIFY_LANG in I18N else "en"
+    template = I18N[lang].get(key, key)
+    return template.format(**kwargs) if kwargs else template
 
 def with_prefix(message: str) -> str:
     return f"[{ACCOUNT_PREFIX}/{SERVICE_NAME}] {message}"
@@ -114,10 +182,20 @@ def is_terminal_error_status(status):
     return any(keyword in status for keyword in ["Rejected", "Canceled", "Expired"])
 
 def send_order_status_message(title, symbol, side_text, quantity, order_id, status, executed_qty="0", executed_price="0", reason=""):
-    extra = f"\nReason: {reason}" if reason else ""
-    send_tg_message(
-        f"{title}\nSymbol: {symbol}\nSide: {side_text}\nQty: {quantity}\nExecuted: {executed_qty}\nAvg: {executed_price}\nOrder: {order_id}\nStatus: {status}{extra}"
-    )
+    localized_side = t("side_buy") if side_text == "Buy" else t("side_sell")
+    root_symbol = symbol.split('.')[0] if '.' in symbol else symbol
+
+    if is_filled_status(status):
+        msg = t("order_filled", symbol=root_symbol, side=localized_side, qty=quantity, price=executed_price, order_id=order_id)
+    elif is_partial_filled_status(status):
+        msg = t("order_partial", symbol=root_symbol, side=localized_side, executed=executed_qty, qty=quantity, price=executed_price, order_id=order_id)
+    elif is_terminal_error_status(status):
+        status_label = t("status_rejected") if "Rejected" in status else (t("status_canceled") if "Canceled" in status else t("status_expired"))
+        msg = t("order_error", symbol=root_symbol, side=localized_side, qty=quantity, status=status_label, order_id=order_id, reason=reason or "—")
+    else:
+        msg = t("order_filled", symbol=root_symbol, side=localized_side, qty=quantity, price=executed_price, order_id=order_id)
+
+    send_tg_message(msg)
 
 
 def safe_quote_last_price(q_ctx, symbol):
@@ -467,9 +545,9 @@ def run_strategy():
         active_risk_asset = "SOXL" if soxl_p > soxl_ma_trend else "SOXX"
         market_status = f"🚀 RISK-ON ({active_risk_asset})" if active_risk_asset == "SOXL" else "🛡️ DE-LEVER (SOXX)"
         msg = (
-            f"SOXL above {TREND_MA_WINDOW}d MA, hold SOXL, risk {deploy_ratio_text}"
+            t("signal_risk_on", window=TREND_MA_WINDOW, ratio=deploy_ratio_text)
             if active_risk_asset == "SOXL"
-            else f"SOXL below {TREND_MA_WINDOW}d MA, switch to SOXX, risk {deploy_ratio_text}"
+            else t("signal_delever", window=TREND_MA_WINDOW, ratio=deploy_ratio_text)
         )
 
         targets = {
@@ -499,7 +577,7 @@ def run_strategy():
                             OrderSide.Sell,
                             q_sell,
                             logs,
-                            f"[Limit sell] {k}: {q_sell} @ ${lp}",
+                            t("limit_sell", symbol=k, qty=q_sell, price=lp),
                             submitted_price=lp,
                         )
                     else:
@@ -510,7 +588,7 @@ def run_strategy():
                             OrderSide.Sell,
                             q_sell,
                             logs,
-                            f"[Market sell] {k}: {q_sell} @ ${round(p, 2)}",
+                            t("market_sell", symbol=k, qty=q_sell, price=round(p, 2)),
                         )
 
                     if submitted:
@@ -559,7 +637,7 @@ def run_strategy():
                             OrderSide.Buy,
                             q_buy,
                             logs,
-                            f"[Limit buy] {k}: {q_buy} @ ${ref_price}",
+                            t("limit_buy", symbol=k, qty=q_buy, price=ref_price),
                             submitted_price=ref_price,
                         )
                         cost_estimate = q_buy * budget_price
@@ -571,7 +649,7 @@ def run_strategy():
                             OrderSide.Buy,
                             q_buy,
                             logs,
-                            f"[Market buy] {k}: {q_buy} @ ${round(p, 2)}",
+                            t("market_buy", symbol=k, qty=q_buy, price=round(p, 2)),
                         )
                         cost_estimate = q_buy * budget_price
                     
@@ -587,30 +665,33 @@ def run_strategy():
         if action_done:
             formatted_logs = "\n".join([f"  {log}" for log in logs])
             tg_msg = (
-                f"Rebalance\n"
-                f"Market: {market_status}\n"
-                f"Risk: {deploy_ratio_text}\n"
-                f"Income target: {income_ratio_text}\n"
-                f"Income locked: {income_locked_ratio_text}\n"
-                f"Signal: {msg}\n"
-                f"---\n"
+                f"{t('rebalance_title')}\n"
+                f"{t('market_status', status=market_status)}\n"
+                f"{t('risk_position', ratio=deploy_ratio_text)}\n"
+                f"{t('income_target', ratio=income_ratio_text)}\n"
+                f"{t('income_locked', ratio=income_locked_ratio_text)}\n"
+                f"{t('signal', msg=msg)}\n"
+                f"{SEPARATOR}\n"
                 f"{formatted_logs}"
             )
             send_tg_message(tg_msg)
         else:
+            cash_label = t("cash_label")
             no_trade_msg = (
-                f"Heartbeat\n"
-                f"Market: {market_status}\n"
-                f"Equity: ${total_strategy_equity:,.2f}\n"
+                f"{t('heartbeat_title')}\n"
+                f"{t('market_status', status=market_status)}\n"
+                f"{t('equity', value=f'{total_strategy_equity:,.2f}')}\n"
+                f"{SEPARATOR}\n"
                 f"SOXL: ${mv['SOXL']:,.2f}  SOXX: ${mv['SOXX']:,.2f}\n"
                 f"QQQI: ${mv['QQQI']:,.2f}  SPYI: ${mv['SPYI']:,.2f}\n"
-                f"BOXX: ${mv['BOXX']:,.2f}  Cash: ${available_cash:,.2f}\n"
-                f"Risk: {deploy_ratio_text}\n"
-                f"Income target: {income_ratio_text}\n"
-                f"Income locked: {income_locked_ratio_text}\n"
-                f"Signal: {msg}\n"
-                f"---\n"
-                f"No trades needed"
+                f"BOXX: ${mv['BOXX']:,.2f}  {cash_label}: ${available_cash:,.2f}\n"
+                f"{SEPARATOR}\n"
+                f"{t('risk_position', ratio=deploy_ratio_text)}\n"
+                f"{t('income_target', ratio=income_ratio_text)}\n"
+                f"{t('income_locked', ratio=income_locked_ratio_text)}\n"
+                f"{t('heartbeat_signal', msg=msg)}\n"
+                f"{SEPARATOR}\n"
+                f"{t('no_trades')}"
             )
             print(with_prefix(no_trade_msg), flush=True)
             send_tg_message(no_trade_msg)
@@ -618,7 +699,7 @@ def run_strategy():
     except Exception:
         err = traceback.format_exc()
         print(with_prefix(f"Strategy error:\n{err}"), flush=True)
-        send_tg_message(f"Strategy error:\n{err}")
+        send_tg_message(f"{t('error_title')}\n{err}")
 
 @app.route("/", methods=["POST", "GET"])
 def handle_trigger():
