@@ -75,8 +75,7 @@ BOXX: $34,000.00  Cash: $10,000.00
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `TELEGRAM_TOKEN` | Yes | Bot token for alerts |
-| `TELEGRAM_CHAT_ID` | Conditional | Per-service chat or user ID for alerts. Falls back to `GLOBAL_TELEGRAM_CHAT_ID` if unset. |
-| `GLOBAL_TELEGRAM_CHAT_ID` | No | Optional shared Telegram chat ID for teams that route multiple quant services to the same destination. |
+| `GLOBAL_TELEGRAM_CHAT_ID` | Yes | Telegram chat or user ID used by this service. |
 | `LONGPORT_APP_KEY` | Yes | LongPort OpenAPI app key (for token refresh) |
 | `LONGPORT_APP_SECRET` | Yes | LongPort OpenAPI app secret (for token refresh) |
 | `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token`) |
@@ -116,7 +115,7 @@ Recommended setup:
   - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `LONGPORT_SECRET_NAME`
   - Secrets: `LONGPORT_APP_KEY`, `LONGPORT_APP_SECRET`
 
-On every push to `main`, the workflow updates both Cloud Run services with the shared and per-environment values above. It does **not** remove legacy `TELEGRAM_CHAT_ID`, so existing deployments keep working. Once you have confirmed both services are reading `GLOBAL_TELEGRAM_CHAT_ID` as intended, you can remove `TELEGRAM_CHAT_ID` from each Cloud Run service manually.
+On every push to `main`, the workflow updates both Cloud Run services with the shared and per-environment values above, and removes `TELEGRAM_CHAT_ID` from each Cloud Run service.
 
 Important:
 
@@ -217,8 +216,7 @@ BOXX: $34,000.00  现金: $10,000.00
 | 变量 | 必需 | 说明 |
 |------|------|------|
 | `TELEGRAM_TOKEN` | 是 | Telegram 机器人 Token |
-| `TELEGRAM_CHAT_ID` | 条件必需 | 当前服务自己的 Chat ID。不填时会回退到 `GLOBAL_TELEGRAM_CHAT_ID`。 |
-| `GLOBAL_TELEGRAM_CHAT_ID` | 否 | 可选的共享 Telegram Chat ID。适合多个 quant 服务共用一个接收目标。 |
+| `GLOBAL_TELEGRAM_CHAT_ID` | 是 | 这个服务使用的 Telegram Chat ID。 |
 | `LONGPORT_APP_KEY` | 是 | LongPort OpenAPI 应用密钥（用于刷新 Token） |
 | `LONGPORT_APP_SECRET` | 是 | LongPort OpenAPI 应用密钥（用于刷新 Token） |
 | `LONGPORT_SECRET_NAME` | 否 | Secret Manager 中的密钥名称（默认: `longport_token`） |
@@ -258,7 +256,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
   - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`LONGPORT_SECRET_NAME`
   - Secrets: `LONGPORT_APP_KEY`、`LONGPORT_APP_SECRET`
 
-每次 push 到 `main` 时，这个 workflow 会分别更新两个 Cloud Run 服务，把共享和各自隔离的变量同步进去。它**不会主动删除**旧的 `TELEGRAM_CHAT_ID`，这样现有部署不会被硬切断。等你确认两个服务都已经按预期读取 `GLOBAL_TELEGRAM_CHAT_ID` 后，再手动把各自 Cloud Run 上旧的 `TELEGRAM_CHAT_ID` 删掉即可。
+每次 push 到 `main` 时，这个 workflow 会分别更新两个 Cloud Run 服务，把共享和各自隔离的变量同步进去，并删除旧的 `TELEGRAM_CHAT_ID`。
 
 注意：
 
