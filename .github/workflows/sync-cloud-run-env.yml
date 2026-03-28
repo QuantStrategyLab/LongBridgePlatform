@@ -22,7 +22,8 @@ jobs:
       LONGPORT_APP_KEY: ${{ secrets.LONGPORT_APP_KEY }}
       LONGPORT_APP_SECRET: ${{ secrets.LONGPORT_APP_SECRET }}
     steps:
-      - name: Validate config
+      - name: Check whether env sync is configured
+        id: config
         run: |
           set -euo pipefail
 
@@ -40,26 +41,38 @@ jobs:
             LONGPORT_APP_SECRET
           )
 
+          missing_vars=()
           for var_name in "${required_vars[@]}"; do
             if [ -z "${!var_name:-}" ]; then
-              echo "${var_name} is required." >&2
-              exit 1
+              missing_vars+=("${var_name}")
             fi
           done
 
+          if [ "${#missing_vars[@]}" -gt 0 ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping HK Cloud Run env sync because these values are not configured yet:" >&2
+            printf '  - %s\n' "${missing_vars[@]}" >&2
+            exit 0
+          fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
       - name: Authenticate to Google Cloud
         id: auth
+        if: steps.config.outputs.enabled == 'true'
         uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ env.GCP_SA_KEY }}
 
       - name: Set up gcloud
+        if: steps.config.outputs.enabled == 'true'
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ steps.auth.outputs.project_id }}
           version: ">= 416.0.0"
 
       - name: Sync Cloud Run environment
+        if: steps.config.outputs.enabled == 'true'
         run: |
           set -euo pipefail
 
@@ -84,7 +97,8 @@ jobs:
       LONGPORT_APP_KEY: ${{ secrets.LONGPORT_APP_KEY }}
       LONGPORT_APP_SECRET: ${{ secrets.LONGPORT_APP_SECRET }}
     steps:
-      - name: Validate config
+      - name: Check whether env sync is configured
+        id: config
         run: |
           set -euo pipefail
 
@@ -102,26 +116,38 @@ jobs:
             LONGPORT_APP_SECRET
           )
 
+          missing_vars=()
           for var_name in "${required_vars[@]}"; do
             if [ -z "${!var_name:-}" ]; then
-              echo "${var_name} is required." >&2
-              exit 1
+              missing_vars+=("${var_name}")
             fi
           done
 
+          if [ "${#missing_vars[@]}" -gt 0 ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping SG Cloud Run env sync because these values are not configured yet:" >&2
+            printf '  - %s\n' "${missing_vars[@]}" >&2
+            exit 0
+          fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
       - name: Authenticate to Google Cloud
         id: auth
+        if: steps.config.outputs.enabled == 'true'
         uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ env.GCP_SA_KEY }}
 
       - name: Set up gcloud
+        if: steps.config.outputs.enabled == 'true'
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ steps.auth.outputs.project_id }}
           version: ">= 416.0.0"
 
       - name: Sync Cloud Run environment
+        if: steps.config.outputs.enabled == 'true'
         run: |
           set -euo pipefail
 

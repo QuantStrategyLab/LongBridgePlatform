@@ -11,6 +11,10 @@ grep -Fq 'GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}' "$workflow_file"
 grep -Fq 'TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}' "$workflow_file"
 grep -Fq 'LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}' "$workflow_file"
 grep -Fq 'credentials_json: ${{ env.GCP_SA_KEY }}' "$workflow_file"
+grep -Fq "echo \"enabled=false\" >> \"\$GITHUB_OUTPUT\"" "$workflow_file"
+grep -Fq "Skipping HK Cloud Run env sync because these values are not configured yet:" "$workflow_file"
+grep -Fq "Skipping SG Cloud Run env sync because these values are not configured yet:" "$workflow_file"
+grep -Fq "if: steps.config.outputs.enabled == 'true'" "$workflow_file"
 if grep -Fq -- "--remove-env-vars TELEGRAM_CHAT_ID" "$workflow_file"; then
   echo "workflow should not force-remove TELEGRAM_CHAT_ID; keep backward compatibility" >&2
   exit 1

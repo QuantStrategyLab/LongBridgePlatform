@@ -121,7 +121,7 @@ On every push to `main`, the workflow updates both Cloud Run services with the s
 Important:
 
 - Put `GCP_SA_KEY` in **repository secrets**, not only under a single Environment. Both `longbridge-hk` and `longbridge-sg` jobs need it.
-- The workflow now validates `GCP_SA_KEY` before calling `google-github-actions/auth`, so if this secret is missing you will see a direct `GCP_SA_KEY is required.` error instead of the less clear `auth` input error.
+- The workflow now checks whether all env-sync variables are configured before calling `google-github-actions/auth`. If they are not ready yet, the job will be **skipped** instead of failing, so old Google Cloud Trigger-only setups keep working.
 
 ### Quick deploy
 
@@ -260,7 +260,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 注意：
 
 - `GCP_SA_KEY` 请放在**仓库级 Secret**，不要只放在某一个 Environment 里，因为 `longbridge-hk` 和 `longbridge-sg` 两个 job 都要用它。
-- 现在 workflow 会在调用 `google-github-actions/auth` 之前先校验 `GCP_SA_KEY`，如果没配好，会直接报 `GCP_SA_KEY is required.`，不会再给一个很绕的 `auth` 入参错误。
+- 现在 workflow 会先检查 env-sync 需要的变量和 secret 是否已经配齐；如果你还没开始迁移，它会直接**跳过**这个同步 job，不会影响原来只靠 Google Cloud Trigger 的老流程。
 
 ### 快速部署
 
