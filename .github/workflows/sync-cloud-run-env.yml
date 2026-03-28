@@ -17,22 +17,11 @@ jobs:
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       LONGPORT_APP_KEY: ${{ secrets.LONGPORT_APP_KEY }}
       LONGPORT_APP_SECRET: ${{ secrets.LONGPORT_APP_SECRET }}
     steps:
-      - name: Authenticate to Google Cloud
-        id: auth
-        uses: google-github-actions/auth@v3
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v3
-        with:
-          project_id: ${{ steps.auth.outputs.project_id }}
-          version: ">= 416.0.0"
-
       - name: Validate config
         run: |
           set -euo pipefail
@@ -45,6 +34,7 @@ jobs:
             LONGPORT_SECRET_NAME
             NOTIFY_LANG
             GLOBAL_TELEGRAM_CHAT_ID
+            GCP_SA_KEY
             TELEGRAM_TOKEN
             LONGPORT_APP_KEY
             LONGPORT_APP_SECRET
@@ -56,6 +46,18 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ env.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ steps.auth.outputs.project_id }}
+          version: ">= 416.0.0"
 
       - name: Sync Cloud Run environment
         run: |
@@ -77,22 +79,11 @@ jobs:
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       LONGPORT_APP_KEY: ${{ secrets.LONGPORT_APP_KEY }}
       LONGPORT_APP_SECRET: ${{ secrets.LONGPORT_APP_SECRET }}
     steps:
-      - name: Authenticate to Google Cloud
-        id: auth
-        uses: google-github-actions/auth@v3
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v3
-        with:
-          project_id: ${{ steps.auth.outputs.project_id }}
-          version: ">= 416.0.0"
-
       - name: Validate config
         run: |
           set -euo pipefail
@@ -105,6 +96,7 @@ jobs:
             LONGPORT_SECRET_NAME
             NOTIFY_LANG
             GLOBAL_TELEGRAM_CHAT_ID
+            GCP_SA_KEY
             TELEGRAM_TOKEN
             LONGPORT_APP_KEY
             LONGPORT_APP_SECRET
@@ -116,6 +108,18 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ env.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ steps.auth.outputs.project_id }}
+          version: ">= 416.0.0"
 
       - name: Sync Cloud Run environment
         run: |

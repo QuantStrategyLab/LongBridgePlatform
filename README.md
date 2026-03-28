@@ -118,6 +118,11 @@ Recommended setup:
 
 On every push to `main`, the workflow updates both Cloud Run services with the shared and per-environment values above. It does **not** remove legacy `TELEGRAM_CHAT_ID`, so existing deployments keep working. Once you have confirmed both services are reading `GLOBAL_TELEGRAM_CHAT_ID` as intended, you can remove `TELEGRAM_CHAT_ID` from each Cloud Run service manually.
 
+Important:
+
+- Put `GCP_SA_KEY` in **repository secrets**, not only under a single Environment. Both `longbridge-hk` and `longbridge-sg` jobs need it.
+- The workflow now validates `GCP_SA_KEY` before calling `google-github-actions/auth`, so if this secret is missing you will see a direct `GCP_SA_KEY is required.` error instead of the less clear `auth` input error.
+
 ### Quick deploy
 
 1. Enable **Cloud Run** and **Secret Manager API** in GCP.
@@ -251,6 +256,11 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
   - Secrets: `LONGPORT_APP_KEY`、`LONGPORT_APP_SECRET`
 
 每次 push 到 `main` 时，这个 workflow 会分别更新两个 Cloud Run 服务，把共享和各自隔离的变量同步进去。它**不会主动删除**旧的 `TELEGRAM_CHAT_ID`，这样现有部署不会被硬切断。等你确认两个服务都已经按预期读取 `GLOBAL_TELEGRAM_CHAT_ID` 后，再手动把各自 Cloud Run 上旧的 `TELEGRAM_CHAT_ID` 删掉即可。
+
+注意：
+
+- `GCP_SA_KEY` 请放在**仓库级 Secret**，不要只放在某一个 Environment 里，因为 `longbridge-hk` 和 `longbridge-sg` 两个 job 都要用它。
+- 现在 workflow 会在调用 `google-github-actions/auth` 之前先校验 `GCP_SA_KEY`，如果没配好，会直接报 `GCP_SA_KEY is required.`，不会再给一个很绕的 `auth` 入参错误。
 
 ### 快速部署
 
