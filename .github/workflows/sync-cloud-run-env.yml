@@ -11,6 +11,7 @@ jobs:
     environment: longbridge-hk
     env:
       ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}
+      # Set CLOUD_RUN_REGION per Environment so HK/SG can target different regions.
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       ACCOUNT_PREFIX: ${{ vars.ACCOUNT_PREFIX }}
@@ -58,6 +59,7 @@ jobs:
           if [ "${#missing_vars[@]}" -gt 0 ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "HK Cloud Run env sync is enabled, but these values are missing:" >&2
+            echo "  - If HK and SG run in different regions, set CLOUD_RUN_REGION on the longbridge-hk Environment." >&2
             printf '  - %s\n' "${missing_vars[@]}" >&2
             exit 1
           fi
@@ -93,6 +95,7 @@ jobs:
     environment: longbridge-sg
     env:
       ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}
+      # Set CLOUD_RUN_REGION per Environment so HK/SG can target different regions.
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       ACCOUNT_PREFIX: ${{ vars.ACCOUNT_PREFIX }}
@@ -140,6 +143,7 @@ jobs:
           if [ "${#missing_vars[@]}" -gt 0 ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "SG Cloud Run env sync is enabled, but these values are missing:" >&2
+            echo "  - If HK and SG run in different regions, set CLOUD_RUN_REGION on the longbridge-sg Environment." >&2
             printf '  - %s\n' "${missing_vars[@]}" >&2
             exit 1
           fi

@@ -104,17 +104,16 @@ Recommended setup:
 
 - **Repository Variables (shared):**
   - `ENABLE_GITHUB_ENV_SYNC` = `true`
-  - `CLOUD_RUN_REGION`
   - `NOTIFY_LANG`
   - `GLOBAL_TELEGRAM_CHAT_ID`
 - **Repository Secrets (shared):**
   - `GCP_SA_KEY`
   - `TELEGRAM_TOKEN`
 - **GitHub Environment: `longbridge-hk`**
-  - Variables: `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `LONGPORT_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `LONGPORT_SECRET_NAME`
   - Secrets: `LONGPORT_APP_KEY`, `LONGPORT_APP_SECRET`
 - **GitHub Environment: `longbridge-sg`**
-  - Variables: `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `LONGPORT_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `LONGPORT_SECRET_NAME`
   - Secrets: `LONGPORT_APP_KEY`, `LONGPORT_APP_SECRET`
 
 On every push to `main`, the workflow updates both Cloud Run services with the shared and per-environment values above. It does **not** remove legacy `TELEGRAM_CHAT_ID`, so existing deployments keep working. Once you have confirmed both services are reading `GLOBAL_TELEGRAM_CHAT_ID` as intended, you can remove `TELEGRAM_CHAT_ID` from each Cloud Run service manually.
@@ -122,6 +121,7 @@ On every push to `main`, the workflow updates both Cloud Run services with the s
 Important:
 
 - Put `GCP_SA_KEY` in **repository secrets**, not only under a single Environment. Both `longbridge-hk` and `longbridge-sg` jobs need it.
+- `CLOUD_RUN_REGION` should be set on each GitHub Environment, not as one shared repository variable. This lets `HK` and `SG` live in different Cloud Run regions.
 - The workflow only becomes strict when `ENABLE_GITHUB_ENV_SYNC=true`. If this variable is unset, the sync job is skipped and the old Google Cloud Trigger-only setup keeps working. Once you set it to `true`, missing env-sync values become a hard failure so you do not get a false green deployment.
 - Here "shared" only means **shared inside this repository** between the `HK` and `SG` Cloud Run services. `GCP_SA_KEY`, `TELEGRAM_TOKEN`, and the LongPort secrets remain repository- or environment-specific; they are not meant to be a global secret set reused by unrelated quant repos.
 - If you want one cross-project shared layer across multiple quant repos, keep it small: `GLOBAL_TELEGRAM_CHAT_ID` and `NOTIFY_LANG` are reasonable; account credentials and deployment keys are not.
@@ -246,17 +246,16 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 
 - **仓库级 Variables（共享）：**
   - `ENABLE_GITHUB_ENV_SYNC` = `true`
-  - `CLOUD_RUN_REGION`
   - `NOTIFY_LANG`
   - `GLOBAL_TELEGRAM_CHAT_ID`
 - **仓库级 Secrets（共享）：**
   - `GCP_SA_KEY`
   - `TELEGRAM_TOKEN`
 - **GitHub Environment: `longbridge-hk`**
-  - Variables: `CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`LONGPORT_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`LONGPORT_SECRET_NAME`
   - Secrets: `LONGPORT_APP_KEY`、`LONGPORT_APP_SECRET`
 - **GitHub Environment: `longbridge-sg`**
-  - Variables: `CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`LONGPORT_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`LONGPORT_SECRET_NAME`
   - Secrets: `LONGPORT_APP_KEY`、`LONGPORT_APP_SECRET`
 
 每次 push 到 `main` 时，这个 workflow 会分别更新两个 Cloud Run 服务，把共享和各自隔离的变量同步进去。它**不会主动删除**旧的 `TELEGRAM_CHAT_ID`，这样现有部署不会被硬切断。等你确认两个服务都已经按预期读取 `GLOBAL_TELEGRAM_CHAT_ID` 后，再手动把各自 Cloud Run 上旧的 `TELEGRAM_CHAT_ID` 删掉即可。
@@ -264,6 +263,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 注意：
 
 - `GCP_SA_KEY` 请放在**仓库级 Secret**，不要只放在某一个 Environment 里，因为 `longbridge-hk` 和 `longbridge-sg` 两个 job 都要用它。
+- `CLOUD_RUN_REGION` 应该分别放在 `longbridge-hk` 和 `longbridge-sg` 这两个 Environment 里，不要再当成一个仓库级共享变量。这样 HK 和 SG 才能各自更新到自己的 region。
 - 现在 workflow 只有在 `ENABLE_GITHUB_ENV_SYNC=true` 时才会严格检查配置。没打开这个开关时，它会直接跳过，不影响原来只靠 Google Cloud Trigger 的老流程；一旦打开，缺任何配置都会直接失败，避免你以为已经同步成功。
 - 这里的“共享”只是指 **同一个仓库里的 HK / SG 两个服务共享**。`GCP_SA_KEY`、`TELEGRAM_TOKEN`、LongPort 相关 secrets 仍然是这个仓库或某个 Environment 自己的，不建议把它们当成所有 quant 共用的全局 secrets。
 - 如果你真的要在多个 quant 仓库之间保留一层全局共享，建议只保留 `GLOBAL_TELEGRAM_CHAT_ID` 和 `NOTIFY_LANG` 这种低耦合配置。
