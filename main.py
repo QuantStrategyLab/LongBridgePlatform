@@ -50,7 +50,7 @@ ACCOUNT_PREFIX = os.getenv("ACCOUNT_PREFIX", "DEFAULT")
 SERVICE_NAME = os.getenv("SERVICE_NAME", "longbridge-quant")
 NOTIFY_LANG = os.getenv("NOTIFY_LANG", "en")
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TG_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("GLOBAL_TELEGRAM_CHAT_ID")
 
 # Execution: reserve ratio, minimum trade size (ratio of equity and absolute floor)
 CASH_RESERVE_RATIO = 0.03

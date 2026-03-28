@@ -75,7 +75,8 @@ BOXX: $34,000.00  Cash: $10,000.00
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `TELEGRAM_TOKEN` | Yes | Bot token for alerts |
-| `TELEGRAM_CHAT_ID` | Yes | Chat or user ID to receive messages |
+| `TELEGRAM_CHAT_ID` | Conditional | Per-service chat or user ID for alerts. Falls back to `GLOBAL_TELEGRAM_CHAT_ID` if unset. |
+| `GLOBAL_TELEGRAM_CHAT_ID` | No | Optional shared Telegram chat ID for teams that route multiple quant services to the same destination. |
 | `LONGPORT_APP_KEY` | Yes | LongPort OpenAPI app key (for token refresh) |
 | `LONGPORT_APP_SECRET` | Yes | LongPort OpenAPI app secret (for token refresh) |
 | `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token`) |
@@ -186,7 +187,8 @@ BOXX: $34,000.00  现金: $10,000.00
 | 变量 | 必需 | 说明 |
 |------|------|------|
 | `TELEGRAM_TOKEN` | 是 | Telegram 机器人 Token |
-| `TELEGRAM_CHAT_ID` | 是 | 接收消息的 Chat ID |
+| `TELEGRAM_CHAT_ID` | 条件必需 | 当前服务自己的 Chat ID。不填时会回退到 `GLOBAL_TELEGRAM_CHAT_ID`。 |
+| `GLOBAL_TELEGRAM_CHAT_ID` | 否 | 可选的共享 Telegram Chat ID。适合多个 quant 服务共用一个接收目标。 |
 | `LONGPORT_APP_KEY` | 是 | LongPort OpenAPI 应用密钥（用于刷新 Token） |
 | `LONGPORT_APP_SECRET` | 是 | LongPort OpenAPI 应用密钥（用于刷新 Token） |
 | `LONGPORT_SECRET_NAME` | 否 | Secret Manager 中的密钥名称（默认: `longport_token`） |
