@@ -103,6 +103,7 @@ If code deployment still uses Google Cloud Trigger, but you want GitHub to be th
 Recommended setup:
 
 - **Repository Variables (shared):**
+  - `ENABLE_GITHUB_ENV_SYNC` = `true`
   - `CLOUD_RUN_REGION`
   - `NOTIFY_LANG`
   - `GLOBAL_TELEGRAM_CHAT_ID`
@@ -121,7 +122,7 @@ On every push to `main`, the workflow updates both Cloud Run services with the s
 Important:
 
 - Put `GCP_SA_KEY` in **repository secrets**, not only under a single Environment. Both `longbridge-hk` and `longbridge-sg` jobs need it.
-- The workflow now checks whether all env-sync variables are configured before calling `google-github-actions/auth`. If they are not ready yet, the job will be **skipped** instead of failing, so old Google Cloud Trigger-only setups keep working.
+- The workflow only becomes strict when `ENABLE_GITHUB_ENV_SYNC=true`. If this variable is unset, the sync job is skipped and the old Google Cloud Trigger-only setup keeps working. Once you set it to `true`, missing env-sync values become a hard failure so you do not get a false green deployment.
 
 ### Quick deploy
 
@@ -242,6 +243,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 推荐配置方式：
 
 - **仓库级 Variables（共享）：**
+  - `ENABLE_GITHUB_ENV_SYNC` = `true`
   - `CLOUD_RUN_REGION`
   - `NOTIFY_LANG`
   - `GLOBAL_TELEGRAM_CHAT_ID`
@@ -260,7 +262,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 注意：
 
 - `GCP_SA_KEY` 请放在**仓库级 Secret**，不要只放在某一个 Environment 里，因为 `longbridge-hk` 和 `longbridge-sg` 两个 job 都要用它。
-- 现在 workflow 会先检查 env-sync 需要的变量和 secret 是否已经配齐；如果你还没开始迁移，它会直接**跳过**这个同步 job，不会影响原来只靠 Google Cloud Trigger 的老流程。
+- 现在 workflow 只有在 `ENABLE_GITHUB_ENV_SYNC=true` 时才会严格检查配置。没打开这个开关时，它会直接跳过，不影响原来只靠 Google Cloud Trigger 的老流程；一旦打开，缺任何配置都会直接失败，避免你以为已经同步成功。
 
 ### 快速部署
 

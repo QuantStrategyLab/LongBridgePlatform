@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: longbridge-hk
     env:
+      ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       ACCOUNT_PREFIX: ${{ vars.ACCOUNT_PREFIX }}
@@ -26,6 +27,12 @@ jobs:
         id: config
         run: |
           set -euo pipefail
+
+          if [ "${ENABLE_GITHUB_ENV_SYNC:-}" != "true" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping HK Cloud Run env sync because ENABLE_GITHUB_ENV_SYNC is not set to true." >&2
+            exit 0
+          fi
 
           required_vars=(
             CLOUD_RUN_REGION
@@ -50,9 +57,9 @@ jobs:
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping HK Cloud Run env sync because these values are not configured yet:" >&2
+            echo "HK Cloud Run env sync is enabled, but these values are missing:" >&2
             printf '  - %s\n' "${missing_vars[@]}" >&2
-            exit 0
+            exit 1
           fi
 
           echo "enabled=true" >> "$GITHUB_OUTPUT"
@@ -85,6 +92,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: longbridge-sg
     env:
+      ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       ACCOUNT_PREFIX: ${{ vars.ACCOUNT_PREFIX }}
@@ -101,6 +109,12 @@ jobs:
         id: config
         run: |
           set -euo pipefail
+
+          if [ "${ENABLE_GITHUB_ENV_SYNC:-}" != "true" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping SG Cloud Run env sync because ENABLE_GITHUB_ENV_SYNC is not set to true." >&2
+            exit 0
+          fi
 
           required_vars=(
             CLOUD_RUN_REGION
@@ -125,9 +139,9 @@ jobs:
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping SG Cloud Run env sync because these values are not configured yet:" >&2
+            echo "SG Cloud Run env sync is enabled, but these values are missing:" >&2
             printf '  - %s\n' "${missing_vars[@]}" >&2
-            exit 0
+            exit 1
           fi
 
           echo "enabled=true" >> "$GITHUB_OUTPUT"
