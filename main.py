@@ -7,14 +7,21 @@ import os
 import time
 import traceback
 import requests
-import numpy as np
 from datetime import datetime
 
-import pytz
-import pandas_market_calendars as mcal
 from flask import Flask
 
 import google.auth
+from application.rebalance_service import run_strategy as run_rebalance_cycle
+from entrypoints.cloud_run import is_market_open_now
+from notifications.order_alerts import (
+    is_filled_status as notifications_is_filled_status,
+    is_partial_filled_status as notifications_is_partial_filled_status,
+    is_terminal_error_status as notifications_is_terminal_error_status,
+    monitor_submitted_order_status as notifications_monitor_submitted_order_status,
+    send_order_status_message as notifications_send_order_status_message,
+    submit_order_with_alert as notifications_submit_order_with_alert,
+)
 from quant_platform_kit.longbridge import (
     build_contexts,
     calculate_rotation_indicators,
@@ -25,6 +32,10 @@ from quant_platform_kit.longbridge import (
     fetch_token_from_secret,
     refresh_token_if_needed,
     submit_order,
+)
+from strategy.allocation import (
+    get_dynamic_allocation as strategy_get_dynamic_allocation,
+    get_income_layer_ratio as strategy_get_income_layer_ratio,
 )
 
 app = Flask(__name__)
@@ -166,31 +177,28 @@ def notify_issue(title, detail):
 
 
 def is_filled_status(status):
-    """True if order fully filled (no partial)."""
-    return "Filled" in status and "PartialFilled" not in status
+    return notifications_is_filled_status(status)
 
 def is_partial_filled_status(status):
-    return "PartialFilled" in status
+    return notifications_is_partial_filled_status(status)
 
 def is_terminal_error_status(status):
-    """True if Rejected, Canceled, or Expired."""
-    return any(keyword in status for keyword in ["Rejected", "Canceled", "Expired"])
+    return notifications_is_terminal_error_status(status)
 
 def send_order_status_message(title, symbol, side_text, quantity, order_id, status, executed_qty="0", executed_price="0", reason=""):
-    localized_side = t("side_buy") if side_text == "Buy" else t("side_sell")
-    root_symbol = symbol.split('.')[0] if '.' in symbol else symbol
-
-    if is_filled_status(status):
-        msg = t("order_filled", symbol=root_symbol, side=localized_side, qty=quantity, price=executed_price, order_id=order_id)
-    elif is_partial_filled_status(status):
-        msg = t("order_partial", symbol=root_symbol, side=localized_side, executed=executed_qty, qty=quantity, price=executed_price, order_id=order_id)
-    elif is_terminal_error_status(status):
-        status_label = t("status_rejected") if "Rejected" in status else (t("status_canceled") if "Canceled" in status else t("status_expired"))
-        msg = t("order_error", symbol=root_symbol, side=localized_side, qty=quantity, status=status_label, order_id=order_id, reason=reason or "—")
-    else:
-        msg = t("order_filled", symbol=root_symbol, side=localized_side, qty=quantity, price=executed_price, order_id=order_id)
-
-    send_tg_message(msg)
+    del title
+    notifications_send_order_status_message(
+        symbol,
+        side_text,
+        quantity,
+        order_id,
+        status,
+        translator=t,
+        send_tg_message=send_tg_message,
+        executed_qty=executed_qty,
+        executed_price=executed_price,
+        reason=reason,
+    )
 
 
 def safe_quote_last_price(q_ctx, symbol):
@@ -219,104 +227,60 @@ def estimate_cash_buy_quantity_safe(t_ctx, symbol, order_kind, ref_price):
         return None
 
 def monitor_submitted_order_status(t_ctx, symbol, side_text, quantity, order_id):
-    """Poll today_orders for up to 8s; send Telegram on fill, partial, or terminal error."""
-    if not order_id:
-        return
-
-    try:
-        for _ in range(ORDER_POLL_MAX_ATTEMPTS):
-            time.sleep(ORDER_POLL_INTERVAL_SEC)
-            order_status = fetch_order_status(t_ctx, order_id)
-            if not order_status:
-                continue
-
-            status = order_status["status"]
-            reject_msg = order_status["reason"]
-            executed_qty = order_status["executed_qty"]
-            executed_price = order_status["executed_price"]
-
-            if is_filled_status(status):
-                send_order_status_message("Order filled", symbol, side_text, quantity, order_id, status, executed_qty, executed_price)
-                return
-
-            if is_partial_filled_status(status):
-                send_order_status_message("Order partial fill", symbol, side_text, quantity, order_id, status, executed_qty, executed_price)
-
-            if is_terminal_error_status(status):
-                send_order_status_message("Order rejected/error", symbol, side_text, quantity, order_id, status, executed_qty, executed_price, reject_msg)
-                return
-    except Exception:
-        notify_issue(
-            "Order status poll failed",
-            f"Symbol: {symbol} Side: {side_text} Qty: {quantity} Order: {order_id}\n{traceback.format_exc()}"
-        )
+    notifications_monitor_submitted_order_status(
+        t_ctx,
+        symbol,
+        side_text,
+        quantity,
+        order_id,
+        fetch_order_status=fetch_order_status,
+        order_poll_interval_sec=ORDER_POLL_INTERVAL_SEC,
+        order_poll_max_attempts=ORDER_POLL_MAX_ATTEMPTS,
+        translator=t,
+        send_tg_message=send_tg_message,
+        notify_issue=notify_issue,
+        sleeper=time.sleep,
+    )
 
 def submit_order_with_alert(t_ctx, symbol, order_type, side, quantity, logs, log_message, submitted_price=None):
-    """Submit order (LO or MO), append to logs, then poll status and notify via Telegram."""
-    side_text = "Buy" if side == "buy" else "Sell"
-
-    try:
-        report = submit_order(
-            t_ctx,
-            symbol,
-            order_kind=order_type,
-            side=side,
-            quantity=quantity,
-            submitted_price=submitted_price,
-        )
-        order_id = report.broker_order_id or ""
-        log_with_order_id = f"{log_message} [order_id={order_id}]" if order_id else log_message
-        print(with_prefix(f"OK {log_with_order_id}"), flush=True)
-        logs.append(log_with_order_id)
-        monitor_submitted_order_status(t_ctx, symbol, side_text, quantity, order_id)
-        return True
-    except Exception:
-        notify_issue(
-            "Order submit failed",
-            f"Symbol: {symbol} Side: {side_text} Qty: {quantity} Type: {order_type} Price: {submitted_price if submitted_price is not None else 'MO'}\n{traceback.format_exc()}"
-        )
-        return False
+    return notifications_submit_order_with_alert(
+        t_ctx,
+        symbol,
+        order_type,
+        side,
+        quantity,
+        logs,
+        log_message,
+        submit_order=submit_order,
+        fetch_order_status=fetch_order_status,
+        translator=t,
+        send_tg_message=send_tg_message,
+        notify_issue=notify_issue,
+        order_poll_interval_sec=ORDER_POLL_INTERVAL_SEC,
+        order_poll_max_attempts=ORDER_POLL_MAX_ATTEMPTS,
+        sleeper=time.sleep,
+        print_with_prefix=lambda message: print(with_prefix(message), flush=True),
+        submitted_price=submitted_price,
+    )
 
 # ---------------------------------------------------------------------------
 # Allocation: fraction of core equity to deploy to SOXL/SOXX (rest in BOXX)
 # ---------------------------------------------------------------------------
 def get_dynamic_allocation(total_equity_usd):
-    """Deploy ratio by band; above 180k USD applies log decay (no floor)."""
-    if total_equity_usd <= 10000:
-        return SMALL_ACCOUNT_DEPLOY_RATIO
-
-    if total_equity_usd <= 80000:
-        return float(np.interp(
-            total_equity_usd,
-            [10000, 80000],
-            [SMALL_ACCOUNT_DEPLOY_RATIO, MID_ACCOUNT_DEPLOY_RATIO],
-        ))
-
-    if total_equity_usd <= 180000:
-        return float(np.interp(
-            total_equity_usd,
-            [80000, 180000],
-            [MID_ACCOUNT_DEPLOY_RATIO, LARGE_ACCOUNT_DEPLOY_RATIO],
-        ))
-
-    decayed_ratio = LARGE_ACCOUNT_DEPLOY_RATIO - (
-        TRADE_LAYER_DECAY_COEFF * np.log10(total_equity_usd / 180000)
+    return strategy_get_dynamic_allocation(
+        total_equity_usd,
+        small_account_deploy_ratio=SMALL_ACCOUNT_DEPLOY_RATIO,
+        mid_account_deploy_ratio=MID_ACCOUNT_DEPLOY_RATIO,
+        large_account_deploy_ratio=LARGE_ACCOUNT_DEPLOY_RATIO,
+        trade_layer_decay_coeff=TRADE_LAYER_DECAY_COEFF,
     )
-    return max(0.0, decayed_ratio)
 
 def get_income_layer_ratio(total_equity_usd):
-    """Target income layer as fraction of total equity; ramps from 0 to MAX between START and 2*START."""
-    if total_equity_usd <= INCOME_LAYER_START_USD:
-        return 0.0
-
-    if total_equity_usd <= (INCOME_LAYER_START_USD * 2):
-        return float(np.interp(
-            total_equity_usd,
-            [INCOME_LAYER_START_USD, INCOME_LAYER_START_USD * 2],
-            [0.0, INCOME_LAYER_MAX_RATIO],
-        ))
-
-    return INCOME_LAYER_MAX_RATIO
+    return strategy_get_income_layer_ratio(
+        total_equity_usd,
+        income_layer_start_usd=INCOME_LAYER_START_USD,
+        income_layer_max_ratio=INCOME_LAYER_MAX_RATIO,
+    )
 
 # ---------------------------------------------------------------------------
 # Strategy: NYSE hours check, indicators, balance/positions, target allocation, sell then buy
@@ -325,216 +289,46 @@ def run_strategy():
     try:
         print(with_prefix(f"[{datetime.now()}] Starting strategy..."), flush=True)
 
-        token = refresh_token_if_needed(
-            fetch_token_from_secret(PROJECT_ID, SECRET_NAME),
-            project_id=PROJECT_ID,
-            secret_name=SECRET_NAME,
-            app_key=os.getenv("LONGPORT_APP_KEY"),
-            app_secret=os.getenv("LONGPORT_APP_SECRET"),
-            refresh_threshold_days=TOKEN_REFRESH_THRESHOLD_DAYS,
-        )
-        app_key = os.getenv("LONGPORT_APP_KEY", "")
-        app_secret = os.getenv("LONGPORT_APP_SECRET", "")
-        q_ctx, t_ctx = build_contexts(app_key, app_secret, token)
-
-        # Skip if outside NYSE regular session
-        try:
-            nyse = mcal.get_calendar('NYSE')
-            now_utc = datetime.now(pytz.utc)
-            schedule = nyse.schedule(start_date=now_utc, end_date=now_utc)
-            is_normal = False if schedule.empty else nyse.open_at_time(schedule, now_utc)
-        except Exception as e:
-            print(with_prefix(f"Market hours check failed: {e}"), flush=True)
-            is_normal = False
-
-        if not is_normal:
+        market_open = is_market_open_now()
+        if isinstance(market_open, tuple):
+            market_open, error = market_open
+            print(with_prefix(f"Market hours check failed: {error}"), flush=True)
+        if not market_open:
             print(with_prefix("Outside market hours; skip."), flush=True)
             return
-
-        ind = calculate_rotation_indicators(q_ctx, trend_window=TREND_MA_WINDOW)
-        if ind is None:
-            raise Exception("Quote data missing or API limited; cannot compute indicators")
-
-        strategy_assets = ["SOXL", "SOXX", "BOXX", "QQQI", "SPYI"]
-        account_state = fetch_strategy_account_state(q_ctx, t_ctx, strategy_assets)
-        available_cash = account_state["available_cash"]
-        mv = account_state["market_values"]
-        qty = account_state["quantities"]
-        sellable_qty = account_state["sellable_quantities"]
-        total_strategy_equity = account_state["total_strategy_equity"]
-        current_min_trade = max(MIN_TRADE_FLOOR, total_strategy_equity * MIN_TRADE_RATIO)
-
-        # Income layer: sticky (buy-only) value; core_equity = total minus locked income
-        current_income_layer_value = mv["QQQI"] + mv["SPYI"]
-        income_layer_ratio = get_income_layer_ratio(total_strategy_equity)
-        desired_income_layer_value = total_strategy_equity * income_layer_ratio
-        locked_income_layer_value = max(current_income_layer_value, desired_income_layer_value)
-        income_layer_add_value = max(0.0, locked_income_layer_value - current_income_layer_value)
-        core_equity = max(0.0, total_strategy_equity - locked_income_layer_value)
-        deploy_ratio = get_dynamic_allocation(core_equity)
-        deployed_capital = core_equity * deploy_ratio
-        deploy_ratio_text = f"{deploy_ratio * 100:.1f}%"
-        income_ratio_text = f"{income_layer_ratio * 100:.1f}%"
-        income_locked_ratio_text = (
-            f"{(locked_income_layer_value / total_strategy_equity) * 100:.1f}%"
-            if total_strategy_equity > 0 else "0.0%"
+        run_rebalance_cycle(
+            project_id=PROJECT_ID,
+            secret_name=SECRET_NAME,
+            trend_ma_window=TREND_MA_WINDOW,
+            token_refresh_threshold_days=TOKEN_REFRESH_THRESHOLD_DAYS,
+            cash_reserve_ratio=CASH_RESERVE_RATIO,
+            min_trade_ratio=MIN_TRADE_RATIO,
+            min_trade_floor=MIN_TRADE_FLOOR,
+            rebalance_threshold_ratio=REBALANCE_THRESHOLD_RATIO,
+            limit_sell_discount=LIMIT_SELL_DISCOUNT,
+            limit_buy_premium=LIMIT_BUY_PREMIUM,
+            small_account_deploy_ratio=SMALL_ACCOUNT_DEPLOY_RATIO,
+            mid_account_deploy_ratio=MID_ACCOUNT_DEPLOY_RATIO,
+            large_account_deploy_ratio=LARGE_ACCOUNT_DEPLOY_RATIO,
+            trade_layer_decay_coeff=TRADE_LAYER_DECAY_COEFF,
+            income_layer_start_usd=INCOME_LAYER_START_USD,
+            income_layer_max_ratio=INCOME_LAYER_MAX_RATIO,
+            income_layer_qqqi_weight=INCOME_LAYER_QQQI_WEIGHT,
+            income_layer_spyi_weight=INCOME_LAYER_SPYI_WEIGHT,
+            separator=SEPARATOR,
+            translator=t,
+            with_prefix=with_prefix,
+            send_tg_message=send_tg_message,
+            notify_issue=notify_issue,
+            fetch_token_from_secret=fetch_token_from_secret,
+            refresh_token_if_needed=refresh_token_if_needed,
+            build_contexts=build_contexts,
+            calculate_rotation_indicators=calculate_rotation_indicators,
+            fetch_strategy_account_state=fetch_strategy_account_state,
+            fetch_last_price=fetch_last_price,
+            estimate_max_purchase_quantity=estimate_max_purchase_quantity,
+            submit_order_with_alert=submit_order_with_alert,
         )
-        # Trend: SOXL above 150d MA -> SOXL; else SOXX. Deployed capital and remainder to BOXX
-        soxl_p = ind['soxl']['price']
-        soxl_ma_trend = ind['soxl']['ma_trend']
-        active_risk_asset = "SOXL" if soxl_p > soxl_ma_trend else "SOXX"
-        market_status = f"🚀 RISK-ON ({active_risk_asset})" if active_risk_asset == "SOXL" else "🛡️ DE-LEVER (SOXX)"
-        msg = (
-            t("signal_risk_on", window=TREND_MA_WINDOW, ratio=deploy_ratio_text)
-            if active_risk_asset == "SOXL"
-            else t("signal_delever", window=TREND_MA_WINDOW, ratio=deploy_ratio_text)
-        )
-
-        targets = {
-            "SOXL": deployed_capital if active_risk_asset == "SOXL" else 0.0,
-            "SOXX": deployed_capital if active_risk_asset == "SOXX" else 0.0,
-            "QQQI": mv["QQQI"] + (income_layer_add_value * INCOME_LAYER_QQQI_WEIGHT),
-            "SPYI": mv["SPYI"] + (income_layer_add_value * INCOME_LAYER_SPYI_WEIGHT),
-            "BOXX": max(0.0, core_equity - deployed_capital),
-        }
-        logs, action_done = [], False
-
-        # Sell loop: reduce overweight positions (limit for SOXL/SOXX/QQQI/SPYI, market for BOXX)
-        for k in strategy_assets:
-            diff = targets[k] - mv[k]
-            if diff < -(total_strategy_equity * REBALANCE_THRESHOLD_RATIO) and abs(diff) > current_min_trade:
-                p = safe_quote_last_price(q_ctx, f"{k}.US")
-                if p is None:
-                    continue
-                q_sell = min(int(abs(diff) // p), sellable_qty[k])
-                if q_sell > 0:
-                    if k in ["SOXL", "SOXX", "QQQI", "SPYI"]:
-                        lp = round(p * LIMIT_SELL_DISCOUNT, 2)
-                        submitted = submit_order_with_alert(
-                            t_ctx,
-                            f"{k}.US",
-                            "limit",
-                            "sell",
-                            q_sell,
-                            logs,
-                            t("limit_sell", symbol=k, qty=q_sell, price=lp),
-                            submitted_price=lp,
-                        )
-                    else:
-                        submitted = submit_order_with_alert(
-                            t_ctx,
-                            f"{k}.US",
-                            "market",
-                            "sell",
-                            q_sell,
-                            logs,
-                            t("market_sell", symbol=k, qty=q_sell, price=round(p, 2)),
-                        )
-
-                    if submitted:
-                        action_done = True
-                elif sellable_qty[k] <= 0 and qty[k] > 0:
-                    notify_issue(
-                        "Sell skipped",
-                        f"Symbol: {k}.US Diff: ${abs(diff):.2f} Held: {qty[k]} Sellable: {sellable_qty[k]} (no sellable)"
-                    )
-
-        # Buy loop: investable_cash after reserve; cap qty by estimate_max_purchase_quantity
-        investable_cash = max(0, available_cash - (total_strategy_equity * CASH_RESERVE_RATIO))
-        for k in strategy_assets:
-            diff = targets[k] - mv[k]
-            if diff > (total_strategy_equity * REBALANCE_THRESHOLD_RATIO) and abs(diff) > current_min_trade:
-                p = safe_quote_last_price(q_ctx, f"{k}.US")
-                if p is None:
-                    continue
-                can_buy_val = min(diff, investable_cash)
-                if can_buy_val > p:
-                    is_limit_order = k in ["SOXL", "SOXX", "QQQI", "SPYI"]
-                    order_kind = "limit" if is_limit_order else "market"
-                    ref_price = round(p * LIMIT_BUY_PREMIUM, 2) if is_limit_order else round(p, 2)
-                    budget_price = ref_price if is_limit_order else p
-                    q_buy_budget = int(can_buy_val // budget_price)
-                    q_buy_cash_limit = estimate_cash_buy_quantity_safe(t_ctx, f"{k}.US", order_kind, ref_price)
-
-                    if q_buy_cash_limit is None:
-                        continue
-
-                    q_buy = min(q_buy_budget, q_buy_cash_limit)
-                    cost_estimate = 0.0
-
-                    if q_buy <= 0:
-                        notify_issue(
-                            "Buy skipped",
-                            f"Symbol: {k}.US Diff: ${diff:.2f} Cash: ${investable_cash:.2f} Budget qty: {q_buy_budget} Cash limit qty: {q_buy_cash_limit}"
-                        )
-                        continue
-                    
-                    if is_limit_order:
-                        submitted = submit_order_with_alert(
-                            t_ctx,
-                            f"{k}.US",
-                            "limit",
-                            "buy",
-                            q_buy,
-                            logs,
-                            t("limit_buy", symbol=k, qty=q_buy, price=ref_price),
-                            submitted_price=ref_price,
-                        )
-                        cost_estimate = q_buy * budget_price
-                    else:
-                        submitted = submit_order_with_alert(
-                            t_ctx,
-                            f"{k}.US",
-                            "market",
-                            "buy",
-                            q_buy,
-                            logs,
-                            t("market_buy", symbol=k, qty=q_buy, price=round(p, 2)),
-                        )
-                        cost_estimate = q_buy * budget_price
-                    
-                    if submitted:
-                        investable_cash = max(0, investable_cash - cost_estimate)
-                        action_done = True
-                else:
-                    notify_issue(
-                        "Buy skipped",
-                        f"Symbol: {k}.US Diff: ${diff:.2f} Cash: ${investable_cash:.2f} Price: ${p:.2f} (insufficient for 1 share)"
-                    )
-
-        if action_done:
-            formatted_logs = "\n".join([f"  {log}" for log in logs])
-            tg_msg = (
-                f"{t('rebalance_title')}\n"
-                f"{t('market_status', status=market_status)}\n"
-                f"{t('risk_position', ratio=deploy_ratio_text)}\n"
-                f"{t('income_target', ratio=income_ratio_text)}\n"
-                f"{t('income_locked', ratio=income_locked_ratio_text)}\n"
-                f"{t('signal', msg=msg)}\n"
-                f"{SEPARATOR}\n"
-                f"{formatted_logs}"
-            )
-            send_tg_message(tg_msg)
-        else:
-            cash_label = t("cash_label")
-            no_trade_msg = (
-                f"{t('heartbeat_title')}\n"
-                f"{t('market_status', status=market_status)}\n"
-                f"{t('equity', value=f'{total_strategy_equity:,.2f}')}\n"
-                f"{SEPARATOR}\n"
-                f"SOXL: ${mv['SOXL']:,.2f}  SOXX: ${mv['SOXX']:,.2f}\n"
-                f"QQQI: ${mv['QQQI']:,.2f}  SPYI: ${mv['SPYI']:,.2f}\n"
-                f"BOXX: ${mv['BOXX']:,.2f}  {cash_label}: ${available_cash:,.2f}\n"
-                f"{SEPARATOR}\n"
-                f"{t('risk_position', ratio=deploy_ratio_text)}\n"
-                f"{t('income_target', ratio=income_ratio_text)}\n"
-                f"{t('income_locked', ratio=income_locked_ratio_text)}\n"
-                f"{t('heartbeat_signal', msg=msg)}\n"
-                f"{SEPARATOR}\n"
-                f"{t('no_trades')}"
-            )
-            print(with_prefix(no_trade_msg), flush=True)
-            send_tg_message(no_trade_msg)
         
     except Exception:
         err = traceback.format_exc()
@@ -546,6 +340,7 @@ def handle_trigger():
     """Entrypoint for Cloud Run / scheduler: run strategy and return 200."""
     run_strategy()
     return "OK", 200
+
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
