@@ -9,6 +9,8 @@
 
 Quant system on LongPort OpenAPI and Google Cloud Run.
 
+This strategy repo now depends on `QuantPlatformKit` for LongPort token handling, context bootstrap, account snapshot access, market-data access, and order submission. Cloud Run still deploys this strategy repo only.
+
 **Layers**
 
 - **Trading:** SOXL / SOXX / BOXX
@@ -149,6 +151,8 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 ## 中文
 
 基于 LongPort OpenAPI 和 Google Cloud Run 的量化交易系统。
+
+这个策略仓库现在通过 `QuantPlatformKit` 复用 LongPort token 处理、上下文初始化、账户快照、行情读取和下单逻辑。Cloud Run 仍然只部署这个策略仓库本身。
 
 **层级**
 
