@@ -127,6 +127,14 @@ Important:
 - Here "shared" only means **shared inside this repository** between the `HK` and `SG` Cloud Run services. `GCP_SA_KEY`, `TELEGRAM_TOKEN`, and the LongPort secrets remain repository- or environment-specific; they are not meant to be a global secret set reused by unrelated quant repos.
 - If you want one cross-project shared layer across multiple quant repos, keep it small: `GLOBAL_TELEGRAM_CHAT_ID` and `NOTIFY_LANG` are reasonable; account credentials and deployment keys are not.
 
+### Deployment unit and naming
+
+- `QuantPlatformKit` is only a shared dependency; Cloud Run still deploys `LongBridgeQuant` itself.
+- Recommended Cloud Run service names: `longbridge-quant-hk` and `longbridge-quant-sg`.
+- Keep using two triggers and two GitHub Environments. The split key is still `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`.
+- If you later rename or move this repository, rebuild the GitHub source binding in Google Cloud for both triggers instead of assuming the existing source binding will follow the rename.
+- For the shared deployment model and trigger migration checklist, see [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md).
+
 ### Quick deploy
 
 1. Enable **Cloud Run** and **Secret Manager API** in GCP.
@@ -269,6 +277,14 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 - 现在 workflow 只有在 `ENABLE_GITHUB_ENV_SYNC=true` 时才会严格检查配置。没打开这个开关时，它会直接跳过，不影响原来只靠 Google Cloud Trigger 的老流程；一旦打开，缺任何配置都会直接失败，避免你以为已经同步成功。
 - 这里的“共享”只是指 **同一个仓库里的 HK / SG 两个服务共享**。`GCP_SA_KEY`、`TELEGRAM_TOKEN`、LongPort 相关 secrets 仍然是这个仓库或某个 Environment 自己的，不建议把它们当成所有 quant 共用的全局 secrets。
 - 如果你真的要在多个 quant 仓库之间保留一层全局共享，建议只保留 `GLOBAL_TELEGRAM_CHAT_ID` 和 `NOTIFY_LANG` 这种低耦合配置。
+
+### 部署单元和命名建议
+
+- `QuantPlatformKit` 只是共享依赖，不单独部署；Cloud Run 继续只部署 `LongBridgeQuant`。
+- 推荐 Cloud Run 服务名：`longbridge-quant-hk` 和 `longbridge-quant-sg`。
+- 继续保留两个 trigger 和两个 GitHub Environment，区分键始终是 `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`。
+- 如果后面改 GitHub 仓库名或再次迁组织，Google Cloud 里的两个 trigger 都要重新选择 GitHub 来源，不要假设旧绑定会自动跟过去。
+- 统一部署模型和触发器迁移清单见 [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md)。
 
 ### 快速部署
 
