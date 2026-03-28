@@ -1,0 +1,126 @@
+name: Sync Cloud Run Env
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  sync-hk:
+    name: Sync HK Cloud Run Env
+    runs-on: ubuntu-latest
+    environment: longbridge-hk
+    env:
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+      ACCOUNT_PREFIX: ${{ vars.ACCOUNT_PREFIX }}
+      SERVICE_NAME: ${{ vars.SERVICE_NAME }}
+      LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
+      NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
+      GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      LONGPORT_APP_KEY: ${{ secrets.LONGPORT_APP_KEY }}
+      LONGPORT_APP_SECRET: ${{ secrets.LONGPORT_APP_SECRET }}
+    steps:
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ steps.auth.outputs.project_id }}
+          version: ">= 416.0.0"
+
+      - name: Validate config
+        run: |
+          set -euo pipefail
+
+          required_vars=(
+            CLOUD_RUN_REGION
+            CLOUD_RUN_SERVICE
+            ACCOUNT_PREFIX
+            SERVICE_NAME
+            LONGPORT_SECRET_NAME
+            NOTIFY_LANG
+            GLOBAL_TELEGRAM_CHAT_ID
+            TELEGRAM_TOKEN
+            LONGPORT_APP_KEY
+            LONGPORT_APP_SECRET
+          )
+
+          for var_name in "${required_vars[@]}"; do
+            if [ -z "${!var_name:-}" ]; then
+              echo "${var_name} is required." >&2
+              exit 1
+            fi
+          done
+
+      - name: Sync Cloud Run environment
+        run: |
+          set -euo pipefail
+
+          gcloud run services update "${CLOUD_RUN_SERVICE}" \
+            --region "${CLOUD_RUN_REGION}" \
+            --update-env-vars "TELEGRAM_TOKEN=${TELEGRAM_TOKEN},GLOBAL_TELEGRAM_CHAT_ID=${GLOBAL_TELEGRAM_CHAT_ID},NOTIFY_LANG=${NOTIFY_LANG},LONGPORT_APP_KEY=${LONGPORT_APP_KEY},LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET},LONGPORT_SECRET_NAME=${LONGPORT_SECRET_NAME},ACCOUNT_PREFIX=${ACCOUNT_PREFIX},SERVICE_NAME=${SERVICE_NAME}"
+
+  sync-sg:
+    name: Sync SG Cloud Run Env
+    runs-on: ubuntu-latest
+    environment: longbridge-sg
+    env:
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+      ACCOUNT_PREFIX: ${{ vars.ACCOUNT_PREFIX }}
+      SERVICE_NAME: ${{ vars.SERVICE_NAME }}
+      LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
+      NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
+      GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      LONGPORT_APP_KEY: ${{ secrets.LONGPORT_APP_KEY }}
+      LONGPORT_APP_SECRET: ${{ secrets.LONGPORT_APP_SECRET }}
+    steps:
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ steps.auth.outputs.project_id }}
+          version: ">= 416.0.0"
+
+      - name: Validate config
+        run: |
+          set -euo pipefail
+
+          required_vars=(
+            CLOUD_RUN_REGION
+            CLOUD_RUN_SERVICE
+            ACCOUNT_PREFIX
+            SERVICE_NAME
+            LONGPORT_SECRET_NAME
+            NOTIFY_LANG
+            GLOBAL_TELEGRAM_CHAT_ID
+            TELEGRAM_TOKEN
+            LONGPORT_APP_KEY
+            LONGPORT_APP_SECRET
+          )
+
+          for var_name in "${required_vars[@]}"; do
+            if [ -z "${!var_name:-}" ]; then
+              echo "${var_name} is required." >&2
+              exit 1
+            fi
+          done
+
+      - name: Sync Cloud Run environment
+        run: |
+          set -euo pipefail
+
+          gcloud run services update "${CLOUD_RUN_SERVICE}" \
+            --region "${CLOUD_RUN_REGION}" \
+            --update-env-vars "TELEGRAM_TOKEN=${TELEGRAM_TOKEN},GLOBAL_TELEGRAM_CHAT_ID=${GLOBAL_TELEGRAM_CHAT_ID},NOTIFY_LANG=${NOTIFY_LANG},LONGPORT_APP_KEY=${LONGPORT_APP_KEY},LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET},LONGPORT_SECRET_NAME=${LONGPORT_SECRET_NAME},ACCOUNT_PREFIX=${ACCOUNT_PREFIX},SERVICE_NAME=${SERVICE_NAME}"

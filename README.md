@@ -96,6 +96,28 @@ Deploy the same codebase as multiple Cloud Run services (e.g. `HK` and `SG`) by 
 - `SERVICE_NAME`: e.g. `longbridge-quant-hk`, `longbridge-quant-sg`
 - `NOTIFY_LANG`: set `en` or `zh` per deployment
 
+### GitHub-managed env sync for HK / SG
+
+If code deployment still uses Google Cloud Trigger, but you want GitHub to be the single source of truth for runtime env vars, this repo includes `.github/workflows/sync-cloud-run-env.yml`.
+
+Recommended setup:
+
+- **Repository Variables (shared):**
+  - `CLOUD_RUN_REGION`
+  - `NOTIFY_LANG`
+  - `GLOBAL_TELEGRAM_CHAT_ID`
+- **Repository Secrets (shared):**
+  - `GCP_SA_KEY`
+  - `TELEGRAM_TOKEN`
+- **GitHub Environment: `longbridge-hk`**
+  - Variables: `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `LONGPORT_SECRET_NAME`
+  - Secrets: `LONGPORT_APP_KEY`, `LONGPORT_APP_SECRET`
+- **GitHub Environment: `longbridge-sg`**
+  - Variables: `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `LONGPORT_SECRET_NAME`
+  - Secrets: `LONGPORT_APP_KEY`, `LONGPORT_APP_SECRET`
+
+On every push to `main`, the workflow updates both Cloud Run services with the shared and per-environment values above. It does **not** remove legacy `TELEGRAM_CHAT_ID`, so existing deployments keep working. Once you have confirmed both services are reading `GLOBAL_TELEGRAM_CHAT_ID` as intended, you can remove `TELEGRAM_CHAT_ID` from each Cloud Run service manually.
+
 ### Quick deploy
 
 1. Enable **Cloud Run** and **Secret Manager API** in GCP.
@@ -207,6 +229,28 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 - `ACCOUNT_PREFIX`: 如 `HK`、`SG`（所有通知/日志将包含 `[ACCOUNT_PREFIX/SERVICE_NAME]`）
 - `SERVICE_NAME`: 如 `longbridge-quant-hk`、`longbridge-quant-sg`
 - `NOTIFY_LANG`: 每个部署可独立设置 `en` 或 `zh`
+
+### GitHub 统一管理 HK / SG 环境变量
+
+如果代码部署继续走 Google Cloud Trigger，但你想把运行时环境变量统一放在 GitHub 管理，这个仓库已经提供 `.github/workflows/sync-cloud-run-env.yml`。
+
+推荐配置方式：
+
+- **仓库级 Variables（共享）：**
+  - `CLOUD_RUN_REGION`
+  - `NOTIFY_LANG`
+  - `GLOBAL_TELEGRAM_CHAT_ID`
+- **仓库级 Secrets（共享）：**
+  - `GCP_SA_KEY`
+  - `TELEGRAM_TOKEN`
+- **GitHub Environment: `longbridge-hk`**
+  - Variables: `CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`LONGPORT_SECRET_NAME`
+  - Secrets: `LONGPORT_APP_KEY`、`LONGPORT_APP_SECRET`
+- **GitHub Environment: `longbridge-sg`**
+  - Variables: `CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`LONGPORT_SECRET_NAME`
+  - Secrets: `LONGPORT_APP_KEY`、`LONGPORT_APP_SECRET`
+
+每次 push 到 `main` 时，这个 workflow 会分别更新两个 Cloud Run 服务，把共享和各自隔离的变量同步进去。它**不会主动删除**旧的 `TELEGRAM_CHAT_ID`，这样现有部署不会被硬切断。等你确认两个服务都已经按预期读取 `GLOBAL_TELEGRAM_CHAT_ID` 后，再手动把各自 Cloud Run 上旧的 `TELEGRAM_CHAT_ID` 删掉即可。
 
 ### 快速部署
 
