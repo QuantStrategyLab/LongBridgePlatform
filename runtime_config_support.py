@@ -57,7 +57,7 @@ def load_platform_runtime_settings(
     project_id_resolver: Callable[[], str | None],
 ) -> PlatformRuntimeSettings:
     account_prefix = os.getenv("ACCOUNT_PREFIX", "DEFAULT")
-    service_name = os.getenv("SERVICE_NAME", "longbridge-quant")
+    service_name = os.getenv("SERVICE_NAME", "longbridge-quant-semiconductor-rotation-income")
     strategy_definition = resolve_strategy_definition(
         os.getenv("STRATEGY_PROFILE"),
         platform_id=LONGBRIDGE_PLATFORM,

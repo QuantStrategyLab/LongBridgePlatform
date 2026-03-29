@@ -82,7 +82,7 @@ BOXX: $34,000.00  Cash: $10,000.00
 | `LONGPORT_APP_SECRET` | Yes | LongPort OpenAPI app secret (for token refresh); recommended to inject from Secret Manager secret `longport-app-secret` |
 | `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token`) |
 | `ACCOUNT_PREFIX` | No | Alert/log prefix for account/environment (default: `DEFAULT`) |
-| `SERVICE_NAME` | No | Alert/log prefix for service identity (default: `longbridge-quant`) |
+| `SERVICE_NAME` | No | Alert/log prefix for service identity (default: `longbridge-quant-semiconductor-rotation-income`) |
 | `STRATEGY_PROFILE` | No | Strategy profile selector (default: `semiconductor_rotation_income`, currently the only supported `us_equity` value) |
 | `ACCOUNT_REGION` | No | Account region marker for platform-style deployment (e.g. `HK`, `SG`; defaults to `ACCOUNT_PREFIX` / service-name suffix / `DEFAULT`) |
 | `NOTIFY_LANG` | No | Notification language: `en` (English, default) or `zh` (Chinese) |
@@ -250,7 +250,7 @@ BOXX: $34,000.00  现金: $10,000.00
 | `LONGPORT_APP_SECRET` | 是 | LongPort OpenAPI 应用密钥（用于刷新 Token）；建议通过 Secret Manager 的 `longport-app-secret` 注入 |
 | `LONGPORT_SECRET_NAME` | 否 | Secret Manager 中的密钥名称（默认: `longport_token`） |
 | `ACCOUNT_PREFIX` | 否 | 通知/日志前缀，区分账户环境（默认: `DEFAULT`） |
-| `SERVICE_NAME` | 否 | 通知/日志前缀，区分服务（默认: `longbridge-quant`） |
+| `SERVICE_NAME` | 否 | 通知/日志前缀，区分服务（默认: `longbridge-quant-semiconductor-rotation-income`） |
 | `STRATEGY_PROFILE` | 否 | 策略档位选择（默认: `semiconductor_rotation_income`，当前仅支持这个 `us_equity` 策略值） |
 | `ACCOUNT_REGION` | 否 | 平台化部署时的账户区域标记（如 `HK`、`SG`；默认按 `ACCOUNT_PREFIX` / 服务名后缀 / `DEFAULT` 推断） |
 | `NOTIFY_LANG` | 否 | 通知语言: `en`（英文，默认）或 `zh`（中文） |

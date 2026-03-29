@@ -29,7 +29,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.project_id, "project-1")
         self.assertEqual(settings.secret_name, "longport_token")
         self.assertEqual(settings.account_prefix, "DEFAULT")
-        self.assertEqual(settings.service_name, "longbridge-quant")
+        self.assertEqual(settings.service_name, "longbridge-quant-semiconductor-rotation-income")
         self.assertEqual(settings.strategy_profile, DEFAULT_STRATEGY_PROFILE)
         self.assertEqual(settings.strategy_domain, US_EQUITY_DOMAIN)
         self.assertEqual(settings.account_region, DEFAULT_ACCOUNT_REGION)
