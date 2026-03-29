@@ -10,6 +10,7 @@
 Quant system on LongPort OpenAPI and Google Cloud Run.
 
 This strategy repo now depends on `QuantPlatformKit` for LongPort token handling, context bootstrap, account snapshot access, market-data access, and order submission. Cloud Run still deploys this strategy repo only.
+The current `semiconductor_rotation_income` allocation logic is loaded from `UsEquityStrategies`. LongBridgePlatform keeps the LongPort runtime, token refresh, execution, and notification flow.
 
 **Layers**
 
@@ -178,6 +179,7 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 基于 LongPort OpenAPI 和 Google Cloud Run 的量化交易系统。
 
 这个策略仓库现在通过 `QuantPlatformKit` 复用 LongPort token 处理、上下文初始化、账户快照、行情读取和下单逻辑。Cloud Run 仍然只部署这个策略仓库本身。
+当前 `semiconductor_rotation_income` 的仓位与调仓计算逻辑已经改为从 `UsEquityStrategies` 加载；LongBridgePlatform 继续保留 LongPort 运行时、token 刷新、执行和通知流程。
 
 **层级**
 
