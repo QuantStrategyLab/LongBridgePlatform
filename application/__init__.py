@@ -1,2 +1,2 @@
-"""Application-layer services for LongBridgeQuant."""
+"""Application-layer services for LongBridgePlatform."""
 

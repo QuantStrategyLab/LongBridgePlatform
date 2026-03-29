@@ -1,4 +1,4 @@
-"""Telegram notification helpers for LongBridgeQuant."""
+"""Telegram notification helpers for LongBridgePlatform."""
 
 from __future__ import annotations
 

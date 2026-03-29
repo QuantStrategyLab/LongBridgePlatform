@@ -1,2 +1,2 @@
-"""Entrypoint helpers for LongBridgeQuant."""
+"""Entrypoint helpers for LongBridgePlatform."""
 

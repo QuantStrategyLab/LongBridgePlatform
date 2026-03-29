@@ -1,4 +1,4 @@
-"""Order submission and status notification helpers for LongBridgeQuant."""
+"""Order submission and status notification helpers for LongBridgePlatform."""
 
 from __future__ import annotations
 

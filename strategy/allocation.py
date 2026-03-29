@@ -1,4 +1,4 @@
-"""Allocation and plan helpers for LongBridgeQuant."""
+"""Allocation and plan helpers for LongBridgePlatform."""
 
 from __future__ import annotations
 

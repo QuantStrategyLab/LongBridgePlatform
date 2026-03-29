@@ -146,8 +146,8 @@ Important:
 
 ### Deployment unit and naming
 
-- `QuantPlatformKit` is only a shared dependency; Cloud Run still deploys `LongBridgeQuant` itself.
-- Recommended Cloud Run service names: `longbridge-quant-hk` and `longbridge-quant-sg`.
+- `QuantPlatformKit` is only a shared dependency; Cloud Run still deploys `LongBridgePlatform` itself.
+- Recommended Cloud Run service names: `longbridge-quant-semiconductor-rotation-income-hk` and `longbridge-quant-semiconductor-rotation-income-sg`.
 - Keep using two triggers and two GitHub Environments. The split key is still `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`, and the runtime identity is now explicit through `STRATEGY_PROFILE + ACCOUNT_REGION`.
 - If you later rename or move this repository, rebuild the GitHub source binding in Google Cloud for both triggers instead of assuming the existing source binding will follow the rename.
 - For the shared deployment model and trigger migration checklist, see [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md).
@@ -314,8 +314,8 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 
 ### 部署单元和命名建议
 
-- `QuantPlatformKit` 只是共享依赖，不单独部署；Cloud Run 继续只部署 `LongBridgeQuant`。
-- 推荐 Cloud Run 服务名：`longbridge-quant-hk` 和 `longbridge-quant-sg`。
+- `QuantPlatformKit` 只是共享依赖，不单独部署；Cloud Run 继续只部署 `LongBridgePlatform`。
+- 推荐 Cloud Run 服务名：`longbridge-quant-semiconductor-rotation-income-hk` 和 `longbridge-quant-semiconductor-rotation-income-sg`。
 - 继续保留两个 trigger 和两个 GitHub Environment，区分键始终是 `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`，运行身份再通过 `STRATEGY_PROFILE + ACCOUNT_REGION` 明确下来。
 - 如果后面改 GitHub 仓库名或再次迁组织，Google Cloud 里的两个 trigger 都要重新选择 GitHub 来源，不要假设旧绑定会自动跟过去。
 - 统一部署模型和触发器迁移清单见 [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md)。

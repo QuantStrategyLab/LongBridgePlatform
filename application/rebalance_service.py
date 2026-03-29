@@ -1,4 +1,4 @@
-"""Application orchestration for LongBridgeQuant."""
+"""Application orchestration for LongBridgePlatform."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Cloud Run request helpers for LongBridgeQuant."""
+"""Cloud Run request helpers for LongBridgePlatform."""
 
 from __future__ import annotations
 

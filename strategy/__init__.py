@@ -1,2 +1,2 @@
-"""Strategy-layer helpers for LongBridgeQuant."""
+"""Strategy-layer helpers for LongBridgePlatform."""
 

@@ -1,2 +1,2 @@
-"""Notification helpers for LongBridgeQuant."""
+"""Notification helpers for LongBridgePlatform."""
 
