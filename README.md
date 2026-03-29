@@ -9,8 +9,8 @@
 
 Quant system on LongPort OpenAPI and Google Cloud Run.
 
-This strategy repo now depends on `QuantPlatformKit` for LongPort token handling, context bootstrap, account snapshot access, market-data access, and order submission. Cloud Run still deploys this strategy repo only.
-The current `semiconductor_rotation_income` allocation logic is loaded from `UsEquityStrategies`. LongBridgePlatform keeps the LongPort runtime, token refresh, execution, and notification flow.
+This repository uses `QuantPlatformKit` for LongPort token handling, context bootstrap, account snapshot access, market data, and order submission. Cloud Run deploys this repository directly.
+The `semiconductor_rotation_income` allocation logic is loaded from `UsEquityStrategies`. `LongBridgePlatform` keeps the LongPort runtime, token refresh, execution, and notification flow.
 
 **Layers**
 
@@ -41,7 +41,7 @@ The current `semiconductor_rotation_income` allocation logic is loaded from `UsE
 
 ### Notifications
 
-Beautiful emoji-formatted Telegram notifications with full i18n support.
+Telegram notifications include structured execution and heartbeat messages, with English and Chinese variants.
 
 **Trade execution:**
 ```
@@ -84,7 +84,7 @@ BOXX: $34,000.00  Cash: $10,000.00
 | `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token`) |
 | `ACCOUNT_PREFIX` | No | Alert/log prefix for account/environment (default: `DEFAULT`) |
 | `SERVICE_NAME` | No | Alert/log prefix for service identity (default: `longbridge-quant-semiconductor-rotation-income`) |
-| `STRATEGY_PROFILE` | No | Strategy profile selector (default: `semiconductor_rotation_income`, currently the only supported `us_equity` value) |
+| `STRATEGY_PROFILE` | No | Strategy profile selector (default: `semiconductor_rotation_income`; supported value: `semiconductor_rotation_income`) |
 | `ACCOUNT_REGION` | No | Account region marker for platform-style deployment (e.g. `HK`, `SG`; defaults to `ACCOUNT_PREFIX` / service-name suffix / `DEFAULT`) |
 | `NOTIFY_LANG` | No | Notification language: `en` (English, default) or `zh` (Chinese) |
 | `GOOGLE_CLOUD_PROJECT` | No | GCP project ID (defaults to ADC project when unset) |
@@ -178,8 +178,8 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 
 基于 LongPort OpenAPI 和 Google Cloud Run 的量化交易系统。
 
-这个策略仓库现在通过 `QuantPlatformKit` 复用 LongPort token 处理、上下文初始化、账户快照、行情读取和下单逻辑。Cloud Run 仍然只部署这个策略仓库本身。
-当前 `semiconductor_rotation_income` 的仓位与调仓计算逻辑已经改为从 `UsEquityStrategies` 加载；LongBridgePlatform 继续保留 LongPort 运行时、token 刷新、执行和通知流程。
+这个仓库通过 `QuantPlatformKit` 复用 LongPort token 处理、上下文初始化、账户快照、行情读取和下单逻辑。Cloud Run 直接部署这个仓库。
+`semiconductor_rotation_income` 的仓位与调仓计算逻辑从 `UsEquityStrategies` 加载；`LongBridgePlatform` 继续保留 LongPort 运行时、token 刷新、执行和通知流程。
 
 **层级**
 
@@ -210,7 +210,7 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 
 ### 通知格式
 
-精美的 Emoji 格式 Telegram 通知，支持中英文切换。
+Telegram 通知包含结构化的调仓和心跳消息，支持中英文切换。
 
 **调仓通知:**
 ```
@@ -253,7 +253,7 @@ BOXX: $34,000.00  现金: $10,000.00
 | `LONGPORT_SECRET_NAME` | 否 | Secret Manager 中的密钥名称（默认: `longport_token`） |
 | `ACCOUNT_PREFIX` | 否 | 通知/日志前缀，区分账户环境（默认: `DEFAULT`） |
 | `SERVICE_NAME` | 否 | 通知/日志前缀，区分服务（默认: `longbridge-quant-semiconductor-rotation-income`） |
-| `STRATEGY_PROFILE` | 否 | 策略档位选择（默认: `semiconductor_rotation_income`，当前仅支持这个 `us_equity` 策略值） |
+| `STRATEGY_PROFILE` | 否 | 策略档位选择（默认: `semiconductor_rotation_income`；当前支持值: `semiconductor_rotation_income`） |
 | `ACCOUNT_REGION` | 否 | 平台化部署时的账户区域标记（如 `HK`、`SG`；默认按 `ACCOUNT_PREFIX` / 服务名后缀 / `DEFAULT` 推断） |
 | `NOTIFY_LANG` | 否 | 通知语言: `en`（英文，默认）或 `zh`（中文） |
 | `GOOGLE_CLOUD_PROJECT` | 否 | GCP 项目 ID（未设置时使用 ADC 默认项目） |
@@ -276,7 +276,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 - `ACCOUNT_PREFIX`: 如 `HK`、`SG`（所有通知/日志将包含 `[ACCOUNT_PREFIX/SERVICE_NAME]`）
 - `SERVICE_NAME`: 如 `longbridge-quant-semiconductor-rotation-income-hk`、`longbridge-quant-semiconductor-rotation-income-sg`
 - `STRATEGY_PROFILE`: 当前 LongBridge 策略档位使用 `semiconductor_rotation_income`
-- 当前策略大类是 `us_equity`。仓库里已经保留了一层很薄的策略注册表，后面如果要继续拆“策略大类 + 具体策略”，可以沿着这层继续扩，不需要再把平台和策略揉在一起。
+- 当前策略域是 `us_equity`。本地策略注册表只用于域和 profile 校验。
 - `ACCOUNT_REGION`: 显式标记部署账户区域（`HK` / `SG`）；未设置时会回退到 `ACCOUNT_PREFIX` 或服务名里的 `-hk` / `-sg` 后缀
 - `NOTIFY_LANG`: 每个部署可独立设置 `en` 或 `zh`
 
