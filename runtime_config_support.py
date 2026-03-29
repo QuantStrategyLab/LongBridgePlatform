@@ -4,8 +4,13 @@ import os
 from dataclasses import dataclass
 from typing import Callable
 
-DEFAULT_STRATEGY_PROFILE = "semiconductor_rotation_income"
-SUPPORTED_STRATEGY_PROFILES = frozenset({DEFAULT_STRATEGY_PROFILE})
+from strategy_registry import (
+    DEFAULT_STRATEGY_PROFILE,
+    LONGBRIDGE_PLATFORM,
+    SUPPORTED_STRATEGY_PROFILES,
+    resolve_strategy_definition,
+)
+
 DEFAULT_ACCOUNT_REGION = "DEFAULT"
 
 
@@ -16,6 +21,7 @@ class PlatformRuntimeSettings:
     account_prefix: str
     service_name: str
     strategy_profile: str
+    strategy_domain: str
     account_region: str
     notify_lang: str
     tg_token: str | None
@@ -23,13 +29,10 @@ class PlatformRuntimeSettings:
 
 
 def resolve_strategy_profile(raw_value: str | None) -> str:
-    value = (raw_value or DEFAULT_STRATEGY_PROFILE).strip().lower()
-    if value not in SUPPORTED_STRATEGY_PROFILES:
-        supported = ", ".join(sorted(SUPPORTED_STRATEGY_PROFILES))
-        raise ValueError(
-            f"Unsupported STRATEGY_PROFILE={raw_value!r}; supported values: {supported}"
-        )
-    return value
+    return resolve_strategy_definition(
+        raw_value,
+        platform_id=LONGBRIDGE_PLATFORM,
+    ).profile
 
 
 def infer_account_region(
@@ -55,12 +58,17 @@ def load_platform_runtime_settings(
 ) -> PlatformRuntimeSettings:
     account_prefix = os.getenv("ACCOUNT_PREFIX", "DEFAULT")
     service_name = os.getenv("SERVICE_NAME", "longbridge-quant")
+    strategy_definition = resolve_strategy_definition(
+        os.getenv("STRATEGY_PROFILE"),
+        platform_id=LONGBRIDGE_PLATFORM,
+    )
     return PlatformRuntimeSettings(
         project_id=project_id_resolver(),
         secret_name=os.getenv("LONGPORT_SECRET_NAME", "longport_token"),
         account_prefix=account_prefix,
         service_name=service_name,
-        strategy_profile=resolve_strategy_profile(os.getenv("STRATEGY_PROFILE")),
+        strategy_profile=strategy_definition.profile,
+        strategy_domain=strategy_definition.domain,
         account_region=infer_account_region(
             os.getenv("ACCOUNT_REGION"),
             account_prefix=account_prefix,

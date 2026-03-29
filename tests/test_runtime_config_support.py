@@ -15,6 +15,7 @@ from runtime_config_support import (
     infer_account_region,
     load_platform_runtime_settings,
 )
+from strategy_registry import LONGBRIDGE_PLATFORM, US_EQUITY_DOMAIN, get_supported_profiles_for_platform
 
 
 class RuntimeConfigSupportTests(unittest.TestCase):
@@ -27,10 +28,17 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.account_prefix, "DEFAULT")
         self.assertEqual(settings.service_name, "longbridge-quant")
         self.assertEqual(settings.strategy_profile, DEFAULT_STRATEGY_PROFILE)
+        self.assertEqual(settings.strategy_domain, US_EQUITY_DOMAIN)
         self.assertEqual(settings.account_region, DEFAULT_ACCOUNT_REGION)
         self.assertEqual(settings.notify_lang, "en")
         self.assertIsNone(settings.tg_token)
         self.assertIsNone(settings.tg_chat_id)
+
+    def test_platform_supported_profiles_are_filtered_by_registry(self):
+        self.assertEqual(
+            get_supported_profiles_for_platform(LONGBRIDGE_PLATFORM),
+            frozenset({DEFAULT_STRATEGY_PROFILE}),
+        )
 
     def test_account_region_prefers_explicit_env(self):
         region = infer_account_region(

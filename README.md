@@ -83,7 +83,7 @@ BOXX: $34,000.00  Cash: $10,000.00
 | `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token`) |
 | `ACCOUNT_PREFIX` | No | Alert/log prefix for account/environment (default: `DEFAULT`) |
 | `SERVICE_NAME` | No | Alert/log prefix for service identity (default: `longbridge-quant`) |
-| `STRATEGY_PROFILE` | No | Strategy profile selector (default: `semiconductor_rotation_income`, currently the only supported value) |
+| `STRATEGY_PROFILE` | No | Strategy profile selector (default: `semiconductor_rotation_income`, currently the only supported `us_equity` value) |
 | `ACCOUNT_REGION` | No | Account region marker for platform-style deployment (e.g. `HK`, `SG`; defaults to `ACCOUNT_PREFIX` / service-name suffix / `DEFAULT`) |
 | `NOTIFY_LANG` | No | Notification language: `en` (English, default) or `zh` (Chinese) |
 | `GOOGLE_CLOUD_PROJECT` | No | GCP project ID (defaults to ADC project when unset) |
@@ -98,6 +98,7 @@ Deploy the same codebase as multiple Cloud Run services (e.g. `HK` and `SG`) by 
 - `ACCOUNT_PREFIX`: e.g. `HK`, `SG` (all Telegram/log alerts will include `[ACCOUNT_PREFIX/SERVICE_NAME]`)
 - `SERVICE_NAME`: e.g. `longbridge-quant-hk`, `longbridge-quant-sg`
 - `STRATEGY_PROFILE`: use `semiconductor_rotation_income` for the current LongBridge strategy profile
+- Current strategy domain is `us_equity`. The repo now keeps a small strategy registry so future strategy switching can grow by domain + profile, instead of mixing platform and strategy in one layer.
 - `ACCOUNT_REGION`: explicitly mark the deployed account region (`HK` / `SG`); if unset, the app falls back to `ACCOUNT_PREFIX` or the `-hk` / `-sg` service-name suffix
 - `NOTIFY_LANG`: set `en` or `zh` per deployment
 
@@ -239,7 +240,7 @@ BOXX: $34,000.00  现金: $10,000.00
 | `LONGPORT_SECRET_NAME` | 否 | Secret Manager 中的密钥名称（默认: `longport_token`） |
 | `ACCOUNT_PREFIX` | 否 | 通知/日志前缀，区分账户环境（默认: `DEFAULT`） |
 | `SERVICE_NAME` | 否 | 通知/日志前缀，区分服务（默认: `longbridge-quant`） |
-| `STRATEGY_PROFILE` | 否 | 策略档位选择（默认: `semiconductor_rotation_income`，当前仅支持这个值） |
+| `STRATEGY_PROFILE` | 否 | 策略档位选择（默认: `semiconductor_rotation_income`，当前仅支持这个 `us_equity` 策略值） |
 | `ACCOUNT_REGION` | 否 | 平台化部署时的账户区域标记（如 `HK`、`SG`；默认按 `ACCOUNT_PREFIX` / 服务名后缀 / `DEFAULT` 推断） |
 | `NOTIFY_LANG` | 否 | 通知语言: `en`（英文，默认）或 `zh`（中文） |
 | `GOOGLE_CLOUD_PROJECT` | 否 | GCP 项目 ID（未设置时使用 ADC 默认项目） |
@@ -254,6 +255,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 - `ACCOUNT_PREFIX`: 如 `HK`、`SG`（所有通知/日志将包含 `[ACCOUNT_PREFIX/SERVICE_NAME]`）
 - `SERVICE_NAME`: 如 `longbridge-quant-hk`、`longbridge-quant-sg`
 - `STRATEGY_PROFILE`: 当前 LongBridge 策略档位使用 `semiconductor_rotation_income`
+- 当前策略大类是 `us_equity`。仓库里已经保留了一层很薄的策略注册表，后面如果要继续拆“策略大类 + 具体策略”，可以沿着这层继续扩，不需要再把平台和策略揉在一起。
 - `ACCOUNT_REGION`: 显式标记部署账户区域（`HK` / `SG`）；未设置时会回退到 `ACCOUNT_PREFIX` 或服务名里的 `-hk` / `-sg` 后缀
 - `NOTIFY_LANG`: 每个部署可独立设置 `en` 或 `zh`
 
