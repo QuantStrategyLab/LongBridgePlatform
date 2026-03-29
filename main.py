@@ -13,6 +13,7 @@ from flask import Flask
 import google.auth
 from application.rebalance_service import run_strategy as run_rebalance_cycle
 from entrypoints.cloud_run import is_market_open_now
+from runtime_config_support import load_platform_runtime_settings
 from notifications.order_alerts import (
     is_filled_status as notifications_is_filled_status,
     is_partial_filled_status as notifications_is_partial_filled_status,
@@ -55,13 +56,16 @@ def get_project_id():
     except Exception:
         return os.getenv("GOOGLE_CLOUD_PROJECT")
 
-PROJECT_ID = get_project_id()
-SECRET_NAME = os.getenv("LONGPORT_SECRET_NAME", "longport_token")
-ACCOUNT_PREFIX = os.getenv("ACCOUNT_PREFIX", "DEFAULT")
-SERVICE_NAME = os.getenv("SERVICE_NAME", "longbridge-quant")
-NOTIFY_LANG = os.getenv("NOTIFY_LANG", "en")
-TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TG_CHAT_ID = os.getenv("GLOBAL_TELEGRAM_CHAT_ID")
+RUNTIME_SETTINGS = load_platform_runtime_settings(project_id_resolver=get_project_id)
+PROJECT_ID = RUNTIME_SETTINGS.project_id
+SECRET_NAME = RUNTIME_SETTINGS.secret_name
+ACCOUNT_PREFIX = RUNTIME_SETTINGS.account_prefix
+SERVICE_NAME = RUNTIME_SETTINGS.service_name
+STRATEGY_PROFILE = RUNTIME_SETTINGS.strategy_profile
+ACCOUNT_REGION = RUNTIME_SETTINGS.account_region
+NOTIFY_LANG = RUNTIME_SETTINGS.notify_lang
+TG_TOKEN = RUNTIME_SETTINGS.tg_token
+TG_CHAT_ID = RUNTIME_SETTINGS.tg_chat_id
 
 # Execution: reserve ratio, minimum trade size (ratio of equity and absolute floor)
 CASH_RESERVE_RATIO = 0.03

@@ -83,6 +83,8 @@ BOXX: $34,000.00  Cash: $10,000.00
 | `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token`) |
 | `ACCOUNT_PREFIX` | No | Alert/log prefix for account/environment (default: `DEFAULT`) |
 | `SERVICE_NAME` | No | Alert/log prefix for service identity (default: `longbridge-quant`) |
+| `STRATEGY_PROFILE` | No | Strategy profile selector (default: `semiconductor_rotation_income`, currently the only supported value) |
+| `ACCOUNT_REGION` | No | Account region marker for platform-style deployment (e.g. `HK`, `SG`; defaults to `ACCOUNT_PREFIX` / service-name suffix / `DEFAULT`) |
 | `NOTIFY_LANG` | No | Notification language: `en` (English, default) or `zh` (Chinese) |
 | `GOOGLE_CLOUD_PROJECT` | No | GCP project ID (defaults to ADC project when unset) |
 
@@ -95,6 +97,8 @@ Deploy the same codebase as multiple Cloud Run services (e.g. `HK` and `SG`) by 
 - `LONGPORT_SECRET_NAME`: point to different secrets (e.g. `longport_token_hk`, `longport_token_sg`)
 - `ACCOUNT_PREFIX`: e.g. `HK`, `SG` (all Telegram/log alerts will include `[ACCOUNT_PREFIX/SERVICE_NAME]`)
 - `SERVICE_NAME`: e.g. `longbridge-quant-hk`, `longbridge-quant-sg`
+- `STRATEGY_PROFILE`: use `semiconductor_rotation_income` for the current LongBridge strategy profile
+- `ACCOUNT_REGION`: explicitly mark the deployed account region (`HK` / `SG`); if unset, the app falls back to `ACCOUNT_PREFIX` or the `-hk` / `-sg` service-name suffix
 - `NOTIFY_LANG`: set `en` or `zh` per deployment
 
 ### GitHub-managed env sync for HK / SG
@@ -105,16 +109,17 @@ Recommended setup:
 
 - **Repository Variables (shared):**
   - `ENABLE_GITHUB_ENV_SYNC` = `true`
+  - `STRATEGY_PROFILE` (recommended: `semiconductor_rotation_income`)
   - `NOTIFY_LANG`
   - `GLOBAL_TELEGRAM_CHAT_ID`
 - **Repository Secrets (shared):**
   - `GCP_SA_KEY`
   - `TELEGRAM_TOKEN`
 - **GitHub Environment: `longbridge-hk`**
-  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `LONGPORT_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `ACCOUNT_REGION`, `LONGPORT_SECRET_NAME`
   - Secrets: `LONGPORT_APP_KEY`, `LONGPORT_APP_SECRET`
 - **GitHub Environment: `longbridge-sg`**
-  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `LONGPORT_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `ACCOUNT_REGION`, `LONGPORT_SECRET_NAME`
   - Secrets: `LONGPORT_APP_KEY`, `LONGPORT_APP_SECRET`
 
 On every push to `main`, the workflow updates both Cloud Run services with the shared and per-environment values above, and removes `TELEGRAM_CHAT_ID` from each Cloud Run service.
@@ -131,7 +136,7 @@ Important:
 
 - `QuantPlatformKit` is only a shared dependency; Cloud Run still deploys `LongBridgeQuant` itself.
 - Recommended Cloud Run service names: `longbridge-quant-hk` and `longbridge-quant-sg`.
-- Keep using two triggers and two GitHub Environments. The split key is still `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`.
+- Keep using two triggers and two GitHub Environments. The split key is still `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`, and the runtime identity is now explicit through `STRATEGY_PROFILE + ACCOUNT_REGION`.
 - If you later rename or move this repository, rebuild the GitHub source binding in Google Cloud for both triggers instead of assuming the existing source binding will follow the rename.
 - For the shared deployment model and trigger migration checklist, see [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md).
 
@@ -234,6 +239,8 @@ BOXX: $34,000.00  现金: $10,000.00
 | `LONGPORT_SECRET_NAME` | 否 | Secret Manager 中的密钥名称（默认: `longport_token`） |
 | `ACCOUNT_PREFIX` | 否 | 通知/日志前缀，区分账户环境（默认: `DEFAULT`） |
 | `SERVICE_NAME` | 否 | 通知/日志前缀，区分服务（默认: `longbridge-quant`） |
+| `STRATEGY_PROFILE` | 否 | 策略档位选择（默认: `semiconductor_rotation_income`，当前仅支持这个值） |
+| `ACCOUNT_REGION` | 否 | 平台化部署时的账户区域标记（如 `HK`、`SG`；默认按 `ACCOUNT_PREFIX` / 服务名后缀 / `DEFAULT` 推断） |
 | `NOTIFY_LANG` | 否 | 通知语言: `en`（英文，默认）或 `zh`（中文） |
 | `GOOGLE_CLOUD_PROJECT` | 否 | GCP 项目 ID（未设置时使用 ADC 默认项目） |
 
@@ -246,6 +253,8 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 - `LONGPORT_SECRET_NAME`: 指向不同密钥（如 `longport_token_hk`、`longport_token_sg`）
 - `ACCOUNT_PREFIX`: 如 `HK`、`SG`（所有通知/日志将包含 `[ACCOUNT_PREFIX/SERVICE_NAME]`）
 - `SERVICE_NAME`: 如 `longbridge-quant-hk`、`longbridge-quant-sg`
+- `STRATEGY_PROFILE`: 当前 LongBridge 策略档位使用 `semiconductor_rotation_income`
+- `ACCOUNT_REGION`: 显式标记部署账户区域（`HK` / `SG`）；未设置时会回退到 `ACCOUNT_PREFIX` 或服务名里的 `-hk` / `-sg` 后缀
 - `NOTIFY_LANG`: 每个部署可独立设置 `en` 或 `zh`
 
 ### GitHub 统一管理 HK / SG 环境变量
@@ -256,16 +265,17 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 
 - **仓库级 Variables（共享）：**
   - `ENABLE_GITHUB_ENV_SYNC` = `true`
+  - `STRATEGY_PROFILE`（建议设为 `semiconductor_rotation_income`）
   - `NOTIFY_LANG`
   - `GLOBAL_TELEGRAM_CHAT_ID`
 - **仓库级 Secrets（共享）：**
   - `GCP_SA_KEY`
   - `TELEGRAM_TOKEN`
 - **GitHub Environment: `longbridge-hk`**
-  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`LONGPORT_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`ACCOUNT_REGION`、`LONGPORT_SECRET_NAME`
   - Secrets: `LONGPORT_APP_KEY`、`LONGPORT_APP_SECRET`
 - **GitHub Environment: `longbridge-sg`**
-  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`LONGPORT_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`ACCOUNT_REGION`、`LONGPORT_SECRET_NAME`
   - Secrets: `LONGPORT_APP_KEY`、`LONGPORT_APP_SECRET`
 
 每次 push 到 `main` 时，这个 workflow 会分别更新两个 Cloud Run 服务，把共享和各自隔离的变量同步进去，并删除旧的 `TELEGRAM_CHAT_ID`。
@@ -282,7 +292,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 
 - `QuantPlatformKit` 只是共享依赖，不单独部署；Cloud Run 继续只部署 `LongBridgeQuant`。
 - 推荐 Cloud Run 服务名：`longbridge-quant-hk` 和 `longbridge-quant-sg`。
-- 继续保留两个 trigger 和两个 GitHub Environment，区分键始终是 `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`。
+- 继续保留两个 trigger 和两个 GitHub Environment，区分键始终是 `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`，运行身份再通过 `STRATEGY_PROFILE + ACCOUNT_REGION` 明确下来。
 - 如果后面改 GitHub 仓库名或再次迁组织，Google Cloud 里的两个 trigger 都要重新选择 GitHub 来源，不要假设旧绑定会自动跟过去。
 - 统一部署模型和触发器迁移清单见 [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md)。
 
