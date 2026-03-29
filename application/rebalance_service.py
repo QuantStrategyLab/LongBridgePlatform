@@ -85,6 +85,7 @@ def run_strategy(
     logs = []
     action_done = False
     threshold_value = plan["threshold_value"]
+    limit_order_symbols = set(plan["limit_order_symbols"])
 
     for symbol in plan["strategy_assets"]:
         diff = plan["targets"][symbol] - plan["market_values"][symbol]
@@ -102,7 +103,7 @@ def run_strategy(
                 plan["sellable_quantities"][symbol],
             )
             if quantity > 0:
-                if symbol in ["SOXL", "SOXX", "QQQI", "SPYI"]:
+                if symbol in limit_order_symbols:
                     limit_price = round(price * limit_sell_discount, 2)
                     submitted = submit_order_with_alert(
                         trade_context,
@@ -151,7 +152,7 @@ def run_strategy(
                 continue
             can_buy_value = min(diff, investable_cash)
             if can_buy_value > price:
-                is_limit_order = symbol in ["SOXL", "SOXX", "QQQI", "SPYI"]
+                is_limit_order = symbol in limit_order_symbols
                 order_kind = "limit" if is_limit_order else "market"
                 ref_price = round(price * limit_buy_premium, 2) if is_limit_order else round(price, 2)
                 budget_price = ref_price if is_limit_order else price
@@ -228,14 +229,26 @@ def run_strategy(
     else:
         cash_label = translator("cash_label")
         equity_text = f"{plan['total_strategy_equity']:,.2f}"
+        holdings_lines = []
+        for row in plan["portfolio_rows"]:
+            if len(row) == 1:
+                symbol = row[0]
+                holdings_lines.append(
+                    f"{symbol}: ${plan['market_values'][symbol]:,.2f}  {cash_label}: ${plan['available_cash']:,.2f}"
+                )
+            else:
+                holdings_lines.append(
+                    "  ".join(
+                        f"{symbol}: ${plan['market_values'][symbol]:,.2f}"
+                        for symbol in row
+                    )
+                )
         no_trade_message = (
             f"{translator('heartbeat_title')}\n"
             f"{translator('market_status', status=plan['market_status'])}\n"
             f"{translator('equity', value=equity_text)}\n"
             f"{separator}\n"
-            f"SOXL: ${plan['market_values']['SOXL']:,.2f}  SOXX: ${plan['market_values']['SOXX']:,.2f}\n"
-            f"QQQI: ${plan['market_values']['QQQI']:,.2f}  SPYI: ${plan['market_values']['SPYI']:,.2f}\n"
-            f"BOXX: ${plan['market_values']['BOXX']:,.2f}  {cash_label}: ${plan['available_cash']:,.2f}\n"
+            + "\n".join(holdings_lines) + "\n"
             f"{separator}\n"
             f"{translator('risk_position', ratio=plan['deploy_ratio_text'])}\n"
             f"{translator('income_target', ratio=plan['income_ratio_text'])}\n"
