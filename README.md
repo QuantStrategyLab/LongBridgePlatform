@@ -104,7 +104,7 @@ Deploy the same codebase as multiple Cloud Run services (e.g. `HK` and `SG`) by 
 
 - `LONGPORT_SECRET_NAME`: point to different secrets (e.g. `longport_token_hk`, `longport_token_sg`)
 - `ACCOUNT_PREFIX`: e.g. `HK`, `SG` (all Telegram/log alerts will include `[ACCOUNT_PREFIX/SERVICE_NAME]`)
-- `SERVICE_NAME`: e.g. `longbridge-quant-hk`, `longbridge-quant-sg`
+- `SERVICE_NAME`: e.g. `longbridge-quant-semiconductor-rotation-income-hk`, `longbridge-quant-semiconductor-rotation-income-sg`
 - `STRATEGY_PROFILE`: use `semiconductor_rotation_income` for the current LongBridge strategy profile
 - Current strategy domain is `us_equity`. The repo now keeps a small strategy registry so future strategy switching can grow by domain + profile, instead of mixing platform and strategy in one layer.
 - `ACCOUNT_REGION`: explicitly mark the deployed account region (`HK` / `SG`); if unset, the app falls back to `ACCOUNT_PREFIX` or the `-hk` / `-sg` service-name suffix
@@ -272,7 +272,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 
 - `LONGPORT_SECRET_NAME`: 指向不同密钥（如 `longport_token_hk`、`longport_token_sg`）
 - `ACCOUNT_PREFIX`: 如 `HK`、`SG`（所有通知/日志将包含 `[ACCOUNT_PREFIX/SERVICE_NAME]`）
-- `SERVICE_NAME`: 如 `longbridge-quant-hk`、`longbridge-quant-sg`
+- `SERVICE_NAME`: 如 `longbridge-quant-semiconductor-rotation-income-hk`、`longbridge-quant-semiconductor-rotation-income-sg`
 - `STRATEGY_PROFILE`: 当前 LongBridge 策略档位使用 `semiconductor_rotation_income`
 - 当前策略大类是 `us_equity`。仓库里已经保留了一层很薄的策略注册表，后面如果要继续拆“策略大类 + 具体策略”，可以沿着这层继续扩，不需要再把平台和策略揉在一起。
 - `ACCOUNT_REGION`: 显式标记部署账户区域（`HK` / `SG`）；未设置时会回退到 `ACCOUNT_PREFIX` 或服务名里的 `-hk` / `-sg` 后缀

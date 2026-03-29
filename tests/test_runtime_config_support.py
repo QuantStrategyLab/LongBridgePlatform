@@ -47,7 +47,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         region = infer_account_region(
             "sg",
             account_prefix="HK",
-            service_name="longbridge-quant-hk",
+            service_name="longbridge-quant-semiconductor-rotation-income-hk",
         )
         self.assertEqual(region, "SG")
 
@@ -63,7 +63,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         region = infer_account_region(
             None,
             account_prefix="",
-            service_name="longbridge-quant-sg",
+            service_name="longbridge-quant-semiconductor-rotation-income-sg",
         )
         self.assertEqual(region, "SG")
 
