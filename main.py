@@ -6,7 +6,6 @@ Runs on Cloud Run; token from Secret Manager, orders via LongPort OpenAPI, alert
 import os
 import time
 import traceback
-import requests
 from datetime import datetime
 
 from flask import Flask
@@ -21,6 +20,12 @@ from notifications.order_alerts import (
     monitor_submitted_order_status as notifications_monitor_submitted_order_status,
     send_order_status_message as notifications_send_order_status_message,
     submit_order_with_alert as notifications_submit_order_with_alert,
+)
+from notifications.telegram import (
+    build_issue_notifier,
+    build_prefixer,
+    build_sender,
+    build_translator,
 )
 from quant_platform_kit.longbridge import (
     build_contexts,
@@ -90,90 +95,17 @@ INCOME_LAYER_SPYI_WEIGHT = 0.30
 
 SEPARATOR = "━━━━━━━━━━━━━━━━━━"
 
-I18N = {
-    "zh": {
-        "rebalance_title": "🔔 【调仓指令】",
-        "market_status": "📊 市场状态: {status}",
-        "risk_position": "💼 交易层风险仓位: {ratio}",
-        "income_target": "💰 收入层目标: {ratio}",
-        "income_locked": "🏦 收入层锁定占比: {ratio}",
-        "signal": "🎯 触发信号: {msg}",
-        "heartbeat_title": "💓 【心跳检测】",
-        "equity": "💰 净值: ${value}",
-        "cash_label": "现金",
-        "heartbeat_signal": "🎯 信号: {msg}",
-        "no_trades": "✅ 无需调仓",
-        "order_filled": "✅ 订单成交 | {symbol} {side} {qty}股 均价 ${price} (ID: {order_id})",
-        "order_partial": "⚠️ 订单部分成交 | {symbol} {side} 已成交 {executed}/{qty}股 均价 ${price} (ID: {order_id})",
-        "order_error": "❌ 订单异常 | {symbol} {side} {qty}股 已{status} (ID: {order_id}) 原因: {reason}",
-        "error_title": "🚨 【策略异常】",
-        "limit_buy": "📈 [限价买入] {symbol}: {qty}股 @ ${price}",
-        "market_buy": "📈 [市价买入] {symbol}: {qty}股 @ ${price}",
-        "limit_sell": "📉 [限价卖出] {symbol}: {qty}股 @ ${price}",
-        "market_sell": "📉 [市价卖出] {symbol}: {qty}股 @ ${price}",
-        "side_buy": "买入",
-        "side_sell": "卖出",
-        "status_rejected": "拒绝",
-        "status_canceled": "取消",
-        "status_expired": "过期",
-        "signal_risk_on": "SOXL 站上 {window} 日均线，持有 SOXL，交易层风险仓位 {ratio}",
-        "signal_delever": "SOXL 跌破 {window} 日均线，切换至 SOXX，交易层风险仓位 {ratio}",
-    },
-    "en": {
-        "rebalance_title": "🔔 【Trade Execution Report】",
-        "market_status": "📊 Market: {status}",
-        "risk_position": "💼 Risk Position: {ratio}",
-        "income_target": "💰 Income Target: {ratio}",
-        "income_locked": "🏦 Income Locked: {ratio}",
-        "signal": "🎯 Signal: {msg}",
-        "heartbeat_title": "💓 【Heartbeat】",
-        "equity": "💰 Equity: ${value}",
-        "cash_label": "Cash",
-        "heartbeat_signal": "🎯 Signal: {msg}",
-        "no_trades": "✅ No trades needed",
-        "order_filled": "✅ Order Filled | {symbol} {side} {qty} shares avg ${price} (ID: {order_id})",
-        "order_partial": "⚠️ Partial Fill | {symbol} {side} filled {executed}/{qty} shares avg ${price} (ID: {order_id})",
-        "order_error": "❌ Order Error | {symbol} {side} {qty} shares {status} (ID: {order_id}) reason: {reason}",
-        "error_title": "🚨 【Strategy Error】",
-        "limit_buy": "📈 [Limit buy] {symbol}: {qty} shares @ ${price}",
-        "market_buy": "📈 [Market buy] {symbol}: {qty} shares @ ${price}",
-        "limit_sell": "📉 [Limit sell] {symbol}: {qty} shares @ ${price}",
-        "market_sell": "📉 [Market sell] {symbol}: {qty} shares @ ${price}",
-        "side_buy": "Buy",
-        "side_sell": "Sell",
-        "status_rejected": "Rejected",
-        "status_canceled": "Canceled",
-        "status_expired": "Expired",
-        "signal_risk_on": "SOXL above {window}d MA, hold SOXL, risk {ratio}",
-        "signal_delever": "SOXL below {window}d MA, switch to SOXX, risk {ratio}",
-    },
-}
-
 def t(key, **kwargs):
-    """Get translated string for current LANG."""
-    lang = NOTIFY_LANG if NOTIFY_LANG in I18N else "en"
-    template = I18N[lang].get(key, key)
-    return template.format(**kwargs) if kwargs else template
+    return build_translator(NOTIFY_LANG)(key, **kwargs)
 
 def with_prefix(message: str) -> str:
-    return f"[{ACCOUNT_PREFIX}/{SERVICE_NAME}] {message}"
+    return build_prefixer(ACCOUNT_PREFIX, SERVICE_NAME)(message)
 
 def send_tg_message(message):
-    """Send text to Telegram; no-op if token or chat_id missing."""
-    if not TG_TOKEN or not TG_CHAT_ID: return
-    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    try:
-        prefixed = with_prefix(message)
-        print(f"TG:\n{prefixed}", flush=True)
-        requests.post(url, json={"chat_id": TG_CHAT_ID, "text": prefixed}, timeout=10)
-    except Exception as e:
-        print(f"Telegram send failed: {e}", flush=True)
+    return build_sender(TG_TOKEN, TG_CHAT_ID, with_prefix_fn=with_prefix)(message)
 
 def notify_issue(title, detail):
-    """Log and send to Telegram (alerts for order/API failures)."""
-    message = f"{title}\n{detail}"
-    print(with_prefix(message), flush=True)
-    send_tg_message(message)
+    return build_issue_notifier(with_prefix_fn=with_prefix, send_tg_message_fn=send_tg_message)(title, detail)
 
 
 def is_filled_status(status):
