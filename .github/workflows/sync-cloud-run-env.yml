@@ -16,6 +16,9 @@ jobs:
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       ACCOUNT_PREFIX: ${{ vars.ACCOUNT_PREFIX }}
       SERVICE_NAME: ${{ vars.SERVICE_NAME }}
+      TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
+      LONGPORT_APP_KEY_SECRET_NAME: ${{ vars.LONGPORT_APP_KEY_SECRET_NAME }}
+      LONGPORT_APP_SECRET_SECRET_NAME: ${{ vars.LONGPORT_APP_SECRET_SECRET_NAME }}
       STRATEGY_PROFILE: ${{ vars.STRATEGY_PROFILE || 'semiconductor_rotation_income' }}
       ACCOUNT_REGION: ${{ vars.ACCOUNT_REGION || 'HK' }}
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
@@ -46,9 +49,6 @@ jobs:
             NOTIFY_LANG
             GLOBAL_TELEGRAM_CHAT_ID
             GCP_SA_KEY
-            TELEGRAM_TOKEN
-            LONGPORT_APP_KEY
-            LONGPORT_APP_SECRET
           )
 
           missing_vars=()
@@ -57,6 +57,18 @@ jobs:
               missing_vars+=("${var_name}")
             fi
           done
+
+          if [ -z "${TELEGRAM_TOKEN_SECRET_NAME:-}" ] && [ -z "${TELEGRAM_TOKEN:-}" ]; then
+            missing_vars+=("TELEGRAM_TOKEN_SECRET_NAME or TELEGRAM_TOKEN")
+          fi
+
+          if [ -z "${LONGPORT_APP_KEY_SECRET_NAME:-}" ] && [ -z "${LONGPORT_APP_KEY:-}" ]; then
+            missing_vars+=("LONGPORT_APP_KEY_SECRET_NAME or LONGPORT_APP_KEY")
+          fi
+
+          if [ -z "${LONGPORT_APP_SECRET_SECRET_NAME:-}" ] && [ -z "${LONGPORT_APP_SECRET:-}" ]; then
+            missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME or LONGPORT_APP_SECRET")
+          fi
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -87,10 +99,61 @@ jobs:
         run: |
           set -euo pipefail
 
-          gcloud run services update "${CLOUD_RUN_SERVICE}" \
-            --region "${CLOUD_RUN_REGION}" \
-            --remove-env-vars "TELEGRAM_CHAT_ID" \
-            --update-env-vars "TELEGRAM_TOKEN=${TELEGRAM_TOKEN},GLOBAL_TELEGRAM_CHAT_ID=${GLOBAL_TELEGRAM_CHAT_ID},NOTIFY_LANG=${NOTIFY_LANG},LONGPORT_APP_KEY=${LONGPORT_APP_KEY},LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET},LONGPORT_SECRET_NAME=${LONGPORT_SECRET_NAME},ACCOUNT_PREFIX=${ACCOUNT_PREFIX},SERVICE_NAME=${SERVICE_NAME},STRATEGY_PROFILE=${STRATEGY_PROFILE},ACCOUNT_REGION=${ACCOUNT_REGION}"
+          env_pairs=(
+            "GLOBAL_TELEGRAM_CHAT_ID=${GLOBAL_TELEGRAM_CHAT_ID}"
+            "NOTIFY_LANG=${NOTIFY_LANG}"
+            "LONGPORT_SECRET_NAME=${LONGPORT_SECRET_NAME}"
+            "ACCOUNT_PREFIX=${ACCOUNT_PREFIX}"
+            "SERVICE_NAME=${SERVICE_NAME}"
+            "STRATEGY_PROFILE=${STRATEGY_PROFILE}"
+            "ACCOUNT_REGION=${ACCOUNT_REGION}"
+          )
+          secret_pairs=()
+          remove_env_vars=(
+            "TELEGRAM_CHAT_ID"
+          )
+          remove_secret_vars=()
+
+          if [ -n "${TELEGRAM_TOKEN_SECRET_NAME:-}" ]; then
+            secret_pairs+=("TELEGRAM_TOKEN=${TELEGRAM_TOKEN_SECRET_NAME}:latest")
+            remove_env_vars+=("TELEGRAM_TOKEN")
+          else
+            env_pairs+=("TELEGRAM_TOKEN=${TELEGRAM_TOKEN}")
+            remove_secret_vars+=("TELEGRAM_TOKEN")
+          fi
+
+          if [ -n "${LONGPORT_APP_KEY_SECRET_NAME:-}" ]; then
+            secret_pairs+=("LONGPORT_APP_KEY=${LONGPORT_APP_KEY_SECRET_NAME}:latest")
+            remove_env_vars+=("LONGPORT_APP_KEY")
+          else
+            env_pairs+=("LONGPORT_APP_KEY=${LONGPORT_APP_KEY}")
+            remove_secret_vars+=("LONGPORT_APP_KEY")
+          fi
+
+          if [ -n "${LONGPORT_APP_SECRET_SECRET_NAME:-}" ]; then
+            secret_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET_SECRET_NAME}:latest")
+            remove_env_vars+=("LONGPORT_APP_SECRET")
+          else
+            env_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET}")
+            remove_secret_vars+=("LONGPORT_APP_SECRET")
+          fi
+
+          gcloud_args=(
+            run services update "${CLOUD_RUN_SERVICE}"
+            --region "${CLOUD_RUN_REGION}"
+            --remove-env-vars "$(IFS=,; echo "${remove_env_vars[*]}")"
+            --update-env-vars "$(IFS=,; echo "${env_pairs[*]}")"
+          )
+
+          if [ "${#remove_secret_vars[@]}" -gt 0 ]; then
+            gcloud_args+=(--remove-secrets "$(IFS=,; echo "${remove_secret_vars[*]}")")
+          fi
+
+          if [ "${#secret_pairs[@]}" -gt 0 ]; then
+            gcloud_args+=(--update-secrets "$(IFS=,; echo "${secret_pairs[*]}")")
+          fi
+
+          gcloud "${gcloud_args[@]}"
 
   sync-sg:
     name: Sync SG Cloud Run Env
@@ -103,6 +166,9 @@ jobs:
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       ACCOUNT_PREFIX: ${{ vars.ACCOUNT_PREFIX }}
       SERVICE_NAME: ${{ vars.SERVICE_NAME }}
+      TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
+      LONGPORT_APP_KEY_SECRET_NAME: ${{ vars.LONGPORT_APP_KEY_SECRET_NAME }}
+      LONGPORT_APP_SECRET_SECRET_NAME: ${{ vars.LONGPORT_APP_SECRET_SECRET_NAME }}
       STRATEGY_PROFILE: ${{ vars.STRATEGY_PROFILE || 'semiconductor_rotation_income' }}
       ACCOUNT_REGION: ${{ vars.ACCOUNT_REGION || 'SG' }}
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
@@ -133,9 +199,6 @@ jobs:
             NOTIFY_LANG
             GLOBAL_TELEGRAM_CHAT_ID
             GCP_SA_KEY
-            TELEGRAM_TOKEN
-            LONGPORT_APP_KEY
-            LONGPORT_APP_SECRET
           )
 
           missing_vars=()
@@ -144,6 +207,18 @@ jobs:
               missing_vars+=("${var_name}")
             fi
           done
+
+          if [ -z "${TELEGRAM_TOKEN_SECRET_NAME:-}" ] && [ -z "${TELEGRAM_TOKEN:-}" ]; then
+            missing_vars+=("TELEGRAM_TOKEN_SECRET_NAME or TELEGRAM_TOKEN")
+          fi
+
+          if [ -z "${LONGPORT_APP_KEY_SECRET_NAME:-}" ] && [ -z "${LONGPORT_APP_KEY:-}" ]; then
+            missing_vars+=("LONGPORT_APP_KEY_SECRET_NAME or LONGPORT_APP_KEY")
+          fi
+
+          if [ -z "${LONGPORT_APP_SECRET_SECRET_NAME:-}" ] && [ -z "${LONGPORT_APP_SECRET:-}" ]; then
+            missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME or LONGPORT_APP_SECRET")
+          fi
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -174,7 +249,58 @@ jobs:
         run: |
           set -euo pipefail
 
-          gcloud run services update "${CLOUD_RUN_SERVICE}" \
-            --region "${CLOUD_RUN_REGION}" \
-            --remove-env-vars "TELEGRAM_CHAT_ID" \
-            --update-env-vars "TELEGRAM_TOKEN=${TELEGRAM_TOKEN},GLOBAL_TELEGRAM_CHAT_ID=${GLOBAL_TELEGRAM_CHAT_ID},NOTIFY_LANG=${NOTIFY_LANG},LONGPORT_APP_KEY=${LONGPORT_APP_KEY},LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET},LONGPORT_SECRET_NAME=${LONGPORT_SECRET_NAME},ACCOUNT_PREFIX=${ACCOUNT_PREFIX},SERVICE_NAME=${SERVICE_NAME},STRATEGY_PROFILE=${STRATEGY_PROFILE},ACCOUNT_REGION=${ACCOUNT_REGION}"
+          env_pairs=(
+            "GLOBAL_TELEGRAM_CHAT_ID=${GLOBAL_TELEGRAM_CHAT_ID}"
+            "NOTIFY_LANG=${NOTIFY_LANG}"
+            "LONGPORT_SECRET_NAME=${LONGPORT_SECRET_NAME}"
+            "ACCOUNT_PREFIX=${ACCOUNT_PREFIX}"
+            "SERVICE_NAME=${SERVICE_NAME}"
+            "STRATEGY_PROFILE=${STRATEGY_PROFILE}"
+            "ACCOUNT_REGION=${ACCOUNT_REGION}"
+          )
+          secret_pairs=()
+          remove_env_vars=(
+            "TELEGRAM_CHAT_ID"
+          )
+          remove_secret_vars=()
+
+          if [ -n "${TELEGRAM_TOKEN_SECRET_NAME:-}" ]; then
+            secret_pairs+=("TELEGRAM_TOKEN=${TELEGRAM_TOKEN_SECRET_NAME}:latest")
+            remove_env_vars+=("TELEGRAM_TOKEN")
+          else
+            env_pairs+=("TELEGRAM_TOKEN=${TELEGRAM_TOKEN}")
+            remove_secret_vars+=("TELEGRAM_TOKEN")
+          fi
+
+          if [ -n "${LONGPORT_APP_KEY_SECRET_NAME:-}" ]; then
+            secret_pairs+=("LONGPORT_APP_KEY=${LONGPORT_APP_KEY_SECRET_NAME}:latest")
+            remove_env_vars+=("LONGPORT_APP_KEY")
+          else
+            env_pairs+=("LONGPORT_APP_KEY=${LONGPORT_APP_KEY}")
+            remove_secret_vars+=("LONGPORT_APP_KEY")
+          fi
+
+          if [ -n "${LONGPORT_APP_SECRET_SECRET_NAME:-}" ]; then
+            secret_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET_SECRET_NAME}:latest")
+            remove_env_vars+=("LONGPORT_APP_SECRET")
+          else
+            env_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET}")
+            remove_secret_vars+=("LONGPORT_APP_SECRET")
+          fi
+
+          gcloud_args=(
+            run services update "${CLOUD_RUN_SERVICE}"
+            --region "${CLOUD_RUN_REGION}"
+            --remove-env-vars "$(IFS=,; echo "${remove_env_vars[*]}")"
+            --update-env-vars "$(IFS=,; echo "${env_pairs[*]}")"
+          )
+
+          if [ "${#remove_secret_vars[@]}" -gt 0 ]; then
+            gcloud_args+=(--remove-secrets "$(IFS=,; echo "${remove_secret_vars[*]}")")
+          fi
+
+          if [ "${#secret_pairs[@]}" -gt 0 ]; then
+            gcloud_args+=(--update-secrets "$(IFS=,; echo "${secret_pairs[*]}")")
+          fi
+
+          gcloud "${gcloud_args[@]}"
