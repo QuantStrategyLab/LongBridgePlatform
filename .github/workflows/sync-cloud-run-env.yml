@@ -4,10 +4,18 @@ on:
   push:
     branches: [ main ]
 
+env:
+  GCP_PROJECT_ID: longbridgequant
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-build@longbridgequant.iam.gserviceaccount.com
+
 jobs:
   sync-hk:
     name: Sync HK Cloud Run Env
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     environment: longbridge-hk
     env:
       ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}
@@ -24,7 +32,6 @@ jobs:
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
-      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       LONGPORT_APP_KEY: ${{ secrets.LONGPORT_APP_KEY }}
       LONGPORT_APP_SECRET: ${{ secrets.LONGPORT_APP_SECRET }}
@@ -48,7 +55,6 @@ jobs:
             LONGPORT_SECRET_NAME
             NOTIFY_LANG
             GLOBAL_TELEGRAM_CHAT_ID
-            GCP_SA_KEY
           )
 
           missing_vars=()
@@ -85,13 +91,14 @@ jobs:
         if: steps.config.outputs.enabled == 'true'
         uses: google-github-actions/auth@v3
         with:
-          credentials_json: ${{ env.GCP_SA_KEY }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud
         if: steps.config.outputs.enabled == 'true'
         uses: google-github-actions/setup-gcloud@v3
         with:
-          project_id: ${{ steps.auth.outputs.project_id }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
           version: ">= 416.0.0"
 
       - name: Sync Cloud Run environment
@@ -158,6 +165,9 @@ jobs:
   sync-sg:
     name: Sync SG Cloud Run Env
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     environment: longbridge-sg
     env:
       ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}
@@ -174,7 +184,6 @@ jobs:
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
-      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       LONGPORT_APP_KEY: ${{ secrets.LONGPORT_APP_KEY }}
       LONGPORT_APP_SECRET: ${{ secrets.LONGPORT_APP_SECRET }}
@@ -198,7 +207,6 @@ jobs:
             LONGPORT_SECRET_NAME
             NOTIFY_LANG
             GLOBAL_TELEGRAM_CHAT_ID
-            GCP_SA_KEY
           )
 
           missing_vars=()
@@ -235,13 +243,14 @@ jobs:
         if: steps.config.outputs.enabled == 'true'
         uses: google-github-actions/auth@v3
         with:
-          credentials_json: ${{ env.GCP_SA_KEY }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud
         if: steps.config.outputs.enabled == 'true'
         uses: google-github-actions/setup-gcloud@v3
         with:
-          project_id: ${{ steps.auth.outputs.project_id }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
           version: ">= 416.0.0"
 
       - name: Sync Cloud Run environment
