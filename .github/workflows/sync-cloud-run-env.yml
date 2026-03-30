@@ -7,7 +7,7 @@ on:
 env:
   GCP_PROJECT_ID: longbridgequant
   GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
-  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-build@longbridgequant.iam.gserviceaccount.com
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
 
 jobs:
   sync-hk:
