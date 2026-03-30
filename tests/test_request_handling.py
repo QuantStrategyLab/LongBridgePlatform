@@ -3,6 +3,7 @@ import os
 import sys
 import types
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ if str(PLATFORM_KIT_SRC) not in sys.path:
     sys.path.insert(0, str(PLATFORM_KIT_SRC))
 
 
+@contextmanager
 def install_stub_modules():
     google_module = types.ModuleType("google")
     google_module.__path__ = []
@@ -56,7 +58,16 @@ def install_stub_modules():
         "longport": longport_module,
         "longport.openapi": openapi_module,
     }
-    return patch.dict(sys.modules, modules)
+    original = {name: sys.modules.get(name) for name in modules}
+    sys.modules.update(modules)
+    try:
+        yield
+    finally:
+        for name, previous in original.items():
+            if previous is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = previous
 
 
 def load_module():
