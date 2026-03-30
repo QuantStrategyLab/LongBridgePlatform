@@ -19,8 +19,17 @@ from notifications.telegram import build_translator
 
 
 class RebalanceServiceNotificationTests(unittest.TestCase):
-    def _run_strategy(self, plan, *, prices):
+    def _run_strategy(
+        self,
+        plan,
+        *,
+        prices,
+        refreshed_plan=None,
+        account_states=None,
+        estimate_max_purchase_quantity_value=0,
+    ):
         sent_messages = []
+        observed_account_states = []
 
         def fake_send_tg_message(message):
             sent_messages.append(message)
@@ -43,7 +52,19 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             logs.append(f"{log_message} [order_id=test-order]")
             return True
 
-        with patch.object(rebalance_service, "build_rebalance_plan", return_value=plan):
+        plan_side_effect = [plan, refreshed_plan or plan]
+
+        account_state_values = list(account_states or [{}, {}])
+
+        def fake_fetch_strategy_account_state(quote_context, trade_context, strategy_assets):
+            del quote_context, trade_context, strategy_assets
+            if not account_state_values:
+                raise AssertionError("unexpected extra fetch_strategy_account_state call")
+            value = account_state_values.pop(0)
+            observed_account_states.append(value)
+            return value
+
+        with patch.object(rebalance_service, "build_rebalance_plan", side_effect=plan_side_effect):
             rebalance_service.run_strategy(
                 project_id="project-1",
                 secret_name="secret-1",
@@ -72,13 +93,13 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 refresh_token_if_needed=lambda *args, **kwargs: "live-token",
                 build_contexts=lambda app_key, app_secret, token: ("quote-context", "trade-context"),
                 calculate_rotation_indicators=lambda quote_context, trend_window: {"soxl": {"price": 1, "ma_trend": 2}},
-                fetch_strategy_account_state=lambda quote_context, trade_context, strategy_assets: {},
+                fetch_strategy_account_state=fake_fetch_strategy_account_state,
                 fetch_last_price=lambda quote_context, symbol: prices[symbol],
-                estimate_max_purchase_quantity=lambda *args, **kwargs: 0,
+                estimate_max_purchase_quantity=lambda *args, **kwargs: estimate_max_purchase_quantity_value,
                 submit_order_with_alert=fake_submit_order_with_alert,
             )
 
-        return sent_messages
+        return sent_messages, observed_account_states
 
     def test_sell_then_buy_skip_is_sent_in_single_summary_message(self):
         plan = {
@@ -100,7 +121,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             "total_strategy_equity": 60000.0,
             "portfolio_rows": (("SOXL", "SOXX"),),
         }
-        sent_messages = self._run_strategy(
+        sent_messages, _ = self._run_strategy(
             plan,
             prices={"SOXL.US": 45.94, "SOXX.US": 322.74},
         )
@@ -131,7 +152,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             "total_strategy_equity": 60000.0,
             "portfolio_rows": (("SOXX",),),
         }
-        sent_messages = self._run_strategy(
+        sent_messages, _ = self._run_strategy(
             plan,
             prices={"SOXX.US": 322.74},
         )
@@ -141,6 +162,49 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("本轮没有可执行订单", sent_messages[0])
         self.assertIn("跳过项", sent_messages[0])
         self.assertIn("SOXX.US", sent_messages[0])
+
+    def test_refreshes_account_state_after_sell_and_can_place_followup_buy(self):
+        initial_plan = {
+            "strategy_assets": ["SOXL", "SOXX"],
+            "targets": {"SOXL": 0.0, "SOXX": 34718.05},
+            "market_values": {"SOXL": 31928.30, "SOXX": 0.0},
+            "sellable_quantities": {"SOXL": 695, "SOXX": 0},
+            "quantities": {"SOXL": 695, "SOXX": 0},
+            "current_min_trade": 100.0,
+            "limit_order_symbols": ("SOXL", "SOXX"),
+            "threshold_value": 100.0,
+            "investable_cash": 101.95,
+            "market_status": "🛡️ DE-LEVER (SOXX)",
+            "deploy_ratio_text": "57.9%",
+            "income_ratio_text": "0.0%",
+            "income_locked_ratio_text": "38.3%",
+            "signal_message": "SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
+            "available_cash": 101.95,
+            "total_strategy_equity": 60000.0,
+            "portfolio_rows": (("SOXL", "SOXX"),),
+        }
+        refreshed_plan = {
+            **initial_plan,
+            "market_values": {"SOXL": 0.0, "SOXX": 0.0},
+            "sellable_quantities": {"SOXL": 0, "SOXX": 0},
+            "quantities": {"SOXL": 0, "SOXX": 0},
+            "investable_cash": 40000.0,
+            "available_cash": 40000.0,
+        }
+        sent_messages, observed_account_states = self._run_strategy(
+            initial_plan,
+            refreshed_plan=refreshed_plan,
+            account_states=[{"phase": "before_sell"}, {"phase": "after_sell"}],
+            prices={"SOXL.US": 45.94, "SOXX.US": 322.74},
+            estimate_max_purchase_quantity_value=200,
+        )
+
+        self.assertEqual(observed_account_states, [{"phase": "before_sell"}, {"phase": "after_sell"}])
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("🔔 【调仓指令】", sent_messages[0])
+        self.assertIn("限价卖出", sent_messages[0])
+        self.assertIn("限价买入", sent_messages[0])
+        self.assertNotIn("买入跳过", sent_messages[0])
 
 
 if __name__ == "__main__":
