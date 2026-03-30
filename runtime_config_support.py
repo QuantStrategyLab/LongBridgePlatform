@@ -5,9 +5,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from strategy_registry import (
-    DEFAULT_STRATEGY_PROFILE,
     LONGBRIDGE_PLATFORM,
-    SUPPORTED_STRATEGY_PROFILES,
     resolve_strategy_definition,
 )
 
