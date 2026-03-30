@@ -15,6 +15,45 @@ def record_skip_log(skip_logs, *, translator, with_prefix, kind, detail):
     print(with_prefix(message), flush=True)
 
 
+def resolve_rebalance_plan(
+    *,
+    indicators,
+    account_state,
+    trend_ma_window,
+    translator,
+    cash_reserve_ratio,
+    min_trade_ratio,
+    min_trade_floor,
+    rebalance_threshold_ratio,
+    small_account_deploy_ratio,
+    mid_account_deploy_ratio,
+    large_account_deploy_ratio,
+    trade_layer_decay_coeff,
+    income_layer_start_usd,
+    income_layer_max_ratio,
+    income_layer_qqqi_weight,
+    income_layer_spyi_weight,
+):
+    return build_rebalance_plan(
+        indicators,
+        account_state,
+        trend_ma_window=trend_ma_window,
+        translator=translator,
+        cash_reserve_ratio=cash_reserve_ratio,
+        min_trade_ratio=min_trade_ratio,
+        min_trade_floor=min_trade_floor,
+        rebalance_threshold_ratio=rebalance_threshold_ratio,
+        small_account_deploy_ratio=small_account_deploy_ratio,
+        mid_account_deploy_ratio=mid_account_deploy_ratio,
+        large_account_deploy_ratio=large_account_deploy_ratio,
+        trade_layer_decay_coeff=trade_layer_decay_coeff,
+        income_layer_start_usd=income_layer_start_usd,
+        income_layer_max_ratio=income_layer_max_ratio,
+        income_layer_qqqi_weight=income_layer_qqqi_weight,
+        income_layer_spyi_weight=income_layer_spyi_weight,
+    )
+
+
 def run_strategy(
     *,
     project_id,
@@ -69,9 +108,9 @@ def run_strategy(
 
     strategy_assets = ["SOXL", "SOXX", "BOXX", "QQQI", "SPYI"]
     account_state = fetch_strategy_account_state(quote_context, trade_context, strategy_assets)
-    plan = build_rebalance_plan(
-        indicators,
-        account_state,
+    plan = resolve_rebalance_plan(
+        indicators=indicators,
+        account_state=account_state,
         trend_ma_window=trend_ma_window,
         translator=translator,
         cash_reserve_ratio=cash_reserve_ratio,
@@ -91,6 +130,7 @@ def run_strategy(
     logs = []
     skip_logs = []
     action_done = False
+    sell_submitted = False
     threshold_value = plan["threshold_value"]
     limit_order_symbols = set(plan["limit_order_symbols"])
 
@@ -135,6 +175,7 @@ def run_strategy(
 
                 if submitted:
                     action_done = True
+                    sell_submitted = True
             elif plan["sellable_quantities"][symbol] <= 0 and plan["quantities"][symbol] > 0:
                 record_skip_log(
                     skip_logs,
@@ -147,6 +188,29 @@ def run_strategy(
                         f"(no sellable)"
                     ),
                 )
+
+    if sell_submitted:
+        account_state = fetch_strategy_account_state(quote_context, trade_context, strategy_assets)
+        plan = resolve_rebalance_plan(
+            indicators=indicators,
+            account_state=account_state,
+            trend_ma_window=trend_ma_window,
+            translator=translator,
+            cash_reserve_ratio=cash_reserve_ratio,
+            min_trade_ratio=min_trade_ratio,
+            min_trade_floor=min_trade_floor,
+            rebalance_threshold_ratio=rebalance_threshold_ratio,
+            small_account_deploy_ratio=small_account_deploy_ratio,
+            mid_account_deploy_ratio=mid_account_deploy_ratio,
+            large_account_deploy_ratio=large_account_deploy_ratio,
+            trade_layer_decay_coeff=trade_layer_decay_coeff,
+            income_layer_start_usd=income_layer_start_usd,
+            income_layer_max_ratio=income_layer_max_ratio,
+            income_layer_qqqi_weight=income_layer_qqqi_weight,
+            income_layer_spyi_weight=income_layer_spyi_weight,
+        )
+        threshold_value = plan["threshold_value"]
+        limit_order_symbols = set(plan["limit_order_symbols"])
 
     investable_cash = plan["investable_cash"]
     for symbol in plan["strategy_assets"]:
