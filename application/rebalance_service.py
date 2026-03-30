@@ -9,6 +9,12 @@ from datetime import datetime
 from strategy.allocation import build_rebalance_plan
 
 
+def record_skip_log(skip_logs, *, translator, with_prefix, kind, detail):
+    message = translator(kind, detail=detail)
+    skip_logs.append(message)
+    print(with_prefix(message), flush=True)
+
+
 def run_strategy(
     *,
     project_id,
@@ -83,6 +89,7 @@ def run_strategy(
     )
 
     logs = []
+    skip_logs = []
     action_done = False
     threshold_value = plan["threshold_value"]
     limit_order_symbols = set(plan["limit_order_symbols"])
@@ -129,9 +136,12 @@ def run_strategy(
                 if submitted:
                     action_done = True
             elif plan["sellable_quantities"][symbol] <= 0 and plan["quantities"][symbol] > 0:
-                notify_issue(
-                    "Sell skipped",
-                    (
+                record_skip_log(
+                    skip_logs,
+                    translator=translator,
+                    with_prefix=with_prefix,
+                    kind="sell_skipped",
+                    detail=(
                         f"Symbol: {symbol}.US Diff: ${abs(diff):.2f} "
                         f"Held: {plan['quantities'][symbol]} Sellable: {plan['sellable_quantities'][symbol]} "
                         f"(no sellable)"
@@ -171,9 +181,12 @@ def run_strategy(
                 quantity = min(budget_quantity, cash_limit_quantity)
                 cost_estimate = 0.0
                 if quantity <= 0:
-                    notify_issue(
-                        "Buy skipped",
-                        (
+                    record_skip_log(
+                        skip_logs,
+                        translator=translator,
+                        with_prefix=with_prefix,
+                        kind="buy_skipped",
+                        detail=(
                             f"Symbol: {symbol}.US Diff: ${diff:.2f} Cash: ${investable_cash:.2f} "
                             f"Budget qty: {budget_quantity} Cash limit qty: {cash_limit_quantity}"
                         ),
@@ -208,13 +221,19 @@ def run_strategy(
                     investable_cash = max(0, investable_cash - cost_estimate)
                     action_done = True
             else:
-                notify_issue(
-                    "Buy skipped",
-                    f"Symbol: {symbol}.US Diff: ${diff:.2f} Cash: ${investable_cash:.2f} Price: ${price:.2f} (insufficient for 1 share)",
+                record_skip_log(
+                    skip_logs,
+                    translator=translator,
+                    with_prefix=with_prefix,
+                    kind="buy_skipped",
+                    detail=(
+                        f"Symbol: {symbol}.US Diff: ${diff:.2f} Cash: ${investable_cash:.2f} "
+                        f"Price: ${price:.2f} (insufficient for 1 share)"
+                    ),
                 )
 
     if action_done:
-        formatted_logs = "\n".join(f"  {log}" for log in logs)
+        formatted_logs = "\n".join(f"  {log}" for log in [*logs, *skip_logs])
         tg_message = (
             f"{translator('rebalance_title')}\n"
             f"{translator('market_status', status=plan['market_status'])}\n"
@@ -255,8 +274,14 @@ def run_strategy(
             f"{translator('income_locked', ratio=plan['income_locked_ratio_text'])}\n"
             f"{translator('heartbeat_signal', msg=plan['signal_message'])}\n"
             f"{separator}\n"
-            f"{translator('no_trades')}"
+            f"{translator('no_executable_orders') if skip_logs else translator('no_trades')}"
         )
+        if skip_logs:
+            no_trade_message += (
+                f"\n{separator}\n"
+                f"{translator('skipped_actions')}\n"
+                + "\n".join(f"  {log}" for log in skip_logs)
+            )
         print(with_prefix(no_trade_message), flush=True)
         send_tg_message(no_trade_message)
 
