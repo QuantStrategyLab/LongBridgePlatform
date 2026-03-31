@@ -29,10 +29,12 @@ grep -Fq "HK Cloud Run env sync is enabled, but these values are missing:" "$wor
 grep -Fq "SG Cloud Run env sync is enabled, but these values are missing:" "$workflow_file"
 grep -Fq "set CLOUD_RUN_REGION on the longbridge-hk Environment" "$workflow_file"
 grep -Fq "set CLOUD_RUN_REGION on the longbridge-sg Environment" "$workflow_file"
+grep -Fq "Set LONGPORT_APP_KEY_SECRET_NAME and LONGPORT_APP_SECRET_SECRET_NAME on the longbridge-hk Environment" "$workflow_file"
+grep -Fq "Set LONGPORT_APP_KEY_SECRET_NAME and LONGPORT_APP_SECRET_SECRET_NAME on the longbridge-sg Environment" "$workflow_file"
 grep -Fq "if: steps.config.outputs.enabled == 'true'" "$workflow_file"
 grep -Fq 'missing_vars+=("TELEGRAM_TOKEN_SECRET_NAME or TELEGRAM_TOKEN")' "$workflow_file"
-grep -Fq 'missing_vars+=("LONGPORT_APP_KEY_SECRET_NAME or LONGPORT_APP_KEY")' "$workflow_file"
-grep -Fq 'missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME or LONGPORT_APP_SECRET")' "$workflow_file"
+grep -Fq 'missing_vars+=("LONGPORT_APP_KEY_SECRET_NAME")' "$workflow_file"
+grep -Fq 'missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME")' "$workflow_file"
 grep -Fq 'secret_pairs+=("TELEGRAM_TOKEN=${TELEGRAM_TOKEN_SECRET_NAME}:latest")' "$workflow_file"
 grep -Fq 'secret_pairs+=("LONGPORT_APP_KEY=${LONGPORT_APP_KEY_SECRET_NAME}:latest")' "$workflow_file"
 grep -Fq 'secret_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET_SECRET_NAME}:latest")' "$workflow_file"
@@ -41,3 +43,13 @@ grep -Fq 'STRATEGY_PROFILE=${STRATEGY_PROFILE}' "$workflow_file"
 grep -Fq 'ACCOUNT_REGION=${ACCOUNT_REGION}' "$workflow_file"
 grep -Fq 'gcloud_args+=(--remove-secrets "$(IFS=,; echo "${remove_secret_vars[*]}")")' "$workflow_file"
 grep -Fq 'gcloud_args+=(--update-secrets "$(IFS=,; echo "${secret_pairs[*]}")")' "$workflow_file"
+
+if grep -Fq 'LONGPORT_APP_KEY: ${{ secrets.LONGPORT_APP_KEY }}' "$workflow_file"; then
+  echo "unexpected GitHub secret fallback for LONGPORT_APP_KEY still present" >&2
+  exit 1
+fi
+
+if grep -Fq 'LONGPORT_APP_SECRET: ${{ secrets.LONGPORT_APP_SECRET }}' "$workflow_file"; then
+  echo "unexpected GitHub secret fallback for LONGPORT_APP_SECRET still present" >&2
+  exit 1
+fi

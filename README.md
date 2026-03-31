@@ -81,8 +81,8 @@ BOXX: $34,000.00  Cash: $10,000.00
 |----------|----------|-------------|
 | `TELEGRAM_TOKEN` | Yes | Bot token for alerts; recommended to inject from Secret Manager secret `longbridge-telegram-token` |
 | `GLOBAL_TELEGRAM_CHAT_ID` | Yes | Telegram chat or user ID used by this service. |
-| `LONGPORT_APP_KEY` | Yes | LongPort OpenAPI app key (for token refresh); recommended to inject from Secret Manager secret `longport-app-key` |
-| `LONGPORT_APP_SECRET` | Yes | LongPort OpenAPI app secret (for token refresh); recommended to inject from Secret Manager secret `longport-app-secret` |
+| `LONGPORT_APP_KEY` | Yes | LongPort OpenAPI app key (for token refresh); recommended to inject from the region-specific Secret Manager secret for this deployment, such as `longport-app-key-hk` / `longport-app-key-sg` |
+| `LONGPORT_APP_SECRET` | Yes | LongPort OpenAPI app secret (for token refresh); recommended to inject from the region-specific Secret Manager secret for this deployment, such as `longport-app-secret-hk` / `longport-app-secret-sg` |
 | `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token_hk`) |
 | `ACCOUNT_PREFIX` | No | Alert/log prefix for account/environment (default: `DEFAULT`) |
 | `SERVICE_NAME` | No | Alert/log prefix for service identity (default: `longbridge-quant-semiconductor-rotation-income`) |
@@ -93,11 +93,13 @@ BOXX: $34,000.00  Cash: $10,000.00
 
 Secret Manager must contain the secret named by `LONGPORT_SECRET_NAME` (default: `longport_token_hk`), where the **latest version = active access token**. The app refreshes it when expiry is within 30 days.
 
-Recommended shared runtime secrets in the `longbridgequant` project:
+Recommended runtime secrets in the `longbridgequant` project:
 
 - `longbridge-telegram-token`
-- `longport-app-key`
-- `longport-app-secret`
+- `longport-app-key-hk`
+- `longport-app-key-sg`
+- `longport-app-secret-hk`
+- `longport-app-secret-sg`
 - `longport_token_hk`
 - `longport_token_sg`
 
@@ -122,28 +124,27 @@ Recommended setup:
 - **Repository Variables (shared):**
   - `ENABLE_GITHUB_ENV_SYNC` = `true`
   - `TELEGRAM_TOKEN_SECRET_NAME` (recommended: `longbridge-telegram-token`)
-  - `LONGPORT_APP_KEY_SECRET_NAME` (recommended: `longport-app-key`)
-  - `LONGPORT_APP_SECRET_SECRET_NAME` (recommended: `longport-app-secret`)
   - `STRATEGY_PROFILE` (recommended: `semiconductor_rotation_income`)
   - `NOTIFY_LANG`
   - `GLOBAL_TELEGRAM_CHAT_ID`
 - **Repository Secrets (shared):**
   - Optional fallback only: `TELEGRAM_TOKEN`
 - **GitHub Environment: `longbridge-hk`**
-  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `ACCOUNT_REGION`, `LONGPORT_SECRET_NAME`
-  - Secrets: optional fallback only `LONGPORT_APP_KEY`, `LONGPORT_APP_SECRET`
+  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `ACCOUNT_REGION`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
+  - Recommended secret-name values: `longport-app-key-hk`, `longport-app-secret-hk`
 - **GitHub Environment: `longbridge-sg`**
-  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `ACCOUNT_REGION`, `LONGPORT_SECRET_NAME`
-  - Secrets: optional fallback only `LONGPORT_APP_KEY`, `LONGPORT_APP_SECRET`
+  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `ACCOUNT_REGION`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
+  - Recommended secret-name values: `longport-app-key-sg`, `longport-app-secret-sg`
 
 On every push to `main`, the workflow updates both Cloud Run services with the shared and per-environment values above, and removes `TELEGRAM_CHAT_ID` from each Cloud Run service.
 
 Important:
 
 - `CLOUD_RUN_REGION` should be set on each GitHub Environment, not as one shared repository variable. This lets `HK` and `SG` live in different Cloud Run regions.
+- `LONGPORT_APP_KEY_SECRET_NAME` and `LONGPORT_APP_SECRET_SECRET_NAME` should also be set on each GitHub Environment. Do not keep one repository-level default for them when `HK` and `SG` use different LongPort credentials.
 - The workflow only becomes strict when `ENABLE_GITHUB_ENV_SYNC=true`. If this variable is unset, the sync job is skipped and the old Google Cloud Trigger-only setup keeps working. Once you set it to `true`, missing env-sync values become a hard failure so you do not get a false green deployment.
 - GitHub now authenticates to Google Cloud with OIDC + Workload Identity Federation, so `GCP_SA_KEY` is no longer required for this workflow.
-- Here "shared" only means **shared inside this repository** between the `HK` and `SG` Cloud Run services. The Telegram token and LongPort app credentials should live in Secret Manager and be referenced by the shared secret-name variables above; they are not meant to be a global secret set reused by unrelated quant repos.
+- Here "shared" only means **shared inside this repository** between the `HK` and `SG` Cloud Run services. The Telegram token can still be shared, but LongPort app credentials should live in Secret Manager and be referenced by per-environment secret-name variables; they are not meant to be a global secret set reused by unrelated quant repos.
 - If you want one cross-project shared layer across multiple quant repos, keep it small: `GLOBAL_TELEGRAM_CHAT_ID` and `NOTIFY_LANG` are reasonable; account credentials and deployment keys are not.
 
 ### Deployment unit and naming
@@ -162,7 +163,7 @@ Important:
 4. Deploy the app to Cloud Run (e.g. `gcloud run deploy` from repo root with Dockerfile or buildpack).
 5. Create a Cloud Scheduler job that POSTs to the Cloud Run URL on a schedule (e.g. `45 15 * * 1-5` for ~15 min before US market close on weekdays).
 
-IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Accessor for the configured `LONGPORT_SECRET_NAME`, such as `longport_token_hk` / `longport_token_sg`) and **Logs Writer**. Build/deploy typically uses a separate account with Artifact Registry Writer, Cloud Run Admin, Service Account User.
+IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Accessor for the configured `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, and `LONGPORT_APP_SECRET_SECRET_NAME`, such as `longport_token_hk`, `longport-app-key-hk`, `longport-app-secret-hk`) and **Logs Writer**. Build/deploy typically uses a separate account with Artifact Registry Writer, Cloud Run Admin, Service Account User.
 
 ### Parameters (main.py)
 
@@ -251,8 +252,8 @@ BOXX: $34,000.00  现金: $10,000.00
 |------|------|------|
 | `TELEGRAM_TOKEN` | 是 | Telegram 机器人 Token；建议通过 Secret Manager 的 `longbridge-telegram-token` 注入 |
 | `GLOBAL_TELEGRAM_CHAT_ID` | 是 | 这个服务使用的 Telegram Chat ID。 |
-| `LONGPORT_APP_KEY` | 是 | LongPort OpenAPI 应用密钥（用于刷新 Token）；建议通过 Secret Manager 的 `longport-app-key` 注入 |
-| `LONGPORT_APP_SECRET` | 是 | LongPort OpenAPI 应用密钥（用于刷新 Token）；建议通过 Secret Manager 的 `longport-app-secret` 注入 |
+| `LONGPORT_APP_KEY` | 是 | LongPort OpenAPI 应用密钥（用于刷新 Token）；建议从当前部署对应区域的 Secret Manager 密钥注入，例如 `longport-app-key-hk` / `longport-app-key-sg` |
+| `LONGPORT_APP_SECRET` | 是 | LongPort OpenAPI 应用密钥（用于刷新 Token）；建议从当前部署对应区域的 Secret Manager 密钥注入，例如 `longport-app-secret-hk` / `longport-app-secret-sg` |
 | `LONGPORT_SECRET_NAME` | 否 | Secret Manager 中的密钥名称（默认: `longport_token_hk`） |
 | `ACCOUNT_PREFIX` | 否 | 通知/日志前缀，区分账户环境（默认: `DEFAULT`） |
 | `SERVICE_NAME` | 否 | 通知/日志前缀，区分服务（默认: `longbridge-quant-semiconductor-rotation-income`） |
@@ -263,11 +264,13 @@ BOXX: $34,000.00  现金: $10,000.00
 
 Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `longport_token_hk`），**最新版本 = 当前有效的 access token**。Token 到期前 30 天会自动刷新。
 
-建议在 `longbridgequant` 项目里统一维护这些运行时 secret：
+建议在 `longbridgequant` 项目里维护这些运行时 secret：
 
 - `longbridge-telegram-token`
-- `longport-app-key`
-- `longport-app-secret`
+- `longport-app-key-hk`
+- `longport-app-key-sg`
+- `longport-app-secret-hk`
+- `longport-app-secret-sg`
 - `longport_token_hk`
 - `longport_token_sg`
 
@@ -292,28 +295,27 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 - **仓库级 Variables（共享）：**
   - `ENABLE_GITHUB_ENV_SYNC` = `true`
   - `TELEGRAM_TOKEN_SECRET_NAME`（建议：`longbridge-telegram-token`）
-  - `LONGPORT_APP_KEY_SECRET_NAME`（建议：`longport-app-key`）
-  - `LONGPORT_APP_SECRET_SECRET_NAME`（建议：`longport-app-secret`）
   - `STRATEGY_PROFILE`（建议设为 `semiconductor_rotation_income`）
   - `NOTIFY_LANG`
   - `GLOBAL_TELEGRAM_CHAT_ID`
 - **仓库级 Secrets（共享）：**
   - 仅保留为 fallback：`TELEGRAM_TOKEN`
 - **GitHub Environment: `longbridge-hk`**
-  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`ACCOUNT_REGION`、`LONGPORT_SECRET_NAME`
-  - Secrets: 仅保留为 fallback：`LONGPORT_APP_KEY`、`LONGPORT_APP_SECRET`
+  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`ACCOUNT_REGION`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
+  - 建议的 secret-name 值：`longport-app-key-hk`、`longport-app-secret-hk`
 - **GitHub Environment: `longbridge-sg`**
-  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`ACCOUNT_REGION`、`LONGPORT_SECRET_NAME`
-  - Secrets: 仅保留为 fallback：`LONGPORT_APP_KEY`、`LONGPORT_APP_SECRET`
+  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`ACCOUNT_REGION`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
+  - 建议的 secret-name 值：`longport-app-key-sg`、`longport-app-secret-sg`
 
 每次 push 到 `main` 时，这个 workflow 会分别更新两个 Cloud Run 服务，把共享和各自隔离的变量同步进去，并删除旧的 `TELEGRAM_CHAT_ID`。
 
 注意：
 
 - `CLOUD_RUN_REGION` 应该分别放在 `longbridge-hk` 和 `longbridge-sg` 这两个 Environment 里，不要再当成一个仓库级共享变量。这样 HK 和 SG 才能各自更新到自己的 region。
+- `LONGPORT_APP_KEY_SECRET_NAME` 和 `LONGPORT_APP_SECRET_SECRET_NAME` 也应该分别放在各自的 GitHub Environment 里。既然 HK 和 SG 用的是不同 LongPort 凭据，就不要再给它们保留一个仓库级默认值。
 - 现在 workflow 只有在 `ENABLE_GITHUB_ENV_SYNC=true` 时才会严格检查配置。没打开这个开关时，它会直接跳过，不影响原来只靠 Google Cloud Trigger 的老流程；一旦打开，缺任何配置都会直接失败，避免你以为已经同步成功。
 - GitHub 现在通过 OIDC + Workload Identity Federation 登录 Google Cloud，这个 workflow 不再需要 `GCP_SA_KEY`。
-- 这里的“共享”只是指 **同一个仓库里的 HK / SG 两个服务共享**。Telegram token 和 LongPort app 凭据建议放到 Secret Manager，并通过上面的 shared secret-name 变量引用，不建议把它们当成所有 quant 共用的全局 secrets。
+- 这里的“共享”只是指 **同一个仓库里的 HK / SG 两个服务共享**。Telegram token 可以继续共用，但 LongPort app 凭据建议放到 Secret Manager，并通过各自 Environment 里的 secret-name 变量引用，不建议把它们当成所有 quant 共用的全局 secrets。
 - 如果你真的要在多个 quant 仓库之间保留一层全局共享，建议只保留 `GLOBAL_TELEGRAM_CHAT_ID` 和 `NOTIFY_LANG` 这种低耦合配置。
 
 ### 部署单元和命名建议
@@ -332,7 +334,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 4. 部署至 Cloud Run（如从仓库根目录执行 `gcloud run deploy`）。
 5. 创建 Cloud Scheduler 定时任务，POST 到 Cloud Run URL（如 `45 15 * * 1-5`，工作日美股收盘前约 15 分钟）。
 
-IAM: Cloud Run 服务账号需要 **Secret Manager Admin**（或当前 `LONGPORT_SECRET_NAME` 对应 secret 的 Secret Accessor，例如 `longport_token_hk` / `longport_token_sg`）和 **Logs Writer** 权限。
+IAM: Cloud Run 服务账号需要 **Secret Manager Admin**（或当前 `LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME` 对应 secret 的 Secret Accessor，例如 `longport_token_hk`、`longport-app-key-hk`、`longport-app-secret-hk`）和 **Logs Writer** 权限。
 
 ### 策略参数 (main.py)
 
