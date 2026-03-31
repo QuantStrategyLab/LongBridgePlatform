@@ -33,8 +33,6 @@ jobs:
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-      LONGPORT_APP_KEY: ${{ secrets.LONGPORT_APP_KEY }}
-      LONGPORT_APP_SECRET: ${{ secrets.LONGPORT_APP_SECRET }}
     steps:
       - name: Check whether env sync is configured
         id: config
@@ -68,18 +66,19 @@ jobs:
             missing_vars+=("TELEGRAM_TOKEN_SECRET_NAME or TELEGRAM_TOKEN")
           fi
 
-          if [ -z "${LONGPORT_APP_KEY_SECRET_NAME:-}" ] && [ -z "${LONGPORT_APP_KEY:-}" ]; then
-            missing_vars+=("LONGPORT_APP_KEY_SECRET_NAME or LONGPORT_APP_KEY")
+          if [ -z "${LONGPORT_APP_KEY_SECRET_NAME:-}" ]; then
+            missing_vars+=("LONGPORT_APP_KEY_SECRET_NAME")
           fi
 
-          if [ -z "${LONGPORT_APP_SECRET_SECRET_NAME:-}" ] && [ -z "${LONGPORT_APP_SECRET:-}" ]; then
-            missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME or LONGPORT_APP_SECRET")
+          if [ -z "${LONGPORT_APP_SECRET_SECRET_NAME:-}" ]; then
+            missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME")
           fi
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "HK Cloud Run env sync is enabled, but these values are missing:" >&2
             echo "  - If HK and SG run in different regions, set CLOUD_RUN_REGION on the longbridge-hk Environment." >&2
+            echo "  - Set LONGPORT_APP_KEY_SECRET_NAME and LONGPORT_APP_SECRET_SECRET_NAME on the longbridge-hk Environment so HK does not fall back to shared repository defaults." >&2
             printf '  - %s\n' "${missing_vars[@]}" >&2
             exit 1
           fi
@@ -129,21 +128,11 @@ jobs:
             remove_secret_vars+=("TELEGRAM_TOKEN")
           fi
 
-          if [ -n "${LONGPORT_APP_KEY_SECRET_NAME:-}" ]; then
-            secret_pairs+=("LONGPORT_APP_KEY=${LONGPORT_APP_KEY_SECRET_NAME}:latest")
-            remove_env_vars+=("LONGPORT_APP_KEY")
-          else
-            env_pairs+=("LONGPORT_APP_KEY=${LONGPORT_APP_KEY}")
-            remove_secret_vars+=("LONGPORT_APP_KEY")
-          fi
+          secret_pairs+=("LONGPORT_APP_KEY=${LONGPORT_APP_KEY_SECRET_NAME}:latest")
+          remove_env_vars+=("LONGPORT_APP_KEY")
 
-          if [ -n "${LONGPORT_APP_SECRET_SECRET_NAME:-}" ]; then
-            secret_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET_SECRET_NAME}:latest")
-            remove_env_vars+=("LONGPORT_APP_SECRET")
-          else
-            env_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET}")
-            remove_secret_vars+=("LONGPORT_APP_SECRET")
-          fi
+          secret_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET_SECRET_NAME}:latest")
+          remove_env_vars+=("LONGPORT_APP_SECRET")
 
           gcloud_args=(
             run services update "${CLOUD_RUN_SERVICE}"
@@ -185,8 +174,6 @@ jobs:
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-      LONGPORT_APP_KEY: ${{ secrets.LONGPORT_APP_KEY }}
-      LONGPORT_APP_SECRET: ${{ secrets.LONGPORT_APP_SECRET }}
     steps:
       - name: Check whether env sync is configured
         id: config
@@ -220,18 +207,19 @@ jobs:
             missing_vars+=("TELEGRAM_TOKEN_SECRET_NAME or TELEGRAM_TOKEN")
           fi
 
-          if [ -z "${LONGPORT_APP_KEY_SECRET_NAME:-}" ] && [ -z "${LONGPORT_APP_KEY:-}" ]; then
-            missing_vars+=("LONGPORT_APP_KEY_SECRET_NAME or LONGPORT_APP_KEY")
+          if [ -z "${LONGPORT_APP_KEY_SECRET_NAME:-}" ]; then
+            missing_vars+=("LONGPORT_APP_KEY_SECRET_NAME")
           fi
 
-          if [ -z "${LONGPORT_APP_SECRET_SECRET_NAME:-}" ] && [ -z "${LONGPORT_APP_SECRET:-}" ]; then
-            missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME or LONGPORT_APP_SECRET")
+          if [ -z "${LONGPORT_APP_SECRET_SECRET_NAME:-}" ]; then
+            missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME")
           fi
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "SG Cloud Run env sync is enabled, but these values are missing:" >&2
             echo "  - If HK and SG run in different regions, set CLOUD_RUN_REGION on the longbridge-sg Environment." >&2
+            echo "  - Set LONGPORT_APP_KEY_SECRET_NAME and LONGPORT_APP_SECRET_SECRET_NAME on the longbridge-sg Environment so SG does not fall back to shared repository defaults." >&2
             printf '  - %s\n' "${missing_vars[@]}" >&2
             exit 1
           fi
@@ -281,21 +269,11 @@ jobs:
             remove_secret_vars+=("TELEGRAM_TOKEN")
           fi
 
-          if [ -n "${LONGPORT_APP_KEY_SECRET_NAME:-}" ]; then
-            secret_pairs+=("LONGPORT_APP_KEY=${LONGPORT_APP_KEY_SECRET_NAME}:latest")
-            remove_env_vars+=("LONGPORT_APP_KEY")
-          else
-            env_pairs+=("LONGPORT_APP_KEY=${LONGPORT_APP_KEY}")
-            remove_secret_vars+=("LONGPORT_APP_KEY")
-          fi
+          secret_pairs+=("LONGPORT_APP_KEY=${LONGPORT_APP_KEY_SECRET_NAME}:latest")
+          remove_env_vars+=("LONGPORT_APP_KEY")
 
-          if [ -n "${LONGPORT_APP_SECRET_SECRET_NAME:-}" ]; then
-            secret_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET_SECRET_NAME}:latest")
-            remove_env_vars+=("LONGPORT_APP_SECRET")
-          else
-            env_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET}")
-            remove_secret_vars+=("LONGPORT_APP_SECRET")
-          fi
+          secret_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET_SECRET_NAME}:latest")
+          remove_env_vars+=("LONGPORT_APP_SECRET")
 
           gcloud_args=(
             run services update "${CLOUD_RUN_SERVICE}"
