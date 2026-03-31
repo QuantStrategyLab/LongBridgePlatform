@@ -12,6 +12,7 @@ from strategy_registry import (
 
 DEFAULT_ACCOUNT_REGION = "DEFAULT"
 DEFAULT_STRATEGY_PROFILE = PLATFORM_DEFAULT_STRATEGY_PROFILE
+DEFAULT_LONGPORT_SECRET_NAME = "longport_token_hk"
 
 
 @dataclass(frozen=True)
@@ -64,7 +65,7 @@ def load_platform_runtime_settings(
     )
     return PlatformRuntimeSettings(
         project_id=project_id_resolver(),
-        secret_name=os.getenv("LONGPORT_SECRET_NAME", "longport_token"),
+        secret_name=os.getenv("LONGPORT_SECRET_NAME", DEFAULT_LONGPORT_SECRET_NAME),
         account_prefix=account_prefix,
         service_name=service_name,
         strategy_profile=strategy_definition.profile,
