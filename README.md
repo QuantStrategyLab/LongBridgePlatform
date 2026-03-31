@@ -83,7 +83,7 @@ BOXX: $34,000.00  Cash: $10,000.00
 | `GLOBAL_TELEGRAM_CHAT_ID` | Yes | Telegram chat or user ID used by this service. |
 | `LONGPORT_APP_KEY` | Yes | LongPort OpenAPI app key (for token refresh); recommended to inject from Secret Manager secret `longport-app-key` |
 | `LONGPORT_APP_SECRET` | Yes | LongPort OpenAPI app secret (for token refresh); recommended to inject from Secret Manager secret `longport-app-secret` |
-| `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token`) |
+| `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token_hk`) |
 | `ACCOUNT_PREFIX` | No | Alert/log prefix for account/environment (default: `DEFAULT`) |
 | `SERVICE_NAME` | No | Alert/log prefix for service identity (default: `longbridge-quant-semiconductor-rotation-income`) |
 | `STRATEGY_PROFILE` | No | Strategy profile selector (default: `semiconductor_rotation_income`; supported value: `semiconductor_rotation_income`) |
@@ -91,7 +91,7 @@ BOXX: $34,000.00  Cash: $10,000.00
 | `NOTIFY_LANG` | No | Notification language: `en` (English, default) or `zh` (Chinese) |
 | `GOOGLE_CLOUD_PROJECT` | No | GCP project ID (defaults to ADC project when unset) |
 
-Secret Manager must contain the secret named by `LONGPORT_SECRET_NAME` (default: `longport_token`), where the **latest version = active access token**. The app refreshes it when expiry is within 30 days.
+Secret Manager must contain the secret named by `LONGPORT_SECRET_NAME` (default: `longport_token_hk`), where the **latest version = active access token**. The app refreshes it when expiry is within 30 days.
 
 Recommended shared runtime secrets in the `longbridgequant` project:
 
@@ -157,12 +157,12 @@ Important:
 ### Quick deploy
 
 1. Enable **Cloud Run** and **Secret Manager API** in GCP.
-2. Create secret `longport_token` (or your custom `LONGPORT_SECRET_NAME`) in Secret Manager and add your LongPort access token as the first version.
+2. Create secret `longport_token_hk` for HK / `longport_token_sg` for SG (or your custom `LONGPORT_SECRET_NAME`) in Secret Manager and add your LongPort access token as the first version.
 3. Set the required env vars above on the Cloud Run service.
 4. Deploy the app to Cloud Run (e.g. `gcloud run deploy` from repo root with Dockerfile or buildpack).
 5. Create a Cloud Scheduler job that POSTs to the Cloud Run URL on a schedule (e.g. `45 15 * * 1-5` for ~15 min before US market close on weekdays).
 
-IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Accessor for `longport_token`) and **Logs Writer**. Build/deploy typically uses a separate account with Artifact Registry Writer, Cloud Run Admin, Service Account User.
+IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Accessor for the configured `LONGPORT_SECRET_NAME`, such as `longport_token_hk` / `longport_token_sg`) and **Logs Writer**. Build/deploy typically uses a separate account with Artifact Registry Writer, Cloud Run Admin, Service Account User.
 
 ### Parameters (main.py)
 
@@ -253,7 +253,7 @@ BOXX: $34,000.00  现金: $10,000.00
 | `GLOBAL_TELEGRAM_CHAT_ID` | 是 | 这个服务使用的 Telegram Chat ID。 |
 | `LONGPORT_APP_KEY` | 是 | LongPort OpenAPI 应用密钥（用于刷新 Token）；建议通过 Secret Manager 的 `longport-app-key` 注入 |
 | `LONGPORT_APP_SECRET` | 是 | LongPort OpenAPI 应用密钥（用于刷新 Token）；建议通过 Secret Manager 的 `longport-app-secret` 注入 |
-| `LONGPORT_SECRET_NAME` | 否 | Secret Manager 中的密钥名称（默认: `longport_token`） |
+| `LONGPORT_SECRET_NAME` | 否 | Secret Manager 中的密钥名称（默认: `longport_token_hk`） |
 | `ACCOUNT_PREFIX` | 否 | 通知/日志前缀，区分账户环境（默认: `DEFAULT`） |
 | `SERVICE_NAME` | 否 | 通知/日志前缀，区分服务（默认: `longbridge-quant-semiconductor-rotation-income`） |
 | `STRATEGY_PROFILE` | 否 | 策略档位选择（默认: `semiconductor_rotation_income`；当前支持值: `semiconductor_rotation_income`） |
@@ -261,7 +261,7 @@ BOXX: $34,000.00  现金: $10,000.00
 | `NOTIFY_LANG` | 否 | 通知语言: `en`（英文，默认）或 `zh`（中文） |
 | `GOOGLE_CLOUD_PROJECT` | 否 | GCP 项目 ID（未设置时使用 ADC 默认项目） |
 
-Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `longport_token`），**最新版本 = 当前有效的 access token**。Token 到期前 30 天会自动刷新。
+Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `longport_token_hk`），**最新版本 = 当前有效的 access token**。Token 到期前 30 天会自动刷新。
 
 建议在 `longbridgequant` 项目里统一维护这些运行时 secret：
 
@@ -327,12 +327,12 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 ### 快速部署
 
 1. 在 GCP 中启用 **Cloud Run** 和 **Secret Manager API**。
-2. 在 Secret Manager 中创建密钥 `longport_token`（或自定义名称），将 LongPort access token 作为第一个版本写入。
+2. 在 Secret Manager 中为 HK 创建 `longport_token_hk`、为 SG 创建 `longport_token_sg`（或使用你自定义的 `LONGPORT_SECRET_NAME`），并将 LongPort access token 作为第一个版本写入。
 3. 在 Cloud Run 服务上配置上述环境变量。
 4. 部署至 Cloud Run（如从仓库根目录执行 `gcloud run deploy`）。
 5. 创建 Cloud Scheduler 定时任务，POST 到 Cloud Run URL（如 `45 15 * * 1-5`，工作日美股收盘前约 15 分钟）。
 
-IAM: Cloud Run 服务账号需要 **Secret Manager Admin**（或 `longport_token` 的 Secret Accessor）和 **Logs Writer** 权限。
+IAM: Cloud Run 服务账号需要 **Secret Manager Admin**（或当前 `LONGPORT_SECRET_NAME` 对应 secret 的 Secret Accessor，例如 `longport_token_hk` / `longport_token_sg`）和 **Logs Writer** 权限。
 
 ### 策略参数 (main.py)
 

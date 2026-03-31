@@ -14,6 +14,7 @@ if str(QPK_SRC) not in sys.path:
 
 from runtime_config_support import (
     DEFAULT_ACCOUNT_REGION,
+    DEFAULT_LONGPORT_SECRET_NAME,
     DEFAULT_STRATEGY_PROFILE,
     infer_account_region,
     load_platform_runtime_settings,
@@ -27,7 +28,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
         self.assertEqual(settings.project_id, "project-1")
-        self.assertEqual(settings.secret_name, "longport_token")
+        self.assertEqual(settings.secret_name, DEFAULT_LONGPORT_SECRET_NAME)
         self.assertEqual(settings.account_prefix, "DEFAULT")
         self.assertEqual(settings.service_name, "longbridge-quant-semiconductor-rotation-income")
         self.assertEqual(settings.strategy_profile, DEFAULT_STRATEGY_PROFILE)
