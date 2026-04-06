@@ -130,7 +130,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("🔔 【调仓指令】", sent_messages[0])
         self.assertIn("限价卖出", sent_messages[0])
-        self.assertIn("买入跳过", sent_messages[0])
+        self.assertIn("买入说明", sent_messages[0])
         self.assertIn("SOXX.US", sent_messages[0])
 
     def test_buy_skip_without_orders_is_sent_in_single_heartbeat_message(self):
@@ -161,8 +161,74 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("💓 【心跳检测】", sent_messages[0])
         self.assertIn("本轮没有可执行订单", sent_messages[0])
-        self.assertIn("跳过项", sent_messages[0])
+        self.assertIn("说明", sent_messages[0])
+        self.assertIn("可投资现金", sent_messages[0])
         self.assertIn("SOXX.US", sent_messages[0])
+
+    def test_zero_investable_cash_is_silently_skipped(self):
+        plan = {
+            "strategy_assets": ["BOXX"],
+            "targets": {"BOXX": 27316.33},
+            "market_values": {"BOXX": 24880.00},
+            "sellable_quantities": {"BOXX": 214},
+            "quantities": {"BOXX": 214},
+            "current_min_trade": 100.0,
+            "limit_order_symbols": (),
+            "threshold_value": 100.0,
+            "investable_cash": 0.0,
+            "market_status": "🚀 RISK-ON (SOXL)",
+            "deploy_ratio_text": "57.7%",
+            "income_ratio_text": "0.0%",
+            "income_locked_ratio_text": "37.6%",
+            "signal_message": "SOXL 站上 150 日均线，持有 SOXL，交易层风险仓位 57.7%",
+            "available_cash": 3065.61,
+            "total_strategy_equity": 103350.09,
+            "portfolio_rows": (("BOXX",),),
+        }
+
+        sent_messages, _, _ = self._run_strategy(
+            plan,
+            prices={"BOXX.US": 116.27},
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("账户现金", sent_messages[0])
+        self.assertIn("可投资现金: $0.00", sent_messages[0])
+        self.assertIn("✅ 无需调仓", sent_messages[0])
+        self.assertNotIn("本轮没有可执行订单", sent_messages[0])
+        self.assertNotIn("说明", sent_messages[0])
+        self.assertNotIn("买入跳过", sent_messages[0])
+
+    def test_cash_limit_zero_mentions_possible_order_hold(self):
+        plan = {
+            "strategy_assets": ["SOXX"],
+            "targets": {"SOXX": 34718.05},
+            "market_values": {"SOXX": 0.0},
+            "sellable_quantities": {"SOXX": 0},
+            "quantities": {"SOXX": 0},
+            "current_min_trade": 100.0,
+            "limit_order_symbols": ("SOXX",),
+            "threshold_value": 100.0,
+            "investable_cash": 40000.0,
+            "market_status": "🛡️ DE-LEVER (SOXX)",
+            "deploy_ratio_text": "57.9%",
+            "income_ratio_text": "0.0%",
+            "income_locked_ratio_text": "38.3%",
+            "signal_message": "SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
+            "available_cash": 40000.0,
+            "total_strategy_equity": 60000.0,
+            "portfolio_rows": (("SOXX",),),
+        }
+
+        sent_messages, _, _ = self._run_strategy(
+            plan,
+            prices={"SOXX.US": 322.74},
+            estimate_max_purchase_quantity_value=0,
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("券商估算可买数量为 0", sent_messages[0])
+        self.assertIn("可能有未完成挂单", sent_messages[0])
 
     def test_refreshes_account_state_after_sell_and_can_place_followup_buy(self):
         initial_plan = {
