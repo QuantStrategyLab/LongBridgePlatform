@@ -15,6 +15,17 @@ The `semiconductor_rotation_income` allocation logic is loaded from `UsEquityStr
 Full strategy documentation now lives in [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies#semiconductor_rotation_income). The sections below focus on execution-side defaults and runtime behavior.
 This runtime matrix is the authoritative enablement source for LongBridge. `UsEquityStrategies` only carries strategy-layer compatibility and metadata.
 
+### Execution boundary
+
+The mainline runtime now follows one path only:
+
+- `main.py` assembles `StrategyContext` plus platform overrides
+- `strategy_runtime.py` loads the unified strategy entrypoint
+- `entrypoint.evaluate(ctx)` returns a shared `StrategyDecision`
+- `decision_mapper.py` converts that decision into LongBridge order and notification plans
+
+Platform execution no longer depends on `strategy/allocation.py` or hard-coded strategy asset lists in the runtime mainline.
+
 
 **LongBridge profile matrix**
 
@@ -192,6 +203,17 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 `semiconductor_rotation_income` 的仓位与调仓计算逻辑从 `UsEquityStrategies` 加载；`LongBridgePlatform` 继续保留 LongPort 运行时、token 刷新、执行和通知流程。
 
 完整策略说明现在放在 [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies#semiconductor_rotation_income)。下面这些章节主要保留执行侧默认值和运行时行为。
+
+### 执行边界
+
+当前主线运行路径已经统一为：
+
+- `main.py` 负责组装 `StrategyContext` 和平台 override
+- `strategy_runtime.py` 负责加载统一策略入口
+- `entrypoint.evaluate(ctx)` 返回共享的 `StrategyDecision`
+- `decision_mapper.py` 再把决策转换成 LongBridge 订单和通知计划
+
+平台执行主线已经不再依赖 `strategy/allocation.py`，也不再在运行时主流程里硬编码策略资产列表。
 
 **层级**
 
