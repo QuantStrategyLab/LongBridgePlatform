@@ -6,8 +6,6 @@ import os
 import traceback
 from datetime import datetime
 
-from strategy.allocation import build_rebalance_plan
-
 
 def record_skip_log(skip_logs, *, translator, with_prefix, kind, detail):
     message = translator(kind, detail=detail)
@@ -15,65 +13,13 @@ def record_skip_log(skip_logs, *, translator, with_prefix, kind, detail):
     print(with_prefix(message), flush=True)
 
 
-def resolve_rebalance_plan(
-    *,
-    indicators,
-    account_state,
-    trend_ma_window,
-    translator,
-    cash_reserve_ratio,
-    min_trade_ratio,
-    min_trade_floor,
-    rebalance_threshold_ratio,
-    small_account_deploy_ratio,
-    mid_account_deploy_ratio,
-    large_account_deploy_ratio,
-    trade_layer_decay_coeff,
-    income_layer_start_usd,
-    income_layer_max_ratio,
-    income_layer_qqqi_weight,
-    income_layer_spyi_weight,
-):
-    return build_rebalance_plan(
-        indicators,
-        account_state,
-        trend_ma_window=trend_ma_window,
-        translator=translator,
-        cash_reserve_ratio=cash_reserve_ratio,
-        min_trade_ratio=min_trade_ratio,
-        min_trade_floor=min_trade_floor,
-        rebalance_threshold_ratio=rebalance_threshold_ratio,
-        small_account_deploy_ratio=small_account_deploy_ratio,
-        mid_account_deploy_ratio=mid_account_deploy_ratio,
-        large_account_deploy_ratio=large_account_deploy_ratio,
-        trade_layer_decay_coeff=trade_layer_decay_coeff,
-        income_layer_start_usd=income_layer_start_usd,
-        income_layer_max_ratio=income_layer_max_ratio,
-        income_layer_qqqi_weight=income_layer_qqqi_weight,
-        income_layer_spyi_weight=income_layer_spyi_weight,
-    )
-
-
 def run_strategy(
     *,
     project_id,
     secret_name,
-    trend_ma_window,
     token_refresh_threshold_days,
-    cash_reserve_ratio,
-    min_trade_ratio,
-    min_trade_floor,
-    rebalance_threshold_ratio,
     limit_sell_discount,
     limit_buy_premium,
-    small_account_deploy_ratio,
-    mid_account_deploy_ratio,
-    large_account_deploy_ratio,
-    trade_layer_decay_coeff,
-    income_layer_start_usd,
-    income_layer_max_ratio,
-    income_layer_qqqi_weight,
-    income_layer_spyi_weight,
     separator,
     translator,
     with_prefix,
@@ -82,8 +28,9 @@ def run_strategy(
     fetch_token_from_secret,
     refresh_token_if_needed,
     build_contexts,
-    calculate_rotation_indicators,
+    calculate_strategy_indicators,
     fetch_strategy_account_state,
+    resolve_rebalance_plan,
     fetch_last_price,
     estimate_max_purchase_quantity,
     submit_order_with_alert,
@@ -102,29 +49,14 @@ def run_strategy(
     app_secret = os.getenv("LONGPORT_APP_SECRET", "")
     quote_context, trade_context = build_contexts(app_key, app_secret, token)
 
-    indicators = calculate_rotation_indicators(quote_context, trend_window=trend_ma_window)
+    indicators = calculate_strategy_indicators(quote_context)
     if indicators is None:
         raise Exception("Quote data missing or API limited; cannot compute indicators")
 
-    strategy_assets = ["SOXL", "SOXX", "BOXX", "QQQI", "SPYI"]
-    account_state = fetch_strategy_account_state(quote_context, trade_context, strategy_assets)
+    account_state = fetch_strategy_account_state(quote_context, trade_context)
     plan = resolve_rebalance_plan(
         indicators=indicators,
         account_state=account_state,
-        trend_ma_window=trend_ma_window,
-        translator=translator,
-        cash_reserve_ratio=cash_reserve_ratio,
-        min_trade_ratio=min_trade_ratio,
-        min_trade_floor=min_trade_floor,
-        rebalance_threshold_ratio=rebalance_threshold_ratio,
-        small_account_deploy_ratio=small_account_deploy_ratio,
-        mid_account_deploy_ratio=mid_account_deploy_ratio,
-        large_account_deploy_ratio=large_account_deploy_ratio,
-        trade_layer_decay_coeff=trade_layer_decay_coeff,
-        income_layer_start_usd=income_layer_start_usd,
-        income_layer_max_ratio=income_layer_max_ratio,
-        income_layer_qqqi_weight=income_layer_qqqi_weight,
-        income_layer_spyi_weight=income_layer_spyi_weight,
     )
 
     logs = []
@@ -190,24 +122,10 @@ def run_strategy(
                 )
 
     if sell_submitted:
-        account_state = fetch_strategy_account_state(quote_context, trade_context, strategy_assets)
+        account_state = fetch_strategy_account_state(quote_context, trade_context)
         plan = resolve_rebalance_plan(
             indicators=indicators,
             account_state=account_state,
-            trend_ma_window=trend_ma_window,
-            translator=translator,
-            cash_reserve_ratio=cash_reserve_ratio,
-            min_trade_ratio=min_trade_ratio,
-            min_trade_floor=min_trade_floor,
-            rebalance_threshold_ratio=rebalance_threshold_ratio,
-            small_account_deploy_ratio=small_account_deploy_ratio,
-            mid_account_deploy_ratio=mid_account_deploy_ratio,
-            large_account_deploy_ratio=large_account_deploy_ratio,
-            trade_layer_decay_coeff=trade_layer_decay_coeff,
-            income_layer_start_usd=income_layer_start_usd,
-            income_layer_max_ratio=income_layer_max_ratio,
-            income_layer_qqqi_weight=income_layer_qqqi_weight,
-            income_layer_spyi_weight=income_layer_spyi_weight,
         )
         threshold_value = plan["threshold_value"]
         limit_order_symbols = set(plan["limit_order_symbols"])
