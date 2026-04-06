@@ -14,6 +14,7 @@ import google.auth
 from application.rebalance_service import run_strategy as run_rebalance_cycle
 from entrypoints.cloud_run import is_market_open_now
 from runtime_config_support import load_platform_runtime_settings
+from decision_mapper import map_strategy_decision_to_plan
 from notifications.order_alerts import (
     is_filled_status as notifications_is_filled_status,
     is_partial_filled_status as notifications_is_partial_filled_status,
@@ -39,10 +40,7 @@ from quant_platform_kit.longbridge import (
     refresh_token_if_needed,
     submit_order,
 )
-from strategy.allocation import (
-    get_dynamic_allocation as strategy_get_dynamic_allocation,
-    get_income_layer_ratio as strategy_get_income_layer_ratio,
-)
+from strategy_runtime import load_strategy_runtime
 
 app = Flask(__name__)
 
@@ -66,12 +64,9 @@ ACCOUNT_REGION = RUNTIME_SETTINGS.account_region
 NOTIFY_LANG = RUNTIME_SETTINGS.notify_lang
 TG_TOKEN = RUNTIME_SETTINGS.tg_token
 TG_CHAT_ID = RUNTIME_SETTINGS.tg_chat_id
-
-# Execution: reserve ratio, minimum trade size (ratio of equity and absolute floor)
-CASH_RESERVE_RATIO = 0.03
-MIN_TRADE_RATIO = 0.01
-MIN_TRADE_FLOOR = 100.0
-REBALANCE_THRESHOLD_RATIO = 0.01          # 1% of equity to trigger rebalance
+STRATEGY_RUNTIME = load_strategy_runtime(STRATEGY_PROFILE)
+STRATEGY_RUNTIME_CONFIG = dict(STRATEGY_RUNTIME.merged_runtime_config)
+MANAGED_SYMBOLS = STRATEGY_RUNTIME.managed_symbols
 
 # Order pricing: limit order discount/premium relative to last price
 LIMIT_SELL_DISCOUNT = 0.995               # sell limit at 0.5% below last
@@ -83,19 +78,6 @@ ORDER_POLL_MAX_ATTEMPTS = 8
 
 # Token refresh: days before expiry to trigger refresh
 TOKEN_REFRESH_THRESHOLD_DAYS = 30
-
-# Trading layer: SOXL 150d MA for trend; deploy ratio by account size, log decay above 180k
-TREND_MA_WINDOW = 150
-SMALL_ACCOUNT_DEPLOY_RATIO = 0.60
-MID_ACCOUNT_DEPLOY_RATIO = 0.57
-LARGE_ACCOUNT_DEPLOY_RATIO = 0.50
-TRADE_LAYER_DECAY_COEFF = 0.04
-
-# Income layer: starts at INCOME_LAYER_START_USD, caps at INCOME_LAYER_MAX_RATIO; QQQI/SPYI weights
-INCOME_LAYER_START_USD = 150000.0
-INCOME_LAYER_MAX_RATIO = 0.15
-INCOME_LAYER_QQQI_WEIGHT = 0.70
-INCOME_LAYER_SPYI_WEIGHT = 0.30
 
 SEPARATOR = "━━━━━━━━━━━━━━━━━━"
 
@@ -200,27 +182,30 @@ def submit_order_with_alert(t_ctx, symbol, order_type, side, quantity, logs, log
     )
 
 # ---------------------------------------------------------------------------
-# Allocation: fraction of core equity to deploy to SOXL/SOXX (rest in BOXX)
-# ---------------------------------------------------------------------------
-def get_dynamic_allocation(total_equity_usd):
-    return strategy_get_dynamic_allocation(
-        total_equity_usd,
-        small_account_deploy_ratio=SMALL_ACCOUNT_DEPLOY_RATIO,
-        mid_account_deploy_ratio=MID_ACCOUNT_DEPLOY_RATIO,
-        large_account_deploy_ratio=LARGE_ACCOUNT_DEPLOY_RATIO,
-        trade_layer_decay_coeff=TRADE_LAYER_DECAY_COEFF,
-    )
-
-def get_income_layer_ratio(total_equity_usd):
-    return strategy_get_income_layer_ratio(
-        total_equity_usd,
-        income_layer_start_usd=INCOME_LAYER_START_USD,
-        income_layer_max_ratio=INCOME_LAYER_MAX_RATIO,
-    )
-
-# ---------------------------------------------------------------------------
 # Strategy: NYSE hours check, indicators, balance/positions, target allocation, sell then buy
 # ---------------------------------------------------------------------------
+def calculate_strategy_indicators(quote_context):
+    trend_ma_window = int(STRATEGY_RUNTIME_CONFIG.get("trend_ma_window", 150))
+    return calculate_rotation_indicators(quote_context, trend_window=trend_ma_window)
+
+
+def fetch_managed_account_state(quote_context, trade_context):
+    return fetch_strategy_account_state(quote_context, trade_context, list(MANAGED_SYMBOLS))
+
+
+def resolve_rebalance_plan(*, indicators, account_state):
+    evaluation = STRATEGY_RUNTIME.evaluate(
+        indicators=indicators,
+        account_state=account_state,
+        translator=t,
+    )
+    return map_strategy_decision_to_plan(
+        evaluation.decision,
+        account_state=account_state,
+        strategy_profile=STRATEGY_PROFILE,
+    )
+
+
 def run_strategy():
     try:
         print(with_prefix(f"[{datetime.now()}] Starting strategy..."), flush=True)
@@ -235,22 +220,9 @@ def run_strategy():
         run_rebalance_cycle(
             project_id=PROJECT_ID,
             secret_name=SECRET_NAME,
-            trend_ma_window=TREND_MA_WINDOW,
             token_refresh_threshold_days=TOKEN_REFRESH_THRESHOLD_DAYS,
-            cash_reserve_ratio=CASH_RESERVE_RATIO,
-            min_trade_ratio=MIN_TRADE_RATIO,
-            min_trade_floor=MIN_TRADE_FLOOR,
-            rebalance_threshold_ratio=REBALANCE_THRESHOLD_RATIO,
             limit_sell_discount=LIMIT_SELL_DISCOUNT,
             limit_buy_premium=LIMIT_BUY_PREMIUM,
-            small_account_deploy_ratio=SMALL_ACCOUNT_DEPLOY_RATIO,
-            mid_account_deploy_ratio=MID_ACCOUNT_DEPLOY_RATIO,
-            large_account_deploy_ratio=LARGE_ACCOUNT_DEPLOY_RATIO,
-            trade_layer_decay_coeff=TRADE_LAYER_DECAY_COEFF,
-            income_layer_start_usd=INCOME_LAYER_START_USD,
-            income_layer_max_ratio=INCOME_LAYER_MAX_RATIO,
-            income_layer_qqqi_weight=INCOME_LAYER_QQQI_WEIGHT,
-            income_layer_spyi_weight=INCOME_LAYER_SPYI_WEIGHT,
             separator=SEPARATOR,
             translator=t,
             with_prefix=with_prefix,
@@ -259,8 +231,9 @@ def run_strategy():
             fetch_token_from_secret=fetch_token_from_secret,
             refresh_token_if_needed=refresh_token_if_needed,
             build_contexts=build_contexts,
-            calculate_rotation_indicators=calculate_rotation_indicators,
-            fetch_strategy_account_state=fetch_strategy_account_state,
+            calculate_strategy_indicators=calculate_strategy_indicators,
+            fetch_strategy_account_state=fetch_managed_account_state,
+            resolve_rebalance_plan=resolve_rebalance_plan,
             fetch_last_price=fetch_last_price,
             estimate_max_purchase_quantity=estimate_max_purchase_quantity,
             submit_order_with_alert=submit_order_with_alert,
