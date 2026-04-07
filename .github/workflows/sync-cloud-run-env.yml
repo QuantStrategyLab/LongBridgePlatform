@@ -31,6 +31,7 @@ jobs:
       ACCOUNT_REGION: ${{ vars.ACCOUNT_REGION || 'HK' }}
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
+      EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
     steps:
@@ -134,6 +135,12 @@ jobs:
           secret_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET_SECRET_NAME}:latest")
           remove_env_vars+=("LONGPORT_APP_SECRET")
 
+          if [ -n "${EXECUTION_REPORT_GCS_URI:-}" ]; then
+            env_pairs+=("EXECUTION_REPORT_GCS_URI=${EXECUTION_REPORT_GCS_URI}")
+          else
+            remove_env_vars+=("EXECUTION_REPORT_GCS_URI")
+          fi
+
           gcloud_args=(
             run services update "${CLOUD_RUN_SERVICE}"
             --region "${CLOUD_RUN_REGION}"
@@ -172,6 +179,7 @@ jobs:
       ACCOUNT_REGION: ${{ vars.ACCOUNT_REGION || 'SG' }}
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
+      EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
     steps:
@@ -274,6 +282,12 @@ jobs:
 
           secret_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET_SECRET_NAME}:latest")
           remove_env_vars+=("LONGPORT_APP_SECRET")
+
+          if [ -n "${EXECUTION_REPORT_GCS_URI:-}" ]; then
+            env_pairs+=("EXECUTION_REPORT_GCS_URI=${EXECUTION_REPORT_GCS_URI}")
+          else
+            remove_env_vars+=("EXECUTION_REPORT_GCS_URI")
+          fi
 
           gcloud_args=(
             run services update "${CLOUD_RUN_SERVICE}"

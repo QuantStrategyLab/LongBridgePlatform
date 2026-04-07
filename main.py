@@ -6,7 +6,7 @@ Runs on Cloud Run; token from Secret Manager, orders via LongPort OpenAPI, alert
 import os
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import Flask
 
@@ -28,6 +28,12 @@ from notifications.telegram import (
     build_prefixer,
     build_sender,
     build_translator,
+)
+from quant_platform_kit.common.runtime_reports import (
+    append_runtime_report_error,
+    build_runtime_report_base,
+    finalize_runtime_report,
+    persist_runtime_report,
 )
 from runtime_logging import RuntimeLogContext, build_run_id, emit_runtime_log
 from quant_platform_kit.longbridge import (
@@ -112,6 +118,35 @@ def log_runtime_event(log_context, event, **fields):
         printer=lambda line: print(line, flush=True),
         **fields,
     )
+
+
+def build_execution_report(log_context):
+    return build_runtime_report_base(
+        platform=log_context.platform,
+        deploy_target=log_context.deploy_target,
+        service_name=log_context.service_name,
+        strategy_profile=STRATEGY_PROFILE,
+        strategy_domain=RUNTIME_SETTINGS.strategy_domain,
+        account_scope=log_context.account_scope,
+        account_region=log_context.account_region,
+        run_id=log_context.run_id,
+        run_source="cloud_run",
+        started_at=datetime.now(timezone.utc),
+        summary={
+            "managed_symbols": list(MANAGED_SYMBOLS),
+            "account_prefix": ACCOUNT_PREFIX,
+        },
+    )
+
+
+def persist_execution_report(report):
+    persisted = persist_runtime_report(
+        report,
+        base_dir=os.getenv("EXECUTION_REPORT_OUTPUT_DIR"),
+        gcs_prefix_uri=os.getenv("EXECUTION_REPORT_GCS_URI"),
+        gcp_project_id=PROJECT_ID,
+    )
+    return persisted.gcs_uri or persisted.local_path
 
 
 def is_filled_status(status):
@@ -228,6 +263,7 @@ def resolve_rebalance_plan(*, indicators, account_state):
 
 def run_strategy():
     log_context = RUNTIME_LOG_CONTEXT.with_run(build_run_id())
+    report = build_execution_report(log_context)
     try:
         log_runtime_event(
             log_context,
@@ -253,6 +289,13 @@ def run_strategy():
                 "outside_market_hours",
                 message="Outside market hours; skip execution",
             )
+            finalize_runtime_report(
+                report,
+                status="skipped",
+                diagnostics={
+                    "skip_reason": "market_closed",
+                },
+            )
             print(with_prefix("Outside market hours; skip."), flush=True)
             return
         run_rebalance_cycle(
@@ -276,6 +319,7 @@ def run_strategy():
             estimate_max_purchase_quantity=estimate_max_purchase_quantity,
             submit_order_with_alert=submit_order_with_alert,
         )
+        finalize_runtime_report(report, status="ok")
         log_runtime_event(
             log_context,
             "strategy_cycle_completed",
@@ -283,6 +327,13 @@ def run_strategy():
         )
         
     except Exception as exc:
+        append_runtime_report_error(
+            report,
+            stage="strategy_cycle",
+            message=str(exc),
+            error_type=type(exc).__name__,
+        )
+        finalize_runtime_report(report, status="error")
         log_runtime_event(
             log_context,
             "strategy_cycle_failed",
@@ -294,6 +345,12 @@ def run_strategy():
         err = traceback.format_exc()
         print(with_prefix(f"Strategy error:\n{err}"), flush=True)
         send_tg_message(f"{t('error_title')}\n{err}")
+    finally:
+        try:
+            report_path = persist_execution_report(report)
+            print(f"execution_report {report_path}", flush=True)
+        except Exception as persist_exc:
+            print(f"failed to persist execution report: {persist_exc}", flush=True)
 
 @app.route("/", methods=["POST", "GET"])
 def handle_trigger():

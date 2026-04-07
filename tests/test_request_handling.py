@@ -52,6 +52,20 @@ def install_stub_modules():
     cloud_run_module = types.ModuleType("entrypoints.cloud_run")
     cloud_run_module.is_market_open_now = lambda: True
 
+    runtime_config_support_module = types.ModuleType("runtime_config_support")
+    runtime_config_support_module.load_platform_runtime_settings = lambda **_kwargs: types.SimpleNamespace(
+        project_id=None,
+        secret_name="longport_token_hk",
+        account_prefix="HK",
+        service_name="longbridge-quant-semiconductor-rotation-income-hk",
+        strategy_profile="semiconductor_rotation_income",
+        strategy_domain="us_equity",
+        account_region="HK",
+        notify_lang="en",
+        tg_token=None,
+        tg_chat_id="shared-chat-id",
+    )
+
     qpk_longbridge_module = types.ModuleType("quant_platform_kit.longbridge")
     qpk_longbridge_module.build_contexts = lambda *args, **kwargs: ("quote-context", "trade-context")
     qpk_longbridge_module.calculate_rotation_indicators = lambda *args, **kwargs: {}
@@ -105,6 +119,7 @@ def install_stub_modules():
         "flask": flask_module,
         "requests": requests_module,
         "entrypoints.cloud_run": cloud_run_module,
+        "runtime_config_support": runtime_config_support_module,
         "quant_platform_kit.longbridge": qpk_longbridge_module,
         "google": google_module,
         "google.auth": google_auth_module,
@@ -190,6 +205,29 @@ class RequestHandlingTests(unittest.TestCase):
             ["strategy_cycle_started", "strategy_cycle_completed"],
         )
         self.assertTrue(all(run_id == "run-001" for run_id, _event, _fields in observed))
+
+    def test_run_strategy_persists_machine_readable_report(self):
+        module = load_module()
+        observed_reports = []
+
+        module.build_run_id = lambda: "run-001"
+        module.emit_runtime_log = lambda *args, **kwargs: None
+        module.is_market_open_now = lambda: True
+        module.run_rebalance_cycle = lambda **_kwargs: None
+        module.persist_execution_report = (
+            lambda report: observed_reports.append(dict(report)) or "/tmp/runtime-report.json"
+        )
+
+        module.run_strategy()
+
+        self.assertEqual(len(observed_reports), 1)
+        report = observed_reports[0]
+        self.assertEqual(report["platform"], "longbridge")
+        self.assertEqual(report["run_source"], "cloud_run")
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["strategy_profile"], module.STRATEGY_PROFILE)
+        self.assertEqual(report["account_scope"], module.ACCOUNT_REGION)
+        self.assertEqual(report["summary"]["managed_symbols"], list(module.MANAGED_SYMBOLS))
 
 
 if __name__ == "__main__":
