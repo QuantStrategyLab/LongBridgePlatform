@@ -29,6 +29,7 @@ from notifications.telegram import (
     build_sender,
     build_translator,
 )
+from runtime_logging import RuntimeLogContext, build_run_id, emit_runtime_log
 from quant_platform_kit.longbridge import (
     build_contexts,
     calculate_rotation_indicators,
@@ -80,6 +81,16 @@ ORDER_POLL_MAX_ATTEMPTS = 8
 TOKEN_REFRESH_THRESHOLD_DAYS = 30
 
 SEPARATOR = "━━━━━━━━━━━━━━━━━━"
+RUNTIME_LOG_CONTEXT = RuntimeLogContext(
+    platform="longbridge",
+    deploy_target="cloud_run",
+    service_name=SERVICE_NAME or os.getenv("K_SERVICE", "longbridge-platform"),
+    strategy_profile=STRATEGY_PROFILE,
+    account_scope=ACCOUNT_REGION,
+    account_region=ACCOUNT_REGION,
+    project_id=PROJECT_ID,
+    extra_fields={"account_prefix": ACCOUNT_PREFIX},
+)
 
 def t(key, **kwargs):
     return build_translator(NOTIFY_LANG)(key, **kwargs)
@@ -92,6 +103,15 @@ def send_tg_message(message):
 
 def notify_issue(title, detail):
     return build_issue_notifier(with_prefix_fn=with_prefix, send_tg_message_fn=send_tg_message)(title, detail)
+
+
+def log_runtime_event(log_context, event, **fields):
+    return emit_runtime_log(
+        log_context,
+        event,
+        printer=lambda line: print(line, flush=True),
+        **fields,
+    )
 
 
 def is_filled_status(status):
@@ -207,14 +227,32 @@ def resolve_rebalance_plan(*, indicators, account_state):
 
 
 def run_strategy():
+    log_context = RUNTIME_LOG_CONTEXT.with_run(build_run_id())
     try:
+        log_runtime_event(
+            log_context,
+            "strategy_cycle_started",
+            message="Starting strategy execution",
+        )
         print(with_prefix(f"[{datetime.now()}] Starting strategy..."), flush=True)
 
         market_open = is_market_open_now()
         if isinstance(market_open, tuple):
             market_open, error = market_open
+            log_runtime_event(
+                log_context,
+                "market_hours_check_failed",
+                message="Market hours check failed",
+                severity="WARNING",
+                error_message=str(error),
+            )
             print(with_prefix(f"Market hours check failed: {error}"), flush=True)
         if not market_open:
+            log_runtime_event(
+                log_context,
+                "outside_market_hours",
+                message="Outside market hours; skip execution",
+            )
             print(with_prefix("Outside market hours; skip."), flush=True)
             return
         run_rebalance_cycle(
@@ -238,8 +276,21 @@ def run_strategy():
             estimate_max_purchase_quantity=estimate_max_purchase_quantity,
             submit_order_with_alert=submit_order_with_alert,
         )
+        log_runtime_event(
+            log_context,
+            "strategy_cycle_completed",
+            message="Strategy execution completed",
+        )
         
-    except Exception:
+    except Exception as exc:
+        log_runtime_event(
+            log_context,
+            "strategy_cycle_failed",
+            message="Strategy execution failed",
+            severity="ERROR",
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+        )
         err = traceback.format_exc()
         print(with_prefix(f"Strategy error:\n{err}"), flush=True)
         send_tg_message(f"{t('error_title')}\n{err}")
