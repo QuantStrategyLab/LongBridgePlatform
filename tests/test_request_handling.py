@@ -174,6 +174,23 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(body, "OK")
         self.assertTrue(observed["called"])
 
+    def test_run_strategy_emits_structured_runtime_events(self):
+        module = load_module()
+        observed = []
+
+        module.build_run_id = lambda: "run-001"
+        module.emit_runtime_log = lambda context, event, **fields: observed.append((context.run_id, event, fields))
+        module.is_market_open_now = lambda: True
+        module.run_rebalance_cycle = lambda **_kwargs: None
+
+        module.run_strategy()
+
+        self.assertEqual(
+            [event for _run_id, event, _fields in observed],
+            ["strategy_cycle_started", "strategy_cycle_completed"],
+        )
+        self.assertTrue(all(run_id == "run-001" for run_id, _event, _fields in observed))
+
 
 if __name__ == "__main__":
     unittest.main()
