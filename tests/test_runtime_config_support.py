@@ -24,6 +24,7 @@ from strategy_registry import (
     US_EQUITY_DOMAIN,
     get_eligible_profiles_for_platform,
     get_platform_profile_matrix,
+    get_platform_profile_status_matrix,
     get_supported_profiles_for_platform,
 )
 
@@ -102,6 +103,36 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         by_profile = {row["canonical_profile"]: row for row in rows}
         self.assertEqual(by_profile[DEFAULT_STRATEGY_PROFILE]["display_name"], "SOXL/SOXX Semiconductor Trend Income")
         self.assertTrue(by_profile[DEFAULT_STRATEGY_PROFILE]["is_default"])
+
+    def test_platform_profile_status_matrix_matches_current_longbridge_rollout(self):
+        rows = get_platform_profile_status_matrix()
+        by_profile = {row["canonical_profile"]: row for row in rows}
+
+        self.assertEqual(
+            set(by_profile),
+            {
+                "hybrid_growth_income",
+                "semiconductor_rotation_income",
+                "tech_pullback_cash_buffer",
+            },
+        )
+        self.assertEqual(
+            by_profile["semiconductor_rotation_income"],
+            {
+                "canonical_profile": "semiconductor_rotation_income",
+                "display_name": "SOXL/SOXX Semiconductor Trend Income",
+                "domain": "us_equity",
+                "eligible": True,
+                "enabled": True,
+                "is_default": True,
+                "is_rollback": True,
+                "platform": "longbridge",
+            },
+        )
+        self.assertEqual(by_profile["hybrid_growth_income"]["display_name"], "TQQQ Growth Income")
+        self.assertTrue(by_profile["tech_pullback_cash_buffer"]["eligible"])
+        self.assertTrue(by_profile["tech_pullback_cash_buffer"]["enabled"])
+        self.assertEqual(by_profile["tech_pullback_cash_buffer"]["display_name"], "QQQ Tech Enhancement")
 
     def test_loads_feature_snapshot_env_for_tech_profile(self):
         with patch.dict(
