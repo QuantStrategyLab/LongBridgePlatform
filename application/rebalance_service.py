@@ -68,9 +68,6 @@ def _append_status_lines(lines, *, execution, translator, signal_key):
     if benchmark_line:
         lines.append(benchmark_line)
 
-    dashboard_text = str(execution.get("dashboard_text") or "").strip()
-    if dashboard_text:
-        lines.append(dashboard_text)
 
 
 def record_skip_log(skip_logs, *, translator, with_prefix, kind, detail):
