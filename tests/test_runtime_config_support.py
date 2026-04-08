@@ -157,8 +157,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.strategy_config_source, "env")
 
     def test_print_strategy_profile_status_json_matches_registry(self):
-        if not SCRIPT_PATH.exists():
-            self.skipTest("status script is not tracked in this repository")
         result = subprocess.run(
             [sys.executable, str(SCRIPT_PATH), "--json"],
             check=True,
@@ -169,8 +167,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(json.loads(result.stdout), get_platform_profile_status_matrix())
 
     def test_print_strategy_profile_status_table_contains_expected_headers(self):
-        if not SCRIPT_PATH.exists():
-            self.skipTest("status script is not tracked in this repository")
         result = subprocess.run(
             [sys.executable, str(SCRIPT_PATH)],
             check=True,

@@ -1,4 +1,4 @@
-# LongPort Semiconductor Rotation & Income
+# LongPort US Equity Strategy Runtime
 
 [English](#english) | [中文](#中文)
 
@@ -10,9 +10,9 @@
 Quant system on LongPort OpenAPI and Google Cloud Run.
 
 This repository uses `QuantPlatformKit` for LongPort token handling, context bootstrap, account snapshot access, market data, and order submission. Cloud Run deploys this repository directly.
-The `semiconductor_rotation_income` allocation logic is loaded from `UsEquityStrategies`. `LongBridgePlatform` keeps the LongPort runtime, token refresh, execution, and notification flow.
+The LongBridge runtime can execute `semiconductor_rotation_income`, `hybrid_growth_income`, and `tech_pullback_cash_buffer` from `UsEquityStrategies`; `LongBridgePlatform` keeps the LongPort runtime, token refresh, execution, and notification flow.
 
-Full strategy documentation now lives in [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies#semiconductor_rotation_income). The sections below focus on execution-side defaults and runtime behavior.
+Full strategy documentation now lives in [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies). The sections below focus on execution-side defaults and runtime behavior.
 This runtime matrix is the authoritative enablement source for LongBridge. `UsEquityStrategies` only carries strategy-layer compatibility and metadata.
 
 ### Execution boundary
@@ -27,11 +27,19 @@ The mainline runtime now follows one path only:
 Platform execution no longer depends on `strategy/allocation.py` or hard-coded strategy asset lists in the runtime mainline.
 
 
-**LongBridge profile matrix**
+**LongBridge profile status**
 
-| Canonical profile | Display name | Enabled | Default | Rollback | Domain | Runtime note |
-| --- | --- | --- | --- | --- | --- | --- |
-| `semiconductor_rotation_income` | Semiconductor Trend Income | Yes | Yes | Yes | `us_equity` | current LongBridge default |
+| Canonical profile | Display name | Eligible | Enabled | Default | Rollback | Domain | Runtime note |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `semiconductor_rotation_income` | SOXL/SOXX Semiconductor Trend Income | Yes | Yes | Yes | Yes | `us_equity` | current LongBridge default |
+| `hybrid_growth_income` | TQQQ Growth Income | Yes | Yes | No | No | `us_equity` | current SG dry-run line |
+| `tech_pullback_cash_buffer` | QQQ Tech Enhancement | Yes | Yes | No | No | `us_equity` | current HK feature-snapshot line |
+
+Check the current matrix locally:
+
+```bash
+python3 scripts/print_strategy_profile_status.py
+```
 
 **Layers**
 
@@ -104,9 +112,9 @@ BOXX: $34,000.00  Cash: $10,000.00
 | `LONGPORT_APP_SECRET` | Yes | LongPort OpenAPI app secret (for token refresh); recommended to inject from the region-specific Secret Manager secret for this deployment, such as `longport-app-secret-hk` / `longport-app-secret-sg` |
 | `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token_hk`) |
 | `ACCOUNT_PREFIX` | No | Alert/log prefix for account/environment (default: `DEFAULT`) |
-| `SERVICE_NAME` | No | Alert/log prefix for service identity (default: `longbridge-quant-semiconductor-rotation-income`) |
-| `STRATEGY_PROFILE` | No | Strategy profile selector (default: `semiconductor_rotation_income`; runtime value: `semiconductor_rotation_income`) |
-| `ACCOUNT_REGION` | No | Account region marker for platform-style deployment (e.g. `HK`, `SG`; defaults to `ACCOUNT_PREFIX` / service-name suffix / `DEFAULT`) |
+| `STRATEGY_PROFILE` | No | Strategy profile selector (default: `semiconductor_rotation_income`; current live values include `tech_pullback_cash_buffer` on HK and `hybrid_growth_income` on SG) |
+| `ACCOUNT_REGION` | No | Account region marker for platform-style deployment (e.g. `HK`, `SG`; defaults to `ACCOUNT_PREFIX` / `DEFAULT`) |
+| `LONGBRIDGE_DRY_RUN_ONLY` | No | Set to `true` to keep the selected deployment in dry-run mode. |
 | `NOTIFY_LANG` | No | Notification language: `en` (English, default) or `zh` (Chinese) |
 | `GOOGLE_CLOUD_PROJECT` | No | GCP project ID (defaults to ADC project when unset) |
 
@@ -127,11 +135,11 @@ Recommended runtime secrets in the `longbridgequant` project:
 Deploy the same codebase as multiple Cloud Run services (e.g. `HK` and `SG`) by setting different values per service:
 
 - `LONGPORT_SECRET_NAME`: point to different secrets (e.g. `longport_token_hk`, `longport_token_sg`)
-- `ACCOUNT_PREFIX`: e.g. `HK`, `SG` (all Telegram/log alerts will include `[ACCOUNT_PREFIX/SERVICE_NAME]`)
-- `SERVICE_NAME`: e.g. `longbridge-quant-semiconductor-rotation-income-hk`, `longbridge-quant-semiconductor-rotation-income-sg`
-- `STRATEGY_PROFILE`: use `semiconductor_rotation_income` for the current LongBridge strategy profile
-- Current strategy domain is `us_equity`. The repo now keeps a small strategy registry so future strategy switching can grow by domain + profile, instead of mixing platform and strategy in one layer.
-- `ACCOUNT_REGION`: explicitly mark the deployed account region (`HK` / `SG`); if unset, the app falls back to `ACCOUNT_PREFIX` or the `-hk` / `-sg` service-name suffix
+- `ACCOUNT_PREFIX`: e.g. `HK`, `SG` (all Telegram/log alerts will include `[ACCOUNT_PREFIX]`)
+- `STRATEGY_PROFILE`: set per service; current live examples are `tech_pullback_cash_buffer` on HK and `hybrid_growth_income` on SG
+- Current strategy domain is `us_equity`. `STRATEGY_PROFILE` now goes through a platform capability matrix plus a rollout allowlist: `eligible` means the platform can run it in theory, `enabled` means the current rollout really allows it.
+- `ACCOUNT_REGION`: explicitly mark the deployed account region (`HK` / `SG`); if unset, the app falls back to `ACCOUNT_PREFIX` or `DEFAULT`
+- `LONGBRIDGE_DRY_RUN_ONLY`: set per service when that deployment should stay dry-run
 - `NOTIFY_LANG`: set `en` or `zh` per deployment
 
 ### GitHub-managed env sync for HK / SG
@@ -143,16 +151,19 @@ Recommended setup:
 - **Repository Variables (shared):**
   - `ENABLE_GITHUB_ENV_SYNC` = `true`
   - `TELEGRAM_TOKEN_SECRET_NAME` (recommended: `longbridge-telegram-token`)
-  - `STRATEGY_PROFILE` (recommended: `semiconductor_rotation_income`)
   - `NOTIFY_LANG`
   - `GLOBAL_TELEGRAM_CHAT_ID`
 - **Repository Secrets (shared):**
   - Optional fallback only: `TELEGRAM_TOKEN`
 - **GitHub Environment: `longbridge-hk`**
-  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `ACCOUNT_REGION`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
+  - Optional variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`, `LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`, `LONGBRIDGE_STRATEGY_CONFIG_PATH`, `LONGBRIDGE_DRY_RUN_ONLY`
+  - Current live example: `STRATEGY_PROFILE=tech_pullback_cash_buffer`
   - Recommended secret-name values: `longport-app-key-hk`, `longport-app-secret-hk`
 - **GitHub Environment: `longbridge-sg`**
-  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `SERVICE_NAME`, `ACCOUNT_REGION`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
+  - Optional variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`, `LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`, `LONGBRIDGE_STRATEGY_CONFIG_PATH`, `LONGBRIDGE_DRY_RUN_ONLY`
+  - Current live example: `STRATEGY_PROFILE=hybrid_growth_income`
   - Recommended secret-name values: `longport-app-key-sg`, `longport-app-secret-sg`
 
 On every push to `main`, the workflow updates both Cloud Run services with the shared and per-environment values above, and removes `TELEGRAM_CHAT_ID` from each Cloud Run service.
@@ -169,7 +180,7 @@ Important:
 ### Deployment unit and naming
 
 - `QuantPlatformKit` is only a shared dependency; Cloud Run still deploys `LongBridgePlatform` itself.
-- Recommended Cloud Run service names: `longbridge-quant-semiconductor-rotation-income-hk-service` and `longbridge-quant-semiconductor-rotation-income-sg-service`.
+- Recommended Cloud Run service names: `longbridge-quant-hk-service` and `longbridge-quant-sg-service`.
 - Keep using two triggers and two GitHub Environments. The split key is still `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`, and the runtime identity is now explicit through `STRATEGY_PROFILE + ACCOUNT_REGION`.
 - If you later rename or move this repository, rebuild the GitHub source binding in Google Cloud for both triggers instead of assuming the existing source binding will follow the rename.
 - For the shared deployment model and trigger migration checklist, see [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md).
@@ -200,9 +211,9 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 基于 LongPort OpenAPI 和 Google Cloud Run 的量化交易系统。
 
 这个仓库通过 `QuantPlatformKit` 复用 LongPort token 处理、上下文初始化、账户快照、行情读取和下单逻辑。Cloud Run 直接部署这个仓库。
-`semiconductor_rotation_income` 的仓位与调仓计算逻辑从 `UsEquityStrategies` 加载；`LongBridgePlatform` 继续保留 LongPort 运行时、token 刷新、执行和通知流程。
+`LongBridgePlatform` 现在可直接执行 `UsEquityStrategies` 里的 `semiconductor_rotation_income`、`hybrid_growth_income` 和 `tech_pullback_cash_buffer`；仓库本身继续保留 LongPort 运行时、token 刷新、执行和通知流程。
 
-完整策略说明现在放在 [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies#semiconductor_rotation_income)。下面这些章节主要保留执行侧默认值和运行时行为。
+完整策略说明现在放在 [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies)。下面这些章节主要保留执行侧默认值和运行时行为。
 
 ### 执行边界
 
@@ -214,6 +225,20 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 - `decision_mapper.py` 再把决策转换成 LongBridge 订单和通知计划
 
 平台执行主线已经不再依赖 `strategy/allocation.py`，也不再在运行时主流程里硬编码策略资产列表。
+
+**LongBridge profile status**
+
+| Canonical profile | Display name | Eligible | Enabled | Default | Rollback | Domain | Runtime note |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `semiconductor_rotation_income` | SOXL/SOXX 半导体趋势收益 | Yes | Yes | Yes | Yes | `us_equity` | 当前 LongBridge 默认回退线 |
+| `hybrid_growth_income` | TQQQ 增长收益 | Yes | Yes | No | No | `us_equity` | 当前 SG dry-run 线路 |
+| `tech_pullback_cash_buffer` | QQQ 科技增强 | Yes | Yes | No | No | `us_equity` | 当前 HK feature-snapshot 线路 |
+
+本地可直接查看当前矩阵：
+
+```bash
+python3 scripts/print_strategy_profile_status.py
+```
 
 **层级**
 
@@ -286,9 +311,9 @@ BOXX: $34,000.00  现金: $10,000.00
 | `LONGPORT_APP_SECRET` | 是 | LongPort OpenAPI 应用密钥（用于刷新 Token）；建议从当前部署对应区域的 Secret Manager 密钥注入，例如 `longport-app-secret-hk` / `longport-app-secret-sg` |
 | `LONGPORT_SECRET_NAME` | 否 | Secret Manager 中的密钥名称（默认: `longport_token_hk`） |
 | `ACCOUNT_PREFIX` | 否 | 通知/日志前缀，区分账户环境（默认: `DEFAULT`） |
-| `SERVICE_NAME` | 否 | 通知/日志前缀，区分服务（默认: `longbridge-quant-semiconductor-rotation-income`） |
-| `STRATEGY_PROFILE` | 否 | 策略档位选择（默认: `semiconductor_rotation_income`；运行时直接用 `semiconductor_rotation_income`） |
-| `ACCOUNT_REGION` | 否 | 平台化部署时的账户区域标记（如 `HK`、`SG`；默认按 `ACCOUNT_PREFIX` / 服务名后缀 / `DEFAULT` 推断） |
+| `STRATEGY_PROFILE` | 否 | 策略档位选择（默认: `semiconductor_rotation_income`；当前线上 HK 用 `tech_pullback_cash_buffer`，SG 用 `hybrid_growth_income`） |
+| `ACCOUNT_REGION` | 否 | 平台化部署时的账户区域标记（如 `HK`、`SG`；默认按 `ACCOUNT_PREFIX` / `DEFAULT` 推断） |
+| `LONGBRIDGE_DRY_RUN_ONLY` | 否 | 设为 `true` 时，该部署保持 dry-run。 |
 | `NOTIFY_LANG` | 否 | 通知语言: `en`（英文，默认）或 `zh`（中文） |
 | `GOOGLE_CLOUD_PROJECT` | 否 | GCP 项目 ID（未设置时使用 ADC 默认项目） |
 
@@ -309,11 +334,11 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 同一代码库可部署为多个 Cloud Run 服务（如 `HK` 和 `SG`），通过以下变量区分：
 
 - `LONGPORT_SECRET_NAME`: 指向不同密钥（如 `longport_token_hk`、`longport_token_sg`）
-- `ACCOUNT_PREFIX`: 如 `HK`、`SG`（所有通知/日志将包含 `[ACCOUNT_PREFIX/SERVICE_NAME]`）
-- `SERVICE_NAME`: 如 `longbridge-quant-semiconductor-rotation-income-hk`、`longbridge-quant-semiconductor-rotation-income-sg`
-- `STRATEGY_PROFILE`: 当前 LongBridge 策略档位直接使用 `semiconductor_rotation_income`
-- 当前策略域是 `us_equity`。本地策略注册表只用于域和 profile 校验。
-- `ACCOUNT_REGION`: 显式标记部署账户区域（`HK` / `SG`）；未设置时会回退到 `ACCOUNT_PREFIX` 或服务名里的 `-hk` / `-sg` 后缀
+- `ACCOUNT_PREFIX`: 如 `HK`、`SG`（所有通知/日志将包含 `[ACCOUNT_PREFIX]`）
+- `STRATEGY_PROFILE`: 按服务分别设置；当前线上 HK 用 `tech_pullback_cash_buffer`，SG 用 `hybrid_growth_income`
+- 当前策略域是 `us_equity`。`STRATEGY_PROFILE` 现在会先经过平台能力矩阵，再经过 rollout allowlist：`eligible` 表示平台理论可跑，`enabled` 表示当前 rollout 真正放开。
+- `ACCOUNT_REGION`: 显式标记部署账户区域（`HK` / `SG`）；未设置时会回退到 `ACCOUNT_PREFIX` 或 `DEFAULT`
+- `LONGBRIDGE_DRY_RUN_ONLY`: 需要保持模拟运行时按服务单独设置
 - `NOTIFY_LANG`: 每个部署可独立设置 `en` 或 `zh`
 
 ### GitHub 统一管理 HK / SG 环境变量
@@ -325,16 +350,19 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 - **仓库级 Variables（共享）：**
   - `ENABLE_GITHUB_ENV_SYNC` = `true`
   - `TELEGRAM_TOKEN_SECRET_NAME`（建议：`longbridge-telegram-token`）
-  - `STRATEGY_PROFILE`（建议设为 `semiconductor_rotation_income`）
   - `NOTIFY_LANG`
   - `GLOBAL_TELEGRAM_CHAT_ID`
 - **仓库级 Secrets（共享）：**
   - 仅保留为 fallback：`TELEGRAM_TOKEN`
 - **GitHub Environment: `longbridge-hk`**
-  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`ACCOUNT_REGION`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
+  - 可选 Variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`、`LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`、`LONGBRIDGE_STRATEGY_CONFIG_PATH`、`LONGBRIDGE_DRY_RUN_ONLY`
+  - 当前线上示例：`STRATEGY_PROFILE=tech_pullback_cash_buffer`
   - 建议的 secret-name 值：`longport-app-key-hk`、`longport-app-secret-hk`
 - **GitHub Environment: `longbridge-sg`**
-  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`SERVICE_NAME`、`ACCOUNT_REGION`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
+  - 可选 Variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`、`LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`、`LONGBRIDGE_STRATEGY_CONFIG_PATH`、`LONGBRIDGE_DRY_RUN_ONLY`
+  - 当前线上示例：`STRATEGY_PROFILE=hybrid_growth_income`
   - 建议的 secret-name 值：`longport-app-key-sg`、`longport-app-secret-sg`
 
 每次 push 到 `main` 时，这个 workflow 会分别更新两个 Cloud Run 服务，把共享和各自隔离的变量同步进去，并删除旧的 `TELEGRAM_CHAT_ID`。
@@ -351,7 +379,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 ### 部署单元和命名建议
 
 - `QuantPlatformKit` 只是共享依赖，不单独部署；Cloud Run 继续只部署 `LongBridgePlatform`。
-- 推荐 Cloud Run 服务名：`longbridge-quant-semiconductor-rotation-income-hk-service` 和 `longbridge-quant-semiconductor-rotation-income-sg-service`。
+- 推荐 Cloud Run 服务名：`longbridge-quant-hk-service` 和 `longbridge-quant-sg-service`。
 - 继续保留两个 trigger 和两个 GitHub Environment，区分键始终是 `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`，运行身份再通过 `STRATEGY_PROFILE + ACCOUNT_REGION` 明确下来。
 - 如果后面改 GitHub 仓库名或再次迁组织，Google Cloud 里的两个 trigger 都要重新选择 GitHub 来源，不要假设旧绑定会自动跟过去。
 - 统一部署模型和触发器迁移清单见 [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md)。
