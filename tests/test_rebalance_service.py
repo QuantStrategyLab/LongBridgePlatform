@@ -25,6 +25,60 @@ with patch.dict(sys.modules, {"requests": requests_stub}):
     from notifications.telegram import build_translator
 
 
+def _build_plan(
+    *,
+    strategy_symbols,
+    risk_symbols=(),
+    income_symbols=(),
+    safe_haven_symbols=(),
+    targets,
+    market_values,
+    quantities,
+    sellable_quantities,
+    current_min_trade,
+    trade_threshold_value,
+    investable_cash,
+    market_status,
+    deploy_ratio_text,
+    income_ratio_text,
+    income_locked_ratio_text,
+    signal_message,
+    available_cash,
+    total_strategy_equity,
+    portfolio_rows,
+):
+    return {
+        "strategy_profile": "semiconductor_rotation_income",
+        "allocation": {
+            "target_mode": "value",
+            "strategy_symbols": tuple(strategy_symbols),
+            "risk_symbols": tuple(risk_symbols),
+            "income_symbols": tuple(income_symbols),
+            "safe_haven_symbols": tuple(safe_haven_symbols),
+            "targets": dict(targets),
+        },
+        "portfolio": {
+            "strategy_symbols": tuple(strategy_symbols),
+            "portfolio_rows": tuple(portfolio_rows),
+            "market_values": dict(market_values),
+            "quantities": dict(quantities),
+            "sellable_quantities": dict(sellable_quantities),
+            "total_equity": float(total_strategy_equity),
+            "liquid_cash": float(available_cash),
+        },
+        "execution": {
+            "trade_threshold_value": float(trade_threshold_value),
+            "status_display": market_status,
+            "signal_display": signal_message,
+            "deploy_ratio_text": deploy_ratio_text,
+            "income_ratio_text": income_ratio_text,
+            "income_locked_ratio_text": income_locked_ratio_text,
+            "investable_cash": float(investable_cash),
+            "current_min_trade": float(current_min_trade),
+        },
+    }
+
+
 class RebalanceServiceNotificationTests(unittest.TestCase):
     def _run_strategy(
         self,
@@ -103,25 +157,25 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         return sent_messages, observed_account_states, observed_plan_inputs
 
     def test_sell_then_buy_skip_is_sent_in_single_summary_message(self):
-        plan = {
-            "strategy_assets": ["SOXL", "SOXX"],
-            "targets": {"SOXL": 0.0, "SOXX": 34718.05},
-            "market_values": {"SOXL": 31928.30, "SOXX": 0.0},
-            "sellable_quantities": {"SOXL": 695, "SOXX": 0},
-            "quantities": {"SOXL": 695, "SOXX": 0},
-            "current_min_trade": 100.0,
-            "limit_order_symbols": ("SOXL", "SOXX"),
-            "threshold_value": 100.0,
-            "investable_cash": 101.95,
-            "market_status": "🛡️ DE-LEVER (SOXX)",
-            "deploy_ratio_text": "57.9%",
-            "income_ratio_text": "0.0%",
-            "income_locked_ratio_text": "38.3%",
-            "signal_message": "SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
-            "available_cash": 101.95,
-            "total_strategy_equity": 60000.0,
-            "portfolio_rows": (("SOXL", "SOXX"),),
-        }
+        plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            targets={"SOXL": 0.0, "SOXX": 34718.05},
+            market_values={"SOXL": 31928.30, "SOXX": 0.0},
+            sellable_quantities={"SOXL": 695, "SOXX": 0},
+            quantities={"SOXL": 695, "SOXX": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=101.95,
+            market_status="🛡️ DE-LEVER (SOXX)",
+            deploy_ratio_text="57.9%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="38.3%",
+            signal_message="SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
+            available_cash=101.95,
+            total_strategy_equity=60000.0,
+            portfolio_rows=(("SOXL", "SOXX"),),
+        )
         sent_messages, _, _ = self._run_strategy(
             plan,
             prices={"SOXL.US": 45.94, "SOXX.US": 322.74},
@@ -134,25 +188,25 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("SOXX.US", sent_messages[0])
 
     def test_buy_skip_without_orders_is_sent_in_single_heartbeat_message(self):
-        plan = {
-            "strategy_assets": ["SOXX"],
-            "targets": {"SOXX": 34718.05},
-            "market_values": {"SOXX": 0.0},
-            "sellable_quantities": {"SOXX": 0},
-            "quantities": {"SOXX": 0},
-            "current_min_trade": 100.0,
-            "limit_order_symbols": ("SOXX",),
-            "threshold_value": 100.0,
-            "investable_cash": 101.95,
-            "market_status": "🛡️ DE-LEVER (SOXX)",
-            "deploy_ratio_text": "57.9%",
-            "income_ratio_text": "0.0%",
-            "income_locked_ratio_text": "38.3%",
-            "signal_message": "SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
-            "available_cash": 101.95,
-            "total_strategy_equity": 60000.0,
-            "portfolio_rows": (("SOXX",),),
-        }
+        plan = _build_plan(
+            strategy_symbols=("SOXX",),
+            risk_symbols=("SOXX",),
+            targets={"SOXX": 34718.05},
+            market_values={"SOXX": 0.0},
+            sellable_quantities={"SOXX": 0},
+            quantities={"SOXX": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=101.95,
+            market_status="🛡️ DE-LEVER (SOXX)",
+            deploy_ratio_text="57.9%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="38.3%",
+            signal_message="SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
+            available_cash=101.95,
+            total_strategy_equity=60000.0,
+            portfolio_rows=(("SOXX",),),
+        )
         sent_messages, _, _ = self._run_strategy(
             plan,
             prices={"SOXX.US": 322.74},
@@ -166,25 +220,25 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("SOXX.US", sent_messages[0])
 
     def test_zero_investable_cash_is_silently_skipped(self):
-        plan = {
-            "strategy_assets": ["BOXX"],
-            "targets": {"BOXX": 27316.33},
-            "market_values": {"BOXX": 24880.00},
-            "sellable_quantities": {"BOXX": 214},
-            "quantities": {"BOXX": 214},
-            "current_min_trade": 100.0,
-            "limit_order_symbols": (),
-            "threshold_value": 100.0,
-            "investable_cash": 0.0,
-            "market_status": "🚀 RISK-ON (SOXL)",
-            "deploy_ratio_text": "57.7%",
-            "income_ratio_text": "0.0%",
-            "income_locked_ratio_text": "37.6%",
-            "signal_message": "SOXL 站上 150 日均线，持有 SOXL，交易层风险仓位 57.7%",
-            "available_cash": 3065.61,
-            "total_strategy_equity": 103350.09,
-            "portfolio_rows": (("BOXX",),),
-        }
+        plan = _build_plan(
+            strategy_symbols=("BOXX",),
+            safe_haven_symbols=("BOXX",),
+            targets={"BOXX": 27316.33},
+            market_values={"BOXX": 24880.00},
+            sellable_quantities={"BOXX": 214},
+            quantities={"BOXX": 214},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=0.0,
+            market_status="🚀 RISK-ON (SOXL)",
+            deploy_ratio_text="57.7%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="37.6%",
+            signal_message="SOXL 站上 150 日均线，持有 SOXL，交易层风险仓位 57.7%",
+            available_cash=3065.61,
+            total_strategy_equity=103350.09,
+            portfolio_rows=(("BOXX",),),
+        )
 
         sent_messages, _, _ = self._run_strategy(
             plan,
@@ -200,25 +254,25 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertNotIn("买入跳过", sent_messages[0])
 
     def test_cash_limit_zero_mentions_possible_order_hold(self):
-        plan = {
-            "strategy_assets": ["SOXX"],
-            "targets": {"SOXX": 34718.05},
-            "market_values": {"SOXX": 0.0},
-            "sellable_quantities": {"SOXX": 0},
-            "quantities": {"SOXX": 0},
-            "current_min_trade": 100.0,
-            "limit_order_symbols": ("SOXX",),
-            "threshold_value": 100.0,
-            "investable_cash": 40000.0,
-            "market_status": "🛡️ DE-LEVER (SOXX)",
-            "deploy_ratio_text": "57.9%",
-            "income_ratio_text": "0.0%",
-            "income_locked_ratio_text": "38.3%",
-            "signal_message": "SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
-            "available_cash": 40000.0,
-            "total_strategy_equity": 60000.0,
-            "portfolio_rows": (("SOXX",),),
-        }
+        plan = _build_plan(
+            strategy_symbols=("SOXX",),
+            risk_symbols=("SOXX",),
+            targets={"SOXX": 34718.05},
+            market_values={"SOXX": 0.0},
+            sellable_quantities={"SOXX": 0},
+            quantities={"SOXX": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=40000.0,
+            market_status="🛡️ DE-LEVER (SOXX)",
+            deploy_ratio_text="57.9%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="38.3%",
+            signal_message="SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
+            available_cash=40000.0,
+            total_strategy_equity=60000.0,
+            portfolio_rows=(("SOXX",),),
+        )
 
         sent_messages, _, _ = self._run_strategy(
             plan,
@@ -231,33 +285,44 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("可能有未完成挂单", sent_messages[0])
 
     def test_refreshes_account_state_after_sell_and_can_place_followup_buy(self):
-        initial_plan = {
-            "strategy_assets": ["SOXL", "SOXX"],
-            "targets": {"SOXL": 0.0, "SOXX": 34718.05},
-            "market_values": {"SOXL": 31928.30, "SOXX": 0.0},
-            "sellable_quantities": {"SOXL": 695, "SOXX": 0},
-            "quantities": {"SOXL": 695, "SOXX": 0},
-            "current_min_trade": 100.0,
-            "limit_order_symbols": ("SOXL", "SOXX"),
-            "threshold_value": 100.0,
-            "investable_cash": 101.95,
-            "market_status": "🛡️ DE-LEVER (SOXX)",
-            "deploy_ratio_text": "57.9%",
-            "income_ratio_text": "0.0%",
-            "income_locked_ratio_text": "38.3%",
-            "signal_message": "SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
-            "available_cash": 101.95,
-            "total_strategy_equity": 60000.0,
-            "portfolio_rows": (("SOXL", "SOXX"),),
-        }
-        refreshed_plan = {
-            **initial_plan,
-            "market_values": {"SOXL": 0.0, "SOXX": 0.0},
-            "sellable_quantities": {"SOXL": 0, "SOXX": 0},
-            "quantities": {"SOXL": 0, "SOXX": 0},
-            "investable_cash": 40000.0,
-            "available_cash": 40000.0,
-        }
+        initial_plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            targets={"SOXL": 0.0, "SOXX": 34718.05},
+            market_values={"SOXL": 31928.30, "SOXX": 0.0},
+            sellable_quantities={"SOXL": 695, "SOXX": 0},
+            quantities={"SOXL": 695, "SOXX": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=101.95,
+            market_status="🛡️ DE-LEVER (SOXX)",
+            deploy_ratio_text="57.9%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="38.3%",
+            signal_message="SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
+            available_cash=101.95,
+            total_strategy_equity=60000.0,
+            portfolio_rows=(("SOXL", "SOXX"),),
+        )
+        refreshed_plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            targets={"SOXL": 0.0, "SOXX": 34718.05},
+            market_values={"SOXL": 0.0, "SOXX": 0.0},
+            sellable_quantities={"SOXL": 0, "SOXX": 0},
+            quantities={"SOXL": 0, "SOXX": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=40000.0,
+            market_status="🛡️ DE-LEVER (SOXX)",
+            deploy_ratio_text="57.9%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="38.3%",
+            signal_message="SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
+            available_cash=40000.0,
+            total_strategy_equity=60000.0,
+            portfolio_rows=(("SOXL", "SOXX"),),
+        )
         sent_messages, observed_account_states, observed_plan_inputs = self._run_strategy(
             initial_plan,
             refreshed_plan=refreshed_plan,
@@ -273,6 +338,37 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("限价买入", sent_messages[0])
         self.assertNotIn("买入跳过", sent_messages[0])
         self.assertEqual(len(observed_plan_inputs), 2)
+
+    def test_heartbeat_accepts_normalized_portfolio_and_execution_sections(self):
+        plan = _build_plan(
+            strategy_symbols=("SOXX",),
+            risk_symbols=("SOXX",),
+            targets={"SOXX": 34718.05},
+            market_values={"SOXX": 0.0},
+            sellable_quantities={"SOXX": 0},
+            quantities={"SOXX": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=101.95,
+            market_status="🛡️ DE-LEVER (SOXX)",
+            deploy_ratio_text="57.9%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="38.3%",
+            signal_message="SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
+            available_cash=101.95,
+            total_strategy_equity=60000.0,
+            portfolio_rows=(("SOXX",),),
+        )
+
+        sent_messages, _, _ = self._run_strategy(
+            plan,
+            prices={"SOXX.US": 322.74},
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("💓 【心跳检测】", sent_messages[0])
+        self.assertIn("可投资现金", sent_messages[0])
+        self.assertIn("SOXX", sent_messages[0])
 
 
 if __name__ == "__main__":
