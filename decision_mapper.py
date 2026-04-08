@@ -59,27 +59,4 @@ def map_strategy_decision_to_plan(
             "investable_cash": portfolio_plan.liquid_cash,
         },
     )
-    risk_symbols = list(portfolio_plan.risk_symbols)
-    income_symbols = list(portfolio_plan.income_symbols)
-
-    plan.update({
-        "strategy_assets": portfolio_plan.strategy_symbols,
-        "limit_order_symbols": tuple(risk_symbols + income_symbols),
-        "portfolio_rows": portfolio_plan.portfolio_rows,
-        "available_cash": portfolio_plan.liquid_cash,
-        "market_values": dict(portfolio_plan.market_values),
-        "quantities": dict(portfolio_plan.quantities),
-        "sellable_quantities": dict(portfolio_plan.sellable_quantities or {}),
-        "total_strategy_equity": portfolio_plan.total_equity,
-        "current_min_trade": float(annotations.current_min_trade or 0.0),
-        "targets": dict(portfolio_plan.target_values),
-        "market_status": annotations.status_display or "",
-        "signal_message": annotations.signal_display or "",
-        "deploy_ratio_text": annotations.deploy_ratio_text or "",
-        "income_ratio_text": annotations.income_ratio_text or "",
-        "income_locked_ratio_text": annotations.income_locked_ratio_text or "",
-        "active_risk_asset": annotations.active_risk_asset,
-        "investable_cash": float(annotations.investable_cash or portfolio_plan.liquid_cash),
-        "threshold_value": float(annotations.trade_threshold_value),
-    })
     return plan
