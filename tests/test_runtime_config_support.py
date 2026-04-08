@@ -1,4 +1,6 @@
+import json
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -11,6 +13,7 @@ if str(ROOT) not in sys.path:
 QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
 if str(QPK_SRC) not in sys.path:
     sys.path.insert(0, str(QPK_SRC))
+SCRIPT_PATH = ROOT / "scripts" / "print_strategy_profile_status.py"
 
 from runtime_config_support import (
     DEFAULT_ACCOUNT_REGION,
@@ -152,6 +155,29 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.feature_snapshot_manifest_path, "gs://bucket/tech.csv.manifest.json")
         self.assertEqual(settings.strategy_config_path, "/workspace/configs/tech.json")
         self.assertEqual(settings.strategy_config_source, "env")
+
+    def test_print_strategy_profile_status_json_matches_registry(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--json"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(json.loads(result.stdout), get_platform_profile_status_matrix())
+
+    def test_print_strategy_profile_status_table_contains_expected_headers(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertIn("canonical_profile", result.stdout)
+        self.assertIn("display_name", result.stdout)
+        self.assertIn("semiconductor_rotation_income", result.stdout)
+        self.assertIn("QQQ Tech Enhancement", result.stdout)
 
 
 if __name__ == "__main__":
