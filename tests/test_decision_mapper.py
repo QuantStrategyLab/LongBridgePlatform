@@ -131,6 +131,10 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["allocation"]["strategy_symbols"], ("TQQQ", "BOXX", "QQQI", "SPYI"))
         self.assertEqual(plan["execution"]["trade_threshold_value"], 250.0)
         self.assertEqual(plan["execution"]["investable_cash"], 5000.0)
+        self.assertEqual(plan["execution"]["benchmark_symbol"], "QQQ")
+        self.assertEqual(plan["execution"]["benchmark_price"], 500.0)
+        self.assertEqual(plan["execution"]["long_trend_value"], 480.0)
+        self.assertEqual(plan["execution"]["exit_line"], 470.0)
         self.assertEqual(plan["portfolio"]["market_values"]["TQQQ"], 5000.0)
 
 

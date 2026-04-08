@@ -5,6 +5,15 @@ from __future__ import annotations
 import requests
 
 
+SIGNAL_ICONS = {
+    "hold": "💎",
+    "entry": "🚀",
+    "reduce": "⚠️",
+    "exit": "🔴",
+    "idle": "💤",
+}
+
+
 I18N = {
     "zh": {
         "rebalance_title": "🔔 【调仓指令】",
@@ -44,6 +53,11 @@ I18N = {
         "status_expired": "过期",
         "signal_risk_on": "SOXL 站上 {window} 日均线，持有 SOXL，交易层风险仓位 {ratio}",
         "signal_delever": "SOXL 跌破 {window} 日均线，切换至 SOXX，交易层风险仓位 {ratio}",
+        "signal_hold": "趋势持有",
+        "signal_entry": "入场信号",
+        "signal_reduce": "减仓信号",
+        "signal_exit": "离场信号",
+        "signal_idle": "等待信号",
     },
     "en": {
         "rebalance_title": "🔔 【Trade Execution Report】",
@@ -83,6 +97,11 @@ I18N = {
         "status_expired": "Expired",
         "signal_risk_on": "SOXL above {window}d MA, hold SOXL, risk {ratio}",
         "signal_delever": "SOXL below {window}d MA, switch to SOXX, risk {ratio}",
+        "signal_hold": "Trend Hold",
+        "signal_entry": "Entry Signal",
+        "signal_reduce": "Reduce Signal",
+        "signal_exit": "Exit Signal",
+        "signal_idle": "Idle",
     },
 }
 
@@ -94,6 +113,15 @@ def build_translator(lang):
         return template.format(**kwargs) if kwargs else template
 
     return translate
+
+
+def build_signal_text(translate_fn):
+    def signal_text(icon_key):
+        emoji = SIGNAL_ICONS.get(icon_key, "❓")
+        name = translate_fn(f"signal_{icon_key}")
+        return f"{emoji} {name}"
+
+    return signal_text
 
 
 def build_prefixer(account_prefix: str, service_name: str):

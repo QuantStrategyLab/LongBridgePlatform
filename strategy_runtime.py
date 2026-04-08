@@ -43,10 +43,13 @@ class LoadedStrategyRuntime:
         self,
         *,
         translator: Callable[[str], str],
+        signal_text_fn: Callable[[str], str] | None = None,
         **available_inputs,
     ) -> StrategyEvaluationResult:
         runtime_config = dict(self.runtime_overrides)
         runtime_config.setdefault("translator", translator)
+        if signal_text_fn is not None:
+            runtime_config.setdefault("signal_text_fn", signal_text_fn)
         ctx = build_strategy_context_from_available_inputs(
             entrypoint=self.entrypoint,
             runtime_adapter=self.runtime_adapter,

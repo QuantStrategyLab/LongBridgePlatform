@@ -27,6 +27,7 @@ with patch.dict(sys.modules, {"requests": requests_stub}):
 
 def _build_plan(
     *,
+    strategy_profile="semiconductor_rotation_income",
     strategy_symbols,
     risk_symbols=(),
     income_symbols=(),
@@ -46,9 +47,14 @@ def _build_plan(
     available_cash,
     total_strategy_equity,
     portfolio_rows,
+    dashboard_text="",
+    benchmark_symbol="",
+    benchmark_price=0.0,
+    long_trend_value=0.0,
+    exit_line=0.0,
 ):
     return {
-        "strategy_profile": "semiconductor_rotation_income",
+        "strategy_profile": strategy_profile,
         "allocation": {
             "target_mode": "value",
             "strategy_symbols": tuple(strategy_symbols),
@@ -75,6 +81,11 @@ def _build_plan(
             "income_locked_ratio_text": income_locked_ratio_text,
             "investable_cash": float(investable_cash),
             "current_min_trade": float(current_min_trade),
+            "dashboard_text": dashboard_text,
+            "benchmark_symbol": benchmark_symbol,
+            "benchmark_price": float(benchmark_price),
+            "long_trend_value": float(long_trend_value),
+            "exit_line": float(exit_line),
         },
     }
 
@@ -424,6 +435,49 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("💓 【心跳检测】", sent_messages[0])
         self.assertIn("可投资现金", sent_messages[0])
         self.assertIn("SOXX", sent_messages[0])
+
+    def test_hybrid_heartbeat_hides_empty_semiconductor_fields_and_shows_benchmark_line(self):
+        plan = _build_plan(
+            strategy_profile="hybrid_growth_income",
+            strategy_symbols=("TQQQ", "BOXX", "QQQI", "SPYI"),
+            risk_symbols=("TQQQ",),
+            income_symbols=("QQQI", "SPYI"),
+            safe_haven_symbols=("BOXX",),
+            targets={"TQQQ": 0.0, "BOXX": 0.0, "QQQI": 0.0, "SPYI": 0.0},
+            market_values={"TQQQ": 0.0, "BOXX": 0.0, "QQQI": 0.0, "SPYI": 0.0},
+            sellable_quantities={"TQQQ": 0, "BOXX": 0, "QQQI": 0, "SPYI": 0},
+            quantities={"TQQQ": 0, "BOXX": 0, "QQQI": 0, "SPYI": 0},
+            current_min_trade=250.0,
+            trade_threshold_value=250.0,
+            investable_cash=0.0,
+            market_status="",
+            deploy_ratio_text="",
+            income_ratio_text="",
+            income_locked_ratio_text="",
+            signal_message="💤 等待信号",
+            available_cash=0.0,
+            total_strategy_equity=0.0,
+            portfolio_rows=(("TQQQ", "BOXX"), ("QQQI", "SPYI")),
+            benchmark_symbol="QQQ",
+            benchmark_price=588.50,
+            long_trend_value=595.25,
+            exit_line=573.00,
+        )
+
+        sent_messages, _, _ = self._run_strategy(
+            plan,
+            prices={"TQQQ.US": 50.0, "BOXX.US": 100.0, "QQQI.US": 40.0, "SPYI.US": 45.0},
+            dry_run_only=True,
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("💓 【心跳检测】", sent_messages[0])
+        self.assertIn("🧪 dry-run 模式", sent_messages[0])
+        self.assertIn("QQQ: 588.50 | MA200: 595.25 | Exit: 573.00", sent_messages[0])
+        self.assertIn("🎯 信号: 💤 等待信号", sent_messages[0])
+        self.assertNotIn("📊 市场状态: ", sent_messages[0])
+        self.assertNotIn("💼 交易层风险仓位: ", sent_messages[0])
+        self.assertNotIn("🏦 收入层锁定占比: ", sent_messages[0])
 
 
 if __name__ == "__main__":

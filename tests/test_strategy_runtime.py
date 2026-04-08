@@ -38,11 +38,13 @@ class StrategyRuntimeTests(unittest.TestCase):
             indicators={"soxl": {"price": 1.0, "ma_trend": 2.0}},
             account_state={"available_cash": 100.0},
             translator=lambda key, **_kwargs: key,
+            signal_text_fn=lambda icon: f"signal:{icon}",
         )
 
         self.assertEqual(runtime.managed_symbols, ("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"))
         self.assertEqual(entrypoint.ctx.market_data["account_state"]["available_cash"], 100.0)
         self.assertIn("translator", entrypoint.ctx.runtime_config)
+        self.assertEqual(entrypoint.ctx.runtime_config["signal_text_fn"]("idle"), "signal:idle")
         self.assertEqual(result.metadata["strategy_profile"], "semiconductor_rotation_income")
 
     def test_load_strategy_runtime_uses_entrypoint_default_config(self):

@@ -27,6 +27,7 @@ from notifications.telegram import (
     build_issue_notifier,
     build_prefixer,
     build_sender,
+    build_signal_text,
     build_translator,
 )
 from quant_platform_kit.common.runtime_reports import (
@@ -103,6 +104,9 @@ RUNTIME_LOG_CONTEXT = RuntimeLogContext(
 
 def t(key, **kwargs):
     return build_translator(NOTIFY_LANG)(key, **kwargs)
+
+
+signal_text = build_signal_text(t)
 
 def with_prefix(message: str) -> str:
     return build_prefixer(ACCOUNT_PREFIX, SERVICE_NAME)(message)
@@ -317,7 +321,10 @@ def resolve_rebalance_plan(*, indicators, account_state):
         snapshot = build_portfolio_snapshot_from_account_state(account_state)
         evaluation_inputs["snapshot"] = snapshot
 
-    evaluation = STRATEGY_RUNTIME.evaluate(**evaluation_inputs)
+    evaluation = STRATEGY_RUNTIME.evaluate(
+        signal_text_fn=signal_text,
+        **evaluation_inputs,
+    )
     return map_strategy_decision_to_plan(
         evaluation.decision,
         account_state=account_state if "account_state" in AVAILABLE_INPUTS else None,

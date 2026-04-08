@@ -19,6 +19,60 @@ def _plan_allocation(plan):
     return dict(plan.get("allocation") or {})
 
 
+def _has_text(value):
+    return bool(str(value or "").strip())
+
+
+def _has_benchmark_context(execution):
+    return any(
+        float(execution.get(key) or 0.0) > 0.0
+        for key in ("benchmark_price", "long_trend_value", "exit_line")
+    )
+
+
+def _build_benchmark_line(execution):
+    if not _has_benchmark_context(execution):
+        return None
+    benchmark_symbol = str(execution.get("benchmark_symbol") or "QQQ")
+    benchmark_price = float(execution.get("benchmark_price") or 0.0)
+    long_trend_value = float(execution.get("long_trend_value") or 0.0)
+    exit_line = float(execution.get("exit_line") or 0.0)
+    return (
+        f"{benchmark_symbol}: {benchmark_price:.2f} | "
+        f"MA200: {long_trend_value:.2f} | Exit: {exit_line:.2f}"
+    )
+
+
+def _append_status_lines(lines, *, execution, translator, signal_key):
+    status_display = str(execution.get("status_display") or "").strip()
+    if status_display:
+        lines.append(translator("market_status", status=status_display))
+
+    deploy_ratio_text = str(execution.get("deploy_ratio_text") or "").strip()
+    if deploy_ratio_text:
+        lines.append(translator("risk_position", ratio=deploy_ratio_text))
+
+    income_ratio_text = str(execution.get("income_ratio_text") or "").strip()
+    if income_ratio_text:
+        lines.append(translator("income_target", ratio=income_ratio_text))
+
+    income_locked_ratio_text = str(execution.get("income_locked_ratio_text") or "").strip()
+    if income_locked_ratio_text:
+        lines.append(translator("income_locked", ratio=income_locked_ratio_text))
+
+    signal_display = str(execution.get("signal_display") or "").strip()
+    if signal_display:
+        lines.append(translator(signal_key, msg=signal_display))
+
+    benchmark_line = _build_benchmark_line(execution)
+    if benchmark_line:
+        lines.append(benchmark_line)
+
+    dashboard_text = str(execution.get("dashboard_text") or "").strip()
+    if dashboard_text:
+        lines.append(dashboard_text)
+
+
 def record_skip_log(skip_logs, *, translator, with_prefix, kind, detail):
     message = translator(kind, detail=detail)
     skip_logs.append(message)
@@ -104,12 +158,6 @@ def run_strategy(
     investable_cash = float(execution["investable_cash"])
     current_min_trade = float(execution["current_min_trade"])
     portfolio_rows = tuple(portfolio["portfolio_rows"])
-    market_status = str(execution["status_display"])
-    signal_message = str(execution["signal_display"])
-    deploy_ratio_text = str(execution["deploy_ratio_text"])
-    income_ratio_text = str(execution["income_ratio_text"])
-    income_locked_ratio_text = str(execution["income_locked_ratio_text"])
-
     def record_dry_run(symbol, side, quantity, price, *, order_type):
         price_text = f"${price:.2f}" if price is not None else "market"
         suffix = " LIMIT" if order_type == "limit" else ""
@@ -216,12 +264,6 @@ def run_strategy(
         investable_cash = float(execution["investable_cash"])
         current_min_trade = float(execution["current_min_trade"])
         portfolio_rows = tuple(portfolio["portfolio_rows"])
-        market_status = str(execution["status_display"])
-        signal_message = str(execution["signal_display"])
-        deploy_ratio_text = str(execution["deploy_ratio_text"])
-        income_ratio_text = str(execution["income_ratio_text"])
-        income_locked_ratio_text = str(execution["income_locked_ratio_text"])
-
     buy_candidates = [
         symbol
         for symbol in strategy_assets
@@ -339,22 +381,17 @@ def run_strategy(
         tg_lines = [translator("rebalance_title")]
         if dry_run_only:
             tg_lines.append(translator("dry_run_banner"))
-        tg_lines.extend(
-            [
-                translator("market_status", status=market_status),
-                cash_summary,
-                translator("risk_position", ratio=deploy_ratio_text),
-                translator("income_target", ratio=income_ratio_text),
-                translator("income_locked", ratio=income_locked_ratio_text),
-                translator("signal", msg=signal_message),
-                separator,
-                formatted_logs,
-            ]
+        tg_lines.append(cash_summary)
+        _append_status_lines(
+            tg_lines,
+            execution=execution,
+            translator=translator,
+            signal_key="signal",
         )
+        tg_lines.extend([separator, formatted_logs])
         tg_message = "\n".join(tg_lines)
         send_tg_message(tg_message)
     else:
-        cash_label = translator("cash_label")
         equity_text = f"{total_strategy_equity:,.2f}"
         cash_summary = translator(
             "cash_summary",
@@ -363,33 +400,39 @@ def run_strategy(
         )
         holdings_lines = []
         for row in portfolio_rows:
-            if len(row) == 1:
-                symbol = row[0]
-                holdings_lines.append(
-                    f"{symbol}: ${market_values[symbol]:,.2f}  {cash_label}: ${available_cash:,.2f}"
+            holdings_lines.append(
+                "  ".join(
+                    f"{symbol}: ${market_values[symbol]:,.2f}"
+                    for symbol in row
                 )
-            else:
-                holdings_lines.append(
-                    "  ".join(
-                        f"{symbol}: ${market_values[symbol]:,.2f}"
-                        for symbol in row
-                    )
-                )
-        no_trade_message = (
-            f"{translator('heartbeat_title')}\n"
-            f"{translator('market_status', status=market_status)}\n"
-            f"{translator('equity', value=equity_text)}\n"
-            f"{cash_summary}\n"
-            f"{separator}\n"
-            + "\n".join(holdings_lines) + "\n"
-            f"{separator}\n"
-            f"{translator('risk_position', ratio=deploy_ratio_text)}\n"
-            f"{translator('income_target', ratio=income_ratio_text)}\n"
-            f"{translator('income_locked', ratio=income_locked_ratio_text)}\n"
-            f"{translator('heartbeat_signal', msg=signal_message)}\n"
-            f"{separator}\n"
-            f"{translator('no_executable_orders') if (skip_logs or note_logs) else translator('no_trades')}"
+            )
+        no_trade_lines = [
+            translator("heartbeat_title"),
+            translator("equity", value=equity_text),
+        ]
+        if dry_run_only:
+            no_trade_lines.append(translator("dry_run_banner"))
+        no_trade_lines.extend(
+            [
+                cash_summary,
+                separator,
+                *holdings_lines,
+                separator,
+            ]
         )
+        _append_status_lines(
+            no_trade_lines,
+            execution=execution,
+            translator=translator,
+            signal_key="heartbeat_signal",
+        )
+        no_trade_lines.extend(
+            [
+                separator,
+                translator("no_executable_orders") if (skip_logs or note_logs) else translator("no_trades"),
+            ]
+        )
+        no_trade_message = "\n".join(no_trade_lines)
         if skip_logs:
             no_trade_message += (
                 f"\n{separator}\n"
