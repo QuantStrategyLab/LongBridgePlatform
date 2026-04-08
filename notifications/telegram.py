@@ -8,6 +8,7 @@ import requests
 I18N = {
     "zh": {
         "rebalance_title": "🔔 【调仓指令】",
+        "dry_run_banner": "🧪 dry-run 模式，本次不会真实下单",
         "market_status": "📊 市场状态: {status}",
         "risk_position": "💼 交易层风险仓位: {ratio}",
         "income_target": "💰 收入层目标: {ratio}",
@@ -46,6 +47,7 @@ I18N = {
     },
     "en": {
         "rebalance_title": "🔔 【Trade Execution Report】",
+        "dry_run_banner": "🧪 Dry run mode, no real orders will be submitted",
         "market_status": "📊 Market: {status}",
         "risk_position": "💼 Risk Position: {ratio}",
         "income_target": "💰 Income Target: {ratio}",

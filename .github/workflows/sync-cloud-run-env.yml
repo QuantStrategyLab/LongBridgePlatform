@@ -32,6 +32,7 @@ jobs:
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
       EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI }}
+      LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
     steps:
@@ -165,6 +166,12 @@ jobs:
             remove_env_vars+=("EXECUTION_REPORT_GCS_URI")
           fi
 
+          if [ -n "${LONGBRIDGE_DRY_RUN_ONLY:-}" ]; then
+            env_pairs+=("LONGBRIDGE_DRY_RUN_ONLY=${LONGBRIDGE_DRY_RUN_ONLY}")
+          else
+            remove_env_vars+=("LONGBRIDGE_DRY_RUN_ONLY")
+          fi
+
           gcloud_args=(
             run services update "${CLOUD_RUN_SERVICE}"
             --region "${CLOUD_RUN_REGION}"
@@ -204,6 +211,7 @@ jobs:
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
       EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI }}
+      LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
     steps:
@@ -335,6 +343,12 @@ jobs:
             env_pairs+=("EXECUTION_REPORT_GCS_URI=${EXECUTION_REPORT_GCS_URI}")
           else
             remove_env_vars+=("EXECUTION_REPORT_GCS_URI")
+          fi
+
+          if [ -n "${LONGBRIDGE_DRY_RUN_ONLY:-}" ]; then
+            env_pairs+=("LONGBRIDGE_DRY_RUN_ONLY=${LONGBRIDGE_DRY_RUN_ONLY}")
+          else
+            remove_env_vars+=("LONGBRIDGE_DRY_RUN_ONLY")
           fi
 
           gcloud_args=(

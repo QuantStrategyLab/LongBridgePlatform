@@ -33,6 +33,21 @@ class StrategyLoaderTests(unittest.TestCase):
             "semiconductor_rotation_income",
         )
 
+    def test_load_strategy_runtime_adapter_declares_available_inputs(self):
+        from strategy_loader import load_strategy_runtime_adapter_for_profile
+
+        adapter = load_strategy_runtime_adapter_for_profile("semiconductor_rotation_income")
+
+        self.assertEqual(adapter.available_inputs, frozenset({"indicators", "account_state"}))
+
+    def test_load_strategy_runtime_adapter_declares_hybrid_inputs(self):
+        from strategy_loader import load_strategy_runtime_adapter_for_profile
+
+        adapter = load_strategy_runtime_adapter_for_profile("hybrid_growth_income")
+
+        self.assertEqual(adapter.available_inputs, frozenset({"qqq_history", "snapshot"}))
+        self.assertEqual(adapter.portfolio_input_name, "snapshot")
+
 
 if __name__ == "__main__":
     unittest.main()

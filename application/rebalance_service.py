@@ -53,6 +53,7 @@ def run_strategy(
     fetch_last_price,
     estimate_max_purchase_quantity,
     submit_order_with_alert,
+    dry_run_only=False,
 ):
     print(with_prefix(f"[{datetime.now()}] Starting strategy..."), flush=True)
 
@@ -109,6 +110,14 @@ def run_strategy(
     income_ratio_text = str(execution["income_ratio_text"])
     income_locked_ratio_text = str(execution["income_locked_ratio_text"])
 
+    def record_dry_run(symbol, side, quantity, price, *, order_type):
+        price_text = f"${price:.2f}" if price is not None else "market"
+        suffix = " LIMIT" if order_type == "limit" else ""
+        message = f"🧪 DRY_RUN {side.upper()} {symbol} {quantity} @ {price_text}{suffix}"
+        logs.append(message)
+        print(with_prefix(message), flush=True)
+        return True
+
     for symbol in strategy_assets:
         diff = target_values[symbol] - market_values[symbol]
         if diff < -threshold_value and abs(diff) > current_min_trade:
@@ -127,26 +136,44 @@ def run_strategy(
             if quantity > 0:
                 if symbol in limit_order_symbols:
                     limit_price = round(price * limit_sell_discount, 2)
-                    submitted = submit_order_with_alert(
-                        trade_context,
-                        f"{symbol}.US",
-                        "limit",
-                        "sell",
-                        quantity,
-                        logs,
-                        translator("limit_sell", symbol=symbol, qty=quantity, price=limit_price),
-                        submitted_price=limit_price,
-                    )
+                    if dry_run_only:
+                        submitted = record_dry_run(
+                            f"{symbol}.US",
+                            "sell",
+                            quantity,
+                            limit_price,
+                            order_type="limit",
+                        )
+                    else:
+                        submitted = submit_order_with_alert(
+                            trade_context,
+                            f"{symbol}.US",
+                            "limit",
+                            "sell",
+                            quantity,
+                            logs,
+                            translator("limit_sell", symbol=symbol, qty=quantity, price=limit_price),
+                            submitted_price=limit_price,
+                        )
                 else:
-                    submitted = submit_order_with_alert(
-                        trade_context,
-                        f"{symbol}.US",
-                        "market",
-                        "sell",
-                        quantity,
-                        logs,
-                        translator("market_sell", symbol=symbol, qty=quantity, price=round(price, 2)),
-                    )
+                    if dry_run_only:
+                        submitted = record_dry_run(
+                            f"{symbol}.US",
+                            "sell",
+                            quantity,
+                            round(price, 2),
+                            order_type="market",
+                        )
+                    else:
+                        submitted = submit_order_with_alert(
+                            trade_context,
+                            f"{symbol}.US",
+                            "market",
+                            "sell",
+                            quantity,
+                            logs,
+                            translator("market_sell", symbol=symbol, qty=quantity, price=round(price, 2)),
+                        )
 
                 if submitted:
                     action_done = True
@@ -246,27 +273,45 @@ def run_strategy(
                 continue
 
             if is_limit_order:
-                submitted = submit_order_with_alert(
-                    trade_context,
-                    f"{symbol}.US",
-                    "limit",
-                    "buy",
-                    quantity,
-                    logs,
-                    translator("limit_buy", symbol=symbol, qty=quantity, price=ref_price),
-                    submitted_price=ref_price,
-                )
+                if dry_run_only:
+                    submitted = record_dry_run(
+                        f"{symbol}.US",
+                        "buy",
+                        quantity,
+                        ref_price,
+                        order_type="limit",
+                    )
+                else:
+                    submitted = submit_order_with_alert(
+                        trade_context,
+                        f"{symbol}.US",
+                        "limit",
+                        "buy",
+                        quantity,
+                        logs,
+                        translator("limit_buy", symbol=symbol, qty=quantity, price=ref_price),
+                        submitted_price=ref_price,
+                    )
                 cost_estimate = quantity * budget_price
             else:
-                submitted = submit_order_with_alert(
-                    trade_context,
-                    f"{symbol}.US",
-                    "market",
-                    "buy",
-                    quantity,
-                    logs,
-                    translator("market_buy", symbol=symbol, qty=quantity, price=round(price, 2)),
-                )
+                if dry_run_only:
+                    submitted = record_dry_run(
+                        f"{symbol}.US",
+                        "buy",
+                        quantity,
+                        round(price, 2),
+                        order_type="market",
+                    )
+                else:
+                    submitted = submit_order_with_alert(
+                        trade_context,
+                        f"{symbol}.US",
+                        "market",
+                        "buy",
+                        quantity,
+                        logs,
+                        translator("market_buy", symbol=symbol, qty=quantity, price=round(price, 2)),
+                    )
                 cost_estimate = quantity * budget_price
 
             if submitted:
@@ -291,17 +336,22 @@ def run_strategy(
             investable=f"{investable_cash:.2f}",
         )
         formatted_logs = "\n".join(f"  {log}" for log in [*logs, *skip_logs, *note_logs])
-        tg_message = (
-            f"{translator('rebalance_title')}\n"
-            f"{translator('market_status', status=market_status)}\n"
-            f"{cash_summary}\n"
-            f"{translator('risk_position', ratio=deploy_ratio_text)}\n"
-            f"{translator('income_target', ratio=income_ratio_text)}\n"
-            f"{translator('income_locked', ratio=income_locked_ratio_text)}\n"
-            f"{translator('signal', msg=signal_message)}\n"
-            f"{separator}\n"
-            f"{formatted_logs}"
+        tg_lines = [translator("rebalance_title")]
+        if dry_run_only:
+            tg_lines.append(translator("dry_run_banner"))
+        tg_lines.extend(
+            [
+                translator("market_status", status=market_status),
+                cash_summary,
+                translator("risk_position", ratio=deploy_ratio_text),
+                translator("income_target", ratio=income_ratio_text),
+                translator("income_locked", ratio=income_locked_ratio_text),
+                translator("signal", msg=signal_message),
+                separator,
+                formatted_logs,
+            ]
         )
+        tg_message = "\n".join(tg_lines)
         send_tg_message(tg_message)
     else:
         cash_label = translator("cash_label")

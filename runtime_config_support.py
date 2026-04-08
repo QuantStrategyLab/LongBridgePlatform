@@ -27,6 +27,7 @@ class PlatformRuntimeSettings:
     notify_lang: str
     tg_token: str | None
     tg_chat_id: str | None
+    dry_run_only: bool
 
 
 def resolve_strategy_profile(raw_value: str | None) -> str:
@@ -78,6 +79,7 @@ def load_platform_runtime_settings(
         notify_lang=os.getenv("NOTIFY_LANG", "en"),
         tg_token=os.getenv("TELEGRAM_TOKEN"),
         tg_chat_id=os.getenv("GLOBAL_TELEGRAM_CHAT_ID"),
+        dry_run_only=_resolve_bool_env("LONGBRIDGE_DRY_RUN_ONLY"),
     )
 
 
@@ -97,3 +99,10 @@ def _infer_region_from_service_name(service_name: str) -> str | None:
     if name.endswith("-sg"):
         return "SG"
     return None
+
+
+def _resolve_bool_env(name: str) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return False
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}

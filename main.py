@@ -35,6 +35,7 @@ from quant_platform_kit.common.runtime_reports import (
     finalize_runtime_report,
     persist_runtime_report,
 )
+from quant_platform_kit.common.models import PortfolioSnapshot, Position
 from runtime_logging import RuntimeLogContext, build_run_id, emit_runtime_log
 from quant_platform_kit.longbridge import (
     build_contexts,
@@ -74,6 +75,8 @@ TG_CHAT_ID = RUNTIME_SETTINGS.tg_chat_id
 STRATEGY_RUNTIME = load_strategy_runtime(STRATEGY_PROFILE)
 STRATEGY_RUNTIME_CONFIG = dict(STRATEGY_RUNTIME.merged_runtime_config)
 MANAGED_SYMBOLS = STRATEGY_RUNTIME.managed_symbols
+AVAILABLE_INPUTS = frozenset(STRATEGY_RUNTIME.runtime_adapter.available_inputs)
+BENCHMARK_SYMBOL = str(STRATEGY_RUNTIME_CONFIG.get("benchmark_symbol", "QQQ"))
 
 # Order pricing: limit order discount/premium relative to last price
 LIMIT_SELL_DISCOUNT = 0.995               # sell limit at 0.5% below last
@@ -131,10 +134,12 @@ def build_execution_report(log_context):
         account_region=log_context.account_region,
         run_id=log_context.run_id,
         run_source="cloud_run",
+        dry_run=RUNTIME_SETTINGS.dry_run_only,
         started_at=datetime.now(timezone.utc),
         summary={
             "managed_symbols": list(MANAGED_SYMBOLS),
             "account_prefix": ACCOUNT_PREFIX,
+            "benchmark_symbol": BENCHMARK_SYMBOL,
         },
     )
 
@@ -240,23 +245,83 @@ def submit_order_with_alert(t_ctx, symbol, order_type, side, quantity, logs, log
 # Strategy: NYSE hours check, indicators, balance/positions, target allocation, sell then buy
 # ---------------------------------------------------------------------------
 def calculate_strategy_indicators(quote_context):
+    if "qqq_history" in AVAILABLE_INPUTS:
+        return fetch_daily_price_history(quote_context, f"{BENCHMARK_SYMBOL}.US")
     trend_ma_window = int(STRATEGY_RUNTIME_CONFIG.get("trend_ma_window", 150))
     return calculate_rotation_indicators(quote_context, trend_window=trend_ma_window)
+
+
+def fetch_daily_price_history(quote_context, symbol: str, *, lookback: int = 260):
+    from longport.openapi import AdjustType, Period
+
+    bars = quote_context.candlesticks(symbol, Period.Day, lookback, AdjustType.ForwardAdjust)
+    if not bars:
+        return None
+    history = []
+    for bar in bars:
+        close = float(bar.close)
+        history.append(
+            {
+                "close": close,
+                "high": float(getattr(bar, "high", close)),
+                "low": float(getattr(bar, "low", close)),
+            }
+        )
+    return history
 
 
 def fetch_managed_account_state(quote_context, trade_context):
     return fetch_strategy_account_state(quote_context, trade_context, list(MANAGED_SYMBOLS))
 
 
-def resolve_rebalance_plan(*, indicators, account_state):
-    evaluation = STRATEGY_RUNTIME.evaluate(
-        indicators=indicators,
-        account_state=account_state,
-        translator=t,
+def build_portfolio_snapshot_from_account_state(account_state):
+    positions = []
+    market_values = dict(account_state["market_values"])
+    quantities = dict(account_state["quantities"])
+    for symbol in MANAGED_SYMBOLS:
+        quantity = int(quantities.get(symbol, 0))
+        market_value = float(market_values.get(symbol, 0.0))
+        if quantity <= 0 and market_value <= 0.0:
+            continue
+        positions.append(
+            Position(
+                symbol=symbol,
+                quantity=quantity,
+                market_value=market_value,
+            )
+        )
+
+    available_cash = float(account_state["available_cash"])
+    return PortfolioSnapshot(
+        as_of=datetime.now(timezone.utc),
+        total_equity=float(account_state["total_strategy_equity"]),
+        buying_power=available_cash,
+        cash_balance=available_cash,
+        positions=tuple(positions),
+        metadata={"account_hash": ACCOUNT_PREFIX or ACCOUNT_REGION or "longbridge"},
     )
+
+
+def resolve_rebalance_plan(*, indicators, account_state):
+    evaluation_inputs = {
+        "translator": t,
+    }
+    if "indicators" in AVAILABLE_INPUTS:
+        evaluation_inputs["indicators"] = indicators
+    if "account_state" in AVAILABLE_INPUTS:
+        evaluation_inputs["account_state"] = account_state
+    if "qqq_history" in AVAILABLE_INPUTS:
+        evaluation_inputs["qqq_history"] = indicators
+    snapshot = None
+    if "snapshot" in AVAILABLE_INPUTS:
+        snapshot = build_portfolio_snapshot_from_account_state(account_state)
+        evaluation_inputs["snapshot"] = snapshot
+
+    evaluation = STRATEGY_RUNTIME.evaluate(**evaluation_inputs)
     return map_strategy_decision_to_plan(
         evaluation.decision,
-        account_state=account_state,
+        account_state=account_state if "account_state" in AVAILABLE_INPUTS else None,
+        snapshot=snapshot,
         strategy_profile=STRATEGY_PROFILE,
     )
 
@@ -318,6 +383,7 @@ def run_strategy():
             fetch_last_price=fetch_last_price,
             estimate_max_purchase_quantity=estimate_max_purchase_quantity,
             submit_order_with_alert=submit_order_with_alert,
+            dry_run_only=RUNTIME_SETTINGS.dry_run_only,
         )
         finalize_runtime_report(report, status="ok")
         log_runtime_event(

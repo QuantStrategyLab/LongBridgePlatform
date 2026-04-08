@@ -82,6 +82,7 @@ def install_stub_modules():
     strategy_runtime_module.load_strategy_runtime = lambda *_args, **_kwargs: types.SimpleNamespace(
         merged_runtime_config={"trend_ma_window": 150},
         managed_symbols=("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"),
+        runtime_adapter=types.SimpleNamespace(available_inputs=frozenset({"indicators", "account_state"})),
         evaluate=lambda **_kwargs: None,
     )
 

@@ -88,6 +88,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         refreshed_plan=None,
         account_states=None,
         estimate_max_purchase_quantity_value=0,
+        dry_run_only=False,
     ):
         sent_messages = []
         observed_account_states = []
@@ -152,6 +153,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             fetch_last_price=lambda quote_context, symbol: prices[symbol],
             estimate_max_purchase_quantity=lambda *args, **kwargs: estimate_max_purchase_quantity_value,
             submit_order_with_alert=fake_submit_order_with_alert,
+            dry_run_only=dry_run_only,
         )
 
         return sent_messages, observed_account_states, observed_plan_inputs
@@ -338,6 +340,59 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("限价买入", sent_messages[0])
         self.assertNotIn("买入跳过", sent_messages[0])
         self.assertEqual(len(observed_plan_inputs), 2)
+
+    def test_dry_run_replaces_real_order_submission_with_summary_lines(self):
+        initial_plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            targets={"SOXL": 0.0, "SOXX": 34718.05},
+            market_values={"SOXL": 31928.30, "SOXX": 0.0},
+            sellable_quantities={"SOXL": 695, "SOXX": 0},
+            quantities={"SOXL": 695, "SOXX": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=101.95,
+            market_status="🛡️ DE-LEVER (SOXX)",
+            deploy_ratio_text="57.9%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="38.3%",
+            signal_message="SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
+            available_cash=101.95,
+            total_strategy_equity=60000.0,
+            portfolio_rows=(("SOXL", "SOXX"),),
+        )
+        refreshed_plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            targets={"SOXL": 0.0, "SOXX": 34718.05},
+            market_values={"SOXL": 0.0, "SOXX": 0.0},
+            sellable_quantities={"SOXL": 0, "SOXX": 0},
+            quantities={"SOXL": 0, "SOXX": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=40000.0,
+            market_status="🛡️ DE-LEVER (SOXX)",
+            deploy_ratio_text="57.9%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="38.3%",
+            signal_message="SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
+            available_cash=40000.0,
+            total_strategy_equity=60000.0,
+            portfolio_rows=(("SOXL", "SOXX"),),
+        )
+        sent_messages, _, _ = self._run_strategy(
+            initial_plan,
+            refreshed_plan=refreshed_plan,
+            account_states=[{"phase": "before_sell"}, {"phase": "after_sell"}],
+            prices={"SOXL.US": 45.94, "SOXX.US": 322.74},
+            estimate_max_purchase_quantity_value=200,
+            dry_run_only=True,
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("🧪 dry-run 模式", sent_messages[0])
+        self.assertIn("🧪 DRY_RUN SELL SOXL.US", sent_messages[0])
+        self.assertIn("🧪 DRY_RUN BUY SOXX.US", sent_messages[0])
 
     def test_heartbeat_accepts_normalized_portfolio_and_execution_sections(self):
         plan = _build_plan(
