@@ -138,7 +138,6 @@ def build_sender(token, chat_id, *, with_prefix_fn, requests_module=requests):
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         try:
             prefixed = with_prefix_fn(message)
-            print(f"TG:\n{prefixed}", flush=True)
             requests_module.post(url, json={"chat_id": chat_id, "text": prefixed}, timeout=10)
         except Exception as exc:
             print(f"Telegram send failed: {exc}", flush=True)

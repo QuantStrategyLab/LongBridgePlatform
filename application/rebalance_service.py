@@ -387,6 +387,7 @@ def run_strategy(
         )
         tg_lines.extend([separator, formatted_logs])
         tg_message = "\n".join(tg_lines)
+        print(with_prefix(tg_message), flush=True)
         send_tg_message(tg_message)
     else:
         equity_text = f"{total_strategy_equity:,.2f}"
