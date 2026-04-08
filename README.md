@@ -10,7 +10,7 @@
 Quant system on LongPort OpenAPI and Google Cloud Run.
 
 This repository uses `QuantPlatformKit` for LongPort token handling, context bootstrap, account snapshot access, market data, and order submission. Cloud Run deploys this repository directly.
-The LongBridge runtime can execute `semiconductor_rotation_income`, `hybrid_growth_income`, and `tech_pullback_cash_buffer` from `UsEquityStrategies`; `LongBridgePlatform` keeps the LongPort runtime, token refresh, execution, and notification flow.
+The LongBridge runtime can execute `soxl_soxx_trend_income`, `tqqq_growth_income`, and `qqq_tech_enhancement` (legacy aliases: `semiconductor_rotation_income`, `hybrid_growth_income`, `tech_pullback_cash_buffer`) from `UsEquityStrategies`; `LongBridgePlatform` keeps the LongPort runtime, token refresh, execution, and notification flow.
 
 Full strategy documentation now lives in [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies). The sections below focus on execution-side defaults and runtime behavior.
 This runtime matrix is the authoritative enablement source for LongBridge. `UsEquityStrategies` only carries strategy-layer compatibility and metadata.
@@ -31,9 +31,9 @@ Platform execution no longer depends on `strategy/allocation.py` or hard-coded s
 
 | Canonical profile | Display name | Eligible | Enabled | Default | Rollback | Domain | Runtime note |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `semiconductor_rotation_income` | SOXL/SOXX Semiconductor Trend Income | Yes | Yes | Yes | Yes | `us_equity` | current LongBridge default |
-| `hybrid_growth_income` | TQQQ Growth Income | Yes | Yes | No | No | `us_equity` | current SG dry-run line |
-| `tech_pullback_cash_buffer` | QQQ Tech Enhancement | Yes | Yes | No | No | `us_equity` | current HK feature-snapshot line |
+| `soxl_soxx_trend_income` | SOXL/SOXX Semiconductor Trend Income | Yes | Yes | Yes | Yes | `us_equity` | current LongBridge default |
+| `tqqq_growth_income` | TQQQ Growth Income | Yes | Yes | No | No | `us_equity` | current SG dry-run line |
+| `qqq_tech_enhancement` | QQQ Tech Enhancement | Yes | Yes | No | No | `us_equity` | current HK feature-snapshot line |
 
 Check the current matrix locally:
 
@@ -112,7 +112,7 @@ BOXX: $34,000.00  Cash: $10,000.00
 | `LONGPORT_APP_SECRET` | Yes | LongPort OpenAPI app secret (for token refresh); recommended to inject from the region-specific Secret Manager secret for this deployment, such as `longport-app-secret-hk` / `longport-app-secret-sg` |
 | `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token_hk`) |
 | `ACCOUNT_PREFIX` | No | Alert/log prefix for account/environment (default: `DEFAULT`) |
-| `STRATEGY_PROFILE` | No | Strategy profile selector (default: `semiconductor_rotation_income`; current live values include `tech_pullback_cash_buffer` on HK and `hybrid_growth_income` on SG) |
+| `STRATEGY_PROFILE` | No | Strategy profile selector (default: `soxl_soxx_trend_income`; current live values include `qqq_tech_enhancement` on HK and `tqqq_growth_income` on SG) |
 | `ACCOUNT_REGION` | No | Account region marker for platform-style deployment (e.g. `HK`, `SG`; defaults to `ACCOUNT_PREFIX` / `DEFAULT`) |
 | `LONGBRIDGE_DRY_RUN_ONLY` | No | Set to `true` to keep the selected deployment in dry-run mode. |
 | `NOTIFY_LANG` | No | Notification language: `en` (English, default) or `zh` (Chinese) |
@@ -136,7 +136,7 @@ Deploy the same codebase as multiple Cloud Run services (e.g. `HK` and `SG`) by 
 
 - `LONGPORT_SECRET_NAME`: point to different secrets (e.g. `longport_token_hk`, `longport_token_sg`)
 - `ACCOUNT_PREFIX`: e.g. `HK`, `SG` (all Telegram/log alerts will include `[ACCOUNT_PREFIX]`)
-- `STRATEGY_PROFILE`: set per service; current live examples are `tech_pullback_cash_buffer` on HK and `hybrid_growth_income` on SG
+- `STRATEGY_PROFILE`: set per service; current live examples are `qqq_tech_enhancement` on HK and `tqqq_growth_income` on SG
 - Current strategy domain is `us_equity`. `STRATEGY_PROFILE` now goes through a platform capability matrix plus a rollout allowlist: `eligible` means the platform can run it in theory, `enabled` means the current rollout really allows it.
 - `ACCOUNT_REGION`: explicitly mark the deployed account region (`HK` / `SG`); if unset, the app falls back to `ACCOUNT_PREFIX` or `DEFAULT`
 - `LONGBRIDGE_DRY_RUN_ONLY`: set per service when that deployment should stay dry-run
@@ -158,12 +158,12 @@ Recommended setup:
 - **GitHub Environment: `longbridge-hk`**
   - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
   - Optional variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`, `LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`, `LONGBRIDGE_STRATEGY_CONFIG_PATH`, `LONGBRIDGE_DRY_RUN_ONLY`
-  - Current live example: `STRATEGY_PROFILE=tech_pullback_cash_buffer`
+  - Current live example: `STRATEGY_PROFILE=qqq_tech_enhancement`
   - Recommended secret-name values: `longport-app-key-hk`, `longport-app-secret-hk`
 - **GitHub Environment: `longbridge-sg`**
   - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
   - Optional variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`, `LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`, `LONGBRIDGE_STRATEGY_CONFIG_PATH`, `LONGBRIDGE_DRY_RUN_ONLY`
-  - Current live example: `STRATEGY_PROFILE=hybrid_growth_income`
+  - Current live example: `STRATEGY_PROFILE=tqqq_growth_income`
   - Recommended secret-name values: `longport-app-key-sg`, `longport-app-secret-sg`
 
 On every push to `main`, the workflow updates both Cloud Run services with the shared and per-environment values above, and removes `TELEGRAM_CHAT_ID` from each Cloud Run service.
@@ -211,7 +211,7 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 基于 LongPort OpenAPI 和 Google Cloud Run 的量化交易系统。
 
 这个仓库通过 `QuantPlatformKit` 复用 LongPort token 处理、上下文初始化、账户快照、行情读取和下单逻辑。Cloud Run 直接部署这个仓库。
-`LongBridgePlatform` 现在可直接执行 `UsEquityStrategies` 里的 `semiconductor_rotation_income`、`hybrid_growth_income` 和 `tech_pullback_cash_buffer`；仓库本身继续保留 LongPort 运行时、token 刷新、执行和通知流程。
+`LongBridgePlatform` 现在可直接执行 `UsEquityStrategies` 里的 `soxl_soxx_trend_income`、`tqqq_growth_income` 和 `qqq_tech_enhancement`（兼容别名分别是 `semiconductor_rotation_income`、`hybrid_growth_income`、`tech_pullback_cash_buffer`）；仓库本身继续保留 LongPort 运行时、token 刷新、执行和通知流程。
 
 完整策略说明现在放在 [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies)。下面这些章节主要保留执行侧默认值和运行时行为。
 
@@ -230,9 +230,9 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 
 | Canonical profile | Display name | Eligible | Enabled | Default | Rollback | Domain | Runtime note |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `semiconductor_rotation_income` | SOXL/SOXX 半导体趋势收益 | Yes | Yes | Yes | Yes | `us_equity` | 当前 LongBridge 默认回退线 |
-| `hybrid_growth_income` | TQQQ 增长收益 | Yes | Yes | No | No | `us_equity` | 当前 SG dry-run 线路 |
-| `tech_pullback_cash_buffer` | QQQ 科技增强 | Yes | Yes | No | No | `us_equity` | 当前 HK feature-snapshot 线路 |
+| `soxl_soxx_trend_income` | SOXL/SOXX 半导体趋势收益 | Yes | Yes | Yes | Yes | `us_equity` | 当前 LongBridge 默认回退线 |
+| `tqqq_growth_income` | TQQQ 增长收益 | Yes | Yes | No | No | `us_equity` | 当前 SG dry-run 线路 |
+| `qqq_tech_enhancement` | QQQ 科技增强 | Yes | Yes | No | No | `us_equity` | 当前 HK feature-snapshot 线路 |
 
 本地可直接查看当前矩阵：
 
@@ -311,7 +311,7 @@ BOXX: $34,000.00  现金: $10,000.00
 | `LONGPORT_APP_SECRET` | 是 | LongPort OpenAPI 应用密钥（用于刷新 Token）；建议从当前部署对应区域的 Secret Manager 密钥注入，例如 `longport-app-secret-hk` / `longport-app-secret-sg` |
 | `LONGPORT_SECRET_NAME` | 否 | Secret Manager 中的密钥名称（默认: `longport_token_hk`） |
 | `ACCOUNT_PREFIX` | 否 | 通知/日志前缀，区分账户环境（默认: `DEFAULT`） |
-| `STRATEGY_PROFILE` | 否 | 策略档位选择（默认: `semiconductor_rotation_income`；当前线上 HK 用 `tech_pullback_cash_buffer`，SG 用 `hybrid_growth_income`） |
+| `STRATEGY_PROFILE` | 否 | 策略档位选择（默认: `soxl_soxx_trend_income`；当前线上 HK 用 `qqq_tech_enhancement`，SG 用 `tqqq_growth_income`） |
 | `ACCOUNT_REGION` | 否 | 平台化部署时的账户区域标记（如 `HK`、`SG`；默认按 `ACCOUNT_PREFIX` / `DEFAULT` 推断） |
 | `LONGBRIDGE_DRY_RUN_ONLY` | 否 | 设为 `true` 时，该部署保持 dry-run。 |
 | `NOTIFY_LANG` | 否 | 通知语言: `en`（英文，默认）或 `zh`（中文） |
@@ -335,7 +335,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 
 - `LONGPORT_SECRET_NAME`: 指向不同密钥（如 `longport_token_hk`、`longport_token_sg`）
 - `ACCOUNT_PREFIX`: 如 `HK`、`SG`（所有通知/日志将包含 `[ACCOUNT_PREFIX]`）
-- `STRATEGY_PROFILE`: 按服务分别设置；当前线上 HK 用 `tech_pullback_cash_buffer`，SG 用 `hybrid_growth_income`
+- `STRATEGY_PROFILE`: 按服务分别设置；当前线上 HK 用 `qqq_tech_enhancement`，SG 用 `tqqq_growth_income`
 - 当前策略域是 `us_equity`。`STRATEGY_PROFILE` 现在会先经过平台能力矩阵，再经过 rollout allowlist：`eligible` 表示平台理论可跑，`enabled` 表示当前 rollout 真正放开。
 - `ACCOUNT_REGION`: 显式标记部署账户区域（`HK` / `SG`）；未设置时会回退到 `ACCOUNT_PREFIX` 或 `DEFAULT`
 - `LONGBRIDGE_DRY_RUN_ONLY`: 需要保持模拟运行时按服务单独设置
@@ -357,12 +357,12 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 - **GitHub Environment: `longbridge-hk`**
   - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
   - 可选 Variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`、`LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`、`LONGBRIDGE_STRATEGY_CONFIG_PATH`、`LONGBRIDGE_DRY_RUN_ONLY`
-  - 当前线上示例：`STRATEGY_PROFILE=tech_pullback_cash_buffer`
+  - 当前线上示例：`STRATEGY_PROFILE=qqq_tech_enhancement`
   - 建议的 secret-name 值：`longport-app-key-hk`、`longport-app-secret-hk`
 - **GitHub Environment: `longbridge-sg`**
   - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
   - 可选 Variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`、`LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`、`LONGBRIDGE_STRATEGY_CONFIG_PATH`、`LONGBRIDGE_DRY_RUN_ONLY`
-  - 当前线上示例：`STRATEGY_PROFILE=hybrid_growth_income`
+  - 当前线上示例：`STRATEGY_PROFILE=tqqq_growth_income`
   - 建议的 secret-name 值：`longport-app-key-sg`、`longport-app-secret-sg`
 
 每次 push 到 `main` 时，这个 workflow 会分别更新两个 Cloud Run 服务，把共享和各自隔离的变量同步进去，并删除旧的 `TELEGRAM_CHAT_ID`。

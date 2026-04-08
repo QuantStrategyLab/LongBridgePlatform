@@ -27,7 +27,7 @@ grep -Fq 'LONGBRIDGE_FEATURE_SNAPSHOT_PATH: ${{ vars.LONGBRIDGE_FEATURE_SNAPSHOT
 grep -Fq 'LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH: ${{ vars.LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH }}' "$workflow_file"
 grep -Fq 'LONGBRIDGE_STRATEGY_CONFIG_PATH: ${{ vars.LONGBRIDGE_STRATEGY_CONFIG_PATH }}' "$workflow_file"
 grep -Fq 'LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}' "$workflow_file"
-grep -Fq "STRATEGY_PROFILE: \${{ vars.STRATEGY_PROFILE || 'semiconductor_rotation_income' }}" "$workflow_file"
+grep -Fq "STRATEGY_PROFILE: \${{ vars.STRATEGY_PROFILE || 'soxl_soxx_trend_income' }}" "$workflow_file"
 grep -Fq "ACCOUNT_REGION: \${{ vars.ACCOUNT_REGION || 'HK' }}" "$workflow_file"
 grep -Fq "ACCOUNT_REGION: \${{ vars.ACCOUNT_REGION || 'SG' }}" "$workflow_file"
 grep -Fq 'echo "enabled=false" >> "$GITHUB_OUTPUT"' "$workflow_file"

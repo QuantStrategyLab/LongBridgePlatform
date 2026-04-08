@@ -26,7 +26,7 @@ jobs:
       TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
       LONGPORT_APP_KEY_SECRET_NAME: ${{ vars.LONGPORT_APP_KEY_SECRET_NAME }}
       LONGPORT_APP_SECRET_SECRET_NAME: ${{ vars.LONGPORT_APP_SECRET_SECRET_NAME }}
-      STRATEGY_PROFILE: ${{ vars.STRATEGY_PROFILE || 'semiconductor_rotation_income' }}
+      STRATEGY_PROFILE: ${{ vars.STRATEGY_PROFILE || 'soxl_soxx_trend_income' }}
       ACCOUNT_REGION: ${{ vars.ACCOUNT_REGION || 'HK' }}
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
       LONGBRIDGE_FEATURE_SNAPSHOT_PATH: ${{ vars.LONGBRIDGE_FEATURE_SNAPSHOT_PATH }}
@@ -77,7 +77,7 @@ jobs:
             missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME")
           fi
 
-          if [ "${STRATEGY_PROFILE:-}" = "tech_pullback_cash_buffer" ] && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
+          if [ "${STRATEGY_PROFILE:-}" = "qqq_tech_enhancement" ] && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
             missing_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_PATH")
           fi
 
@@ -228,7 +228,7 @@ jobs:
       TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
       LONGPORT_APP_KEY_SECRET_NAME: ${{ vars.LONGPORT_APP_KEY_SECRET_NAME }}
       LONGPORT_APP_SECRET_SECRET_NAME: ${{ vars.LONGPORT_APP_SECRET_SECRET_NAME }}
-      STRATEGY_PROFILE: ${{ vars.STRATEGY_PROFILE || 'semiconductor_rotation_income' }}
+      STRATEGY_PROFILE: ${{ vars.STRATEGY_PROFILE || 'soxl_soxx_trend_income' }}
       ACCOUNT_REGION: ${{ vars.ACCOUNT_REGION || 'SG' }}
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
       LONGBRIDGE_FEATURE_SNAPSHOT_PATH: ${{ vars.LONGBRIDGE_FEATURE_SNAPSHOT_PATH }}
@@ -279,7 +279,7 @@ jobs:
             missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME")
           fi
 
-          if [ "${STRATEGY_PROFILE:-}" = "tech_pullback_cash_buffer" ] && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
+          if [ "${STRATEGY_PROFILE:-}" = "qqq_tech_enhancement" ] && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
             missing_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_PATH")
           fi
 

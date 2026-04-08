@@ -19,11 +19,11 @@ from quant_platform_kit.common.strategies import (
 
 LONGBRIDGE_PLATFORM = "longbridge"
 
-DEFAULT_STRATEGY_PROFILE = "semiconductor_rotation_income"
+DEFAULT_STRATEGY_PROFILE = "soxl_soxx_trend_income"
 ROLLBACK_STRATEGY_PROFILE = DEFAULT_STRATEGY_PROFILE
 
 LONGBRIDGE_ROLLOUT_ALLOWLIST = frozenset(
-    {"semiconductor_rotation_income", "hybrid_growth_income", "tech_pullback_cash_buffer"}
+    {"soxl_soxx_trend_income", "tqqq_growth_income", "qqq_tech_enhancement"}
 )
 
 PLATFORM_SUPPORTED_DOMAINS: dict[str, frozenset[str]] = {

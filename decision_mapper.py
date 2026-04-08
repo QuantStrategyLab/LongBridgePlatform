@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from us_equity_strategies.catalog import resolve_canonical_profile
+
 from quant_platform_kit.strategy_contracts import (
     PositionTarget,
     StrategyDecision,
@@ -143,7 +145,8 @@ def _normalize_to_value_target_decision(
 
 
 def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[str, ...], dict[str, Any]]:
-    if strategy_profile == "hybrid_growth_income":
+    strategy_profile = resolve_canonical_profile(strategy_profile)
+    if strategy_profile == "tqqq_growth_income":
         return (
             "risk_safe_income",
             ("risk_safe", "income"),
@@ -173,7 +176,7 @@ def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[
                 "investable_cash": 0.0,
             },
         )
-    if strategy_profile == "tech_pullback_cash_buffer":
+    if strategy_profile == "qqq_tech_enhancement":
         return (
             "risk_safe_income",
             ("risk_safe",),
@@ -240,6 +243,7 @@ def map_strategy_decision_to_plan(
     snapshot: Any | None = None,
     strategy_profile: str,
 ) -> dict[str, Any]:
+    canonical_profile = resolve_canonical_profile(strategy_profile)
     portfolio_inputs = _build_portfolio_inputs(account_state=account_state, snapshot=snapshot)
     normalized_decision, normalized_annotations = _normalize_to_value_target_decision(
         decision,
@@ -276,10 +280,12 @@ def map_strategy_decision_to_plan(
             investable_cash=investable_cash,
         )
 
-    strategy_symbols_order, portfolio_rows_layout, execution_fields, execution_defaults = _resolve_layout(strategy_profile)
+    strategy_symbols_order, portfolio_rows_layout, execution_fields, execution_defaults = _resolve_layout(
+        canonical_profile
+    )
     return build_value_target_runtime_plan(
         normalized_decision,
-        strategy_profile=strategy_profile,
+        strategy_profile=canonical_profile,
         portfolio_inputs=portfolio_inputs,
         annotations=annotations,
         strategy_symbols_order=strategy_symbols_order,

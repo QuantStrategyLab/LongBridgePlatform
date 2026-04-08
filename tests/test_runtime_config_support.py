@@ -54,13 +54,13 @@ class RuntimeConfigSupportTests(unittest.TestCase):
     def test_platform_supported_profiles_are_filtered_by_registry(self):
         self.assertEqual(
             get_supported_profiles_for_platform(LONGBRIDGE_PLATFORM),
-            frozenset({"hybrid_growth_income", "semiconductor_rotation_income", "tech_pullback_cash_buffer"}),
+            frozenset({"tqqq_growth_income", "soxl_soxx_trend_income", "qqq_tech_enhancement"}),
         )
 
     def test_platform_eligible_profiles_are_exposed_by_capability_matrix(self):
         self.assertEqual(
             get_eligible_profiles_for_platform(LONGBRIDGE_PLATFORM),
-            frozenset({"hybrid_growth_income", "semiconductor_rotation_income", "tech_pullback_cash_buffer"}),
+            frozenset({"tqqq_growth_income", "soxl_soxx_trend_income", "qqq_tech_enhancement"}),
         )
 
     def test_dry_run_only_is_loaded_from_env(self):
@@ -114,15 +114,15 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(
             set(by_profile),
             {
-                "hybrid_growth_income",
-                "semiconductor_rotation_income",
-                "tech_pullback_cash_buffer",
+                "tqqq_growth_income",
+                "soxl_soxx_trend_income",
+                "qqq_tech_enhancement",
             },
         )
         self.assertEqual(
-            by_profile["semiconductor_rotation_income"],
+            by_profile["soxl_soxx_trend_income"],
             {
-                "canonical_profile": "semiconductor_rotation_income",
+                "canonical_profile": "soxl_soxx_trend_income",
                 "display_name": "SOXL/SOXX Semiconductor Trend Income",
                 "domain": "us_equity",
                 "eligible": True,
@@ -132,10 +132,10 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "platform": "longbridge",
             },
         )
-        self.assertEqual(by_profile["hybrid_growth_income"]["display_name"], "TQQQ Growth Income")
-        self.assertTrue(by_profile["tech_pullback_cash_buffer"]["eligible"])
-        self.assertTrue(by_profile["tech_pullback_cash_buffer"]["enabled"])
-        self.assertEqual(by_profile["tech_pullback_cash_buffer"]["display_name"], "QQQ Tech Enhancement")
+        self.assertEqual(by_profile["tqqq_growth_income"]["display_name"], "TQQQ Growth Income")
+        self.assertTrue(by_profile["qqq_tech_enhancement"]["eligible"])
+        self.assertTrue(by_profile["qqq_tech_enhancement"]["enabled"])
+        self.assertEqual(by_profile["qqq_tech_enhancement"]["display_name"], "QQQ Tech Enhancement")
 
     def test_loads_feature_snapshot_env_for_tech_profile(self):
         with patch.dict(
@@ -150,7 +150,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         ):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
-        self.assertEqual(settings.strategy_profile, "tech_pullback_cash_buffer")
+        self.assertEqual(settings.strategy_profile, "qqq_tech_enhancement")
         self.assertEqual(settings.feature_snapshot_path, "gs://bucket/tech.csv")
         self.assertEqual(settings.feature_snapshot_manifest_path, "gs://bucket/tech.csv.manifest.json")
         self.assertEqual(settings.strategy_config_path, "/workspace/configs/tech.json")
@@ -176,7 +176,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
         self.assertIn("canonical_profile", result.stdout)
         self.assertIn("display_name", result.stdout)
-        self.assertIn("semiconductor_rotation_income", result.stdout)
+        self.assertIn("soxl_soxx_trend_income", result.stdout)
         self.assertIn("QQQ Tech Enhancement", result.stdout)
 
 

@@ -12,7 +12,7 @@ class StrategyLoaderTests(unittest.TestCase):
                 self.skipTest(f"{exc.name} is not installed")
             raise
 
-        self.assertEqual(entrypoint.manifest.profile, "semiconductor_rotation_income")
+        self.assertEqual(entrypoint.manifest.profile, "soxl_soxx_trend_income")
         self.assertEqual(
             entrypoint.manifest.default_config["managed_symbols"],
             ("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"),
@@ -30,13 +30,13 @@ class StrategyLoaderTests(unittest.TestCase):
 
         self.assertEqual(
             entrypoint.manifest.profile,
-            "semiconductor_rotation_income",
+            "soxl_soxx_trend_income",
         )
 
     def test_load_strategy_runtime_adapter_declares_available_inputs(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
 
-        adapter = load_strategy_runtime_adapter_for_profile("semiconductor_rotation_income")
+        adapter = load_strategy_runtime_adapter_for_profile("soxl_soxx_trend_income")
 
         self.assertEqual(
             adapter.available_inputs,
@@ -47,7 +47,7 @@ class StrategyLoaderTests(unittest.TestCase):
     def test_load_strategy_runtime_adapter_declares_hybrid_inputs(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
 
-        adapter = load_strategy_runtime_adapter_for_profile("hybrid_growth_income")
+        adapter = load_strategy_runtime_adapter_for_profile("tqqq_growth_income")
 
         self.assertEqual(
             adapter.available_inputs,
@@ -58,7 +58,7 @@ class StrategyLoaderTests(unittest.TestCase):
     def test_load_strategy_runtime_adapter_declares_tech_snapshot_inputs(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
 
-        adapter = load_strategy_runtime_adapter_for_profile("tech_pullback_cash_buffer")
+        adapter = load_strategy_runtime_adapter_for_profile("qqq_tech_enhancement")
 
         self.assertEqual(
             adapter.available_inputs,
