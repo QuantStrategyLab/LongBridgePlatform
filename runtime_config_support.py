@@ -21,7 +21,6 @@ class PlatformRuntimeSettings:
     project_id: str | None
     secret_name: str
     account_prefix: str
-    service_name: str
     strategy_profile: str
     strategy_display_name: str
     strategy_domain: str
@@ -30,6 +29,10 @@ class PlatformRuntimeSettings:
     tg_token: str | None
     tg_chat_id: str | None
     dry_run_only: bool
+    feature_snapshot_path: str | None = None
+    feature_snapshot_manifest_path: str | None = None
+    strategy_config_path: str | None = None
+    strategy_config_source: str | None = None
 
 
 def resolve_strategy_profile(raw_value: str | None) -> str:
@@ -43,12 +46,10 @@ def infer_account_region(
     raw_value: str | None,
     *,
     account_prefix: str,
-    service_name: str,
 ) -> str:
     for candidate in (
         raw_value,
         account_prefix,
-        _infer_region_from_service_name(service_name),
     ):
         normalized = _normalize_region(candidate)
         if normalized is not None:
@@ -61,7 +62,6 @@ def load_platform_runtime_settings(
     project_id_resolver: Callable[[], str | None],
 ) -> PlatformRuntimeSettings:
     account_prefix = os.getenv("ACCOUNT_PREFIX", "DEFAULT")
-    service_name = os.getenv("SERVICE_NAME", "longbridge-quant-semiconductor-rotation-income")
     strategy_definition = resolve_strategy_definition(
         os.getenv("STRATEGY_PROFILE"),
         platform_id=LONGBRIDGE_PLATFORM,
@@ -70,23 +70,35 @@ def load_platform_runtime_settings(
         strategy_definition.profile,
         platform_id=LONGBRIDGE_PLATFORM,
     )
+    strategy_config_path = _first_non_empty(
+        os.getenv("LONGBRIDGE_STRATEGY_CONFIG_PATH"),
+        os.getenv("STRATEGY_CONFIG_PATH"),
+    )
     return PlatformRuntimeSettings(
         project_id=project_id_resolver(),
         secret_name=os.getenv("LONGPORT_SECRET_NAME", DEFAULT_LONGPORT_SECRET_NAME),
         account_prefix=account_prefix,
-        service_name=service_name,
         strategy_profile=strategy_definition.profile,
         strategy_display_name=strategy_metadata.display_name,
         strategy_domain=strategy_definition.domain,
         account_region=infer_account_region(
             os.getenv("ACCOUNT_REGION"),
             account_prefix=account_prefix,
-            service_name=service_name,
         ),
         notify_lang=os.getenv("NOTIFY_LANG", "en"),
         tg_token=os.getenv("TELEGRAM_TOKEN"),
         tg_chat_id=os.getenv("GLOBAL_TELEGRAM_CHAT_ID"),
         dry_run_only=_resolve_bool_env("LONGBRIDGE_DRY_RUN_ONLY"),
+        feature_snapshot_path=_first_non_empty(
+            os.getenv("LONGBRIDGE_FEATURE_SNAPSHOT_PATH"),
+            os.getenv("FEATURE_SNAPSHOT_PATH"),
+        ),
+        feature_snapshot_manifest_path=_first_non_empty(
+            os.getenv("LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"),
+            os.getenv("FEATURE_SNAPSHOT_MANIFEST_PATH"),
+        ),
+        strategy_config_path=strategy_config_path,
+        strategy_config_source="env" if strategy_config_path else None,
     )
 
 
@@ -99,17 +111,16 @@ def _normalize_region(raw_value: str | None) -> str | None:
     return value.upper()
 
 
-def _infer_region_from_service_name(service_name: str) -> str | None:
-    name = str(service_name).strip().lower()
-    if name.endswith("-hk"):
-        return "HK"
-    if name.endswith("-sg"):
-        return "SG"
-    return None
-
-
 def _resolve_bool_env(name: str) -> bool:
     raw_value = os.getenv(name)
     if raw_value is None:
         return False
     return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _first_non_empty(*values: str | None) -> str | None:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return None

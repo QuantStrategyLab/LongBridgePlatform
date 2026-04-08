@@ -38,15 +38,34 @@ class StrategyLoaderTests(unittest.TestCase):
 
         adapter = load_strategy_runtime_adapter_for_profile("semiconductor_rotation_income")
 
-        self.assertEqual(adapter.available_inputs, frozenset({"indicators", "account_state"}))
+        self.assertEqual(
+            adapter.available_inputs,
+            frozenset({"derived_indicators", "portfolio_snapshot"}),
+        )
+        self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
 
     def test_load_strategy_runtime_adapter_declares_hybrid_inputs(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
 
         adapter = load_strategy_runtime_adapter_for_profile("hybrid_growth_income")
 
-        self.assertEqual(adapter.available_inputs, frozenset({"qqq_history", "snapshot"}))
-        self.assertEqual(adapter.portfolio_input_name, "snapshot")
+        self.assertEqual(
+            adapter.available_inputs,
+            frozenset({"benchmark_history", "portfolio_snapshot"}),
+        )
+        self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
+
+    def test_load_strategy_runtime_adapter_declares_tech_snapshot_inputs(self):
+        from strategy_loader import load_strategy_runtime_adapter_for_profile
+
+        adapter = load_strategy_runtime_adapter_for_profile("tech_pullback_cash_buffer")
+
+        self.assertEqual(
+            adapter.available_inputs,
+            frozenset({"feature_snapshot", "portfolio_snapshot"}),
+        )
+        self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
+        self.assertTrue(adapter.require_snapshot_manifest)
 
 
 if __name__ == "__main__":

@@ -137,6 +137,44 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["execution"]["exit_line"], 470.0)
         self.assertEqual(plan["portfolio"]["market_values"]["TQQQ"], 5000.0)
 
+    def test_translates_weight_decision_for_tech_strategy(self):
+        decision = StrategyDecision(
+            positions=(
+                PositionTarget(symbol="AAPL", target_weight=0.35),
+                PositionTarget(symbol="MSFT", target_weight=0.35),
+                PositionTarget(symbol="BOXX", target_weight=0.30, role="safe_haven"),
+            ),
+            diagnostics={
+                "signal_description": "risk on",
+                "status_description": "regime=soft_defense | breadth=55.0%",
+                "benchmark_symbol": "QQQ",
+            },
+        )
+        snapshot = PortfolioSnapshot(
+            as_of=datetime.now(timezone.utc),
+            total_equity=20000.0,
+            buying_power=4000.0,
+            positions=(
+                Position(symbol="AAPL", quantity=10, market_value=1500.0),
+                Position(symbol="BOXX", quantity=30, market_value=3000.0),
+            ),
+            metadata={"account_hash": "longbridge-tech"},
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            snapshot=snapshot,
+            strategy_profile="tech_pullback_cash_buffer",
+        )
+
+        self.assertEqual(plan["allocation"]["target_mode"], "value")
+        self.assertEqual(plan["allocation"]["targets"]["AAPL"], 7000.0)
+        self.assertEqual(plan["allocation"]["targets"]["BOXX"], 6000.0)
+        self.assertEqual(plan["execution"]["signal_display"], "risk on")
+        self.assertEqual(plan["execution"]["status_display"], "regime=soft_defense | breadth=55.0%")
+        self.assertEqual(plan["execution"]["benchmark_symbol"], "QQQ")
+        self.assertEqual(plan["portfolio"]["portfolio_rows"], (("AAPL", "MSFT", "BOXX"),))
+
 
 if __name__ == "__main__":
     unittest.main()

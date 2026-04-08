@@ -37,7 +37,10 @@ from quant_platform_kit.common.runtime_reports import (
     finalize_runtime_report,
     persist_runtime_report,
 )
-from quant_platform_kit.common.models import PortfolioSnapshot, Position
+from quant_platform_kit.strategy_contracts import (
+    build_portfolio_snapshot_from_account_state as qpk_build_portfolio_snapshot_from_account_state,
+    build_strategy_evaluation_inputs,
+)
 from runtime_logging import RuntimeLogContext, build_run_id, emit_runtime_log
 from quant_platform_kit.longbridge import (
     build_contexts,
@@ -68,14 +71,17 @@ RUNTIME_SETTINGS = load_platform_runtime_settings(project_id_resolver=get_projec
 PROJECT_ID = RUNTIME_SETTINGS.project_id
 SECRET_NAME = RUNTIME_SETTINGS.secret_name
 ACCOUNT_PREFIX = RUNTIME_SETTINGS.account_prefix
-SERVICE_NAME = RUNTIME_SETTINGS.service_name
 STRATEGY_PROFILE = RUNTIME_SETTINGS.strategy_profile
 STRATEGY_DISPLAY_NAME = RUNTIME_SETTINGS.strategy_display_name
 ACCOUNT_REGION = RUNTIME_SETTINGS.account_region
 NOTIFY_LANG = RUNTIME_SETTINGS.notify_lang
 TG_TOKEN = RUNTIME_SETTINGS.tg_token
 TG_CHAT_ID = RUNTIME_SETTINGS.tg_chat_id
-STRATEGY_RUNTIME = load_strategy_runtime(STRATEGY_PROFILE)
+STRATEGY_RUNTIME = load_strategy_runtime(
+    STRATEGY_PROFILE,
+    runtime_settings=RUNTIME_SETTINGS,
+    logger=lambda message: print(message, flush=True),
+)
 STRATEGY_RUNTIME_CONFIG = dict(STRATEGY_RUNTIME.merged_runtime_config)
 MANAGED_SYMBOLS = STRATEGY_RUNTIME.managed_symbols
 AVAILABLE_INPUTS = frozenset(STRATEGY_RUNTIME.runtime_adapter.available_inputs)
@@ -106,7 +112,7 @@ strategy_display_name = build_strategy_display_name(t)(
 RUNTIME_LOG_CONTEXT = RuntimeLogContext(
     platform="longbridge",
     deploy_target="cloud_run",
-    service_name=SERVICE_NAME or os.getenv("K_SERVICE", "longbridge-platform"),
+    service_name=os.getenv("K_SERVICE", "longbridge-platform"),
     strategy_profile=STRATEGY_PROFILE,
     account_scope=ACCOUNT_REGION,
     account_region=ACCOUNT_REGION,
@@ -119,7 +125,7 @@ RUNTIME_LOG_CONTEXT = RuntimeLogContext(
 )
 
 def with_prefix(message: str) -> str:
-    return build_prefixer(ACCOUNT_PREFIX, SERVICE_NAME)(message)
+    return build_prefixer(ACCOUNT_PREFIX)(message)
 
 def send_tg_message(message):
     return build_sender(TG_TOKEN, TG_CHAT_ID, with_prefix_fn=with_prefix)(message)
@@ -261,7 +267,9 @@ def submit_order_with_alert(t_ctx, symbol, order_type, side, quantity, logs, log
 # Strategy: NYSE hours check, indicators, balance/positions, target allocation, sell then buy
 # ---------------------------------------------------------------------------
 def calculate_strategy_indicators(quote_context):
-    if "qqq_history" in AVAILABLE_INPUTS:
+    if "feature_snapshot" in AVAILABLE_INPUTS and not ({"benchmark_history", "qqq_history", "derived_indicators", "indicators"} & AVAILABLE_INPUTS):
+        return {}
+    if "benchmark_history" in AVAILABLE_INPUTS or "qqq_history" in AVAILABLE_INPUTS:
         return fetch_daily_price_history(quote_context, f"{BENCHMARK_SYMBOL}.US")
     trend_ma_window = int(STRATEGY_RUNTIME_CONFIG.get("trend_ma_window", 150))
     return calculate_rotation_indicators(quote_context, trend_window=trend_ma_window)
@@ -291,50 +299,31 @@ def fetch_managed_account_state(quote_context, trade_context):
 
 
 def build_portfolio_snapshot_from_account_state(account_state):
-    positions = []
-    market_values = dict(account_state["market_values"])
-    quantities = dict(account_state["quantities"])
-    for symbol in MANAGED_SYMBOLS:
-        quantity = int(quantities.get(symbol, 0))
-        market_value = float(market_values.get(symbol, 0.0))
-        if quantity <= 0 and market_value <= 0.0:
-            continue
-        positions.append(
-            Position(
-                symbol=symbol,
-                quantity=quantity,
-                market_value=market_value,
-            )
-        )
-
-    available_cash = float(account_state["available_cash"])
-    return PortfolioSnapshot(
-        as_of=datetime.now(timezone.utc),
-        total_equity=float(account_state["total_strategy_equity"]),
-        buying_power=available_cash,
-        cash_balance=available_cash,
-        positions=tuple(positions),
+    return qpk_build_portfolio_snapshot_from_account_state(
+        account_state,
+        strategy_symbols=MANAGED_SYMBOLS,
         metadata={"account_hash": ACCOUNT_PREFIX or ACCOUNT_REGION or "longbridge"},
     )
 
 
 def resolve_rebalance_plan(*, indicators, account_state):
-    evaluation_inputs = {
-        "translator": t,
-    }
-    if "indicators" in AVAILABLE_INPUTS:
-        evaluation_inputs["indicators"] = indicators
-    if "account_state" in AVAILABLE_INPUTS:
-        evaluation_inputs["account_state"] = account_state
-    if "qqq_history" in AVAILABLE_INPUTS:
-        evaluation_inputs["qqq_history"] = indicators
     snapshot = None
-    if "snapshot" in AVAILABLE_INPUTS:
+    if "portfolio_snapshot" in AVAILABLE_INPUTS or "snapshot" in AVAILABLE_INPUTS:
         snapshot = build_portfolio_snapshot_from_account_state(account_state)
-        evaluation_inputs["snapshot"] = snapshot
-
-    evaluation = STRATEGY_RUNTIME.evaluate(
+    evaluation_inputs = build_strategy_evaluation_inputs(
+        available_inputs=AVAILABLE_INPUTS,
+        market_inputs={
+            "derived_indicators": indicators,
+            "indicators": indicators,
+            "benchmark_history": indicators,
+            "qqq_history": indicators,
+        },
+        portfolio_snapshot=snapshot,
+        account_state=account_state,
+        translator=t,
         signal_text_fn=signal_text,
+    )
+    evaluation = STRATEGY_RUNTIME.evaluate(
         **evaluation_inputs,
     )
     return map_strategy_decision_to_plan(

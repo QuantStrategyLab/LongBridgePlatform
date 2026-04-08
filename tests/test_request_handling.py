@@ -57,9 +57,8 @@ def install_stub_modules():
         project_id=None,
         secret_name="longport_token_hk",
         account_prefix="HK",
-        service_name="longbridge-quant-semiconductor-rotation-income-hk",
         strategy_profile="semiconductor_rotation_income",
-        strategy_display_name="Semiconductor Trend Income",
+        strategy_display_name="SOXL/SOXX Semiconductor Trend Income",
         strategy_domain="us_equity",
         account_region="HK",
         notify_lang="en",
@@ -98,7 +97,9 @@ def install_stub_modules():
     strategy_runtime_module.load_strategy_runtime = lambda *_args, **_kwargs: types.SimpleNamespace(
         merged_runtime_config={"trend_ma_window": 150},
         managed_symbols=("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"),
-        runtime_adapter=types.SimpleNamespace(available_inputs=frozenset({"indicators", "account_state"})),
+        runtime_adapter=types.SimpleNamespace(
+            available_inputs=frozenset({"derived_indicators", "portfolio_snapshot"})
+        ),
         evaluate=lambda **_kwargs: None,
     )
 

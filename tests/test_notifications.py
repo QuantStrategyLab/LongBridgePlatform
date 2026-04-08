@@ -35,12 +35,16 @@ class NotificationTests(unittest.TestCase):
         en_translate = build_translator("en")
         zh_name = build_strategy_display_name(zh_translate)("semiconductor_rotation_income")
         en_name = build_strategy_display_name(en_translate)("semiconductor_rotation_income")
-        self.assertEqual(zh_name, "芯片趋势收益")
-        self.assertEqual(en_name, "Semiconductor Trend Income")
+        self.assertEqual(zh_name, "SOXL/SOXX 半导体趋势收益")
+        self.assertEqual(en_name, "SOXL/SOXX Semiconductor Trend Income")
 
-    def test_build_prefixer_formats_account_and_service(self):
+    def test_build_prefixer_prefers_account_prefix_only(self):
         with_prefix = build_prefixer("HK", "longbridge-quant-semiconductor-rotation-income-hk")
-        self.assertEqual(with_prefix("hello"), "[HK/longbridge-quant-semiconductor-rotation-income-hk] hello")
+        self.assertEqual(with_prefix("hello"), "[HK] hello")
+
+    def test_build_prefixer_falls_back_to_service_name(self):
+        with_prefix = build_prefixer("", "longbridge-quant-hk")
+        self.assertEqual(with_prefix("hello"), "[longbridge-quant-hk] hello")
 
     def test_build_sender_posts_prefixed_message(self):
         fake_requests = FakeRequests()
@@ -55,7 +59,7 @@ class NotificationTests(unittest.TestCase):
         url, payload, timeout = fake_requests.calls[0]
         self.assertIn("token-1", url)
         self.assertEqual(payload["chat_id"], "chat-1")
-        self.assertEqual(payload["text"], "[HK/longbridge-quant-semiconductor-rotation-income-hk] hello")
+        self.assertEqual(payload["text"], "[HK] hello")
         self.assertEqual(timeout, 10)
 
     def test_build_issue_notifier_logs_and_sends(self):

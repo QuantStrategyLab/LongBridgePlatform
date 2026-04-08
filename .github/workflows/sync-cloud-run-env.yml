@@ -23,13 +23,15 @@ jobs:
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       ACCOUNT_PREFIX: ${{ vars.ACCOUNT_PREFIX }}
-      SERVICE_NAME: ${{ vars.SERVICE_NAME }}
       TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
       LONGPORT_APP_KEY_SECRET_NAME: ${{ vars.LONGPORT_APP_KEY_SECRET_NAME }}
       LONGPORT_APP_SECRET_SECRET_NAME: ${{ vars.LONGPORT_APP_SECRET_SECRET_NAME }}
       STRATEGY_PROFILE: ${{ vars.STRATEGY_PROFILE || 'semiconductor_rotation_income' }}
       ACCOUNT_REGION: ${{ vars.ACCOUNT_REGION || 'HK' }}
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
+      LONGBRIDGE_FEATURE_SNAPSHOT_PATH: ${{ vars.LONGBRIDGE_FEATURE_SNAPSHOT_PATH }}
+      LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH: ${{ vars.LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH }}
+      LONGBRIDGE_STRATEGY_CONFIG_PATH: ${{ vars.LONGBRIDGE_STRATEGY_CONFIG_PATH }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
       EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI }}
       LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}
@@ -51,7 +53,6 @@ jobs:
             CLOUD_RUN_REGION
             CLOUD_RUN_SERVICE
             ACCOUNT_PREFIX
-            SERVICE_NAME
             LONGPORT_SECRET_NAME
             NOTIFY_LANG
             GLOBAL_TELEGRAM_CHAT_ID
@@ -74,6 +75,10 @@ jobs:
 
           if [ -z "${LONGPORT_APP_SECRET_SECRET_NAME:-}" ]; then
             missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME")
+          fi
+
+          if [ "${STRATEGY_PROFILE:-}" = "tech_pullback_cash_buffer" ] && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
+            missing_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_PATH")
           fi
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then
@@ -136,13 +141,13 @@ jobs:
             "NOTIFY_LANG=${NOTIFY_LANG}"
             "LONGPORT_SECRET_NAME=${LONGPORT_SECRET_NAME}"
             "ACCOUNT_PREFIX=${ACCOUNT_PREFIX}"
-            "SERVICE_NAME=${SERVICE_NAME}"
             "STRATEGY_PROFILE=${STRATEGY_PROFILE}"
             "ACCOUNT_REGION=${ACCOUNT_REGION}"
           )
           secret_pairs=()
           remove_env_vars=(
             "TELEGRAM_CHAT_ID"
+            "SERVICE_NAME"
           )
           remove_secret_vars=()
 
@@ -164,6 +169,24 @@ jobs:
             env_pairs+=("EXECUTION_REPORT_GCS_URI=${EXECUTION_REPORT_GCS_URI}")
           else
             remove_env_vars+=("EXECUTION_REPORT_GCS_URI")
+          fi
+
+          if [ -n "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
+            env_pairs+=("LONGBRIDGE_FEATURE_SNAPSHOT_PATH=${LONGBRIDGE_FEATURE_SNAPSHOT_PATH}")
+          else
+            remove_env_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_PATH")
+          fi
+
+          if [ -n "${LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH:-}" ]; then
+            env_pairs+=("LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=${LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH}")
+          else
+            remove_env_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH")
+          fi
+
+          if [ -n "${LONGBRIDGE_STRATEGY_CONFIG_PATH:-}" ]; then
+            env_pairs+=("LONGBRIDGE_STRATEGY_CONFIG_PATH=${LONGBRIDGE_STRATEGY_CONFIG_PATH}")
+          else
+            remove_env_vars+=("LONGBRIDGE_STRATEGY_CONFIG_PATH")
           fi
 
           if [ -n "${LONGBRIDGE_DRY_RUN_ONLY:-}" ]; then
@@ -202,13 +225,15 @@ jobs:
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       ACCOUNT_PREFIX: ${{ vars.ACCOUNT_PREFIX }}
-      SERVICE_NAME: ${{ vars.SERVICE_NAME }}
       TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
       LONGPORT_APP_KEY_SECRET_NAME: ${{ vars.LONGPORT_APP_KEY_SECRET_NAME }}
       LONGPORT_APP_SECRET_SECRET_NAME: ${{ vars.LONGPORT_APP_SECRET_SECRET_NAME }}
       STRATEGY_PROFILE: ${{ vars.STRATEGY_PROFILE || 'semiconductor_rotation_income' }}
       ACCOUNT_REGION: ${{ vars.ACCOUNT_REGION || 'SG' }}
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
+      LONGBRIDGE_FEATURE_SNAPSHOT_PATH: ${{ vars.LONGBRIDGE_FEATURE_SNAPSHOT_PATH }}
+      LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH: ${{ vars.LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH }}
+      LONGBRIDGE_STRATEGY_CONFIG_PATH: ${{ vars.LONGBRIDGE_STRATEGY_CONFIG_PATH }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
       EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI }}
       LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}
@@ -230,7 +255,6 @@ jobs:
             CLOUD_RUN_REGION
             CLOUD_RUN_SERVICE
             ACCOUNT_PREFIX
-            SERVICE_NAME
             LONGPORT_SECRET_NAME
             NOTIFY_LANG
             GLOBAL_TELEGRAM_CHAT_ID
@@ -253,6 +277,10 @@ jobs:
 
           if [ -z "${LONGPORT_APP_SECRET_SECRET_NAME:-}" ]; then
             missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME")
+          fi
+
+          if [ "${STRATEGY_PROFILE:-}" = "tech_pullback_cash_buffer" ] && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
+            missing_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_PATH")
           fi
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then
@@ -315,13 +343,13 @@ jobs:
             "NOTIFY_LANG=${NOTIFY_LANG}"
             "LONGPORT_SECRET_NAME=${LONGPORT_SECRET_NAME}"
             "ACCOUNT_PREFIX=${ACCOUNT_PREFIX}"
-            "SERVICE_NAME=${SERVICE_NAME}"
             "STRATEGY_PROFILE=${STRATEGY_PROFILE}"
             "ACCOUNT_REGION=${ACCOUNT_REGION}"
           )
           secret_pairs=()
           remove_env_vars=(
             "TELEGRAM_CHAT_ID"
+            "SERVICE_NAME"
           )
           remove_secret_vars=()
 
@@ -343,6 +371,24 @@ jobs:
             env_pairs+=("EXECUTION_REPORT_GCS_URI=${EXECUTION_REPORT_GCS_URI}")
           else
             remove_env_vars+=("EXECUTION_REPORT_GCS_URI")
+          fi
+
+          if [ -n "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
+            env_pairs+=("LONGBRIDGE_FEATURE_SNAPSHOT_PATH=${LONGBRIDGE_FEATURE_SNAPSHOT_PATH}")
+          else
+            remove_env_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_PATH")
+          fi
+
+          if [ -n "${LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH:-}" ]; then
+            env_pairs+=("LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=${LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH}")
+          else
+            remove_env_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH")
+          fi
+
+          if [ -n "${LONGBRIDGE_STRATEGY_CONFIG_PATH:-}" ]; then
+            env_pairs+=("LONGBRIDGE_STRATEGY_CONFIG_PATH=${LONGBRIDGE_STRATEGY_CONFIG_PATH}")
+          else
+            remove_env_vars+=("LONGBRIDGE_STRATEGY_CONFIG_PATH")
           fi
 
           if [ -n "${LONGBRIDGE_DRY_RUN_ONLY:-}" ]; then

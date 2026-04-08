@@ -36,26 +36,27 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.project_id, "project-1")
         self.assertEqual(settings.secret_name, DEFAULT_LONGPORT_SECRET_NAME)
         self.assertEqual(settings.account_prefix, "DEFAULT")
-        self.assertEqual(settings.service_name, "longbridge-quant-semiconductor-rotation-income")
         self.assertEqual(settings.strategy_profile, DEFAULT_STRATEGY_PROFILE)
-        self.assertEqual(settings.strategy_display_name, "Semiconductor Trend Income")
+        self.assertEqual(settings.strategy_display_name, "SOXL/SOXX Semiconductor Trend Income")
         self.assertEqual(settings.strategy_domain, US_EQUITY_DOMAIN)
         self.assertEqual(settings.account_region, DEFAULT_ACCOUNT_REGION)
         self.assertEqual(settings.notify_lang, "en")
         self.assertIsNone(settings.tg_token)
         self.assertIsNone(settings.tg_chat_id)
         self.assertFalse(settings.dry_run_only)
+        self.assertIsNone(settings.feature_snapshot_path)
+        self.assertIsNone(settings.strategy_config_path)
 
     def test_platform_supported_profiles_are_filtered_by_registry(self):
         self.assertEqual(
             get_supported_profiles_for_platform(LONGBRIDGE_PLATFORM),
-            frozenset({"hybrid_growth_income", "semiconductor_rotation_income"}),
+            frozenset({"hybrid_growth_income", "semiconductor_rotation_income", "tech_pullback_cash_buffer"}),
         )
 
     def test_platform_eligible_profiles_are_exposed_by_capability_matrix(self):
         self.assertEqual(
             get_eligible_profiles_for_platform(LONGBRIDGE_PLATFORM),
-            frozenset({"hybrid_growth_income", "semiconductor_rotation_income"}),
+            frozenset({"hybrid_growth_income", "semiconductor_rotation_income", "tech_pullback_cash_buffer"}),
         )
 
     def test_dry_run_only_is_loaded_from_env(self):
@@ -74,7 +75,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         region = infer_account_region(
             "sg",
             account_prefix="HK",
-            service_name="longbridge-quant-semiconductor-rotation-income-hk",
         )
         self.assertEqual(region, "SG")
 
@@ -82,17 +82,15 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         region = infer_account_region(
             None,
             account_prefix="hk",
-            service_name="longbridge-quant",
         )
         self.assertEqual(region, "HK")
 
-    def test_account_region_falls_back_to_service_name_suffix(self):
+    def test_account_region_defaults_when_prefix_missing(self):
         region = infer_account_region(
             None,
             account_prefix="",
-            service_name="longbridge-quant-semiconductor-rotation-income-sg",
         )
-        self.assertEqual(region, "SG")
+        self.assertEqual(region, DEFAULT_ACCOUNT_REGION)
 
     def test_unsupported_strategy_profile_fails_fast(self):
         with patch.dict(os.environ, {"STRATEGY_PROFILE": "balanced_income"}, clear=True):
@@ -102,9 +100,27 @@ class RuntimeConfigSupportTests(unittest.TestCase):
     def test_platform_profile_matrix_marks_default(self):
         rows = get_platform_profile_matrix()
         by_profile = {row["canonical_profile"]: row for row in rows}
-        self.assertEqual(by_profile[DEFAULT_STRATEGY_PROFILE]["display_name"], "Semiconductor Trend Income")
+        self.assertEqual(by_profile[DEFAULT_STRATEGY_PROFILE]["display_name"], "SOXL/SOXX Semiconductor Trend Income")
         self.assertTrue(by_profile[DEFAULT_STRATEGY_PROFILE]["is_default"])
 
+    def test_loads_feature_snapshot_env_for_tech_profile(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_PROFILE": "tech_pullback_cash_buffer",
+                "LONGBRIDGE_FEATURE_SNAPSHOT_PATH": "gs://bucket/tech.csv",
+                "LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH": "gs://bucket/tech.csv.manifest.json",
+                "LONGBRIDGE_STRATEGY_CONFIG_PATH": "/workspace/configs/tech.json",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertEqual(settings.strategy_profile, "tech_pullback_cash_buffer")
+        self.assertEqual(settings.feature_snapshot_path, "gs://bucket/tech.csv")
+        self.assertEqual(settings.feature_snapshot_manifest_path, "gs://bucket/tech.csv.manifest.json")
+        self.assertEqual(settings.strategy_config_path, "/workspace/configs/tech.json")
+        self.assertEqual(settings.strategy_config_source, "env")
 
 
 if __name__ == "__main__":

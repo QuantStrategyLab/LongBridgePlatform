@@ -23,7 +23,7 @@ DEFAULT_STRATEGY_PROFILE = "semiconductor_rotation_income"
 ROLLBACK_STRATEGY_PROFILE = DEFAULT_STRATEGY_PROFILE
 
 LONGBRIDGE_ROLLOUT_ALLOWLIST = frozenset(
-    {"semiconductor_rotation_income", "hybrid_growth_income"}
+    {"semiconductor_rotation_income", "hybrid_growth_income", "tech_pullback_cash_buffer"}
 )
 
 PLATFORM_SUPPORTED_DOMAINS: dict[str, frozenset[str]] = {
@@ -33,8 +33,18 @@ STRATEGY_CATALOG = get_strategy_catalog()
 PLATFORM_CAPABILITY_MATRIX = PlatformCapabilityMatrix(
     platform_id=LONGBRIDGE_PLATFORM,
     supported_domains=PLATFORM_SUPPORTED_DOMAINS[LONGBRIDGE_PLATFORM],
-    supported_target_modes=frozenset({"value"}),
-    supported_inputs=frozenset({"indicators", "account_state", "qqq_history", "snapshot"}),
+    supported_target_modes=frozenset({"weight", "value"}),
+    supported_inputs=frozenset(
+        {
+            "benchmark_history",
+            "portfolio_snapshot",
+            "derived_indicators",
+            "feature_snapshot",
+            "indicators",
+            "account_state",
+            "snapshot",
+        }
+    ),
     supported_capabilities=frozenset(),
 )
 ELIGIBLE_STRATEGY_PROFILES = derive_eligible_profiles_for_platform(

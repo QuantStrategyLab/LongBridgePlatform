@@ -1,22 +1,25 @@
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import strategy_runtime as strategy_runtime_module
+from quant_platform_kit.common.models import PortfolioSnapshot
 from quant_platform_kit.strategy_contracts import (
     StrategyDecision,
     StrategyManifest,
     StrategyRuntimeAdapter,
 )
+from runtime_config_support import PlatformRuntimeSettings
 
 
-class _FakeEntrypoint:
+class _SemiconductorEntrypoint:
     def __init__(self):
         self.manifest = StrategyManifest(
             profile="semiconductor_rotation_income",
             domain="us_equity",
-            display_name="Semiconductor Rotation Income",
+            display_name="SOXL/SOXX Semiconductor Trend Income",
             description="test entrypoint",
-            required_inputs=frozenset({"indicators", "account_state"}),
+            required_inputs=frozenset({"derived_indicators", "portfolio_snapshot"}),
             default_config={"managed_symbols": ("SOXL", "SOXX", "BOXX", "QQQI", "SPYI")},
         )
 
@@ -25,31 +28,75 @@ class _FakeEntrypoint:
         return StrategyDecision(diagnostics={"signal_message": "ok"})
 
 
+class _TechEntrypoint:
+    manifest = StrategyManifest(
+        profile="tech_pullback_cash_buffer",
+        domain="us_equity",
+        display_name="QQQ Tech Enhancement",
+        description="test entrypoint",
+        required_inputs=frozenset({"feature_snapshot"}),
+        default_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},
+    )
+
+    def evaluate(self, ctx):
+        self.ctx = ctx
+        return StrategyDecision(diagnostics={"signal_description": "risk on"})
+
+
+def _build_runtime_settings(profile: str, *, feature_snapshot_path: str | None = None) -> PlatformRuntimeSettings:
+    return PlatformRuntimeSettings(
+        project_id=None,
+        secret_name="longport_token_hk",
+        account_prefix="HK",
+        strategy_profile=profile,
+        strategy_display_name=(
+            "QQQ Tech Enhancement" if profile == "tech_pullback_cash_buffer" else "SOXL/SOXX Semiconductor Trend Income"
+        ),
+        strategy_domain="us_equity",
+        account_region="HK",
+        notify_lang="en",
+        tg_token=None,
+        tg_chat_id=None,
+        dry_run_only=False,
+        feature_snapshot_path=feature_snapshot_path,
+        feature_snapshot_manifest_path=None,
+        strategy_config_path=None,
+        strategy_config_source=None,
+    )
+
+
 class StrategyRuntimeTests(unittest.TestCase):
     def test_runtime_exposes_managed_symbols_and_injects_translator(self):
-        entrypoint = _FakeEntrypoint()
+        entrypoint = _SemiconductorEntrypoint()
         runtime = strategy_runtime_module.LoadedStrategyRuntime(
             entrypoint=entrypoint,
-            runtime_adapter=StrategyRuntimeAdapter(),
+            runtime_adapter=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            runtime_settings=_build_runtime_settings("semiconductor_rotation_income"),
             merged_runtime_config={"managed_symbols": ("SOXL", "SOXX", "BOXX", "QQQI", "SPYI")},
         )
 
         result = runtime.evaluate(
-            indicators={"soxl": {"price": 1.0, "ma_trend": 2.0}},
-            account_state={"available_cash": 100.0},
+            derived_indicators={"soxl": {"price": 1.0, "ma_trend": 2.0}},
+            portfolio_snapshot=PortfolioSnapshot(
+                as_of=datetime.now(timezone.utc),
+                total_equity=100.0,
+                buying_power=100.0,
+                positions=(),
+            ),
             translator=lambda key, **_kwargs: key,
             signal_text_fn=lambda icon: f"signal:{icon}",
         )
 
         self.assertEqual(runtime.managed_symbols, ("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"))
-        self.assertEqual(entrypoint.ctx.market_data["account_state"]["available_cash"], 100.0)
+        self.assertEqual(entrypoint.ctx.market_data["derived_indicators"]["soxl"]["price"], 1.0)
+        self.assertEqual(entrypoint.ctx.portfolio.total_equity, 100.0)
         self.assertIn("translator", entrypoint.ctx.runtime_config)
         self.assertEqual(entrypoint.ctx.runtime_config["signal_text_fn"]("idle"), "signal:idle")
         self.assertEqual(result.metadata["strategy_profile"], "semiconductor_rotation_income")
-        self.assertEqual(result.metadata["strategy_display_name"], "Semiconductor Rotation Income")
+        self.assertEqual(result.metadata["strategy_display_name"], "SOXL/SOXX Semiconductor Trend Income")
 
     def test_load_strategy_runtime_uses_entrypoint_default_config(self):
-        entrypoint = _FakeEntrypoint()
+        entrypoint = _SemiconductorEntrypoint()
 
         with patch.object(strategy_runtime_module, "load_strategy_entrypoint_for_profile", return_value=entrypoint) as mock_loader:
             with patch.object(
@@ -57,11 +104,64 @@ class StrategyRuntimeTests(unittest.TestCase):
                 "load_strategy_runtime_adapter_for_profile",
                 return_value=StrategyRuntimeAdapter(),
             ):
-                runtime = strategy_runtime_module.load_strategy_runtime("semiconductor_rotation_income")
+                runtime = strategy_runtime_module.load_strategy_runtime(
+                    "semiconductor_rotation_income",
+                    runtime_settings=_build_runtime_settings("semiconductor_rotation_income"),
+                )
 
         mock_loader.assert_called_once_with("semiconductor_rotation_income")
         self.assertIs(runtime.entrypoint, entrypoint)
         self.assertEqual(runtime.managed_symbols, ("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"))
+
+    def test_feature_snapshot_runtime_loads_snapshot_into_context(self):
+        entrypoint = _TechEntrypoint()
+        runtime = strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=StrategyRuntimeAdapter(
+                status_icon="🧲",
+                required_feature_columns=frozenset({"symbol", "close", "as_of"}),
+                snapshot_date_columns=("as_of",),
+                require_snapshot_manifest=False,
+                managed_symbols_extractor=lambda *_args, **_kwargs: ("AAPL", "MSFT", "BOXX"),
+                portfolio_input_name="portfolio_snapshot",
+            ),
+            runtime_settings=_build_runtime_settings(
+                "tech_pullback_cash_buffer",
+                feature_snapshot_path="gs://bucket/tech.csv",
+            ),
+            merged_runtime_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},
+            logger=lambda _message: None,
+        )
+
+        with patch.object(
+            strategy_runtime_module,
+            "load_feature_snapshot_guarded",
+            return_value=type(
+                "GuardResult",
+                (),
+                {
+                    "frame": [
+                        {"as_of": "2026-04-08", "symbol": "AAPL", "close": 100.0},
+                        {"as_of": "2026-04-08", "symbol": "MSFT", "close": 200.0},
+                    ],
+                    "metadata": {"snapshot_guard_decision": "proceed", "snapshot_as_of": "2026-04-08"},
+                },
+            )(),
+        ):
+            result = runtime.evaluate(
+                portfolio_snapshot=PortfolioSnapshot(
+                    as_of=datetime.now(timezone.utc),
+                    total_equity=1000.0,
+                    buying_power=200.0,
+                    positions=(),
+                ),
+                translator=lambda key, **_kwargs: key,
+            )
+
+        self.assertEqual(entrypoint.ctx.market_data["feature_snapshot"][0]["symbol"], "AAPL")
+        self.assertEqual(entrypoint.ctx.portfolio.total_equity, 1000.0)
+        self.assertEqual(result.metadata["managed_symbols"], ("AAPL", "MSFT", "BOXX"))
+        self.assertEqual(result.metadata["status_icon"], "🧲")
 
 
 if __name__ == "__main__":

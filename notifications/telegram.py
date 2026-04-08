@@ -59,11 +59,11 @@ I18N = {
         "signal_reduce": "减仓信号",
         "signal_exit": "离场信号",
         "signal_idle": "等待信号",
-        "strategy_name_semiconductor_rotation_income": "芯片趋势收益",
-        "strategy_name_hybrid_growth_income": "QQQ/TQQQ 增长收益",
-        "strategy_name_global_etf_rotation": "全球 ETF 轮动防御",
-        "strategy_name_russell_1000_multi_factor_defensive": "罗素1000多因子防御",
-        "strategy_name_tech_pullback_cash_buffer": "科技回撤现金缓冲",
+        "strategy_name_semiconductor_rotation_income": "SOXL/SOXX 半导体趋势收益",
+        "strategy_name_hybrid_growth_income": "TQQQ 增长收益",
+        "strategy_name_global_etf_rotation": "全球 ETF 轮动",
+        "strategy_name_russell_1000_multi_factor_defensive": "罗素1000多因子",
+        "strategy_name_tech_pullback_cash_buffer": "QQQ 科技增强",
     },
     "en": {
         "rebalance_title": "🔔 【Trade Execution Report】",
@@ -109,11 +109,11 @@ I18N = {
         "signal_reduce": "Reduce Signal",
         "signal_exit": "Exit Signal",
         "signal_idle": "Idle",
-        "strategy_name_semiconductor_rotation_income": "Semiconductor Trend Income",
-        "strategy_name_hybrid_growth_income": "QQQ/TQQQ Growth Income",
-        "strategy_name_global_etf_rotation": "Global ETF Rotation Defense",
-        "strategy_name_russell_1000_multi_factor_defensive": "Russell 1000 Multi-Factor Defensive",
-        "strategy_name_tech_pullback_cash_buffer": "Tech Pullback Cash Buffer",
+        "strategy_name_semiconductor_rotation_income": "SOXL/SOXX Semiconductor Trend Income",
+        "strategy_name_hybrid_growth_income": "TQQQ Growth Income",
+        "strategy_name_global_etf_rotation": "Global ETF Rotation",
+        "strategy_name_russell_1000_multi_factor_defensive": "Russell 1000 Multi-Factor",
+        "strategy_name_tech_pullback_cash_buffer": "QQQ Tech Enhancement",
     },
 }
 
@@ -150,9 +150,14 @@ def build_strategy_display_name(translate_fn):
     return strategy_display_name
 
 
-def build_prefixer(account_prefix: str, service_name: str):
+def build_prefixer(account_prefix: str, service_name: str | None = None):
     def with_prefix(message: str) -> str:
-        return f"[{account_prefix}/{service_name}] {message}"
+        account_label = str(account_prefix or "").strip()
+        service_label = str(service_name or "").strip()
+        prefix = account_label or service_label
+        if not prefix:
+            return message
+        return f"[{prefix}] {message}"
 
     return with_prefix
 

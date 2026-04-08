@@ -4,70 +4,207 @@ from collections.abc import Mapping
 from typing import Any
 
 from quant_platform_kit.strategy_contracts import (
+    PositionTarget,
     StrategyDecision,
+    ValueTargetExecutionAnnotations,
     build_value_target_execution_annotations,
-    build_value_target_execution_plan,
-    build_value_target_plan_payload,
-    build_value_target_portfolio_plan,
+    build_value_target_portfolio_inputs_from_account_state,
+    build_value_target_portfolio_inputs_from_snapshot,
+    build_value_target_runtime_plan,
+    resolve_decision_target_mode,
+    translate_decision_to_target_mode,
 )
 
+_SAFE_HAVEN_SYMBOLS = frozenset({"BOXX", "BIL"})
+_INCOME_SYMBOLS = frozenset({"QQQI", "SPYI"})
+_DEFAULT_MIN_TRADE_FLOOR = 100.0
+_DEFAULT_REBALANCE_THRESHOLD_RATIO = 0.01
 
-def map_strategy_decision_to_plan(
+
+def _build_portfolio_inputs(
+    *,
+    account_state: Mapping[str, Any] | None,
+    snapshot: Any | None,
+):
+    if account_state is not None:
+        return build_value_target_portfolio_inputs_from_account_state(account_state)
+    if snapshot is not None:
+        return build_value_target_portfolio_inputs_from_snapshot(
+            snapshot,
+            include_sellable_quantities=True,
+            liquid_cash=float(snapshot.buying_power or snapshot.cash_balance or 0.0),
+        )
+    raise ValueError("LongBridge plan mapping requires account_state or snapshot")
+
+
+def _symbol_role(symbol: str) -> str | None:
+    normalized = str(symbol or "").strip().upper()
+    if normalized in _SAFE_HAVEN_SYMBOLS:
+        return "safe_haven"
+    if normalized in _INCOME_SYMBOLS:
+        return "income"
+    return None
+
+
+def _default_threshold_value(total_equity: float) -> float:
+    return max(_DEFAULT_MIN_TRADE_FLOOR, float(total_equity) * _DEFAULT_REBALANCE_THRESHOLD_RATIO)
+
+
+def _build_weight_translation_annotations(
     decision: StrategyDecision,
     *,
-    account_state: Mapping[str, Any] | None = None,
-    snapshot: Any | None = None,
-    strategy_profile: str,
-) -> dict[str, Any]:
-    execution_plan = build_value_target_execution_plan(
-        decision,
-        strategy_profile=strategy_profile,
+    total_equity: float,
+    liquid_cash: float,
+) -> ValueTargetExecutionAnnotations:
+    diagnostics = dict(decision.diagnostics)
+    threshold_value = _default_threshold_value(total_equity)
+    signal_display = str(
+        diagnostics.get("signal_description")
+        or diagnostics.get("signal_display")
+        or diagnostics.get("signal_message")
+        or ""
+    ).strip() or None
+    status_display = str(
+        diagnostics.get("status_description")
+        or diagnostics.get("market_status")
+        or diagnostics.get("canary_status")
+        or ""
+    ).strip() or None
+    benchmark_symbol = str(diagnostics.get("benchmark_symbol") or "").strip().upper() or None
+    return ValueTargetExecutionAnnotations(
+        trade_threshold_value=threshold_value,
+        reserved_cash=0.0,
+        signal_display=signal_display,
+        status_display=status_display,
+        benchmark_symbol=benchmark_symbol,
+        benchmark_price=(
+            float(diagnostics["benchmark_price"])
+            if diagnostics.get("benchmark_price") is not None
+            else None
+        ),
+        long_trend_value=(
+            float(diagnostics["long_trend_value"])
+            if diagnostics.get("long_trend_value") is not None
+            else None
+        ),
+        exit_line=(
+            float(diagnostics["exit_line"])
+            if diagnostics.get("exit_line") is not None
+            else None
+        ),
+        current_min_trade=threshold_value,
+        investable_cash=max(0.0, float(liquid_cash)),
     )
-    annotations = build_value_target_execution_annotations(decision)
-    if account_state is not None:
-        market_values = dict(account_state["market_values"])
-        quantities = dict(account_state["quantities"])
-        sellable_quantities = dict(account_state["sellable_quantities"])
-        total_equity = float(account_state["total_strategy_equity"])
-        liquid_cash = float(account_state["available_cash"])
-    elif snapshot is not None:
-        strategy_symbols = tuple(execution_plan.strategy_symbols_risk_safe_income)
-        market_values = {symbol: 0.0 for symbol in strategy_symbols}
-        quantities = {symbol: 0 for symbol in strategy_symbols}
-        sellable_quantities = {symbol: 0 for symbol in strategy_symbols}
-        for position in getattr(snapshot, "positions", ()):
-            if position.symbol not in market_values:
-                continue
-            market_values[position.symbol] = float(position.market_value)
-            quantities[position.symbol] = int(position.quantity)
-            sellable_quantities[position.symbol] = int(position.quantity)
-        total_equity = float(snapshot.total_equity)
-        liquid_cash = float(snapshot.buying_power or snapshot.cash_balance or 0.0)
-    else:
-        raise ValueError("LongBridge plan mapping requires account_state or snapshot")
 
-    portfolio_plan = build_value_target_portfolio_plan(
-        execution_plan,
-        market_values=market_values,
-        quantities=quantities,
-        sellable_quantities=sellable_quantities,
-        total_equity=total_equity,
-        liquid_cash=liquid_cash,
-        strategy_symbols_order="risk_safe_income",
-        portfolio_rows_layout=("risk", "income", "safe"),
+
+def _build_hold_current_value_decision(portfolio_inputs) -> StrategyDecision:
+    positions: list[PositionTarget] = []
+    for symbol, market_value in sorted(portfolio_inputs.market_values.items()):
+        positions.append(
+            PositionTarget(
+                symbol=str(symbol),
+                target_value=float(market_value),
+                role=_symbol_role(str(symbol)),
+            )
+        )
+    return StrategyDecision(positions=tuple(positions))
+
+
+def _normalize_to_value_target_decision(
+    decision: StrategyDecision,
+    *,
+    portfolio_inputs,
+) -> tuple[StrategyDecision, ValueTargetExecutionAnnotations | None]:
+    target_mode = resolve_decision_target_mode(decision)
+    no_execute = "no_execute" in set(decision.risk_flags)
+
+    if target_mode == "value" and not no_execute:
+        return decision, None
+
+    if target_mode == "weight" and not no_execute:
+        translated = translate_decision_to_target_mode(
+            decision,
+            target_mode="value",
+            total_equity=float(portfolio_inputs.total_equity),
+        )
+        return translated, _build_weight_translation_annotations(
+            decision,
+            total_equity=float(portfolio_inputs.total_equity),
+            liquid_cash=float(portfolio_inputs.liquid_cash),
+        )
+
+    synthetic = _build_hold_current_value_decision(portfolio_inputs)
+    synthetic_annotations = _build_weight_translation_annotations(
+        decision,
+        total_equity=float(portfolio_inputs.total_equity),
+        liquid_cash=float(portfolio_inputs.liquid_cash),
     )
-    investable_cash = annotations.investable_cash
-    if investable_cash is None:
-        investable_cash = max(0.0, liquid_cash - annotations.reserved_cash)
-    current_min_trade = annotations.current_min_trade
-    if current_min_trade is None:
-        current_min_trade = annotations.trade_threshold_value
-    plan = build_value_target_plan_payload(
-        strategy_profile=strategy_profile,
-        portfolio_plan=portfolio_plan,
-        annotations=annotations,
-        include_sellable_quantities=True,
-        execution_fields=(
+    return synthetic, synthetic_annotations
+
+
+def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[str, ...], dict[str, Any]]:
+    if strategy_profile == "hybrid_growth_income":
+        return (
+            "risk_safe_income",
+            ("risk_safe", "income"),
+            (
+                "trade_threshold_value",
+                "reserved_cash",
+                "signal_display",
+                "status_display",
+                "dashboard_text",
+                "benchmark_symbol",
+                "benchmark_price",
+                "long_trend_value",
+                "exit_line",
+                "current_min_trade",
+                "investable_cash",
+            ),
+            {
+                "reserved_cash": 0.0,
+                "signal_display": "",
+                "status_display": "",
+                "dashboard_text": "",
+                "benchmark_symbol": "QQQ",
+                "benchmark_price": 0.0,
+                "long_trend_value": 0.0,
+                "exit_line": 0.0,
+                "current_min_trade": 0.0,
+                "investable_cash": 0.0,
+            },
+        )
+    if strategy_profile == "tech_pullback_cash_buffer":
+        return (
+            "risk_safe_income",
+            ("risk_safe",),
+            (
+                "trade_threshold_value",
+                "reserved_cash",
+                "signal_display",
+                "status_display",
+                "benchmark_symbol",
+                "benchmark_price",
+                "long_trend_value",
+                "exit_line",
+                "current_min_trade",
+                "investable_cash",
+            ),
+            {
+                "reserved_cash": 0.0,
+                "signal_display": "",
+                "status_display": "",
+                "benchmark_symbol": "QQQ",
+                "benchmark_price": 0.0,
+                "long_trend_value": 0.0,
+                "exit_line": 0.0,
+                "current_min_trade": 0.0,
+                "investable_cash": 0.0,
+            },
+        )
+    return (
+        "risk_safe_income",
+        ("risk", "income", "safe"),
+        (
             "trade_threshold_value",
             "signal_display",
             "status_display",
@@ -83,15 +220,71 @@ def map_strategy_decision_to_plan(
             "investable_cash",
             "current_min_trade",
         ),
-        execution_defaults={
+        {
             "signal_display": "",
             "status_display": "",
             "dashboard_text": "",
             "deploy_ratio_text": "",
             "income_ratio_text": "",
             "income_locked_ratio_text": "",
-            "current_min_trade": current_min_trade,
-            "investable_cash": investable_cash,
+            "current_min_trade": 0.0,
+            "investable_cash": 0.0,
         },
     )
-    return plan
+
+
+def map_strategy_decision_to_plan(
+    decision: StrategyDecision,
+    *,
+    account_state: Mapping[str, Any] | None = None,
+    snapshot: Any | None = None,
+    strategy_profile: str,
+) -> dict[str, Any]:
+    portfolio_inputs = _build_portfolio_inputs(account_state=account_state, snapshot=snapshot)
+    normalized_decision, normalized_annotations = _normalize_to_value_target_decision(
+        decision,
+        portfolio_inputs=portfolio_inputs,
+    )
+    annotations = normalized_annotations
+    if annotations is None:
+        annotations = build_value_target_execution_annotations(normalized_decision)
+        investable_cash = annotations.investable_cash
+        if investable_cash is None:
+            investable_cash = max(
+                0.0,
+                portfolio_inputs.liquid_cash - annotations.reserved_cash,
+            )
+        current_min_trade = annotations.current_min_trade
+        if current_min_trade is None:
+            current_min_trade = annotations.trade_threshold_value
+        annotations = ValueTargetExecutionAnnotations(
+            trade_threshold_value=annotations.trade_threshold_value,
+            reserved_cash=annotations.reserved_cash,
+            signal_display=annotations.signal_display,
+            status_display=annotations.status_display,
+            dashboard_text=annotations.dashboard_text,
+            separator=annotations.separator,
+            benchmark_symbol=annotations.benchmark_symbol,
+            benchmark_price=annotations.benchmark_price,
+            long_trend_value=annotations.long_trend_value,
+            exit_line=annotations.exit_line,
+            deploy_ratio_text=annotations.deploy_ratio_text,
+            income_ratio_text=annotations.income_ratio_text,
+            income_locked_ratio_text=annotations.income_locked_ratio_text,
+            active_risk_asset=annotations.active_risk_asset,
+            current_min_trade=current_min_trade,
+            investable_cash=investable_cash,
+        )
+
+    strategy_symbols_order, portfolio_rows_layout, execution_fields, execution_defaults = _resolve_layout(strategy_profile)
+    return build_value_target_runtime_plan(
+        normalized_decision,
+        strategy_profile=strategy_profile,
+        portfolio_inputs=portfolio_inputs,
+        annotations=annotations,
+        strategy_symbols_order=strategy_symbols_order,
+        portfolio_rows_layout=portfolio_rows_layout,
+        include_sellable_quantities=True,
+        execution_fields=execution_fields,
+        execution_defaults=execution_defaults,
+    )

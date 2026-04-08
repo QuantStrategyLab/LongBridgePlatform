@@ -23,6 +23,9 @@ grep -Fq 'TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}' "$
 grep -Fq 'LONGPORT_APP_KEY_SECRET_NAME: ${{ vars.LONGPORT_APP_KEY_SECRET_NAME }}' "$workflow_file"
 grep -Fq 'LONGPORT_APP_SECRET_SECRET_NAME: ${{ vars.LONGPORT_APP_SECRET_SECRET_NAME }}' "$workflow_file"
 grep -Fq 'LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}' "$workflow_file"
+grep -Fq 'LONGBRIDGE_FEATURE_SNAPSHOT_PATH: ${{ vars.LONGBRIDGE_FEATURE_SNAPSHOT_PATH }}' "$workflow_file"
+grep -Fq 'LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH: ${{ vars.LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH }}' "$workflow_file"
+grep -Fq 'LONGBRIDGE_STRATEGY_CONFIG_PATH: ${{ vars.LONGBRIDGE_STRATEGY_CONFIG_PATH }}' "$workflow_file"
 grep -Fq 'LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}' "$workflow_file"
 grep -Fq "STRATEGY_PROFILE: \${{ vars.STRATEGY_PROFILE || 'semiconductor_rotation_income' }}" "$workflow_file"
 grep -Fq "ACCOUNT_REGION: \${{ vars.ACCOUNT_REGION || 'HK' }}" "$workflow_file"
@@ -40,15 +43,30 @@ grep -Fq "if: steps.config.outputs.enabled == 'true'" "$workflow_file"
 grep -Fq 'missing_vars+=("TELEGRAM_TOKEN_SECRET_NAME or TELEGRAM_TOKEN")' "$workflow_file"
 grep -Fq 'missing_vars+=("LONGPORT_APP_KEY_SECRET_NAME")' "$workflow_file"
 grep -Fq 'missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME")' "$workflow_file"
+grep -Fq 'missing_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_PATH")' "$workflow_file"
 grep -Fq 'secret_pairs+=("TELEGRAM_TOKEN=${TELEGRAM_TOKEN_SECRET_NAME}:latest")' "$workflow_file"
 grep -Fq 'secret_pairs+=("LONGPORT_APP_KEY=${LONGPORT_APP_KEY_SECRET_NAME}:latest")' "$workflow_file"
 grep -Fq 'secret_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET_SECRET_NAME}:latest")' "$workflow_file"
 grep -Fq 'LONGPORT_SECRET_NAME=${LONGPORT_SECRET_NAME}' "$workflow_file"
+grep -Fq 'LONGBRIDGE_FEATURE_SNAPSHOT_PATH=${LONGBRIDGE_FEATURE_SNAPSHOT_PATH}' "$workflow_file"
+grep -Fq 'LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=${LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH}' "$workflow_file"
+grep -Fq 'LONGBRIDGE_STRATEGY_CONFIG_PATH=${LONGBRIDGE_STRATEGY_CONFIG_PATH}' "$workflow_file"
 grep -Fq 'LONGBRIDGE_DRY_RUN_ONLY=${LONGBRIDGE_DRY_RUN_ONLY}' "$workflow_file"
 grep -Fq 'STRATEGY_PROFILE=${STRATEGY_PROFILE}' "$workflow_file"
 grep -Fq 'ACCOUNT_REGION=${ACCOUNT_REGION}' "$workflow_file"
+grep -Fq '"SERVICE_NAME"' "$workflow_file"
 grep -Fq 'gcloud_args+=(--remove-secrets "$(IFS=,; echo "${remove_secret_vars[*]}")")' "$workflow_file"
 grep -Fq 'gcloud_args+=(--update-secrets "$(IFS=,; echo "${secret_pairs[*]}")")' "$workflow_file"
+
+if grep -Fq 'SERVICE_NAME: ${{ vars.SERVICE_NAME }}' "$workflow_file"; then
+  echo "unexpected SERVICE_NAME env wiring still present" >&2
+  exit 1
+fi
+
+if grep -Fq 'SERVICE_NAME=${SERVICE_NAME}' "$workflow_file"; then
+  echo "unexpected SERVICE_NAME sync still present" >&2
+  exit 1
+fi
 
 if grep -Fq 'LONGPORT_APP_KEY: ${{ secrets.LONGPORT_APP_KEY }}' "$workflow_file"; then
   echo "unexpected GitHub secret fallback for LONGPORT_APP_KEY still present" >&2
