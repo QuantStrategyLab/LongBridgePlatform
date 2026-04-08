@@ -35,6 +35,10 @@ class LoadedStrategyRuntime:
         return self.entrypoint.manifest.profile
 
     @property
+    def display_name(self) -> str:
+        return str(self.entrypoint.manifest.display_name)
+
+    @property
     def managed_symbols(self) -> tuple[str, ...]:
         configured = self.merged_runtime_config.get("managed_symbols", ())
         return tuple(str(symbol) for symbol in configured)
@@ -60,7 +64,10 @@ class LoadedStrategyRuntime:
         decision = self.entrypoint.evaluate(ctx)
         return StrategyEvaluationResult(
             decision=decision,
-            metadata={"strategy_profile": self.profile},
+            metadata={
+                "strategy_profile": self.profile,
+                "strategy_display_name": self.display_name,
+            },
         )
 
 

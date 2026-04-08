@@ -70,6 +70,13 @@ def _append_status_lines(lines, *, execution, translator, signal_key):
 
 
 
+def _append_strategy_line(lines, *, strategy_display_name, translator):
+    name = str(strategy_display_name or "").strip()
+    if name:
+        lines.append(translator("strategy_label", name=name))
+
+
+
 def record_skip_log(skip_logs, *, translator, with_prefix, kind, detail):
     message = translator(kind, detail=detail)
     skip_logs.append(message)
@@ -105,6 +112,7 @@ def run_strategy(
     estimate_max_purchase_quantity,
     submit_order_with_alert,
     dry_run_only=False,
+    strategy_display_name="",
 ):
     print(with_prefix(f"[{datetime.now()}] Starting strategy..."), flush=True)
 
@@ -376,6 +384,11 @@ def run_strategy(
         )
         formatted_logs = "\n".join(f"  {log}" for log in [*logs, *skip_logs, *note_logs])
         tg_lines = [translator("rebalance_title")]
+        _append_strategy_line(
+            tg_lines,
+            strategy_display_name=strategy_display_name,
+            translator=translator,
+        )
         if dry_run_only:
             tg_lines.append(translator("dry_run_banner"))
         tg_lines.append(cash_summary)
@@ -406,8 +419,13 @@ def run_strategy(
             )
         no_trade_lines = [
             translator("heartbeat_title"),
-            translator("equity", value=equity_text),
         ]
+        _append_strategy_line(
+            no_trade_lines,
+            strategy_display_name=strategy_display_name,
+            translator=translator,
+        )
+        no_trade_lines.append(translator("equity", value=equity_text))
         if dry_run_only:
             no_trade_lines.append(translator("dry_run_banner"))
         no_trade_lines.extend(

@@ -46,6 +46,7 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertIn("translator", entrypoint.ctx.runtime_config)
         self.assertEqual(entrypoint.ctx.runtime_config["signal_text_fn"]("idle"), "signal:idle")
         self.assertEqual(result.metadata["strategy_profile"], "semiconductor_rotation_income")
+        self.assertEqual(result.metadata["strategy_display_name"], "Semiconductor Rotation Income")
 
     def test_load_strategy_runtime_uses_entrypoint_default_config(self):
         entrypoint = _FakeEntrypoint()

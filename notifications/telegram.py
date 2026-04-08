@@ -18,6 +18,7 @@ I18N = {
     "zh": {
         "rebalance_title": "🔔 【调仓指令】",
         "dry_run_banner": "🧪 dry-run 模式，本次不会真实下单",
+        "strategy_label": "🧭 策略: {name}",
         "market_status": "📊 市场状态: {status}",
         "risk_position": "💼 交易层风险仓位: {ratio}",
         "income_target": "💰 收入层目标: {ratio}",
@@ -58,10 +59,16 @@ I18N = {
         "signal_reduce": "减仓信号",
         "signal_exit": "离场信号",
         "signal_idle": "等待信号",
+        "strategy_name_semiconductor_rotation_income": "芯片趋势收益",
+        "strategy_name_hybrid_growth_income": "QQQ/TQQQ 增长收益",
+        "strategy_name_global_etf_rotation": "全球 ETF 轮动防御",
+        "strategy_name_russell_1000_multi_factor_defensive": "罗素1000多因子防御",
+        "strategy_name_tech_pullback_cash_buffer": "科技回撤现金缓冲",
     },
     "en": {
         "rebalance_title": "🔔 【Trade Execution Report】",
         "dry_run_banner": "🧪 Dry run mode, no real orders will be submitted",
+        "strategy_label": "🧭 Strategy: {name}",
         "market_status": "📊 Market: {status}",
         "risk_position": "💼 Risk Position: {ratio}",
         "income_target": "💰 Income Target: {ratio}",
@@ -102,6 +109,11 @@ I18N = {
         "signal_reduce": "Reduce Signal",
         "signal_exit": "Exit Signal",
         "signal_idle": "Idle",
+        "strategy_name_semiconductor_rotation_income": "Semiconductor Trend Income",
+        "strategy_name_hybrid_growth_income": "QQQ/TQQQ Growth Income",
+        "strategy_name_global_etf_rotation": "Global ETF Rotation Defense",
+        "strategy_name_russell_1000_multi_factor_defensive": "Russell 1000 Multi-Factor Defensive",
+        "strategy_name_tech_pullback_cash_buffer": "Tech Pullback Cash Buffer",
     },
 }
 
@@ -122,6 +134,20 @@ def build_signal_text(translate_fn):
         return f"{emoji} {name}"
 
     return signal_text
+
+
+def build_strategy_display_name(translate_fn):
+    def strategy_display_name(profile: str, *, fallback_name: str | None = None) -> str:
+        key = f"strategy_name_{str(profile or '').strip()}"
+        translated = translate_fn(key)
+        if translated != key:
+            return translated
+        fallback = str(fallback_name or "").strip()
+        if fallback:
+            return fallback
+        return str(profile or "").strip()
+
+    return strategy_display_name
 
 
 def build_prefixer(account_prefix: str, service_name: str):

@@ -59,6 +59,7 @@ def install_stub_modules():
         account_prefix="HK",
         service_name="longbridge-quant-semiconductor-rotation-income-hk",
         strategy_profile="semiconductor_rotation_income",
+        strategy_display_name="Semiconductor Trend Income",
         strategy_domain="us_equity",
         account_region="HK",
         notify_lang="en",
@@ -230,6 +231,8 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(report["strategy_profile"], module.STRATEGY_PROFILE)
         self.assertEqual(report["account_scope"], module.ACCOUNT_REGION)
         self.assertEqual(report["summary"]["managed_symbols"], list(module.MANAGED_SYMBOLS))
+        self.assertEqual(report["summary"]["strategy_display_name"], module.STRATEGY_DISPLAY_NAME)
+        self.assertEqual(report["summary"]["strategy_display_name_localized"], module.strategy_display_name)
 
 
 if __name__ == "__main__":

@@ -100,6 +100,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         account_states=None,
         estimate_max_purchase_quantity_value=0,
         dry_run_only=False,
+        strategy_display_name="芯片趋势收益",
     ):
         sent_messages = []
         observed_account_states = []
@@ -165,6 +166,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             estimate_max_purchase_quantity=lambda *args, **kwargs: estimate_max_purchase_quantity_value,
             submit_order_with_alert=fake_submit_order_with_alert,
             dry_run_only=dry_run_only,
+            strategy_display_name=strategy_display_name,
         )
 
         return sent_messages, observed_account_states, observed_plan_inputs
@@ -196,6 +198,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("🔔 【调仓指令】", sent_messages[0])
+        self.assertIn("🧭 策略: 芯片趋势收益", sent_messages[0])
         self.assertIn("限价卖出", sent_messages[0])
         self.assertIn("买入说明", sent_messages[0])
         self.assertIn("SOXX.US", sent_messages[0])
@@ -468,10 +471,12 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             plan,
             prices={"TQQQ.US": 50.0, "BOXX.US": 100.0, "QQQI.US": 40.0, "SPYI.US": 45.0},
             dry_run_only=True,
+            strategy_display_name="QQQ/TQQQ 增长收益",
         )
 
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("💓 【心跳检测】", sent_messages[0])
+        self.assertIn("🧭 策略: QQQ/TQQQ 增长收益", sent_messages[0])
         self.assertIn("🧪 dry-run 模式", sent_messages[0])
         self.assertIn("QQQ: 588.50 | MA200: 595.25 | Exit: 573.00", sent_messages[0])
         self.assertIn("🎯 信号: 💤 等待信号", sent_messages[0])

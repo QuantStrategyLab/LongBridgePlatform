@@ -8,6 +8,7 @@ from strategy_registry import (
     DEFAULT_STRATEGY_PROFILE as PLATFORM_DEFAULT_STRATEGY_PROFILE,
     LONGBRIDGE_PLATFORM,
     resolve_strategy_definition,
+    resolve_strategy_metadata,
 )
 
 DEFAULT_ACCOUNT_REGION = "DEFAULT"
@@ -22,6 +23,7 @@ class PlatformRuntimeSettings:
     account_prefix: str
     service_name: str
     strategy_profile: str
+    strategy_display_name: str
     strategy_domain: str
     account_region: str
     notify_lang: str
@@ -64,12 +66,17 @@ def load_platform_runtime_settings(
         os.getenv("STRATEGY_PROFILE"),
         platform_id=LONGBRIDGE_PLATFORM,
     )
+    strategy_metadata = resolve_strategy_metadata(
+        strategy_definition.profile,
+        platform_id=LONGBRIDGE_PLATFORM,
+    )
     return PlatformRuntimeSettings(
         project_id=project_id_resolver(),
         secret_name=os.getenv("LONGPORT_SECRET_NAME", DEFAULT_LONGPORT_SECRET_NAME),
         account_prefix=account_prefix,
         service_name=service_name,
         strategy_profile=strategy_definition.profile,
+        strategy_display_name=strategy_metadata.display_name,
         strategy_domain=strategy_definition.domain,
         account_region=infer_account_region(
             os.getenv("ACCOUNT_REGION"),

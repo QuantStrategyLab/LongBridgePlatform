@@ -7,7 +7,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from notifications.telegram import build_issue_notifier, build_prefixer, build_sender, build_translator
+from notifications.telegram import (
+    build_issue_notifier,
+    build_prefixer,
+    build_sender,
+    build_strategy_display_name,
+    build_translator,
+)
 
 
 class FakeRequests:
@@ -23,6 +29,14 @@ class NotificationTests(unittest.TestCase):
     def test_build_translator_supports_chinese(self):
         translate = build_translator("zh")
         self.assertEqual(translate("equity", value="123.45"), "💰 净值: $123.45")
+
+    def test_build_strategy_display_name_supports_i18n(self):
+        zh_translate = build_translator("zh")
+        en_translate = build_translator("en")
+        zh_name = build_strategy_display_name(zh_translate)("semiconductor_rotation_income")
+        en_name = build_strategy_display_name(en_translate)("semiconductor_rotation_income")
+        self.assertEqual(zh_name, "芯片趋势收益")
+        self.assertEqual(en_name, "Semiconductor Trend Income")
 
     def test_build_prefixer_formats_account_and_service(self):
         with_prefix = build_prefixer("HK", "longbridge-quant-semiconductor-rotation-income-hk")

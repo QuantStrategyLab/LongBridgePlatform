@@ -6,11 +6,13 @@ from quant_platform_kit.common.strategies import (
     PlatformCapabilityMatrix,
     PlatformStrategyPolicy,
     StrategyDefinition,
+    StrategyMetadata,
     US_EQUITY_DOMAIN,
     build_platform_profile_matrix,
     build_platform_profile_status_matrix,
     derive_enabled_profiles_for_platform,
     derive_eligible_profiles_for_platform,
+    get_catalog_strategy_metadata,
     get_enabled_profiles_for_platform,
     resolve_platform_strategy_definition,
 )
@@ -96,3 +98,12 @@ def resolve_strategy_definition(
         strategy_catalog=STRATEGY_CATALOG,
         policy=PLATFORM_POLICY,
     )
+
+
+def resolve_strategy_metadata(
+    raw_value: str | None,
+    *,
+    platform_id: str,
+) -> StrategyMetadata:
+    definition = resolve_strategy_definition(raw_value, platform_id=platform_id)
+    return get_catalog_strategy_metadata(STRATEGY_CATALOG, definition.profile)

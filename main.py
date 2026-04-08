@@ -28,6 +28,7 @@ from notifications.telegram import (
     build_prefixer,
     build_sender,
     build_signal_text,
+    build_strategy_display_name,
     build_translator,
 )
 from quant_platform_kit.common.runtime_reports import (
@@ -69,6 +70,7 @@ SECRET_NAME = RUNTIME_SETTINGS.secret_name
 ACCOUNT_PREFIX = RUNTIME_SETTINGS.account_prefix
 SERVICE_NAME = RUNTIME_SETTINGS.service_name
 STRATEGY_PROFILE = RUNTIME_SETTINGS.strategy_profile
+STRATEGY_DISPLAY_NAME = RUNTIME_SETTINGS.strategy_display_name
 ACCOUNT_REGION = RUNTIME_SETTINGS.account_region
 NOTIFY_LANG = RUNTIME_SETTINGS.notify_lang
 TG_TOKEN = RUNTIME_SETTINGS.tg_token
@@ -91,6 +93,16 @@ ORDER_POLL_MAX_ATTEMPTS = 8
 TOKEN_REFRESH_THRESHOLD_DAYS = 30
 
 SEPARATOR = "━━━━━━━━━━━━━━━━━━"
+
+def t(key, **kwargs):
+    return build_translator(NOTIFY_LANG)(key, **kwargs)
+
+
+signal_text = build_signal_text(t)
+strategy_display_name = build_strategy_display_name(t)(
+    STRATEGY_PROFILE,
+    fallback_name=STRATEGY_DISPLAY_NAME,
+)
 RUNTIME_LOG_CONTEXT = RuntimeLogContext(
     platform="longbridge",
     deploy_target="cloud_run",
@@ -99,14 +111,12 @@ RUNTIME_LOG_CONTEXT = RuntimeLogContext(
     account_scope=ACCOUNT_REGION,
     account_region=ACCOUNT_REGION,
     project_id=PROJECT_ID,
-    extra_fields={"account_prefix": ACCOUNT_PREFIX},
+    extra_fields={
+        "account_prefix": ACCOUNT_PREFIX,
+        "strategy_display_name": STRATEGY_DISPLAY_NAME,
+        "strategy_display_name_localized": strategy_display_name,
+    },
 )
-
-def t(key, **kwargs):
-    return build_translator(NOTIFY_LANG)(key, **kwargs)
-
-
-signal_text = build_signal_text(t)
 
 def with_prefix(message: str) -> str:
     return build_prefixer(ACCOUNT_PREFIX, SERVICE_NAME)(message)
@@ -144,6 +154,8 @@ def build_execution_report(log_context):
             "managed_symbols": list(MANAGED_SYMBOLS),
             "account_prefix": ACCOUNT_PREFIX,
             "benchmark_symbol": BENCHMARK_SYMBOL,
+            "strategy_display_name": STRATEGY_DISPLAY_NAME,
+            "strategy_display_name_localized": strategy_display_name,
         },
     )
 
@@ -391,6 +403,7 @@ def run_strategy():
             estimate_max_purchase_quantity=estimate_max_purchase_quantity,
             submit_order_with_alert=submit_order_with_alert,
             dry_run_only=RUNTIME_SETTINGS.dry_run_only,
+            strategy_display_name=strategy_display_name,
         )
         finalize_runtime_report(report, status="ok")
         log_runtime_event(
