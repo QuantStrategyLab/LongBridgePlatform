@@ -54,13 +54,13 @@ class RuntimeConfigSupportTests(unittest.TestCase):
     def test_platform_supported_profiles_are_filtered_by_registry(self):
         self.assertEqual(
             get_supported_profiles_for_platform(LONGBRIDGE_PLATFORM),
-            frozenset({"tqqq_growth_income", "soxl_soxx_trend_income", "qqq_tech_enhancement"}),
+            frozenset({"global_etf_rotation", "tqqq_growth_income", "soxl_soxx_trend_income", "qqq_tech_enhancement"}),
         )
 
     def test_platform_eligible_profiles_are_exposed_by_capability_matrix(self):
         self.assertEqual(
             get_eligible_profiles_for_platform(LONGBRIDGE_PLATFORM),
-            frozenset({"tqqq_growth_income", "soxl_soxx_trend_income", "qqq_tech_enhancement"}),
+            frozenset({"global_etf_rotation", "tqqq_growth_income", "soxl_soxx_trend_income", "qqq_tech_enhancement"}),
         )
 
     def test_dry_run_only_is_loaded_from_env(self):
@@ -113,6 +113,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(
             set(by_profile),
             {
+                "global_etf_rotation",
                 "tqqq_growth_income",
                 "soxl_soxx_trend_income",
                 "qqq_tech_enhancement",
@@ -132,6 +133,9 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             },
         )
         self.assertEqual(by_profile["tqqq_growth_income"]["display_name"], "TQQQ Growth Income")
+        self.assertEqual(by_profile["global_etf_rotation"]["display_name"], "Global ETF Rotation")
+        self.assertTrue(by_profile["global_etf_rotation"]["eligible"])
+        self.assertTrue(by_profile["global_etf_rotation"]["enabled"])
         self.assertTrue(by_profile["qqq_tech_enhancement"]["eligible"])
         self.assertTrue(by_profile["qqq_tech_enhancement"]["enabled"])
         self.assertEqual(by_profile["qqq_tech_enhancement"]["display_name"], "QQQ Tech Enhancement")
@@ -176,6 +180,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("canonical_profile", result.stdout)
         self.assertIn("display_name", result.stdout)
         self.assertIn("soxl_soxx_trend_income", result.stdout)
+        self.assertIn("global_etf_rotation", result.stdout)
+        self.assertIn("Global ETF Rotation", result.stdout)
         self.assertIn("QQQ Tech Enhancement", result.stdout)
 
 

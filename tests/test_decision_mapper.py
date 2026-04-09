@@ -175,6 +175,42 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["execution"]["benchmark_symbol"], "QQQ")
         self.assertEqual(plan["portfolio"]["portfolio_rows"], (("AAPL", "MSFT", "BOXX"),))
 
+    def test_translates_weight_decision_for_global_etf_rotation(self):
+        decision = StrategyDecision(
+            positions=(
+                PositionTarget(symbol="VGK", target_weight=0.5),
+                PositionTarget(symbol="EWJ", target_weight=0.3),
+                PositionTarget(symbol="BIL", target_weight=0.2, role="safe_haven"),
+            ),
+            diagnostics={
+                "signal_description": "quarterly",
+                "canary_status": "SPY:✅, EFA:✅",
+            },
+        )
+        snapshot = PortfolioSnapshot(
+            as_of=datetime.now(timezone.utc),
+            total_equity=20000.0,
+            buying_power=4000.0,
+            positions=(
+                Position(symbol="VOO", quantity=10, market_value=1500.0),
+                Position(symbol="BIL", quantity=30, market_value=3000.0),
+            ),
+            metadata={"account_hash": "longbridge-global"},
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            snapshot=snapshot,
+            strategy_profile="global_etf_rotation",
+        )
+
+        self.assertEqual(plan["allocation"]["target_mode"], "value")
+        self.assertEqual(plan["allocation"]["targets"]["VGK"], 10000.0)
+        self.assertEqual(plan["allocation"]["targets"]["EWJ"], 6000.0)
+        self.assertEqual(plan["allocation"]["targets"]["BIL"], 4000.0)
+        self.assertEqual(plan["execution"]["signal_display"], "quarterly")
+        self.assertEqual(plan["execution"]["status_display"], "SPY:✅, EFA:✅")
+
 
 if __name__ == "__main__":
     unittest.main()

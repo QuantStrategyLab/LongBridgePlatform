@@ -23,7 +23,7 @@ DEFAULT_STRATEGY_PROFILE = "soxl_soxx_trend_income"
 ROLLBACK_STRATEGY_PROFILE = DEFAULT_STRATEGY_PROFILE
 
 LONGBRIDGE_ROLLOUT_ALLOWLIST = frozenset(
-    {"soxl_soxx_trend_income", "tqqq_growth_income", "qqq_tech_enhancement"}
+    {"global_etf_rotation", "soxl_soxx_trend_income", "tqqq_growth_income", "qqq_tech_enhancement"}
 )
 
 PLATFORM_SUPPORTED_DOMAINS: dict[str, frozenset[str]] = {
@@ -37,6 +37,7 @@ PLATFORM_CAPABILITY_MATRIX = PlatformCapabilityMatrix(
     supported_inputs=frozenset(
         {
             "benchmark_history",
+            "market_history",
             "portfolio_snapshot",
             "derived_indicators",
             "feature_snapshot",

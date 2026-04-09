@@ -66,6 +66,48 @@ def _build_runtime_settings(profile: str, *, feature_snapshot_path: str | None =
 
 
 class StrategyRuntimeTests(unittest.TestCase):
+    def test_market_history_runtime_loads_loader_into_context(self):
+        class _GlobalEntrypoint:
+            manifest = StrategyManifest(
+                profile="global_etf_rotation",
+                domain="us_equity",
+                display_name="Global ETF Rotation",
+                description="test entrypoint",
+                required_inputs=frozenset({"market_history"}),
+                default_config={"safe_haven": "BIL", "ranking_pool": ("VOO", "VGK")},
+            )
+
+            def evaluate(self, ctx):
+                self.ctx = ctx
+                return StrategyDecision(diagnostics={"signal_description": "quarterly"})
+
+        entrypoint = _GlobalEntrypoint()
+        runtime = strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            runtime_settings=_build_runtime_settings("global_etf_rotation"),
+            merged_runtime_config={"safe_haven": "BIL", "ranking_pool": ("VOO", "VGK")},
+        )
+
+        def market_history_loader(*_args, **_kwargs):
+            return [1.0, 2.0, 3.0]
+
+        snapshot = PortfolioSnapshot(
+            as_of=datetime.now(timezone.utc),
+            total_equity=1000.0,
+            buying_power=200.0,
+            positions=(),
+        )
+        result = runtime.evaluate(
+            market_history=market_history_loader,
+            portfolio_snapshot=snapshot,
+            translator=lambda key, **_kwargs: key,
+        )
+
+        self.assertIs(entrypoint.ctx.market_data["market_history"], market_history_loader)
+        self.assertIs(entrypoint.ctx.portfolio, snapshot)
+        self.assertEqual(result.metadata["strategy_profile"], "global_etf_rotation")
+
     def test_runtime_exposes_managed_symbols_and_injects_translator(self):
         entrypoint = _SemiconductorEntrypoint()
         runtime = strategy_runtime_module.LoadedStrategyRuntime(

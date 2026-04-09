@@ -7,6 +7,7 @@ import os
 import time
 import traceback
 from datetime import datetime, timezone
+import pandas as pd
 
 from flask import Flask
 
@@ -269,10 +270,24 @@ def submit_order_with_alert(t_ctx, symbol, order_type, side, quantity, logs, log
 def calculate_strategy_indicators(quote_context):
     if "feature_snapshot" in AVAILABLE_INPUTS and not ({"benchmark_history", "qqq_history", "derived_indicators", "indicators"} & AVAILABLE_INPUTS):
         return {}
+    if "market_history" in AVAILABLE_INPUTS:
+        return build_market_history_loader(quote_context)
     if "benchmark_history" in AVAILABLE_INPUTS or "qqq_history" in AVAILABLE_INPUTS:
         return fetch_daily_price_history(quote_context, f"{BENCHMARK_SYMBOL}.US")
     trend_ma_window = int(STRATEGY_RUNTIME_CONFIG.get("trend_ma_window", 150))
     return calculate_rotation_indicators(quote_context, trend_window=trend_ma_window)
+
+
+def build_market_history_loader(quote_context):
+    def load_market_history(_broker_client, symbol, *_args, **_kwargs):
+        history = fetch_daily_price_history(quote_context, f"{str(symbol).strip().upper()}.US")
+        if not history:
+            return pd.Series(dtype=float)
+        index = pd.bdate_range(end=pd.Timestamp.utcnow().normalize(), periods=len(history))
+        closes = [float(bar["close"]) for bar in history]
+        return pd.Series(closes, index=index, dtype=float)
+
+    return load_market_history
 
 
 def fetch_daily_price_history(quote_context, symbol: str, *, lookback: int = 260):
@@ -313,6 +328,7 @@ def resolve_rebalance_plan(*, indicators, account_state):
     evaluation_inputs = build_strategy_evaluation_inputs(
         available_inputs=AVAILABLE_INPUTS,
         market_inputs={
+            "market_history": indicators,
             "derived_indicators": indicators,
             "indicators": indicators,
             "benchmark_history": indicators,
