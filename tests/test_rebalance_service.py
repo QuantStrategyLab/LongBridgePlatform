@@ -27,7 +27,7 @@ with patch.dict(sys.modules, {"requests": requests_stub}):
 
 def _build_plan(
     *,
-    strategy_profile="semiconductor_rotation_income",
+    strategy_profile="soxl_soxx_trend_income",
     strategy_symbols,
     risk_symbols=(),
     income_symbols=(),
@@ -441,7 +441,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
     def test_hybrid_heartbeat_hides_empty_semiconductor_fields_and_shows_benchmark_line(self):
         plan = _build_plan(
-            strategy_profile="hybrid_growth_income",
+            strategy_profile="tqqq_growth_income",
             strategy_symbols=("TQQQ", "BOXX", "QQQI", "SPYI"),
             risk_symbols=("TQQQ",),
             income_symbols=("QQQI", "SPYI"),

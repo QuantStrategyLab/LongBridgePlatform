@@ -41,7 +41,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             account_state=account_state,
-            strategy_profile="semiconductor_rotation_income",
+            strategy_profile="soxl_soxx_trend_income",
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")
@@ -83,7 +83,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             account_state=account_state,
-            strategy_profile="semiconductor_rotation_income",
+            strategy_profile="soxl_soxx_trend_income",
         )
 
         self.assertEqual(plan["execution"]["trade_threshold_value"], 250.0)
@@ -125,7 +125,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             snapshot=snapshot,
-            strategy_profile="hybrid_growth_income",
+            strategy_profile="tqqq_growth_income",
         )
 
         self.assertEqual(plan["allocation"]["strategy_symbols"], ("TQQQ", "BOXX", "QQQI", "SPYI"))
@@ -164,7 +164,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             snapshot=snapshot,
-            strategy_profile="tech_pullback_cash_buffer",
+            strategy_profile="qqq_tech_enhancement",
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")

@@ -15,7 +15,7 @@ from runtime_config_support import PlatformRuntimeSettings
 class _SemiconductorEntrypoint:
     def __init__(self):
         self.manifest = StrategyManifest(
-            profile="semiconductor_rotation_income",
+            profile="soxl_soxx_trend_income",
             domain="us_equity",
             display_name="SOXL/SOXX Semiconductor Trend Income",
             description="test entrypoint",
@@ -30,7 +30,7 @@ class _SemiconductorEntrypoint:
 
 class _TechEntrypoint:
     manifest = StrategyManifest(
-        profile="tech_pullback_cash_buffer",
+        profile="qqq_tech_enhancement",
         domain="us_equity",
         display_name="QQQ Tech Enhancement",
         description="test entrypoint",
@@ -50,7 +50,7 @@ def _build_runtime_settings(profile: str, *, feature_snapshot_path: str | None =
         account_prefix="HK",
         strategy_profile=profile,
         strategy_display_name=(
-            "QQQ Tech Enhancement" if profile == "tech_pullback_cash_buffer" else "SOXL/SOXX Semiconductor Trend Income"
+            "QQQ Tech Enhancement" if profile == "qqq_tech_enhancement" else "SOXL/SOXX Semiconductor Trend Income"
         ),
         strategy_domain="us_equity",
         account_region="HK",
@@ -71,7 +71,7 @@ class StrategyRuntimeTests(unittest.TestCase):
         runtime = strategy_runtime_module.LoadedStrategyRuntime(
             entrypoint=entrypoint,
             runtime_adapter=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
-            runtime_settings=_build_runtime_settings("semiconductor_rotation_income"),
+            runtime_settings=_build_runtime_settings("soxl_soxx_trend_income"),
             merged_runtime_config={"managed_symbols": ("SOXL", "SOXX", "BOXX", "QQQI", "SPYI")},
         )
 
@@ -92,7 +92,7 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertEqual(entrypoint.ctx.portfolio.total_equity, 100.0)
         self.assertIn("translator", entrypoint.ctx.runtime_config)
         self.assertEqual(entrypoint.ctx.runtime_config["signal_text_fn"]("idle"), "signal:idle")
-        self.assertEqual(result.metadata["strategy_profile"], "semiconductor_rotation_income")
+        self.assertEqual(result.metadata["strategy_profile"], "soxl_soxx_trend_income")
         self.assertEqual(result.metadata["strategy_display_name"], "SOXL/SOXX Semiconductor Trend Income")
 
     def test_load_strategy_runtime_uses_entrypoint_default_config(self):
@@ -105,11 +105,11 @@ class StrategyRuntimeTests(unittest.TestCase):
                 return_value=StrategyRuntimeAdapter(),
             ):
                 runtime = strategy_runtime_module.load_strategy_runtime(
-                    "semiconductor_rotation_income",
-                    runtime_settings=_build_runtime_settings("semiconductor_rotation_income"),
+                    "soxl_soxx_trend_income",
+                    runtime_settings=_build_runtime_settings("soxl_soxx_trend_income"),
                 )
 
-        mock_loader.assert_called_once_with("semiconductor_rotation_income")
+        mock_loader.assert_called_once_with("soxl_soxx_trend_income")
         self.assertIs(runtime.entrypoint, entrypoint)
         self.assertEqual(runtime.managed_symbols, ("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"))
 
@@ -126,7 +126,7 @@ class StrategyRuntimeTests(unittest.TestCase):
                 portfolio_input_name="portfolio_snapshot",
             ),
             runtime_settings=_build_runtime_settings(
-                "tech_pullback_cash_buffer",
+                "qqq_tech_enhancement",
                 feature_snapshot_path="gs://bucket/tech.csv",
             ),
             merged_runtime_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},

@@ -69,11 +69,10 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
         self.assertTrue(settings.dry_run_only)
 
-    def test_accepts_human_readable_alias(self):
+    def test_rejects_human_readable_alias(self):
         with patch.dict(os.environ, {"STRATEGY_PROFILE": "semiconductor_trend_income"}, clear=True):
-            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
-
-        self.assertEqual(settings.strategy_profile, DEFAULT_STRATEGY_PROFILE)
+            with self.assertRaises(ValueError):
+                load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
     def test_account_region_prefers_explicit_env(self):
         region = infer_account_region(
@@ -141,7 +140,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "STRATEGY_PROFILE": "tech_pullback_cash_buffer",
+                "STRATEGY_PROFILE": "qqq_tech_enhancement",
                 "LONGBRIDGE_FEATURE_SNAPSHOT_PATH": "gs://bucket/tech.csv",
                 "LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH": "gs://bucket/tech.csv.manifest.json",
                 "LONGBRIDGE_STRATEGY_CONFIG_PATH": "/workspace/configs/tech.json",

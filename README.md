@@ -10,7 +10,7 @@
 Quant system on LongPort OpenAPI and Google Cloud Run.
 
 This repository uses `QuantPlatformKit` for LongPort token handling, context bootstrap, account snapshot access, market data, and order submission. Cloud Run deploys this repository directly.
-The LongBridge runtime can execute `soxl_soxx_trend_income`, `tqqq_growth_income`, and `qqq_tech_enhancement` (legacy aliases: `semiconductor_rotation_income`, `hybrid_growth_income`, `tech_pullback_cash_buffer`) from `UsEquityStrategies`; `LongBridgePlatform` keeps the LongPort runtime, token refresh, execution, and notification flow.
+The LongBridge runtime can execute `soxl_soxx_trend_income`, `tqqq_growth_income`, and `qqq_tech_enhancement` from `UsEquityStrategies`; `LongBridgePlatform` keeps the LongPort runtime, token refresh, execution, and notification flow.
 
 Full strategy documentation now lives in [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies). The sections below focus on execution-side defaults and runtime behavior.
 This runtime matrix is the authoritative enablement source for LongBridge. `UsEquityStrategies` only carries strategy-layer compatibility and metadata.
@@ -211,7 +211,7 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 基于 LongPort OpenAPI 和 Google Cloud Run 的量化交易系统。
 
 这个仓库通过 `QuantPlatformKit` 复用 LongPort token 处理、上下文初始化、账户快照、行情读取和下单逻辑。Cloud Run 直接部署这个仓库。
-`LongBridgePlatform` 现在可直接执行 `UsEquityStrategies` 里的 `soxl_soxx_trend_income`、`tqqq_growth_income` 和 `qqq_tech_enhancement`（兼容别名分别是 `semiconductor_rotation_income`、`hybrid_growth_income`、`tech_pullback_cash_buffer`）；仓库本身继续保留 LongPort 运行时、token 刷新、执行和通知流程。
+`LongBridgePlatform` 现在可直接执行 `UsEquityStrategies` 里的 `soxl_soxx_trend_income`、`tqqq_growth_income` 和 `qqq_tech_enhancement`；仓库本身继续保留 LongPort 运行时、token 刷新、执行和通知流程。
 
 完整策略说明现在放在 [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies)。下面这些章节主要保留执行侧默认值和运行时行为。
 

@@ -57,7 +57,7 @@ def install_stub_modules():
         project_id=None,
         secret_name="longport_token_hk",
         account_prefix="HK",
-        strategy_profile="semiconductor_rotation_income",
+        strategy_profile="soxl_soxx_trend_income",
         strategy_display_name="SOXL/SOXX Semiconductor Trend Income",
         strategy_domain="us_equity",
         account_region="HK",

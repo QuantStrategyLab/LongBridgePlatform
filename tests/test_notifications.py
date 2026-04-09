@@ -33,8 +33,8 @@ class NotificationTests(unittest.TestCase):
     def test_build_strategy_display_name_supports_i18n(self):
         zh_translate = build_translator("zh")
         en_translate = build_translator("en")
-        zh_name = build_strategy_display_name(zh_translate)("semiconductor_rotation_income")
-        en_name = build_strategy_display_name(en_translate)("semiconductor_rotation_income")
+        zh_name = build_strategy_display_name(zh_translate)("soxl_soxx_trend_income")
+        en_name = build_strategy_display_name(en_translate)("soxl_soxx_trend_income")
         self.assertEqual(zh_name, "SOXL/SOXX 半导体趋势收益")
         self.assertEqual(en_name, "SOXL/SOXX Semiconductor Trend Income")
 
