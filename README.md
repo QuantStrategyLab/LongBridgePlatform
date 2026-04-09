@@ -10,7 +10,7 @@
 Quant system on LongPort OpenAPI and Google Cloud Run.
 
 This repository uses `QuantPlatformKit` for LongPort token handling, context bootstrap, account snapshot access, market data, and order submission. Cloud Run deploys this repository directly.
-The LongBridge runtime can execute `soxl_soxx_trend_income`, `tqqq_growth_income`, and `qqq_tech_enhancement` from `UsEquityStrategies`; `LongBridgePlatform` keeps the LongPort runtime, token refresh, execution, and notification flow.
+The LongBridge runtime can execute all five live `us_equity` profiles from `UsEquityStrategies`; `LongBridgePlatform` keeps the LongPort runtime, token refresh, execution, and notification flow.
 
 Full strategy documentation now lives in [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies). The sections below focus on execution-side defaults and runtime behavior.
 This runtime matrix is the authoritative enablement source for LongBridge. `UsEquityStrategies` only carries strategy-layer compatibility and metadata.
@@ -31,6 +31,8 @@ Platform execution no longer depends on `strategy/allocation.py` or hard-coded s
 
 | Canonical profile | Display name | Eligible | Enabled | Default | Rollback | Domain | Runtime note |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `global_etf_rotation` | Global ETF Rotation | Yes | Yes | No | No | `us_equity` | enabled weight-mode rotation line |
+| `russell_1000_multi_factor_defensive` | Russell 1000 Multi-Factor | Yes | Yes | No | No | `us_equity` | enabled feature-snapshot stock baseline |
 | `soxl_soxx_trend_income` | SOXL/SOXX Semiconductor Trend Income | Yes | Yes | Yes | Yes | `us_equity` | current LongBridge default |
 | `tqqq_growth_income` | TQQQ Growth Income | Yes | Yes | No | No | `us_equity` | current SG dry-run line |
 | `qqq_tech_enhancement` | QQQ Tech Enhancement | Yes | Yes | No | No | `us_equity` | current HK feature-snapshot line |
@@ -112,7 +114,7 @@ BOXX: $34,000.00  Cash: $10,000.00
 | `LONGPORT_APP_SECRET` | Yes | LongPort OpenAPI app secret (for token refresh); recommended to inject from the region-specific Secret Manager secret for this deployment, such as `longport-app-secret-hk` / `longport-app-secret-sg` |
 | `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token_hk`) |
 | `ACCOUNT_PREFIX` | No | Alert/log prefix for account/environment (default: `DEFAULT`) |
-| `STRATEGY_PROFILE` | No | Strategy profile selector (default: `soxl_soxx_trend_income`; current live values include `qqq_tech_enhancement` on HK and `tqqq_growth_income` on SG) |
+| `STRATEGY_PROFILE` | No | Strategy profile selector (default: `soxl_soxx_trend_income`; enabled values include `global_etf_rotation`, `russell_1000_multi_factor_defensive`, `qqq_tech_enhancement` on HK, and `tqqq_growth_income` on SG) |
 | `ACCOUNT_REGION` | No | Account region marker for platform-style deployment (e.g. `HK`, `SG`; defaults to `ACCOUNT_PREFIX` / `DEFAULT`) |
 | `LONGBRIDGE_DRY_RUN_ONLY` | No | Set to `true` to keep the selected deployment in dry-run mode. |
 | `NOTIFY_LANG` | No | Notification language: `en` (English, default) or `zh` (Chinese) |
@@ -211,7 +213,7 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 基于 LongPort OpenAPI 和 Google Cloud Run 的量化交易系统。
 
 这个仓库通过 `QuantPlatformKit` 复用 LongPort token 处理、上下文初始化、账户快照、行情读取和下单逻辑。Cloud Run 直接部署这个仓库。
-`LongBridgePlatform` 现在可直接执行 `UsEquityStrategies` 里的 `soxl_soxx_trend_income`、`tqqq_growth_income` 和 `qqq_tech_enhancement`；仓库本身继续保留 LongPort 运行时、token 刷新、执行和通知流程。
+`LongBridgePlatform` 现在可直接执行 `UsEquityStrategies` 里的全部 5 条 live `us_equity` 策略：`global_etf_rotation`、`russell_1000_multi_factor_defensive`、`soxl_soxx_trend_income`、`tqqq_growth_income` 和 `qqq_tech_enhancement`；仓库本身继续保留 LongPort 运行时、token 刷新、执行和通知流程。
 
 完整策略说明现在放在 [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies)。下面这些章节主要保留执行侧默认值和运行时行为。
 
@@ -230,6 +232,8 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 
 | Canonical profile | Display name | Eligible | Enabled | Default | Rollback | Domain | Runtime note |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `global_etf_rotation` | Global ETF Rotation | Yes | Yes | No | No | `us_equity` | 已启用的 weight-mode 轮动线 |
+| `russell_1000_multi_factor_defensive` | Russell 1000 Multi-Factor | Yes | Yes | No | No | `us_equity` | 已启用的 feature-snapshot 个股基线 |
 | `soxl_soxx_trend_income` | SOXL/SOXX 半导体趋势收益 | Yes | Yes | Yes | Yes | `us_equity` | 当前 LongBridge 默认回退线 |
 | `tqqq_growth_income` | TQQQ 增长收益 | Yes | Yes | No | No | `us_equity` | 当前 SG dry-run 线路 |
 | `qqq_tech_enhancement` | QQQ 科技增强 | Yes | Yes | No | No | `us_equity` | 当前 HK feature-snapshot 线路 |
@@ -311,7 +315,7 @@ BOXX: $34,000.00  现金: $10,000.00
 | `LONGPORT_APP_SECRET` | 是 | LongPort OpenAPI 应用密钥（用于刷新 Token）；建议从当前部署对应区域的 Secret Manager 密钥注入，例如 `longport-app-secret-hk` / `longport-app-secret-sg` |
 | `LONGPORT_SECRET_NAME` | 否 | Secret Manager 中的密钥名称（默认: `longport_token_hk`） |
 | `ACCOUNT_PREFIX` | 否 | 通知/日志前缀，区分账户环境（默认: `DEFAULT`） |
-| `STRATEGY_PROFILE` | 否 | 策略档位选择（默认: `soxl_soxx_trend_income`；当前线上 HK 用 `qqq_tech_enhancement`，SG 用 `tqqq_growth_income`） |
+| `STRATEGY_PROFILE` | 否 | 策略档位选择（默认: `soxl_soxx_trend_income`；已启用值还包括 `global_etf_rotation`、`russell_1000_multi_factor_defensive`，当前线上 HK 用 `qqq_tech_enhancement`，SG 用 `tqqq_growth_income`） |
 | `ACCOUNT_REGION` | 否 | 平台化部署时的账户区域标记（如 `HK`、`SG`；默认按 `ACCOUNT_PREFIX` / `DEFAULT` 推断） |
 | `LONGBRIDGE_DRY_RUN_ONLY` | 否 | 设为 `true` 时，该部署保持 dry-run。 |
 | `NOTIFY_LANG` | 否 | 通知语言: `en`（英文，默认）或 `zh`（中文） |
