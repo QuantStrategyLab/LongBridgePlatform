@@ -54,13 +54,29 @@ class RuntimeConfigSupportTests(unittest.TestCase):
     def test_platform_supported_profiles_are_filtered_by_registry(self):
         self.assertEqual(
             get_supported_profiles_for_platform(LONGBRIDGE_PLATFORM),
-            frozenset({"global_etf_rotation", "tqqq_growth_income", "soxl_soxx_trend_income", "qqq_tech_enhancement"}),
+            frozenset(
+                {
+                    "global_etf_rotation",
+                    "russell_1000_multi_factor_defensive",
+                    "tqqq_growth_income",
+                    "soxl_soxx_trend_income",
+                    "qqq_tech_enhancement",
+                }
+            ),
         )
 
     def test_platform_eligible_profiles_are_exposed_by_capability_matrix(self):
         self.assertEqual(
             get_eligible_profiles_for_platform(LONGBRIDGE_PLATFORM),
-            frozenset({"global_etf_rotation", "tqqq_growth_income", "soxl_soxx_trend_income", "qqq_tech_enhancement"}),
+            frozenset(
+                {
+                    "global_etf_rotation",
+                    "russell_1000_multi_factor_defensive",
+                    "tqqq_growth_income",
+                    "soxl_soxx_trend_income",
+                    "qqq_tech_enhancement",
+                }
+            ),
         )
 
     def test_dry_run_only_is_loaded_from_env(self):
@@ -114,6 +130,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             set(by_profile),
             {
                 "global_etf_rotation",
+                "russell_1000_multi_factor_defensive",
                 "tqqq_growth_income",
                 "soxl_soxx_trend_income",
                 "qqq_tech_enhancement",
@@ -133,6 +150,12 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             },
         )
         self.assertEqual(by_profile["tqqq_growth_income"]["display_name"], "TQQQ Growth Income")
+        self.assertEqual(
+            by_profile["russell_1000_multi_factor_defensive"]["display_name"],
+            "Russell 1000 Multi-Factor",
+        )
+        self.assertTrue(by_profile["russell_1000_multi_factor_defensive"]["eligible"])
+        self.assertTrue(by_profile["russell_1000_multi_factor_defensive"]["enabled"])
         self.assertEqual(by_profile["global_etf_rotation"]["display_name"], "Global ETF Rotation")
         self.assertTrue(by_profile["global_etf_rotation"]["eligible"])
         self.assertTrue(by_profile["global_etf_rotation"]["enabled"])
@@ -181,7 +204,9 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("display_name", result.stdout)
         self.assertIn("soxl_soxx_trend_income", result.stdout)
         self.assertIn("global_etf_rotation", result.stdout)
+        self.assertIn("russell_1000_multi_factor_defensive", result.stdout)
         self.assertIn("Global ETF Rotation", result.stdout)
+        self.assertIn("Russell 1000 Multi-Factor", result.stdout)
         self.assertIn("QQQ Tech Enhancement", result.stdout)
 
 
