@@ -14,6 +14,7 @@ QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
 if str(QPK_SRC) not in sys.path:
     sys.path.insert(0, str(QPK_SRC))
 SCRIPT_PATH = ROOT / "scripts" / "print_strategy_profile_status.py"
+SWITCH_PLAN_SCRIPT_PATH = ROOT / "scripts" / "print_strategy_switch_env_plan.py"
 
 from runtime_config_support import (
     DEFAULT_ACCOUNT_REGION,
@@ -208,6 +209,56 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("Global ETF Rotation", result.stdout)
         self.assertIn("Russell 1000 Multi-Factor", result.stdout)
         self.assertIn("QQQ Tech Enhancement", result.stdout)
+
+    def test_print_strategy_switch_env_plan_for_global_etf_rotation(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SWITCH_PLAN_SCRIPT_PATH),
+                "--profile",
+                "global_etf_rotation",
+                "--account-region",
+                "sg",
+                "--json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        plan = json.loads(result.stdout)
+        self.assertEqual(plan["platform"], "longbridge")
+        self.assertEqual(plan["canonical_profile"], "global_etf_rotation")
+        self.assertEqual(plan["set_env"]["ACCOUNT_REGION"], "SG")
+        self.assertEqual(plan["set_env"]["ACCOUNT_PREFIX"], "SG")
+        self.assertIn("LONGBRIDGE_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
+
+    def test_print_strategy_switch_env_plan_for_russell(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SWITCH_PLAN_SCRIPT_PATH),
+                "--profile",
+                "russell_1000_multi_factor_defensive",
+                "--account-region",
+                "hk",
+                "--json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        plan = json.loads(result.stdout)
+        self.assertEqual(plan["canonical_profile"], "russell_1000_multi_factor_defensive")
+        self.assertEqual(plan["set_env"]["ACCOUNT_REGION"], "HK")
+        self.assertEqual(plan["set_env"]["ACCOUNT_PREFIX"], "HK")
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_PATH"], "<required>")
+        self.assertEqual(
+            plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"],
+            "<required>",
+        )
+        self.assertIn("LONGBRIDGE_STRATEGY_CONFIG_PATH", plan["remove_if_present"])
 
 
 if __name__ == "__main__":
