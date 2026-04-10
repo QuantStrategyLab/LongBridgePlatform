@@ -91,6 +91,21 @@ def _build_plan(
 
 
 class RebalanceServiceNotificationTests(unittest.TestCase):
+    def test_append_status_lines_localizes_snapshot_guard_text_for_zh(self):
+        lines = []
+        rebalance_service._append_status_lines(
+            lines,
+            execution={
+                "status_display": "fail_closed | reason=feature_snapshot_path_missing",
+                "signal_display": "feature snapshot guard blocked execution",
+            },
+            translator=build_translator("zh"),
+            signal_key="heartbeat_signal",
+        )
+
+        self.assertIn("📊 市场状态: 关闭执行 | 原因=缺少特征快照路径", lines)
+        self.assertIn("🎯 信号: 特征快照校验阻止执行", lines)
+
     def _run_strategy(
         self,
         plan,

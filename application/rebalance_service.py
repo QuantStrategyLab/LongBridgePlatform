@@ -6,6 +6,28 @@ import os
 import traceback
 from datetime import datetime
 
+_ZH_REASON_REPLACEMENTS = (
+    ("feature snapshot guard blocked execution", "特征快照校验阻止执行"),
+    ("feature snapshot required", "需要特征快照"),
+    ("feature snapshot compute failed", "特征快照计算失败"),
+    ("feature_snapshot_download_failed", "特征快照下载失败"),
+    ("feature_snapshot_compute_failed", "特征快照计算失败"),
+    ("feature_snapshot_path_missing", "缺少特征快照路径"),
+    ("feature_snapshot_missing", "特征快照不存在"),
+    ("feature_snapshot_stale", "特征快照过旧"),
+    ("feature_snapshot_manifest_missing", "缺少快照清单"),
+    ("feature_snapshot_profile_mismatch", "快照策略名不匹配"),
+    ("feature_snapshot_config_name_mismatch", "快照配置名不匹配"),
+    ("feature_snapshot_config_path_mismatch", "快照配置路径不匹配"),
+    ("feature_snapshot_contract_version_mismatch", "快照契约版本不匹配"),
+    ("outside_execution_window", "当前不在执行窗口"),
+    ("insufficient_buying_power", "购买力不足"),
+    ("missing_price", "缺少报价"),
+    ("no_equity", "无净值"),
+    ("fail_closed", "关闭执行"),
+    ("reason=", "原因="),
+)
+
 
 def _plan_portfolio(plan):
     return dict(plan.get("portfolio") or {})
@@ -21,6 +43,21 @@ def _plan_allocation(plan):
 
 def _has_text(value):
     return bool(str(value or "").strip())
+
+
+def _translator_uses_zh(translator) -> bool:
+    sample = str(translator("no_trades"))
+    return any("\u4e00" <= ch <= "\u9fff" for ch in sample)
+
+
+def _localize_notification_text(text, *, translator):
+    value = str(text or "").strip()
+    if not value or not _translator_uses_zh(translator):
+        return value
+    localized = value
+    for source, target in _ZH_REASON_REPLACEMENTS:
+        localized = localized.replace(source, target)
+    return localized
 
 
 def _has_benchmark_context(execution):
@@ -44,7 +81,7 @@ def _build_benchmark_line(execution):
 
 
 def _append_status_lines(lines, *, execution, translator, signal_key):
-    status_display = str(execution.get("status_display") or "").strip()
+    status_display = _localize_notification_text(execution.get("status_display"), translator=translator)
     if status_display:
         lines.append(translator("market_status", status=status_display))
 
@@ -60,7 +97,7 @@ def _append_status_lines(lines, *, execution, translator, signal_key):
     if income_locked_ratio_text:
         lines.append(translator("income_locked", ratio=income_locked_ratio_text))
 
-    signal_display = str(execution.get("signal_display") or "").strip()
+    signal_display = _localize_notification_text(execution.get("signal_display"), translator=translator)
     if signal_display:
         lines.append(translator(signal_key, msg=signal_display))
 
