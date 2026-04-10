@@ -106,6 +106,31 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("📊 市场状态: 关闭执行 | 原因=缺少特征快照路径", lines)
         self.assertIn("🎯 信号: 特征快照校验阻止执行", lines)
 
+    def test_append_status_lines_localizes_qqq_tech_diagnostics_for_zh(self):
+        lines = []
+        rebalance_service._append_status_lines(
+            lines,
+            execution={
+                "status_display": "regime=soft_defense | breadth=41.2% | target_stock=60.0% | realized_stock=60.0%",
+                "signal_display": (
+                    "regime=soft_defense breadth=41.2% benchmark_trend=down "
+                    "target_stock=60.0% realized_stock=60.0% selected=8 top=CIEN(0.92)"
+                ),
+            },
+            translator=build_translator("zh"),
+            signal_key="signal",
+        )
+
+        self.assertIn(
+            "📊 市场状态: 市场阶段=软防御 | 市场宽度=41.2% | 目标股票仓位=60.0% | 实际股票仓位=60.0%",
+            lines,
+        )
+        self.assertIn(
+            "🎯 触发信号: 市场阶段=软防御 市场宽度=41.2% 基准趋势=向下 "
+            "目标股票仓位=60.0% 实际股票仓位=60.0% 入选标的数=8 前排标的=CIEN(0.92)",
+            lines,
+        )
+
     def _run_strategy(
         self,
         plan,
