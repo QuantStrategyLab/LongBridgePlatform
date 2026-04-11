@@ -31,3 +31,9 @@ def test_submit_order_with_alert_localizes_order_id_suffix_for_zh():
     assert logs == ["📈 [市价买入] BOXX: 49股 @ $116.31 （订单号: 1227343614540054528）"]
     assert "order_id=" not in logs[0]
     assert printed == ["OK 📈 [市价买入] BOXX: 49股 @ $116.31 （订单号: 1227343614540054528）"]
+
+
+def test_build_translator_localizes_semiconductor_trend_status_for_zh():
+    translate = build_translator("zh")
+    assert translate("market_status_delever", asset="SOXX") == "🛡️ 降杠杆（SOXX）"
+    assert translate("signal_delever", window=150, ratio="40.2%") == "SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 40.2%"
