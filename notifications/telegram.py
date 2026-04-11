@@ -63,7 +63,7 @@ I18N = {
         "strategy_name_tqqq_growth_income": "TQQQ 增长收益",
         "strategy_name_global_etf_rotation": "全球 ETF 轮动",
         "strategy_name_russell_1000_multi_factor_defensive": "罗素1000多因子",
-        "strategy_name_qqq_tech_enhancement": "QQQ 科技增强",
+        "strategy_name_qqq_tech_enhancement": "科技通信回调增强",
     },
     "en": {
         "rebalance_title": "🔔 【Trade Execution Report】",
@@ -113,7 +113,7 @@ I18N = {
         "strategy_name_tqqq_growth_income": "TQQQ Growth Income",
         "strategy_name_global_etf_rotation": "Global ETF Rotation",
         "strategy_name_russell_1000_multi_factor_defensive": "Russell 1000 Multi-Factor",
-        "strategy_name_qqq_tech_enhancement": "QQQ Tech Enhancement",
+        "strategy_name_qqq_tech_enhancement": "Tech/Communication Pullback Enhancement",
     },
 }
 

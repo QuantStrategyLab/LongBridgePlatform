@@ -162,7 +162,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertTrue(by_profile["global_etf_rotation"]["enabled"])
         self.assertTrue(by_profile["qqq_tech_enhancement"]["eligible"])
         self.assertTrue(by_profile["qqq_tech_enhancement"]["enabled"])
-        self.assertEqual(by_profile["qqq_tech_enhancement"]["display_name"], "QQQ Tech Enhancement")
+        self.assertEqual(by_profile["qqq_tech_enhancement"]["display_name"], "Tech/Communication Pullback Enhancement")
 
     def test_loads_feature_snapshot_env_for_tech_profile(self):
         with patch.dict(
@@ -242,7 +242,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("russell_1000_multi_factor_defensive", result.stdout)
         self.assertIn("Global ETF Rotation", result.stdout)
         self.assertIn("Russell 1000 Multi-Factor", result.stdout)
-        self.assertIn("QQQ Tech Enhancement", result.stdout)
+        self.assertIn("Tech/Communication Pullback Enhancement", result.stdout)
 
     def test_print_strategy_switch_env_plan_for_global_etf_rotation(self):
         result = subprocess.run(

@@ -35,7 +35,7 @@ Platform execution no longer depends on `strategy/allocation.py` or hard-coded s
 | `russell_1000_multi_factor_defensive` | Russell 1000 Multi-Factor | Yes | Yes | No | No | `us_equity` | enabled feature-snapshot stock baseline |
 | `soxl_soxx_trend_income` | SOXL/SOXX Semiconductor Trend Income | Yes | Yes | Yes | Yes | `us_equity` | current LongBridge default |
 | `tqqq_growth_income` | TQQQ Growth Income | Yes | Yes | No | No | `us_equity` | current SG dry-run line |
-| `qqq_tech_enhancement` | QQQ Tech Enhancement | Yes | Yes | No | No | `us_equity` | current HK feature-snapshot line |
+| `qqq_tech_enhancement` | Tech/Communication Pullback Enhancement | Yes | Yes | No | No | `us_equity` | current HK feature-snapshot line |
 
 Check the current matrix locally:
 
@@ -236,7 +236,7 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 | `russell_1000_multi_factor_defensive` | Russell 1000 Multi-Factor | Yes | Yes | No | No | `us_equity` | 已启用的 feature-snapshot 个股基线 |
 | `soxl_soxx_trend_income` | SOXL/SOXX 半导体趋势收益 | Yes | Yes | Yes | Yes | `us_equity` | 当前 LongBridge 默认回退线 |
 | `tqqq_growth_income` | TQQQ 增长收益 | Yes | Yes | No | No | `us_equity` | 当前 SG dry-run 线路 |
-| `qqq_tech_enhancement` | QQQ 科技增强 | Yes | Yes | No | No | `us_equity` | 当前 HK feature-snapshot 线路 |
+| `qqq_tech_enhancement` | 科技通信回调增强 | Yes | Yes | No | No | `us_equity` | 当前 HK feature-snapshot 线路 |
 
 本地可直接查看当前矩阵：
 
