@@ -25,9 +25,13 @@ _ZH_REASON_REPLACEMENTS = (
     ("regime=risk_on", "市场阶段=进攻"),
     ("benchmark_trend=down", "基准趋势=向下"),
     ("benchmark_trend=up", "基准趋势=向上"),
+    ("benchmark=down", "基准趋势=向下"),
+    ("benchmark=up", "基准趋势=向上"),
     ("breadth=", "市场宽度="),
     ("target_stock=", "目标股票仓位="),
     ("realized_stock=", "实际股票仓位="),
+    ("stock_exposure=", "股票目标仓位="),
+    ("safe_haven=", "避险仓位="),
     ("selected=", "入选标的数="),
     ("top=", "前排标的="),
     ("no_selection", "无入选标的"),
@@ -212,9 +216,17 @@ def run_strategy(
     current_min_trade = float(execution["current_min_trade"])
     portfolio_rows = tuple(portfolio["portfolio_rows"])
     def record_dry_run(symbol, side, quantity, price, *, order_type):
-        price_text = f"${price:.2f}" if price is not None else "market"
-        suffix = " LIMIT" if order_type == "limit" else ""
-        message = f"🧪 DRY_RUN {side.upper()} {symbol} {quantity} @ {price_text}{suffix}"
+        price_text = f"${price:.2f}" if price is not None else translator("order_type_market")
+        side_key = "side_buy" if str(side).lower() == "buy" else "side_sell"
+        order_type_key = "order_type_limit" if order_type == "limit" else "order_type_market"
+        message = translator(
+            "dry_run_order",
+            side=translator(side_key),
+            symbol=symbol,
+            qty=quantity,
+            price=price_text,
+            order_type=translator(order_type_key),
+        )
         logs.append(message)
         print(with_prefix(message), flush=True)
         return True

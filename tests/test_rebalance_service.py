@@ -163,7 +163,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             submitted_price=None,
         ):
             del trade_context, order_type, side, quantity, submitted_price
-            logs.append(f"{log_message} [order_id=test-order]")
+            logs.append(f"{log_message} （订单号: test-order）")
             return True
 
         plan_side_effect = [plan, refreshed_plan or plan]
@@ -444,9 +444,9 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("🧪 dry-run 模式", sent_messages[0])
-        self.assertIn("🧪 DRY_RUN SELL SOXL.US", sent_messages[0])
-        self.assertIn("🧪 DRY_RUN BUY SOXX.US", sent_messages[0])
+        self.assertIn("🧪 模拟运行模式", sent_messages[0])
+        self.assertIn("🧪 模拟限价卖出 SOXL.US", sent_messages[0])
+        self.assertIn("🧪 模拟限价买入 SOXX.US", sent_messages[0])
 
     def test_heartbeat_accepts_normalized_portfolio_and_execution_sections(self):
         plan = _build_plan(
@@ -517,7 +517,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("💓 【心跳检测】", sent_messages[0])
         self.assertIn("🧭 策略: TQQQ 增长收益", sent_messages[0])
-        self.assertIn("🧪 dry-run 模式", sent_messages[0])
+        self.assertIn("🧪 模拟运行模式", sent_messages[0])
         self.assertIn("QQQ: 588.50 | MA200: 595.25 | Exit: 573.00", sent_messages[0])
         self.assertIn("🎯 信号: 💤 等待信号", sent_messages[0])
         self.assertNotIn("📊 市场状态: ", sent_messages[0])

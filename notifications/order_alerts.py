@@ -158,6 +158,17 @@ def monitor_submitted_order_status(
         )
 
 
+
+def _append_order_id_suffix(log_message, order_id, *, translator):
+    order_id_text = str(order_id or "").strip()
+    if not order_id_text:
+        return log_message
+    suffix = str(translator("order_id_suffix", order_id=order_id_text)).strip()
+    if not suffix or suffix == "order_id_suffix":
+        suffix = f"[order_id={order_id_text}]"
+    return f"{log_message} {suffix}"
+
+
 def submit_order_with_alert(
     trade_context,
     symbol,
@@ -190,7 +201,7 @@ def submit_order_with_alert(
             submitted_price=submitted_price,
         )
         order_id = report.broker_order_id or ""
-        log_with_order_id = f"{log_message} [order_id={order_id}]" if order_id else log_message
+        log_with_order_id = _append_order_id_suffix(log_message, order_id, translator=translator)
         print_with_prefix(f"OK {log_with_order_id}")
         logs.append(log_with_order_id)
         monitor_submitted_order_status(
