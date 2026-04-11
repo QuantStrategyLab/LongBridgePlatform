@@ -30,7 +30,7 @@ class _SemiconductorEntrypoint:
 
 class _TechEntrypoint:
     manifest = StrategyManifest(
-        profile="qqq_tech_enhancement",
+        profile="tech_communication_pullback_enhancement",
         domain="us_equity",
         display_name="Tech/Communication Pullback Enhancement",
         description="test entrypoint",
@@ -65,7 +65,7 @@ def _build_runtime_settings(profile: str, *, feature_snapshot_path: str | None =
         account_prefix="HK",
         strategy_profile=profile,
         strategy_display_name=(
-            "Tech/Communication Pullback Enhancement" if profile == "qqq_tech_enhancement" else "SOXL/SOXX Semiconductor Trend Income"
+            "Tech/Communication Pullback Enhancement" if profile == "tech_communication_pullback_enhancement" else "SOXL/SOXX Semiconductor Trend Income"
         ),
         strategy_domain="us_equity",
         account_region="HK",
@@ -183,7 +183,7 @@ class StrategyRuntimeTests(unittest.TestCase):
                 portfolio_input_name="portfolio_snapshot",
             ),
             runtime_settings=_build_runtime_settings(
-                "qqq_tech_enhancement",
+                "tech_communication_pullback_enhancement",
                 feature_snapshot_path="gs://bucket/tech.csv",
             ),
             merged_runtime_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},

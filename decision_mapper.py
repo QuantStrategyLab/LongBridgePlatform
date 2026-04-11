@@ -176,7 +176,7 @@ def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[
                 "investable_cash": 0.0,
             },
         )
-    if strategy_profile == "qqq_tech_enhancement":
+    if strategy_profile in {"tech_communication_pullback_enhancement", "qqq_tech_enhancement"}:
         return (
             "risk_safe_income",
             ("risk_safe",),

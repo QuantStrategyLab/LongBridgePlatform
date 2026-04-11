@@ -77,7 +77,7 @@ jobs:
             missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME")
           fi
 
-          if [ "${STRATEGY_PROFILE:-}" = "qqq_tech_enhancement" ] && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
+          if { [ "${STRATEGY_PROFILE:-}" = "tech_communication_pullback_enhancement" ] || [ "${STRATEGY_PROFILE:-}" = "qqq_tech_enhancement" ]; } && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
             missing_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_PATH")
           fi
 
@@ -279,7 +279,7 @@ jobs:
             missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME")
           fi
 
-          if [ "${STRATEGY_PROFILE:-}" = "qqq_tech_enhancement" ] && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
+          if { [ "${STRATEGY_PROFILE:-}" = "tech_communication_pullback_enhancement" ] || [ "${STRATEGY_PROFILE:-}" = "qqq_tech_enhancement" ]; } && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
             missing_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_PATH")
           fi
 

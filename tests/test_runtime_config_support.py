@@ -61,7 +61,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                     "russell_1000_multi_factor_defensive",
                     "tqqq_growth_income",
                     "soxl_soxx_trend_income",
-                    "qqq_tech_enhancement",
+                    "tech_communication_pullback_enhancement",
                 }
             ),
         )
@@ -75,7 +75,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                     "russell_1000_multi_factor_defensive",
                     "tqqq_growth_income",
                     "soxl_soxx_trend_income",
-                    "qqq_tech_enhancement",
+                    "tech_communication_pullback_enhancement",
                 }
             ),
         )
@@ -134,7 +134,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "russell_1000_multi_factor_defensive",
                 "tqqq_growth_income",
                 "soxl_soxx_trend_income",
-                "qqq_tech_enhancement",
+                "tech_communication_pullback_enhancement",
             },
         )
         self.assertEqual(
@@ -160,15 +160,15 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(by_profile["global_etf_rotation"]["display_name"], "Global ETF Rotation")
         self.assertTrue(by_profile["global_etf_rotation"]["eligible"])
         self.assertTrue(by_profile["global_etf_rotation"]["enabled"])
-        self.assertTrue(by_profile["qqq_tech_enhancement"]["eligible"])
-        self.assertTrue(by_profile["qqq_tech_enhancement"]["enabled"])
-        self.assertEqual(by_profile["qqq_tech_enhancement"]["display_name"], "Tech/Communication Pullback Enhancement")
+        self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["eligible"])
+        self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["enabled"])
+        self.assertEqual(by_profile["tech_communication_pullback_enhancement"]["display_name"], "Tech/Communication Pullback Enhancement")
 
     def test_loads_feature_snapshot_env_for_tech_profile(self):
         with patch.dict(
             os.environ,
             {
-                "STRATEGY_PROFILE": "qqq_tech_enhancement",
+                "STRATEGY_PROFILE": "tech_communication_pullback_enhancement",
                 "LONGBRIDGE_FEATURE_SNAPSHOT_PATH": "gs://bucket/tech.csv",
                 "LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH": "gs://bucket/tech.csv.manifest.json",
                 "LONGBRIDGE_STRATEGY_CONFIG_PATH": "/workspace/configs/tech.json",
@@ -177,7 +177,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         ):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
-        self.assertEqual(settings.strategy_profile, "qqq_tech_enhancement")
+        self.assertEqual(settings.strategy_profile, "tech_communication_pullback_enhancement")
         self.assertEqual(settings.feature_snapshot_path, "gs://bucket/tech.csv")
         self.assertEqual(settings.feature_snapshot_manifest_path, "gs://bucket/tech.csv.manifest.json")
         self.assertEqual(settings.strategy_config_path, "/workspace/configs/tech.json")
@@ -216,10 +216,10 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(by_profile["global_etf_rotation"]["input_mode"], "market_history")
         self.assertFalse(by_profile["global_etf_rotation"]["requires_snapshot_artifacts"])
         self.assertFalse(by_profile["global_etf_rotation"]["requires_strategy_config_path"])
-        self.assertEqual(by_profile["qqq_tech_enhancement"]["profile_group"], "snapshot_backed")
-        self.assertEqual(by_profile["qqq_tech_enhancement"]["input_mode"], "feature_snapshot")
-        self.assertTrue(by_profile["qqq_tech_enhancement"]["requires_snapshot_artifacts"])
-        self.assertTrue(by_profile["qqq_tech_enhancement"]["requires_strategy_config_path"])
+        self.assertEqual(by_profile["tech_communication_pullback_enhancement"]["profile_group"], "snapshot_backed")
+        self.assertEqual(by_profile["tech_communication_pullback_enhancement"]["input_mode"], "feature_snapshot")
+        self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["requires_snapshot_artifacts"])
+        self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["requires_strategy_config_path"])
         self.assertFalse(
             by_profile["russell_1000_multi_factor_defensive"]["requires_strategy_config_path"]
         )

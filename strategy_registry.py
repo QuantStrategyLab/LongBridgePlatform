@@ -28,6 +28,7 @@ LONGBRIDGE_ROLLOUT_ALLOWLIST = frozenset(
         "russell_1000_multi_factor_defensive",
         "soxl_soxx_trend_income",
         "tqqq_growth_income",
+        "tech_communication_pullback_enhancement",
         "qqq_tech_enhancement",
     }
 )

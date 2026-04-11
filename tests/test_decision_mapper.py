@@ -164,7 +164,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             snapshot=snapshot,
-            strategy_profile="qqq_tech_enhancement",
+            strategy_profile="tech_communication_pullback_enhancement",
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")

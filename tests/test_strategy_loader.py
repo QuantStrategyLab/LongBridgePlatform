@@ -103,7 +103,7 @@ class StrategyLoaderTests(unittest.TestCase):
     def test_load_strategy_runtime_adapter_declares_tech_snapshot_inputs(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
 
-        adapter = load_strategy_runtime_adapter_for_profile("qqq_tech_enhancement")
+        adapter = load_strategy_runtime_adapter_for_profile("tech_communication_pullback_enhancement")
 
         self.assertEqual(
             adapter.available_inputs,
