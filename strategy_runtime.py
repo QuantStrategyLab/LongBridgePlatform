@@ -132,9 +132,13 @@ class LoadedStrategyRuntime:
             )
             return StrategyEvaluationResult(decision=decision, metadata=metadata)
 
+        evaluation_as_of = datetime.now(timezone.utc)
+        runtime_config = dict(runtime_config)
+        runtime_config.setdefault("run_as_of", evaluation_as_of)
+
         guard_result = load_feature_snapshot_guarded(
             feature_snapshot_path,
-            run_as_of=datetime.now(timezone.utc),
+            run_as_of=evaluation_as_of,
             required_columns=self._required_feature_columns(),
             snapshot_date_columns=self._snapshot_date_columns(),
             max_snapshot_month_lag=self._max_snapshot_month_lag(),
@@ -179,7 +183,7 @@ class LoadedStrategyRuntime:
         ctx = build_strategy_context_from_available_inputs(
             entrypoint=self.entrypoint,
             runtime_adapter=self.runtime_adapter,
-            as_of=datetime.now(timezone.utc),
+            as_of=evaluation_as_of,
             available_inputs=evaluation_inputs,
             runtime_config=runtime_config,
         )

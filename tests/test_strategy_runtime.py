@@ -204,7 +204,7 @@ class StrategyRuntimeTests(unittest.TestCase):
                     "metadata": {"snapshot_guard_decision": "proceed", "snapshot_as_of": "2026-04-08"},
                 },
             )(),
-        ):
+        ) as load_snapshot:
             result = runtime.evaluate(
                 portfolio_snapshot=PortfolioSnapshot(
                     as_of=datetime.now(timezone.utc),
@@ -217,6 +217,9 @@ class StrategyRuntimeTests(unittest.TestCase):
 
         self.assertEqual(entrypoint.ctx.market_data["feature_snapshot"][0]["symbol"], "AAPL")
         self.assertEqual(entrypoint.ctx.portfolio.total_equity, 1000.0)
+        self.assertIn("run_as_of", entrypoint.ctx.runtime_config)
+        self.assertEqual(entrypoint.ctx.runtime_config["run_as_of"], entrypoint.ctx.as_of)
+        self.assertEqual(load_snapshot.call_args.kwargs["run_as_of"], entrypoint.ctx.as_of)
         self.assertEqual(result.metadata["managed_symbols"], ("AAPL", "MSFT", "BOXX"))
         self.assertEqual(result.metadata["status_icon"], "🧲")
 
