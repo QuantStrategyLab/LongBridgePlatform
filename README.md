@@ -43,6 +43,24 @@ Check the current matrix locally:
 python3 scripts/print_strategy_profile_status.py
 ```
 
+### Runtime cadence
+
+Strategy cadence is owned by the strategy profile, but the actual broker run is
+triggered by Cloud Scheduler. Keep the Cloud Scheduler job aligned with the
+selected `STRATEGY_PROFILE` for each Cloud Run service:
+
+| Profile | Intended cadence | Recommended Cloud Scheduler | Notes |
+| --- | --- | --- | --- |
+| `global_etf_rotation` | quarterly rebalance + daily canary | weekdays near US close, e.g. `45 15 * * 1-5` in `America/New_York` | Non-rebalance days should only act on the canary emergency path. |
+| `soxl_soxx_trend_income` | daily | weekdays near US close, e.g. `45 15 * * 1-5` in `America/New_York` | Trend/income value-mode profile. |
+| `tqqq_growth_income` | daily | weekdays near US close, e.g. `45 15 * * 1-5` in `America/New_York` | Current SG line. |
+| `russell_1000_multi_factor_defensive` | monthly | first few calendar days after month end, e.g. `45 15 1-7 * *` in `America/New_York` | Consumes monthly feature snapshots from `UsEquitySnapshotPipelines`. |
+| `tech_communication_pullback_enhancement` | monthly | first few calendar days after month end, e.g. `45 15 1-7 * *` in `America/New_York` | Current HK line. LongBridge constrains this profile to the first trading day after the monthly snapshot to avoid month-internal rebalancing. |
+
+The upstream snapshot/data workflows live in `UsEquitySnapshotPipelines` and run
+monthly. Cloud Scheduler only invokes the broker runtime; it does not generate
+new feature snapshots.
+
 **Layers**
 
 - **Trading:** SOXL / SOXX / BOXX
@@ -193,7 +211,7 @@ Important:
 2. Create secret `longport_token_hk` for HK / `longport_token_sg` for SG (or your custom `LONGPORT_SECRET_NAME`) in Secret Manager and add your LongPort access token as the first version.
 3. Set the required env vars above on the Cloud Run service.
 4. Deploy the app to Cloud Run (e.g. `gcloud run deploy` from repo root with Dockerfile or buildpack).
-5. Create a Cloud Scheduler job that POSTs to the Cloud Run URL on a schedule (e.g. `45 15 * * 1-5` for ~15 min before US market close on weekdays).
+5. Create a Cloud Scheduler job that POSTs to the Cloud Run URL on a schedule. Use the [runtime cadence](#runtime-cadence) table: daily profiles usually use `45 15 * * 1-5`, while monthly snapshot profiles use a first-week monthly candidate window such as `45 15 1-7 * *`.
 
 IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Accessor for the configured `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, and `LONGPORT_APP_SECRET_SECRET_NAME`, such as `longport_token_hk`, `longport-app-key-hk`, `longport-app-secret-hk`) and **Logs Writer**. Build/deploy typically uses a separate account with Artifact Registry Writer, Cloud Run Admin, Service Account User.
 
@@ -243,6 +261,22 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 ```bash
 python3 scripts/print_strategy_profile_status.py
 ```
+
+### 策略执行频率
+
+策略频率由策略档位决定，但实际券商执行是 Cloud Scheduler 触发的。
+每个 Cloud Run 服务的 Cloud Scheduler 需要和当前 `STRATEGY_PROFILE` 对齐：
+
+| Profile | 目标频率 | 建议 Cloud Scheduler | 说明 |
+| --- | --- | --- | --- |
+| `global_etf_rotation` | 季度调仓 + 每日 canary 防守检查 | 美股临近收盘的工作日，例如 `45 15 * * 1-5`，时区 `America/New_York` | 非调仓日原则上只在 canary 紧急防守路径动作。 |
+| `soxl_soxx_trend_income` | 日频 | 美股临近收盘的工作日，例如 `45 15 * * 1-5`，时区 `America/New_York` | 趋势/收益 value-mode 策略。 |
+| `tqqq_growth_income` | 日频 | 美股临近收盘的工作日，例如 `45 15 * * 1-5`，时区 `America/New_York` | 当前 SG 线路。 |
+| `russell_1000_multi_factor_defensive` | 月频 | 月末之后前几个自然日，例如 `45 15 1-7 * *`，时区 `America/New_York` | 消费 `UsEquitySnapshotPipelines` 生成的月度 feature snapshot。 |
+| `tech_communication_pullback_enhancement` | 月频 | 月末之后前几个自然日，例如 `45 15 1-7 * *`，时区 `America/New_York` | 当前 HK 线路。LongBridge 会把该策略限制在月度 snapshot 之后第一个交易日执行，避免月内重复调仓。 |
+
+上游数据刷新和 feature snapshot 发布在 `UsEquitySnapshotPipelines` 里，按月运行。
+Cloud Scheduler 只负责触发券商运行时，不负责生成新的 feature snapshot。
 
 **层级**
 
@@ -394,7 +428,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 2. 在 Secret Manager 中为 HK 创建 `longport_token_hk`、为 SG 创建 `longport_token_sg`（或使用你自定义的 `LONGPORT_SECRET_NAME`），并将 LongPort access token 作为第一个版本写入。
 3. 在 Cloud Run 服务上配置上述环境变量。
 4. 部署至 Cloud Run（如从仓库根目录执行 `gcloud run deploy`）。
-5. 创建 Cloud Scheduler 定时任务，POST 到 Cloud Run URL（如 `45 15 * * 1-5`，工作日美股收盘前约 15 分钟）。
+5. 创建 Cloud Scheduler 定时任务，POST 到 Cloud Run URL。按上面的[策略执行频率](#策略执行频率)配置：日频策略通常用 `45 15 * * 1-5`，月频 snapshot 策略用类似 `45 15 1-7 * *` 的月初候选窗口。
 
 IAM: Cloud Run 服务账号需要 **Secret Manager Admin**（或当前 `LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME` 对应 secret 的 Secret Accessor，例如 `longport_token_hk`、`longport-app-key-hk`、`longport-app-secret-hk`）和 **Logs Writer** 权限。
 

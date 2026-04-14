@@ -20,6 +20,7 @@ from strategy_loader import (
 
 
 _FEATURE_SNAPSHOT_INPUT = "feature_snapshot"
+_SINGLE_EXECUTION_WINDOW_PROFILES = frozenset({"tech_communication_pullback_enhancement"})
 
 
 @dataclass(frozen=True)
@@ -135,6 +136,8 @@ class LoadedStrategyRuntime:
         evaluation_as_of = datetime.now(timezone.utc)
         runtime_config = dict(runtime_config)
         runtime_config.setdefault("run_as_of", evaluation_as_of)
+        if self.profile in _SINGLE_EXECUTION_WINDOW_PROFILES:
+            runtime_config.setdefault("runtime_execution_window_trading_days", 1)
 
         guard_result = load_feature_snapshot_guarded(
             feature_snapshot_path,

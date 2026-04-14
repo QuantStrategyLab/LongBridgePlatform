@@ -219,6 +219,7 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertEqual(entrypoint.ctx.portfolio.total_equity, 1000.0)
         self.assertIn("run_as_of", entrypoint.ctx.runtime_config)
         self.assertEqual(entrypoint.ctx.runtime_config["run_as_of"], entrypoint.ctx.as_of)
+        self.assertEqual(entrypoint.ctx.runtime_config["runtime_execution_window_trading_days"], 1)
         self.assertEqual(load_snapshot.call_args.kwargs["run_as_of"], entrypoint.ctx.as_of)
         self.assertEqual(result.metadata["managed_symbols"], ("AAPL", "MSFT", "BOXX"))
         self.assertEqual(result.metadata["status_icon"], "🧲")
@@ -267,6 +268,7 @@ class StrategyRuntimeTests(unittest.TestCase):
             )
 
         self.assertEqual(entrypoint.ctx.market_data["feature_snapshot"][1]["symbol"], "AAPL")
+        self.assertNotIn("runtime_execution_window_trading_days", entrypoint.ctx.runtime_config)
         self.assertEqual(result.metadata["managed_symbols"], ("AAPL", "MSFT", "BOXX"))
         self.assertEqual(result.metadata["status_icon"], "📏")
 
