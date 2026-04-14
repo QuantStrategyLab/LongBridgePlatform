@@ -77,8 +77,12 @@ jobs:
             missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME")
           fi
 
-          if { [ "${STRATEGY_PROFILE:-}" = "tech_communication_pullback_enhancement" ] || [ "${STRATEGY_PROFILE:-}" = "qqq_tech_enhancement" ]; } && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
+          if { [ "${STRATEGY_PROFILE:-}" = "tech_communication_pullback_enhancement" ] || [ "${STRATEGY_PROFILE:-}" = "qqq_tech_enhancement" ] || [ "${STRATEGY_PROFILE:-}" = "mega_cap_leader_rotation_dynamic_top20" ]; } && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
             missing_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_PATH")
+          fi
+
+          if [ "${STRATEGY_PROFILE:-}" = "mega_cap_leader_rotation_dynamic_top20" ] && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH:-}" ]; then
+            missing_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH")
           fi
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then
@@ -279,8 +283,12 @@ jobs:
             missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME")
           fi
 
-          if { [ "${STRATEGY_PROFILE:-}" = "tech_communication_pullback_enhancement" ] || [ "${STRATEGY_PROFILE:-}" = "qqq_tech_enhancement" ]; } && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
+          if { [ "${STRATEGY_PROFILE:-}" = "tech_communication_pullback_enhancement" ] || [ "${STRATEGY_PROFILE:-}" = "qqq_tech_enhancement" ] || [ "${STRATEGY_PROFILE:-}" = "mega_cap_leader_rotation_dynamic_top20" ]; } && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_PATH:-}" ]; then
             missing_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_PATH")
+          fi
+
+          if [ "${STRATEGY_PROFILE:-}" = "mega_cap_leader_rotation_dynamic_top20" ] && [ -z "${LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH:-}" ]; then
+            missing_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH")
           fi
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then

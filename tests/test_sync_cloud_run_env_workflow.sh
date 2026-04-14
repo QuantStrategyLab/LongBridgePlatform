@@ -44,6 +44,8 @@ grep -Fq 'missing_vars+=("TELEGRAM_TOKEN_SECRET_NAME or TELEGRAM_TOKEN")' "$work
 grep -Fq 'missing_vars+=("LONGPORT_APP_KEY_SECRET_NAME")' "$workflow_file"
 grep -Fq 'missing_vars+=("LONGPORT_APP_SECRET_SECRET_NAME")' "$workflow_file"
 grep -Fq 'missing_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_PATH")' "$workflow_file"
+grep -Fq 'missing_vars+=("LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH")' "$workflow_file"
+grep -Fq '[ "${STRATEGY_PROFILE:-}" = "mega_cap_leader_rotation_dynamic_top20" ]' "$workflow_file"
 grep -Fq 'secret_pairs+=("TELEGRAM_TOKEN=${TELEGRAM_TOKEN_SECRET_NAME}:latest")' "$workflow_file"
 grep -Fq 'secret_pairs+=("LONGPORT_APP_KEY=${LONGPORT_APP_KEY_SECRET_NAME}:latest")' "$workflow_file"
 grep -Fq 'secret_pairs+=("LONGPORT_APP_SECRET=${LONGPORT_APP_SECRET_SECRET_NAME}:latest")' "$workflow_file"

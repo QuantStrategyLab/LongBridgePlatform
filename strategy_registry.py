@@ -25,6 +25,7 @@ ROLLBACK_STRATEGY_PROFILE = DEFAULT_STRATEGY_PROFILE
 LONGBRIDGE_ROLLOUT_ALLOWLIST = frozenset(
     {
         "global_etf_rotation",
+        "mega_cap_leader_rotation_dynamic_top20",
         "russell_1000_multi_factor_defensive",
         "soxl_soxx_trend_income",
         "tqqq_growth_income",
