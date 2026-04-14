@@ -12,8 +12,8 @@ Quant system on LongPort OpenAPI and Google Cloud Run.
 This repository uses `QuantPlatformKit` for LongPort token handling, context bootstrap, account snapshot access, market data, and order submission. Cloud Run deploys this repository directly.
 The LongBridge runtime can execute all five live `us_equity` profiles from `UsEquityStrategies`; `LongBridgePlatform` keeps the LongPort runtime, token refresh, execution, and notification flow.
 
-Full strategy documentation now lives in [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies). The sections below focus on execution-side defaults and runtime behavior.
-This runtime matrix is the authoritative enablement source for LongBridge. `UsEquityStrategies` only carries strategy-layer compatibility and metadata.
+Full strategy documentation now lives in [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies). The sections below focus on LongBridge runtime behavior, profile enablement, deployment, and credentials.
+This runtime matrix is the authoritative enablement source for LongBridge. `UsEquityStrategies` carries strategy-layer logic, cadence, compatibility, and metadata.
 
 ### Execution boundary
 
@@ -43,84 +43,13 @@ Check the current matrix locally:
 python3 scripts/print_strategy_profile_status.py
 ```
 
-### Runtime cadence
+### Strategy documentation boundary
 
-Strategy cadence is owned by the strategy profile, but the actual broker run is
-triggered by Cloud Scheduler. Keep the Cloud Scheduler job aligned with the
-selected `STRATEGY_PROFILE` for each Cloud Run service:
-
-| Profile | Intended cadence | Recommended Cloud Scheduler | Notes |
-| --- | --- | --- | --- |
-| `global_etf_rotation` | quarterly rebalance + daily canary | weekdays near US close, e.g. `45 15 * * 1-5` in `America/New_York` | Non-rebalance days should only act on the canary emergency path. |
-| `soxl_soxx_trend_income` | daily | weekdays near US close, e.g. `45 15 * * 1-5` in `America/New_York` | Trend/income value-mode profile. |
-| `tqqq_growth_income` | daily | weekdays near US close, e.g. `45 15 * * 1-5` in `America/New_York` | Current SG line. |
-| `russell_1000_multi_factor_defensive` | monthly | first few calendar days after month end, e.g. `45 15 1-7 * *` in `America/New_York` | Consumes monthly feature snapshots from `UsEquitySnapshotPipelines`. |
-| `tech_communication_pullback_enhancement` | monthly | first few calendar days after month end, e.g. `45 15 1-7 * *` in `America/New_York` | Current HK line. LongBridge constrains this profile to the first trading day after the monthly snapshot to avoid month-internal rebalancing. |
-
-The upstream snapshot/data workflows live in `UsEquitySnapshotPipelines` and run
-monthly. Cloud Scheduler only invokes the broker runtime; it does not generate
-new feature snapshots.
-
-**Layers**
-
-- **Trading:** SOXL / SOXX / BOXX
-- **Income:** QQQI / SPYI
-
-### Strategy
-
-**Trading layer**
-
-- SOXL 150-day MA for trend.
-- SOXL > MA150 → hold SOXL; SOXL ≤ MA150 → hold SOXX.
-- Rest of trading capital in BOXX.
-
-**Income layer**
-
-- Starts when total equity ≥ 150,000 USD.
-- Target income allocation cap 15%.
-- New income allocation: QQQI 70% / SPYI 30%.
-- Income positions are buy-only (no automatic reduction).
-
-**Execution**
-
-- Only SOXL, SOXX, BOXX, QQQI, SPYI are used.
-- Cash from account USD `available_cash`; no margin.
-- `estimate_max_purchase_quantity` used before buys.
-- Telegram alerts for submit, fill, reject, and errors.
+Strategy logic, cadence, asset universes, parameters, and research/backtest notes live in `UsEquityStrategies`. This platform README keeps only LongBridge profile enablement, env vars, deployment wiring, broker execution behavior, and notification transport.
 
 ### Notifications
 
-Telegram notifications include structured execution and heartbeat messages, with English and Chinese variants.
-
-**Trade execution:**
-```
-🔔 【Trade Execution Report】
-📊 Market: 🚀 RISK-ON (SOXL)
-💼 Risk Position: 57.8%
-💰 Income Target: 0.0%
-🏦 Income Locked: 38.8%
-🎯 Signal: SOXL above 150d MA, hold SOXL, risk 57.8%
-━━━━━━━━━━━━━━━━━━
-  📈 [Market buy] BOXX: 190 shares @ $115.99 [order_id=xxx]
-```
-
-**Heartbeat (no trades):**
-```
-💓 【Heartbeat】
-📊 Market: 🚀 RISK-ON (SOXL)
-💰 Equity: $150,000.00
-━━━━━━━━━━━━━━━━━━
-SOXL: $85,000.00  SOXX: $0.00
-QQQI: $15,000.00  SPYI: $6,000.00
-BOXX: $34,000.00  Cash: $10,000.00
-━━━━━━━━━━━━━━━━━━
-💼 Risk Position: 57.0%
-💰 Income Target: 5.0%
-🏦 Income Locked: 14.0%
-🎯 Signal: SOXL above 150d MA, hold SOXL, risk 57.0%
-━━━━━━━━━━━━━━━━━━
-✅ No trades needed
-```
+Telegram notifications include structured execution and heartbeat messages, with English and Chinese variants. Strategy-specific signal/status fields come from the selected `UsEquityStrategies` profile; LongBridge-specific fields cover order submission, fill/reject/error reporting, account prefix, and region.
 
 ### Environment variables
 
@@ -211,17 +140,10 @@ Important:
 2. Create secret `longport_token_hk` for HK / `longport_token_sg` for SG (or your custom `LONGPORT_SECRET_NAME`) in Secret Manager and add your LongPort access token as the first version.
 3. Set the required env vars above on the Cloud Run service.
 4. Deploy the app to Cloud Run (e.g. `gcloud run deploy` from repo root with Dockerfile or buildpack).
-5. Create a Cloud Scheduler job that POSTs to the Cloud Run URL on a schedule. Use the [runtime cadence](#runtime-cadence) table: daily profiles usually use `45 15 * * 1-5`, while monthly snapshot profiles use a first-week monthly candidate window such as `45 15 1-7 * *`.
+5. Create a Cloud Scheduler job that POSTs to the Cloud Run URL. Choose the cron from the strategy-layer cadence in `UsEquityStrategies`; this platform repo only owns the runtime trigger wiring.
 
 IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Accessor for the configured `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, and `LONGPORT_APP_SECRET_SECRET_NAME`, such as `longport_token_hk`, `longport-app-key-hk`, `longport-app-secret-hk`) and **Logs Writer**. Build/deploy typically uses a separate account with Artifact Registry Writer, Cloud Run Admin, Service Account User.
 
-### Parameters (main.py)
-
-- `TREND_MA_WINDOW`
-- `SMALL_ACCOUNT_DEPLOY_RATIO` / `MID_ACCOUNT_DEPLOY_RATIO` / `LARGE_ACCOUNT_DEPLOY_RATIO`
-- `TRADE_LAYER_DECAY_COEFF`
-- `INCOME_LAYER_START_USD` / `INCOME_LAYER_MAX_RATIO`
-- `INCOME_LAYER_QQQI_WEIGHT` / `INCOME_LAYER_SPYI_WEIGHT`
 
 ---
 
@@ -233,7 +155,7 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 这个仓库通过 `QuantPlatformKit` 复用 LongPort token 处理、上下文初始化、账户快照、行情读取和下单逻辑。Cloud Run 直接部署这个仓库。
 `LongBridgePlatform` 现在可直接执行 `UsEquityStrategies` 里的全部 5 条 live `us_equity` 策略：`global_etf_rotation`、`russell_1000_multi_factor_defensive`、`soxl_soxx_trend_income`、`tqqq_growth_income` 和 `tech_communication_pullback_enhancement`；仓库本身继续保留 LongPort 运行时、token 刷新、执行和通知流程。
 
-完整策略说明现在放在 [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies)。下面这些章节主要保留执行侧默认值和运行时行为。
+完整策略说明现在放在 [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies)。下面这些章节只保留 LongBridge 运行时、profile 启用状态、部署和凭据说明。
 
 ### 执行边界
 
@@ -262,82 +184,13 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 python3 scripts/print_strategy_profile_status.py
 ```
 
-### 策略执行频率
+### 策略文档边界
 
-策略频率由策略档位决定，但实际券商执行是 Cloud Scheduler 触发的。
-每个 Cloud Run 服务的 Cloud Scheduler 需要和当前 `STRATEGY_PROFILE` 对齐：
-
-| Profile | 目标频率 | 建议 Cloud Scheduler | 说明 |
-| --- | --- | --- | --- |
-| `global_etf_rotation` | 季度调仓 + 每日 canary 防守检查 | 美股临近收盘的工作日，例如 `45 15 * * 1-5`，时区 `America/New_York` | 非调仓日原则上只在 canary 紧急防守路径动作。 |
-| `soxl_soxx_trend_income` | 日频 | 美股临近收盘的工作日，例如 `45 15 * * 1-5`，时区 `America/New_York` | 趋势/收益 value-mode 策略。 |
-| `tqqq_growth_income` | 日频 | 美股临近收盘的工作日，例如 `45 15 * * 1-5`，时区 `America/New_York` | 当前 SG 线路。 |
-| `russell_1000_multi_factor_defensive` | 月频 | 月末之后前几个自然日，例如 `45 15 1-7 * *`，时区 `America/New_York` | 消费 `UsEquitySnapshotPipelines` 生成的月度 feature snapshot。 |
-| `tech_communication_pullback_enhancement` | 月频 | 月末之后前几个自然日，例如 `45 15 1-7 * *`，时区 `America/New_York` | 当前 HK 线路。LongBridge 会把该策略限制在月度 snapshot 之后第一个交易日执行，避免月内重复调仓。 |
-
-上游数据刷新和 feature snapshot 发布在 `UsEquitySnapshotPipelines` 里，按月运行。
-Cloud Scheduler 只负责触发券商运行时，不负责生成新的 feature snapshot。
-
-**层级**
-
-- **交易层:** SOXL / SOXX / BOXX
-- **收入层:** QQQI / SPYI
-
-### 策略
-
-**交易层**
-
-- 使用 SOXL 150 日均线判断趋势。
-- SOXL > MA150 → 持有 SOXL；SOXL ≤ MA150 → 切换至 SOXX。
-- 交易层剩余资金放入 BOXX。
-
-**收入层**
-
-- 当总资产 ≥ 150,000 USD 时启动。
-- 收入层目标配比上限 15%。
-- 新增收入配置：QQQI 70% / SPYI 30%。
-- 收入层仅买入，不自动减仓。
-
-**执行**
-
-- 仅使用 SOXL、SOXX、BOXX、QQQI、SPYI。
-- 使用账户 USD 可用现金，不使用保证金。
-- 买入前调用 `estimate_max_purchase_quantity` 校验。
-- 通过 Telegram 推送下单、成交、拒绝及异常通知。
+策略逻辑、策略频率、标的池、参数和研究/回测说明都放在 `UsEquityStrategies`。这个平台 README 只保留 LongBridge profile 启用状态、环境变量、部署 wiring、券商执行行为和通知通道说明。
 
 ### 通知格式
 
-Telegram 通知包含结构化的调仓和心跳消息，支持中英文切换。
-
-**调仓通知:**
-```
-🔔 【调仓指令】
-📊 市场状态: 🚀 RISK-ON (SOXL)
-💼 交易层风险仓位: 57.8%
-💰 收入层目标: 0.0%
-🏦 收入层锁定占比: 38.8%
-🎯 触发信号: SOXL 站上 150 日均线，持有 SOXL，交易层风险仓位 57.8%
-━━━━━━━━━━━━━━━━━━
-  📈 [市价买入] BOXX: 190股 @ $115.99 [order_id=xxx]
-```
-
-**心跳通知 (无需调仓):**
-```
-💓 【心跳检测】
-📊 市场状态: 🚀 RISK-ON (SOXL)
-💰 净值: $150,000.00
-━━━━━━━━━━━━━━━━━━
-SOXL: $85,000.00  SOXX: $0.00
-QQQI: $15,000.00  SPYI: $6,000.00
-BOXX: $34,000.00  现金: $10,000.00
-━━━━━━━━━━━━━━━━━━
-💼 交易层风险仓位: 57.0%
-💰 收入层目标: 5.0%
-🏦 收入层锁定占比: 14.0%
-🎯 信号: SOXL 站上 150 日均线，持有 SOXL，交易层风险仓位 57.0%
-━━━━━━━━━━━━━━━━━━
-✅ 无需调仓
-```
+Telegram 通知包含结构化的调仓和心跳消息，支持中英文切换。策略相关的信号/状态字段来自当前选择的 `UsEquityStrategies` profile；LongBridge 侧只负责下单、成交/拒单/异常、账户前缀和区域字段。
 
 ### 环境变量
 
@@ -428,14 +281,6 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 2. 在 Secret Manager 中为 HK 创建 `longport_token_hk`、为 SG 创建 `longport_token_sg`（或使用你自定义的 `LONGPORT_SECRET_NAME`），并将 LongPort access token 作为第一个版本写入。
 3. 在 Cloud Run 服务上配置上述环境变量。
 4. 部署至 Cloud Run（如从仓库根目录执行 `gcloud run deploy`）。
-5. 创建 Cloud Scheduler 定时任务，POST 到 Cloud Run URL。按上面的[策略执行频率](#策略执行频率)配置：日频策略通常用 `45 15 * * 1-5`，月频 snapshot 策略用类似 `45 15 1-7 * *` 的月初候选窗口。
+5. 创建 Cloud Scheduler 定时任务，POST 到 Cloud Run URL。cron 频率以 `UsEquityStrategies` 里的策略层 cadence 为准；这个平台仓只维护运行时触发 wiring。
 
 IAM: Cloud Run 服务账号需要 **Secret Manager Admin**（或当前 `LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME` 对应 secret 的 Secret Accessor，例如 `longport_token_hk`、`longport-app-key-hk`、`longport-app-secret-hk`）和 **Logs Writer** 权限。
-
-### 策略参数 (main.py)
-
-- `TREND_MA_WINDOW`
-- `SMALL_ACCOUNT_DEPLOY_RATIO` / `MID_ACCOUNT_DEPLOY_RATIO` / `LARGE_ACCOUNT_DEPLOY_RATIO`
-- `TRADE_LAYER_DECAY_COEFF`
-- `INCOME_LAYER_START_USD` / `INCOME_LAYER_MAX_RATIO`
-- `INCOME_LAYER_QQQI_WEIGHT` / `INCOME_LAYER_SPYI_WEIGHT`
