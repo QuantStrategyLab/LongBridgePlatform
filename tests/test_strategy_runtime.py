@@ -12,6 +12,26 @@ from quant_platform_kit.strategy_contracts import (
 from runtime_config_support import PlatformRuntimeSettings
 
 
+class _TqqqEntrypoint:
+    manifest = StrategyManifest(
+        profile="tqqq_growth_income",
+        domain="us_equity",
+        display_name="TQQQ Growth Income",
+        description="test entrypoint",
+        required_inputs=frozenset({"benchmark_history", "portfolio_snapshot"}),
+        default_config={
+            "benchmark_symbol": "QQQ",
+            "managed_symbols": ("TQQQ", "QQQ", "BOXX", "SPYI", "QQQI"),
+            "income_threshold_usd": 1_000_000_000.0,
+            "qqqi_income_ratio": 0.5,
+        },
+    )
+
+    def evaluate(self, ctx):
+        self.ctx = ctx
+        return StrategyDecision(diagnostics={"signal_description": "tqqq"})
+
+
 class _SemiconductorEntrypoint:
     def __init__(self):
         self.manifest = StrategyManifest(
@@ -73,7 +93,13 @@ class _DynamicMegaLeveragedEntrypoint:
         return StrategyDecision(diagnostics={"signal_description": "leveraged pullback"})
 
 
-def _build_runtime_settings(profile: str, *, feature_snapshot_path: str | None = None) -> PlatformRuntimeSettings:
+def _build_runtime_settings(
+    profile: str,
+    *,
+    feature_snapshot_path: str | None = None,
+    income_threshold_usd: float | None = None,
+    qqqi_income_ratio: float | None = None,
+) -> PlatformRuntimeSettings:
     return PlatformRuntimeSettings(
         project_id=None,
         secret_name="longport_token_hk",
@@ -88,6 +114,8 @@ def _build_runtime_settings(profile: str, *, feature_snapshot_path: str | None =
         tg_token=None,
         tg_chat_id=None,
         dry_run_only=False,
+        income_threshold_usd=income_threshold_usd,
+        qqqi_income_ratio=qqqi_income_ratio,
         feature_snapshot_path=feature_snapshot_path,
         feature_snapshot_manifest_path=None,
         strategy_config_path=None,
@@ -184,6 +212,29 @@ class StrategyRuntimeTests(unittest.TestCase):
         mock_loader.assert_called_once_with("soxl_soxx_trend_income")
         self.assertIs(runtime.entrypoint, entrypoint)
         self.assertEqual(runtime.managed_symbols, ("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"))
+
+    def test_load_strategy_runtime_applies_tqqq_income_overrides_from_settings(self):
+        entrypoint = _TqqqEntrypoint()
+
+        with patch.object(strategy_runtime_module, "load_strategy_entrypoint_for_profile", return_value=entrypoint):
+            with patch.object(
+                strategy_runtime_module,
+                "load_strategy_runtime_adapter_for_profile",
+                return_value=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            ):
+                runtime = strategy_runtime_module.load_strategy_runtime(
+                    "tqqq_growth_income",
+                    runtime_settings=_build_runtime_settings(
+                        "tqqq_growth_income",
+                        income_threshold_usd=100000.0,
+                        qqqi_income_ratio=0.5,
+                    ),
+                )
+
+        self.assertEqual(runtime.runtime_overrides["income_threshold_usd"], 100000.0)
+        self.assertEqual(runtime.runtime_overrides["qqqi_income_ratio"], 0.5)
+        self.assertEqual(runtime.merged_runtime_config["income_threshold_usd"], 100000.0)
+        self.assertEqual(runtime.merged_runtime_config["qqqi_income_ratio"], 0.5)
 
     def test_feature_snapshot_runtime_loads_snapshot_into_context(self):
         entrypoint = _TechEntrypoint()
