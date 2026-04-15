@@ -141,9 +141,11 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         estimate_max_purchase_quantity_value=0,
         dry_run_only=False,
         strategy_display_name="SOXL/SOXX 半导体趋势收益",
+        post_sell_refresh_attempts=1,
     ):
         sent_messages = []
         observed_account_states = []
+        observed_sleeps = []
 
         def fake_send_tg_message(message):
             sent_messages.append(message)
@@ -166,7 +168,10 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             logs.append(f"{log_message} （订单号: test-order）")
             return True
 
-        plan_side_effect = [plan, refreshed_plan or plan]
+        if isinstance(refreshed_plan, (list, tuple)):
+            plan_side_effect = [plan, *refreshed_plan]
+        else:
+            plan_side_effect = [plan, refreshed_plan or plan]
         observed_plan_inputs = []
 
         account_state_values = list(account_states or [{}, {}])
@@ -207,6 +212,9 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             submit_order_with_alert=fake_submit_order_with_alert,
             dry_run_only=dry_run_only,
             strategy_display_name=strategy_display_name,
+            post_sell_refresh_attempts=post_sell_refresh_attempts,
+            post_sell_refresh_interval_sec=0.0,
+            sleeper=observed_sleeps.append,
         )
 
         return sent_messages, observed_account_states, observed_plan_inputs
@@ -394,6 +402,100 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("限价买入", sent_messages[0])
         self.assertNotIn("买入跳过", sent_messages[0])
         self.assertEqual(len(observed_plan_inputs), 2)
+
+    def test_retries_account_refresh_after_sell_until_buying_power_updates(self):
+        initial_plan = _build_plan(
+            strategy_profile="tqqq_growth_income",
+            strategy_symbols=("TQQQ", "BOXX"),
+            risk_symbols=("TQQQ",),
+            safe_haven_symbols=("BOXX",),
+            targets={"TQQQ": 900.0, "BOXX": 100.0},
+            market_values={"TQQQ": 0.0, "BOXX": 1000.0},
+            sellable_quantities={"TQQQ": 0, "BOXX": 10},
+            quantities={"TQQQ": 0, "BOXX": 10},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=101.95,
+            market_status="",
+            deploy_ratio_text="",
+            income_ratio_text="",
+            income_locked_ratio_text="",
+            signal_message="🚀 入场信号",
+            available_cash=101.95,
+            total_strategy_equity=1200.0,
+            portfolio_rows=(("TQQQ", "BOXX"),),
+        )
+        stale_refreshed_plan = _build_plan(
+            strategy_profile="tqqq_growth_income",
+            strategy_symbols=("TQQQ", "BOXX"),
+            risk_symbols=("TQQQ",),
+            safe_haven_symbols=("BOXX",),
+            targets={"TQQQ": 900.0, "BOXX": 100.0},
+            market_values={"TQQQ": 0.0, "BOXX": 1000.0},
+            sellable_quantities={"TQQQ": 0, "BOXX": 10},
+            quantities={"TQQQ": 0, "BOXX": 10},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=101.95,
+            market_status="",
+            deploy_ratio_text="",
+            income_ratio_text="",
+            income_locked_ratio_text="",
+            signal_message="🚀 入场信号",
+            available_cash=101.95,
+            total_strategy_equity=1200.0,
+            portfolio_rows=(("TQQQ", "BOXX"),),
+        )
+        settled_refreshed_plan = _build_plan(
+            strategy_profile="tqqq_growth_income",
+            strategy_symbols=("TQQQ", "BOXX"),
+            risk_symbols=("TQQQ",),
+            safe_haven_symbols=("BOXX",),
+            targets={"TQQQ": 900.0, "BOXX": 100.0},
+            market_values={"TQQQ": 0.0, "BOXX": 100.0},
+            sellable_quantities={"TQQQ": 0, "BOXX": 1},
+            quantities={"TQQQ": 0, "BOXX": 1},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=1001.95,
+            market_status="",
+            deploy_ratio_text="",
+            income_ratio_text="",
+            income_locked_ratio_text="",
+            signal_message="🚀 入场信号",
+            available_cash=1001.95,
+            total_strategy_equity=1200.0,
+            portfolio_rows=(("TQQQ", "BOXX"),),
+        )
+
+        sent_messages, observed_account_states, observed_plan_inputs = self._run_strategy(
+            initial_plan,
+            refreshed_plan=[stale_refreshed_plan, settled_refreshed_plan],
+            account_states=[
+                {"phase": "before_sell"},
+                {"phase": "stale_after_sell"},
+                {"phase": "settled_after_sell"},
+            ],
+            prices={"TQQQ.US": 50.0, "BOXX.US": 100.0},
+            estimate_max_purchase_quantity_value=200,
+            strategy_display_name="TQQQ 增长收益",
+            post_sell_refresh_attempts=2,
+        )
+
+        self.assertEqual(
+            observed_account_states,
+            [
+                {"phase": "before_sell"},
+                {"phase": "stale_after_sell"},
+                {"phase": "settled_after_sell"},
+            ],
+        )
+        self.assertEqual(len(observed_plan_inputs), 3)
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("市价卖出", sent_messages[0])
+        self.assertIn("限价买入", sent_messages[0])
+        self.assertIn("TQQQ", sent_messages[0])
+        self.assertNotIn("买入说明", sent_messages[0])
 
     def test_dry_run_replaces_real_order_submission_with_summary_lines(self):
         initial_plan = _build_plan(

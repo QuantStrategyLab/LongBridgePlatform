@@ -419,6 +419,9 @@ def run_strategy():
             submit_order_with_alert=submit_order_with_alert,
             dry_run_only=RUNTIME_SETTINGS.dry_run_only,
             strategy_display_name=strategy_display_name,
+            post_sell_refresh_attempts=ORDER_POLL_MAX_ATTEMPTS,
+            post_sell_refresh_interval_sec=ORDER_POLL_INTERVAL_SEC,
+            sleeper=time.sleep,
         )
         finalize_runtime_report(report, status="ok")
         log_runtime_event(
