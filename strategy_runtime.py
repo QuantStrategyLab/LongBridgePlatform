@@ -278,10 +278,21 @@ def _default_runtime_settings(profile: str, display_name: str) -> PlatformRuntim
     )
 
 
+def _build_runtime_overrides(profile: str, runtime_settings: PlatformRuntimeSettings) -> dict[str, Any]:
+    overrides: dict[str, Any] = {}
+    if profile == "tqqq_growth_income":
+        if runtime_settings.income_threshold_usd is not None:
+            overrides["income_threshold_usd"] = runtime_settings.income_threshold_usd
+        if runtime_settings.qqqi_income_ratio is not None:
+            overrides["qqqi_income_ratio"] = runtime_settings.qqqi_income_ratio
+    return overrides
+
+
 def load_strategy_runtime(
     raw_profile: str | None,
     *,
     runtime_settings: PlatformRuntimeSettings | None = None,
+    runtime_overrides: Mapping[str, Any] | None = None,
     logger: Callable[[str], None] = print,
 ) -> LoadedStrategyRuntime:
     entrypoint = load_strategy_entrypoint_for_profile(raw_profile)
@@ -290,19 +301,24 @@ def load_strategy_runtime(
         entrypoint.manifest.profile,
         entrypoint.manifest.display_name,
     )
+    overrides = _build_runtime_overrides(entrypoint.manifest.profile, resolved_runtime_settings)
+    overrides.update(runtime_overrides or {})
     runtime = LoadedStrategyRuntime(
         entrypoint=entrypoint,
         runtime_adapter=runtime_adapter,
         runtime_settings=resolved_runtime_settings,
+        runtime_overrides=overrides,
         logger=logger,
     )
     runtime_config = runtime.load_runtime_parameters()
     merged_runtime_config = dict(entrypoint.manifest.default_config)
     merged_runtime_config.update(runtime_config)
+    merged_runtime_config.update(overrides)
     return LoadedStrategyRuntime(
         entrypoint=entrypoint,
         runtime_adapter=runtime_adapter,
         runtime_settings=resolved_runtime_settings,
+        runtime_overrides=overrides,
         runtime_config=runtime_config,
         merged_runtime_config=merged_runtime_config,
         logger=logger,

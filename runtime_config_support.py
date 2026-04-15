@@ -32,6 +32,8 @@ class PlatformRuntimeSettings:
     tg_token: str | None
     tg_chat_id: str | None
     dry_run_only: bool
+    income_threshold_usd: float | None = None
+    qqqi_income_ratio: float | None = None
     feature_snapshot_path: str | None = None
     feature_snapshot_manifest_path: str | None = None
     strategy_config_path: str | None = None
@@ -109,6 +111,8 @@ def load_platform_runtime_settings(
         tg_token=os.getenv("TELEGRAM_TOKEN"),
         tg_chat_id=os.getenv("GLOBAL_TELEGRAM_CHAT_ID"),
         dry_run_only=_resolve_bool_env("LONGBRIDGE_DRY_RUN_ONLY"),
+        income_threshold_usd=_optional_float_env("INCOME_THRESHOLD_USD"),
+        qqqi_income_ratio=_qqqi_income_ratio_env(),
         feature_snapshot_path=_first_non_empty(
             os.getenv("LONGBRIDGE_FEATURE_SNAPSHOT_PATH"),
             os.getenv("FEATURE_SNAPSHOT_PATH"),
@@ -157,6 +161,20 @@ def _resolve_bool_env(name: str) -> bool:
     if raw_value is None:
         return False
     return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _optional_float_env(name: str) -> float | None:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return None
+    return float(raw_value)
+
+
+def _qqqi_income_ratio_env() -> float | None:
+    value = _optional_float_env("QQQI_INCOME_RATIO")
+    if value is not None and not (0.0 <= value <= 1.0):
+        raise ValueError(f"QQQI_INCOME_RATIO must be in [0,1], got {value}")
+    return value
 
 
 def _first_non_empty(*values: str | None) -> str | None:
