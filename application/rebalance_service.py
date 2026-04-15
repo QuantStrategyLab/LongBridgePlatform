@@ -58,6 +58,10 @@ def _plan_allocation(plan):
     return dict(plan.get("allocation") or {})
 
 
+def _noop_sleep(_seconds):
+    return None
+
+
 def _has_text(value):
     return bool(str(value or "").strip())
 
@@ -167,6 +171,9 @@ def run_strategy(
     submit_order_with_alert,
     dry_run_only=False,
     strategy_display_name="",
+    post_sell_refresh_attempts=1,
+    post_sell_refresh_interval_sec=0.0,
+    sleeper=_noop_sleep,
 ):
     print(with_prefix(f"[{datetime.now()}] Starting strategy..."), flush=True)
 
@@ -186,16 +193,23 @@ def run_strategy(
     if indicators is None:
         raise Exception("Quote data missing or API limited; cannot compute indicators")
 
-    account_state = fetch_strategy_account_state(quote_context, trade_context)
-    plan = resolve_rebalance_plan(
-        indicators=indicators,
-        account_state=account_state,
-    )
-    portfolio = _plan_portfolio(plan)
-    execution = _plan_execution(plan)
-    allocation = _plan_allocation(plan)
-    if allocation.get("target_mode") != "value":
-        raise ValueError("LongBridgePlatform requires allocation.target_mode=value")
+    def load_plan(current_account_state):
+        current_plan = resolve_rebalance_plan(
+            indicators=indicators,
+            account_state=current_account_state,
+        )
+        current_portfolio = _plan_portfolio(current_plan)
+        current_execution = _plan_execution(current_plan)
+        current_allocation = _plan_allocation(current_plan)
+        if current_allocation.get("target_mode") != "value":
+            raise ValueError("LongBridgePlatform requires allocation.target_mode=value")
+        return current_plan, current_portfolio, current_execution, current_allocation
+
+    def fetch_replanned_state():
+        current_account_state = fetch_strategy_account_state(quote_context, trade_context)
+        return load_plan(current_account_state)
+
+    plan, portfolio, execution, allocation = fetch_replanned_state()
 
     logs = []
     skip_logs = []
@@ -307,16 +321,24 @@ def run_strategy(
                 )
 
     if sell_submitted:
-        account_state = fetch_strategy_account_state(quote_context, trade_context)
-        plan = resolve_rebalance_plan(
-            indicators=indicators,
-            account_state=account_state,
-        )
-        portfolio = _plan_portfolio(plan)
-        execution = _plan_execution(plan)
-        allocation = _plan_allocation(plan)
-        if allocation.get("target_mode") != "value":
-            raise ValueError("LongBridgePlatform requires allocation.target_mode=value")
+        previous_investable_cash = investable_cash
+        refresh_attempts = max(1, int(post_sell_refresh_attempts or 1))
+        refresh_interval = max(0.0, float(post_sell_refresh_interval_sec or 0.0))
+        best_refreshed_state = None
+        best_investable_cash = previous_investable_cash
+        for attempt in range(refresh_attempts):
+            if attempt > 0:
+                sleeper(refresh_interval)
+            refreshed_state = fetch_replanned_state()
+            refreshed_execution = refreshed_state[2]
+            refreshed_investable_cash = float(refreshed_execution["investable_cash"])
+            if best_refreshed_state is None or refreshed_investable_cash > best_investable_cash:
+                best_refreshed_state = refreshed_state
+                best_investable_cash = refreshed_investable_cash
+            if refreshed_investable_cash > previous_investable_cash:
+                best_refreshed_state = refreshed_state
+                break
+        plan, portfolio, execution, allocation = best_refreshed_state
         threshold_value = float(execution["trade_threshold_value"])
         limit_order_symbols = set(
             allocation.get("risk_symbols", ()) + allocation.get("income_symbols", ())
