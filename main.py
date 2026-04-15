@@ -271,7 +271,12 @@ def calculate_strategy_indicators(quote_context):
     if "feature_snapshot" in AVAILABLE_INPUTS and not ({"benchmark_history", "qqq_history", "derived_indicators", "indicators"} & AVAILABLE_INPUTS):
         return {}
     if "market_history" in AVAILABLE_INPUTS:
-        return build_market_history_loader(quote_context)
+        market_inputs = {"market_history": build_market_history_loader(quote_context)}
+        if "benchmark_history" in AVAILABLE_INPUTS:
+            market_inputs["benchmark_history"] = fetch_daily_price_history(quote_context, f"{BENCHMARK_SYMBOL}.US")
+        if "qqq_history" in AVAILABLE_INPUTS:
+            market_inputs["qqq_history"] = fetch_daily_price_history(quote_context, f"{BENCHMARK_SYMBOL}.US")
+        return market_inputs
     if "benchmark_history" in AVAILABLE_INPUTS or "qqq_history" in AVAILABLE_INPUTS:
         return fetch_daily_price_history(quote_context, f"{BENCHMARK_SYMBOL}.US")
     trend_ma_window = int(STRATEGY_RUNTIME_CONFIG.get("trend_ma_window", 150))
@@ -325,15 +330,20 @@ def resolve_rebalance_plan(*, indicators, account_state):
     snapshot = None
     if "portfolio_snapshot" in AVAILABLE_INPUTS or "snapshot" in AVAILABLE_INPUTS:
         snapshot = build_portfolio_snapshot_from_account_state(account_state)
+    market_inputs = {
+        "market_history": indicators,
+        "derived_indicators": indicators,
+        "indicators": indicators,
+        "benchmark_history": indicators,
+        "qqq_history": indicators,
+    }
+    if isinstance(indicators, dict) and any(
+        key in indicators for key in ("market_history", "benchmark_history", "qqq_history")
+    ):
+        market_inputs.update(indicators)
     evaluation_inputs = build_strategy_evaluation_inputs(
         available_inputs=AVAILABLE_INPUTS,
-        market_inputs={
-            "market_history": indicators,
-            "derived_indicators": indicators,
-            "indicators": indicators,
-            "benchmark_history": indicators,
-            "qqq_history": indicators,
-        },
+        market_inputs=market_inputs,
         portfolio_snapshot=snapshot,
         account_state=account_state,
         translator=t,
