@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
+from quant_platform_kit.common.strategies import derive_strategy_artifact_paths
 from strategy_registry import (
     DEFAULT_STRATEGY_PROFILE as PLATFORM_DEFAULT_STRATEGY_PROFILE,
     LONGBRIDGE_PLATFORM,
     resolve_strategy_definition,
     resolve_strategy_metadata,
 )
+from us_equity_strategies import get_strategy_catalog
 
 DEFAULT_ACCOUNT_REGION = "DEFAULT"
 DEFAULT_STRATEGY_PROFILE = PLATFORM_DEFAULT_STRATEGY_PROFILE
@@ -70,9 +73,26 @@ def load_platform_runtime_settings(
         strategy_definition.profile,
         platform_id=LONGBRIDGE_PLATFORM,
     )
-    strategy_config_path = _first_non_empty(
-        os.getenv("LONGBRIDGE_STRATEGY_CONFIG_PATH"),
-        os.getenv("STRATEGY_CONFIG_PATH"),
+    artifact_root = _first_non_empty(
+        os.getenv("LONGBRIDGE_STRATEGY_ARTIFACT_ROOT"),
+        os.getenv("STRATEGY_ARTIFACT_ROOT"),
+    )
+    derived_artifact_paths = derive_strategy_artifact_paths(
+        get_strategy_catalog(),
+        strategy_definition.profile,
+        artifact_root=artifact_root,
+        repo_root=Path(__file__).resolve().parent,
+    )
+    strategy_config_path, strategy_config_source = resolve_strategy_config_path(
+        explicit_path=_first_non_empty(
+            os.getenv("LONGBRIDGE_STRATEGY_CONFIG_PATH"),
+            os.getenv("STRATEGY_CONFIG_PATH"),
+        ),
+        bundled_path=(
+            str(derived_artifact_paths.bundled_config_path)
+            if derived_artifact_paths.bundled_config_path is not None
+            else None
+        ),
     )
     return PlatformRuntimeSettings(
         project_id=project_id_resolver(),
@@ -92,14 +112,35 @@ def load_platform_runtime_settings(
         feature_snapshot_path=_first_non_empty(
             os.getenv("LONGBRIDGE_FEATURE_SNAPSHOT_PATH"),
             os.getenv("FEATURE_SNAPSHOT_PATH"),
+            str(derived_artifact_paths.feature_snapshot_path)
+            if derived_artifact_paths.feature_snapshot_path is not None
+            else None,
         ),
         feature_snapshot_manifest_path=_first_non_empty(
             os.getenv("LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"),
             os.getenv("FEATURE_SNAPSHOT_MANIFEST_PATH"),
+            str(derived_artifact_paths.feature_snapshot_manifest_path)
+            if derived_artifact_paths.feature_snapshot_manifest_path is not None
+            else None,
         ),
         strategy_config_path=strategy_config_path,
-        strategy_config_source="env" if strategy_config_path else None,
+        strategy_config_source=strategy_config_source,
     )
+
+
+def resolve_strategy_config_path(
+    *,
+    explicit_path: str | None,
+    bundled_path: str | None,
+) -> tuple[str | None, str | None]:
+    path = _first_non_empty(explicit_path)
+    if path is not None:
+        return path, "env"
+
+    bundled = _first_non_empty(bundled_path)
+    if bundled is not None and Path(bundled).exists():
+        return bundled, "bundled_canonical_default"
+    return None, None
 
 
 def _normalize_region(raw_value: str | None) -> str | None:
