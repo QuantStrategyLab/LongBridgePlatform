@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from quant_platform_kit.common.strategies import derive_strategy_artifact_paths
+from quant_platform_kit.common.runtime_config import (
+    resolve_bool_value,
+    resolve_strategy_runtime_path_settings,
+)
 from strategy_registry import (
     LONGBRIDGE_PLATFORM,
     resolve_strategy_definition,
@@ -73,34 +76,21 @@ def load_platform_runtime_settings(
         strategy_definition.profile,
         platform_id=LONGBRIDGE_PLATFORM,
     )
-    artifact_root = _first_non_empty(
-        os.getenv("LONGBRIDGE_STRATEGY_ARTIFACT_ROOT"),
-        os.getenv("STRATEGY_ARTIFACT_ROOT"),
-    )
-    derived_artifact_paths = derive_strategy_artifact_paths(
-        get_strategy_catalog(),
-        strategy_definition.profile,
-        artifact_root=artifact_root,
+    runtime_paths = resolve_strategy_runtime_path_settings(
+        strategy_catalog=get_strategy_catalog(),
+        strategy_definition=strategy_definition,
+        strategy_metadata=strategy_metadata,
+        platform_env_prefix="LONGBRIDGE",
+        env=os.environ,
         repo_root=Path(__file__).resolve().parent,
-    )
-    strategy_config_path, strategy_config_source = resolve_strategy_config_path(
-        explicit_path=_first_non_empty(
-            os.getenv("LONGBRIDGE_STRATEGY_CONFIG_PATH"),
-            os.getenv("STRATEGY_CONFIG_PATH"),
-        ),
-        bundled_path=(
-            str(derived_artifact_paths.bundled_config_path)
-            if derived_artifact_paths.bundled_config_path is not None
-            else None
-        ),
     )
     return PlatformRuntimeSettings(
         project_id=project_id_resolver(),
         secret_name=os.getenv("LONGPORT_SECRET_NAME", DEFAULT_LONGPORT_SECRET_NAME),
         account_prefix=account_prefix,
-        strategy_profile=strategy_definition.profile,
-        strategy_display_name=strategy_metadata.display_name,
-        strategy_domain=strategy_definition.domain,
+        strategy_profile=runtime_paths.strategy_profile,
+        strategy_display_name=runtime_paths.strategy_display_name,
+        strategy_domain=runtime_paths.strategy_domain,
         account_region=infer_account_region(
             os.getenv("ACCOUNT_REGION"),
             account_prefix=account_prefix,
@@ -108,41 +98,14 @@ def load_platform_runtime_settings(
         notify_lang=os.getenv("NOTIFY_LANG", "en"),
         tg_token=os.getenv("TELEGRAM_TOKEN"),
         tg_chat_id=os.getenv("GLOBAL_TELEGRAM_CHAT_ID"),
-        dry_run_only=_resolve_bool_env("LONGBRIDGE_DRY_RUN_ONLY"),
+        dry_run_only=resolve_bool_value(os.getenv("LONGBRIDGE_DRY_RUN_ONLY")),
         income_threshold_usd=_optional_float_env("INCOME_THRESHOLD_USD"),
         qqqi_income_ratio=_qqqi_income_ratio_env(),
-        feature_snapshot_path=_first_non_empty(
-            os.getenv("LONGBRIDGE_FEATURE_SNAPSHOT_PATH"),
-            os.getenv("FEATURE_SNAPSHOT_PATH"),
-            str(derived_artifact_paths.feature_snapshot_path)
-            if derived_artifact_paths.feature_snapshot_path is not None
-            else None,
-        ),
-        feature_snapshot_manifest_path=_first_non_empty(
-            os.getenv("LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"),
-            os.getenv("FEATURE_SNAPSHOT_MANIFEST_PATH"),
-            str(derived_artifact_paths.feature_snapshot_manifest_path)
-            if derived_artifact_paths.feature_snapshot_manifest_path is not None
-            else None,
-        ),
-        strategy_config_path=strategy_config_path,
-        strategy_config_source=strategy_config_source,
+        feature_snapshot_path=runtime_paths.feature_snapshot_path,
+        feature_snapshot_manifest_path=runtime_paths.feature_snapshot_manifest_path,
+        strategy_config_path=runtime_paths.strategy_config_path,
+        strategy_config_source=runtime_paths.strategy_config_source,
     )
-
-
-def resolve_strategy_config_path(
-    *,
-    explicit_path: str | None,
-    bundled_path: str | None,
-) -> tuple[str | None, str | None]:
-    path = _first_non_empty(explicit_path)
-    if path is not None:
-        return path, "env"
-
-    bundled = _first_non_empty(bundled_path)
-    if bundled is not None and Path(bundled).exists():
-        return bundled, "bundled_canonical_default"
-    return None, None
 
 
 def _normalize_region(raw_value: str | None) -> str | None:
@@ -152,13 +115,6 @@ def _normalize_region(raw_value: str | None) -> str | None:
     if not value:
         return None
     return value.upper()
-
-
-def _resolve_bool_env(name: str) -> bool:
-    raw_value = os.getenv(name)
-    if raw_value is None:
-        return False
-    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _optional_float_env(name: str) -> float | None:
@@ -174,10 +130,3 @@ def _qqqi_income_ratio_env() -> float | None:
         raise ValueError(f"QQQI_INCOME_RATIO must be in [0,1], got {value}")
     return value
 
-
-def _first_non_empty(*values: str | None) -> str | None:
-    for value in values:
-        text = str(value or "").strip()
-        if text:
-            return text
-    return None

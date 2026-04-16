@@ -8,6 +8,7 @@ from quant_platform_kit.strategy_contracts import (
     StrategyDecision,
     StrategyManifest,
     StrategyRuntimeAdapter,
+    StrategyRuntimePolicy,
 )
 from runtime_config_support import PlatformRuntimeSettings
 
@@ -247,6 +248,7 @@ class StrategyRuntimeTests(unittest.TestCase):
                 require_snapshot_manifest=False,
                 managed_symbols_extractor=lambda *_args, **_kwargs: ("AAPL", "MSFT", "BOXX"),
                 portfolio_input_name="portfolio_snapshot",
+                runtime_policy=StrategyRuntimePolicy(runtime_execution_window_trading_days=1),
             ),
             runtime_settings=_build_runtime_settings(
                 "tech_communication_pullback_enhancement",

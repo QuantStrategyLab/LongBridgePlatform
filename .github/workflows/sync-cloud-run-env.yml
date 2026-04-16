@@ -80,10 +80,7 @@ jobs:
           import os
           import subprocess
           import sys
-          from pathlib import Path
-
-          from quant_platform_kit.common.strategies import derive_strategy_artifact_paths
-          from us_equity_strategies import get_strategy_catalog, resolve_canonical_profile
+          from us_equity_strategies import resolve_canonical_profile
 
           profile = os.environ.get("STRATEGY_PROFILE", "").strip().lower()
           if not profile:
@@ -102,16 +99,6 @@ jobs:
           if not selected.get("eligible") or not selected.get("enabled"):
               raise SystemExit(f"STRATEGY_PROFILE={profile!r} is not eligible/enabled: {selected}")
 
-          artifact_paths = derive_strategy_artifact_paths(
-              get_strategy_catalog(),
-              canonical_profile,
-              repo_root=Path.cwd(),
-          )
-          has_bundled_strategy_config = bool(
-              artifact_paths.bundled_config_path is not None
-              and Path(artifact_paths.bundled_config_path).exists()
-          )
-
           output_path = os.environ["GITHUB_OUTPUT"]
           with open(output_path, "a", encoding="utf-8") as output:
               output.write(
@@ -124,7 +111,7 @@ jobs:
                   f"requires_strategy_config_path={str(bool(selected.get('requires_strategy_config_path'))).lower()}\n"
               )
               output.write(
-                  f"has_bundled_strategy_config={str(has_bundled_strategy_config).lower()}\n"
+                  f"config_source_policy={str(selected.get('config_source_policy') or 'none')}\n"
               )
           PY
 
@@ -134,7 +121,7 @@ jobs:
           REQUIRES_SNAPSHOT_ARTIFACTS: ${{ steps.strategy_requirements.outputs.requires_snapshot_artifacts }}
           REQUIRES_SNAPSHOT_MANIFEST_PATH: ${{ steps.strategy_requirements.outputs.requires_snapshot_manifest_path }}
           REQUIRES_STRATEGY_CONFIG_PATH: ${{ steps.strategy_requirements.outputs.requires_strategy_config_path }}
-          HAS_BUNDLED_STRATEGY_CONFIG: ${{ steps.strategy_requirements.outputs.has_bundled_strategy_config }}
+          CONFIG_SOURCE_POLICY: ${{ steps.strategy_requirements.outputs.config_source_policy }}
         run: |
           set -euo pipefail
 
@@ -175,8 +162,8 @@ jobs:
           fi
 
           if [ "${REQUIRES_STRATEGY_CONFIG_PATH:-}" = "true" ] \
-            && [ -z "${LONGBRIDGE_STRATEGY_CONFIG_PATH:-}" ] \
-            && [ "${HAS_BUNDLED_STRATEGY_CONFIG:-}" != "true" ]; then
+            && [ "${CONFIG_SOURCE_POLICY:-}" = "env_only" ] \
+            && [ -z "${LONGBRIDGE_STRATEGY_CONFIG_PATH:-}" ]; then
             missing_vars+=("LONGBRIDGE_STRATEGY_CONFIG_PATH")
           fi
 
@@ -390,10 +377,7 @@ jobs:
           import os
           import subprocess
           import sys
-          from pathlib import Path
-
-          from quant_platform_kit.common.strategies import derive_strategy_artifact_paths
-          from us_equity_strategies import get_strategy_catalog, resolve_canonical_profile
+          from us_equity_strategies import resolve_canonical_profile
 
           profile = os.environ.get("STRATEGY_PROFILE", "").strip().lower()
           if not profile:
@@ -412,16 +396,6 @@ jobs:
           if not selected.get("eligible") or not selected.get("enabled"):
               raise SystemExit(f"STRATEGY_PROFILE={profile!r} is not eligible/enabled: {selected}")
 
-          artifact_paths = derive_strategy_artifact_paths(
-              get_strategy_catalog(),
-              canonical_profile,
-              repo_root=Path.cwd(),
-          )
-          has_bundled_strategy_config = bool(
-              artifact_paths.bundled_config_path is not None
-              and Path(artifact_paths.bundled_config_path).exists()
-          )
-
           output_path = os.environ["GITHUB_OUTPUT"]
           with open(output_path, "a", encoding="utf-8") as output:
               output.write(
@@ -434,7 +408,7 @@ jobs:
                   f"requires_strategy_config_path={str(bool(selected.get('requires_strategy_config_path'))).lower()}\n"
               )
               output.write(
-                  f"has_bundled_strategy_config={str(has_bundled_strategy_config).lower()}\n"
+                  f"config_source_policy={str(selected.get('config_source_policy') or 'none')}\n"
               )
           PY
 
@@ -444,7 +418,7 @@ jobs:
           REQUIRES_SNAPSHOT_ARTIFACTS: ${{ steps.strategy_requirements.outputs.requires_snapshot_artifacts }}
           REQUIRES_SNAPSHOT_MANIFEST_PATH: ${{ steps.strategy_requirements.outputs.requires_snapshot_manifest_path }}
           REQUIRES_STRATEGY_CONFIG_PATH: ${{ steps.strategy_requirements.outputs.requires_strategy_config_path }}
-          HAS_BUNDLED_STRATEGY_CONFIG: ${{ steps.strategy_requirements.outputs.has_bundled_strategy_config }}
+          CONFIG_SOURCE_POLICY: ${{ steps.strategy_requirements.outputs.config_source_policy }}
         run: |
           set -euo pipefail
 
@@ -485,8 +459,8 @@ jobs:
           fi
 
           if [ "${REQUIRES_STRATEGY_CONFIG_PATH:-}" = "true" ] \
-            && [ -z "${LONGBRIDGE_STRATEGY_CONFIG_PATH:-}" ] \
-            && [ "${HAS_BUNDLED_STRATEGY_CONFIG:-}" != "true" ]; then
+            && [ "${CONFIG_SOURCE_POLICY:-}" = "env_only" ] \
+            && [ -z "${LONGBRIDGE_STRATEGY_CONFIG_PATH:-}" ]; then
             missing_vars+=("LONGBRIDGE_STRATEGY_CONFIG_PATH")
           fi
 

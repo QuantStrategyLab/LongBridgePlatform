@@ -382,11 +382,13 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(plan["profile_group"], "snapshot_backed")
         self.assertEqual(plan["input_mode"], "feature_snapshot")
         self.assertTrue(plan["requires_snapshot_artifacts"])
+        self.assertFalse(plan["requires_snapshot_manifest_path"])
         self.assertFalse(plan["requires_strategy_config_path"])
         self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_PATH"], "<required>")
-        self.assertEqual(
-            plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"],
-            "<required>",
+        self.assertNotIn("LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH", plan["set_env"])
+        self.assertIn(
+            "LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH",
+            plan["remove_if_present"],
         )
         self.assertIn("LONGBRIDGE_STRATEGY_CONFIG_PATH", plan["remove_if_present"])
 
@@ -458,6 +460,32 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             plan["hints"]["feature_snapshot_filename"],
             "dynamic_mega_leveraged_pullback_feature_snapshot_latest.csv",
         )
+
+    def test_print_strategy_switch_env_plan_for_tech_uses_bundled_config_by_default(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SWITCH_PLAN_SCRIPT_PATH),
+                "--profile",
+                "tech_communication_pullback_enhancement",
+                "--account-region",
+                "hk",
+                "--json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        plan = json.loads(result.stdout)
+        self.assertEqual(plan["canonical_profile"], "tech_communication_pullback_enhancement")
+        self.assertEqual(plan["config_source_policy"], "bundled_or_env")
+        self.assertTrue(plan["requires_strategy_config_path"])
+        self.assertEqual(plan["runtime_execution_window_trading_days"], 1)
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_PATH"], "<required>")
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"], "<required>")
+        self.assertNotIn("LONGBRIDGE_STRATEGY_CONFIG_PATH", plan["set_env"])
+        self.assertIn("LONGBRIDGE_STRATEGY_CONFIG_PATH", plan["remove_if_present"])
 
 
 if __name__ == "__main__":
