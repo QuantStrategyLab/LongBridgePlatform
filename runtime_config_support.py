@@ -7,7 +7,6 @@ from typing import Callable
 
 from quant_platform_kit.common.strategies import derive_strategy_artifact_paths
 from strategy_registry import (
-    DEFAULT_STRATEGY_PROFILE as PLATFORM_DEFAULT_STRATEGY_PROFILE,
     LONGBRIDGE_PLATFORM,
     resolve_strategy_definition,
     resolve_strategy_metadata,
@@ -15,7 +14,6 @@ from strategy_registry import (
 from us_equity_strategies import get_strategy_catalog
 
 DEFAULT_ACCOUNT_REGION = "DEFAULT"
-DEFAULT_STRATEGY_PROFILE = PLATFORM_DEFAULT_STRATEGY_PROFILE
 DEFAULT_LONGPORT_SECRET_NAME = "longport_token_hk"
 
 
