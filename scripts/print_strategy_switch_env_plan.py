@@ -42,7 +42,11 @@ def build_switch_plan(profile: str, *, account_region: str | None = None) -> dic
         platform_id=LONGBRIDGE_PLATFORM,
     )
     requires_feature_snapshot = bool(runtime_requirements["requires_snapshot_artifacts"])
+    requires_snapshot_manifest_path = bool(
+        runtime_requirements["requires_snapshot_manifest_path"]
+    )
     requires_strategy_config_path = bool(runtime_requirements["requires_strategy_config_path"])
+    config_source_policy = str(runtime_requirements.get("config_source_policy") or "none")
     normalized_region = (account_region or "").strip().upper()
 
     set_env: dict[str, str] = {"STRATEGY_PROFILE": definition.profile}
@@ -66,9 +70,19 @@ def build_switch_plan(profile: str, *, account_region: str | None = None) -> dic
 
     if requires_feature_snapshot:
         set_env["LONGBRIDGE_FEATURE_SNAPSHOT_PATH"] = "<required>"
-        set_env["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"] = "<required>"
-        if requires_strategy_config_path and artifact_paths.bundled_config_path is not None:
-            set_env["LONGBRIDGE_STRATEGY_CONFIG_PATH"] = str(artifact_paths.bundled_config_path)
+        if requires_snapshot_manifest_path:
+            set_env["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"] = "<required>"
+        else:
+            remove_if_present.append("LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH")
+        if requires_strategy_config_path and config_source_policy == "env_only":
+            set_env["LONGBRIDGE_STRATEGY_CONFIG_PATH"] = "<required>"
+        elif requires_strategy_config_path and config_source_policy == "bundled_or_env":
+            remove_if_present.append("LONGBRIDGE_STRATEGY_CONFIG_PATH")
+            notes.append(
+                "LONGBRIDGE_STRATEGY_CONFIG_PATH is optional for bundled_or_env profiles; leave it unset to use the packaged canonical config."
+            )
+        elif requires_strategy_config_path:
+            set_env["LONGBRIDGE_STRATEGY_CONFIG_PATH"] = "<required>"
         else:
             remove_if_present.append("LONGBRIDGE_STRATEGY_CONFIG_PATH")
     else:

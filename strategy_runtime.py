@@ -5,6 +5,10 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
 from quant_platform_kit.common.feature_snapshot import load_feature_snapshot_guarded
+from quant_platform_kit.common.feature_snapshot_runtime import (
+    FeatureSnapshotRuntimeSettings,
+    evaluate_feature_snapshot_strategy,
+)
 from quant_platform_kit.strategy_contracts import (
     StrategyDecision,
     StrategyEntrypoint,
@@ -20,7 +24,6 @@ from strategy_loader import (
 
 
 _FEATURE_SNAPSHOT_INPUT = "feature_snapshot"
-_SINGLE_EXECUTION_WINDOW_PROFILES = frozenset({"tech_communication_pullback_enhancement"})
 
 
 @dataclass(frozen=True)
@@ -92,158 +95,28 @@ class LoadedStrategyRuntime:
         runtime_config: Mapping[str, Any],
         available_inputs: Mapping[str, Any],
     ) -> StrategyEvaluationResult:
-        feature_snapshot_path = self.runtime_settings.feature_snapshot_path
-        runtime_config_name = str(
-            self.merged_runtime_config.get("runtime_config_name")
-            or self.runtime_settings.strategy_profile
-        )
-        runtime_config_path = (
-            self.merged_runtime_config.get("runtime_config_path")
-            or self.runtime_settings.strategy_config_path
-        )
-        runtime_config_source = (
-            self.merged_runtime_config.get("runtime_config_source")
-            or self.runtime_settings.strategy_config_source
-        )
-        safe_haven_symbol = str(self.merged_runtime_config.get("safe_haven") or "BOXX").strip().upper() or None
-
-        if not feature_snapshot_path:
-            metadata = {
-                "strategy_profile": self.profile,
-                "strategy_display_name": self.display_name,
-                "feature_snapshot_path": None,
-                "strategy_config_path": runtime_config_path,
-                "strategy_config_source": runtime_config_source,
-                "dry_run_only": self.runtime_settings.dry_run_only,
-                "snapshot_guard_decision": "fail_closed",
-                "fail_reason": "feature_snapshot_path_missing",
-                "managed_symbols": self.managed_symbols,
-                "safe_haven_symbol": safe_haven_symbol,
-                "status_icon": "🛑",
-            }
-            decision = StrategyDecision(
-                risk_flags=("no_execute",),
-                diagnostics={
-                    "signal_description": "feature snapshot required",
-                    "status_description": "fail_closed | reason=feature_snapshot_path_missing",
-                    "actionable": False,
-                    "snapshot_guard_decision": "fail_closed",
-                    "fail_reason": "feature_snapshot_path_missing",
-                },
-            )
-            return StrategyEvaluationResult(decision=decision, metadata=metadata)
-
-        evaluation_as_of = datetime.now(timezone.utc)
-        runtime_config = dict(runtime_config)
-        runtime_config.setdefault("run_as_of", evaluation_as_of)
-        if self.profile in _SINGLE_EXECUTION_WINDOW_PROFILES:
-            runtime_config.setdefault("runtime_execution_window_trading_days", 1)
-
-        guard_result = load_feature_snapshot_guarded(
-            feature_snapshot_path,
-            run_as_of=evaluation_as_of,
-            required_columns=self._required_feature_columns(),
-            snapshot_date_columns=self._snapshot_date_columns(),
-            max_snapshot_month_lag=self._max_snapshot_month_lag(),
-            manifest_path=self.runtime_settings.feature_snapshot_manifest_path,
-            require_manifest=self._require_snapshot_manifest(),
-            expected_strategy_profile=self.profile,
-            expected_config_name=runtime_config_name,
-            expected_config_path=runtime_config_path,
-            expected_contract_version=self._snapshot_contract_version(),
-        )
-        guard_metadata = dict(guard_result.metadata)
-        if guard_metadata.get("snapshot_guard_decision") != "proceed":
-            decision_text = str(guard_metadata.get("snapshot_guard_decision") or "fail_closed")
-            reason = guard_metadata.get("fail_reason") or guard_metadata.get("no_op_reason")
-            metadata = {
-                "strategy_profile": self.profile,
-                "strategy_display_name": self.display_name,
-                "strategy_config_path": runtime_config_path,
-                "strategy_config_source": runtime_config_source,
-                "dry_run_only": self.runtime_settings.dry_run_only,
-                "managed_symbols": self.managed_symbols,
-                "safe_haven_symbol": safe_haven_symbol,
-                "status_icon": "🛑",
-                **guard_metadata,
-            }
-            decision = StrategyDecision(
-                risk_flags=("no_execute",),
-                diagnostics={
-                    "signal_description": "feature snapshot guard blocked execution",
-                    "status_description": f"{decision_text} | reason={reason}",
-                    "actionable": False,
-                    "snapshot_guard_decision": decision_text,
-                    "fail_reason": guard_metadata.get("fail_reason"),
-                    "no_op_reason": guard_metadata.get("no_op_reason"),
-                },
-            )
-            return StrategyEvaluationResult(decision=decision, metadata=metadata)
-
-        feature_snapshot = guard_result.frame
-        evaluation_inputs = dict(available_inputs)
-        evaluation_inputs[_FEATURE_SNAPSHOT_INPUT] = feature_snapshot
-        ctx = build_strategy_context_from_available_inputs(
+        result = evaluate_feature_snapshot_strategy(
             entrypoint=self.entrypoint,
             runtime_adapter=self.runtime_adapter,
-            as_of=evaluation_as_of,
-            available_inputs=evaluation_inputs,
+            runtime_settings=FeatureSnapshotRuntimeSettings(
+                feature_snapshot_path=self.runtime_settings.feature_snapshot_path,
+                feature_snapshot_manifest_path=self.runtime_settings.feature_snapshot_manifest_path,
+                strategy_config_path=self.runtime_settings.strategy_config_path,
+                strategy_config_source=self.runtime_settings.strategy_config_source,
+                dry_run_only=self.runtime_settings.dry_run_only,
+            ),
             runtime_config=runtime_config,
-        )
-        decision = self.entrypoint.evaluate(ctx)
-        managed_symbols = self._extract_managed_symbols(
-            feature_snapshot,
-            safe_haven_symbol=safe_haven_symbol,
+            merged_runtime_config=self.merged_runtime_config,
+            available_inputs=available_inputs,
+            base_managed_symbols=self.managed_symbols,
+            include_strategy_display_name=True,
+            set_run_as_of=True,
+            snapshot_loader=load_feature_snapshot_guarded,
         )
         return StrategyEvaluationResult(
-            decision=decision,
-            metadata={
-                "strategy_profile": self.profile,
-                "strategy_display_name": self.display_name,
-                "strategy_config_path": runtime_config_path,
-                "strategy_config_source": runtime_config_source,
-                "feature_snapshot_path": feature_snapshot_path,
-                "dry_run_only": self.runtime_settings.dry_run_only,
-                "managed_symbols": managed_symbols,
-                "safe_haven_symbol": safe_haven_symbol,
-                "status_icon": self.runtime_adapter.status_icon,
-                **guard_metadata,
-            },
+            decision=result.decision,
+            metadata=result.metadata,
         )
-
-    def _required_feature_columns(self) -> tuple[str, ...] | frozenset[str]:
-        return self.runtime_adapter.required_feature_columns
-
-    def _snapshot_date_columns(self) -> tuple[str, ...]:
-        return tuple(self.runtime_adapter.snapshot_date_columns)
-
-    def _max_snapshot_month_lag(self) -> int:
-        return int(self.runtime_adapter.max_snapshot_month_lag)
-
-    def _require_snapshot_manifest(self) -> bool:
-        return bool(self.runtime_adapter.require_snapshot_manifest)
-
-    def _snapshot_contract_version(self) -> str | None:
-        return self.runtime_adapter.snapshot_contract_version
-
-    def _extract_managed_symbols(
-        self,
-        feature_snapshot,
-        *,
-        safe_haven_symbol: str | None,
-    ) -> tuple[str, ...]:
-        extractor = self.runtime_adapter.managed_symbols_extractor
-        if callable(extractor):
-            return tuple(
-                extractor(
-                    feature_snapshot,
-                    benchmark_symbol=str(self.merged_runtime_config.get("benchmark_symbol") or "QQQ"),
-                    safe_haven=safe_haven_symbol,
-                )
-            )
-        if safe_haven_symbol:
-            return (safe_haven_symbol,)
-        return self.managed_symbols
 
     def load_runtime_parameters(self) -> dict[str, Any]:
         runtime_loader = self.runtime_adapter.runtime_parameter_loader
