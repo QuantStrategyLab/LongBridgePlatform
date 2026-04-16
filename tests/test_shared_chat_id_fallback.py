@@ -137,6 +137,7 @@ class SharedChatIdTests(unittest.TestCase):
                 os.environ,
                 {
                     "GLOBAL_TELEGRAM_CHAT_ID": "shared-chat-id",
+                    "STRATEGY_PROFILE": "soxl_soxx_trend_income",
                 },
                 clear=False,
             ):

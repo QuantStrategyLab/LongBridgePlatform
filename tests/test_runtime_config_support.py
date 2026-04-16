@@ -20,7 +20,6 @@ SWITCH_PLAN_SCRIPT_PATH = ROOT / "scripts" / "print_strategy_switch_env_plan.py"
 from runtime_config_support import (
     DEFAULT_ACCOUNT_REGION,
     DEFAULT_LONGPORT_SECRET_NAME,
-    DEFAULT_STRATEGY_PROFILE,
     infer_account_region,
     load_platform_runtime_settings,
 )
@@ -34,15 +33,18 @@ from strategy_registry import (
 )
 
 
+SAMPLE_STRATEGY_PROFILE = "soxl_soxx_trend_income"
+
+
 class RuntimeConfigSupportTests(unittest.TestCase):
-    def test_load_platform_runtime_settings_uses_defaults(self):
-        with patch.dict(os.environ, {}, clear=True):
+    def test_load_platform_runtime_settings_uses_defaults_with_explicit_strategy_profile(self):
+        with patch.dict(os.environ, {"STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE}, clear=True):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
         self.assertEqual(settings.project_id, "project-1")
         self.assertEqual(settings.secret_name, DEFAULT_LONGPORT_SECRET_NAME)
         self.assertEqual(settings.account_prefix, "DEFAULT")
-        self.assertEqual(settings.strategy_profile, DEFAULT_STRATEGY_PROFILE)
+        self.assertEqual(settings.strategy_profile, SAMPLE_STRATEGY_PROFILE)
         self.assertEqual(settings.strategy_display_name, "SOXL/SOXX Semiconductor Trend Income")
         self.assertEqual(settings.strategy_domain, US_EQUITY_DOMAIN)
         self.assertEqual(settings.account_region, DEFAULT_ACCOUNT_REGION)
@@ -55,6 +57,11 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.feature_snapshot_path)
         self.assertIsNone(settings.strategy_config_path)
 
+    def test_load_platform_runtime_settings_requires_strategy_profile(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(EnvironmentError, "STRATEGY_PROFILE is required"):
+                load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
     def test_platform_supported_profiles_are_filtered_by_registry(self):
         self.assertEqual(
             get_supported_profiles_for_platform(LONGBRIDGE_PLATFORM),
@@ -62,6 +69,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 {
                     "dynamic_mega_leveraged_pullback",
                     "global_etf_rotation",
+                    "mega_cap_leader_rotation_aggressive",
                     "mega_cap_leader_rotation_dynamic_top20",
                     "russell_1000_multi_factor_defensive",
                     "tqqq_growth_income",
@@ -78,6 +86,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 {
                     "dynamic_mega_leveraged_pullback",
                     "global_etf_rotation",
+                    "mega_cap_leader_rotation_aggressive",
                     "mega_cap_leader_rotation_dynamic_top20",
                     "russell_1000_multi_factor_defensive",
                     "tqqq_growth_income",
@@ -88,7 +97,11 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         )
 
     def test_dry_run_only_is_loaded_from_env(self):
-        with patch.dict(os.environ, {"LONGBRIDGE_DRY_RUN_ONLY": "true"}, clear=True):
+        with patch.dict(
+            os.environ,
+            {"STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE, "LONGBRIDGE_DRY_RUN_ONLY": "true"},
+            clear=True,
+        ):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
         self.assertTrue(settings.dry_run_only)
@@ -149,11 +162,12 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
                 load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
-    def test_platform_profile_matrix_marks_default(self):
+    def test_platform_profile_matrix_exposes_profiles_without_selection_roles(self):
         rows = get_platform_profile_matrix()
         by_profile = {row["canonical_profile"]: row for row in rows}
-        self.assertEqual(by_profile[DEFAULT_STRATEGY_PROFILE]["display_name"], "SOXL/SOXX Semiconductor Trend Income")
-        self.assertTrue(by_profile[DEFAULT_STRATEGY_PROFILE]["is_default"])
+        self.assertEqual(by_profile[SAMPLE_STRATEGY_PROFILE]["display_name"], "SOXL/SOXX Semiconductor Trend Income")
+        self.assertNotIn("is_default", by_profile[SAMPLE_STRATEGY_PROFILE])
+        self.assertNotIn("is_rollback", by_profile[SAMPLE_STRATEGY_PROFILE])
 
     def test_platform_profile_status_matrix_matches_current_longbridge_rollout(self):
         rows = get_platform_profile_status_matrix()
@@ -164,6 +178,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             {
                 "global_etf_rotation",
                 "dynamic_mega_leveraged_pullback",
+                "mega_cap_leader_rotation_aggressive",
                 "mega_cap_leader_rotation_dynamic_top20",
                 "russell_1000_multi_factor_defensive",
                 "tqqq_growth_income",
@@ -179,8 +194,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "domain": "us_equity",
                 "eligible": True,
                 "enabled": True,
-                "is_default": True,
-                "is_rollback": True,
                 "platform": "longbridge",
             },
         )
@@ -200,6 +213,9 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertTrue(by_profile["mega_cap_leader_rotation_dynamic_top20"]["eligible"])
         self.assertTrue(by_profile["mega_cap_leader_rotation_dynamic_top20"]["enabled"])
         self.assertEqual(by_profile["mega_cap_leader_rotation_dynamic_top20"]["display_name"], "Mega Cap Leader Rotation Dynamic Top20")
+        self.assertTrue(by_profile["mega_cap_leader_rotation_aggressive"]["eligible"])
+        self.assertTrue(by_profile["mega_cap_leader_rotation_aggressive"]["enabled"])
+        self.assertEqual(by_profile["mega_cap_leader_rotation_aggressive"]["display_name"], "Mega Cap Leader Rotation Aggressive")
         self.assertTrue(by_profile["dynamic_mega_leveraged_pullback"]["eligible"])
         self.assertTrue(by_profile["dynamic_mega_leveraged_pullback"]["enabled"])
         self.assertEqual(by_profile["dynamic_mega_leveraged_pullback"]["display_name"], "Dynamic Mega Leveraged Pullback")
@@ -264,8 +280,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                         "domain",
                         "eligible",
                         "enabled",
-                        "is_default",
-                        "is_rollback",
                         "platform",
                     )
                 }
