@@ -199,6 +199,25 @@ def _append_status_lines(lines, *, execution, translator, signal_key):
     lines.extend(_build_benchmark_lines(execution, translator=translator))
 
 
+def _first_detail_line(text) -> str:
+    parts = _split_labeled_text(text)
+    return parts[0] if parts else ""
+
+
+def _append_compact_status_lines(lines, *, execution, translator, signal_key):
+    status_summary = _first_detail_line(
+        _localize_notification_text(execution.get("status_display"), translator=translator)
+    )
+    if status_summary:
+        lines.append(translator("market_status", status=status_summary))
+
+    signal_summary = _first_detail_line(
+        _localize_notification_text(execution.get("signal_display"), translator=translator)
+    )
+    if signal_summary:
+        lines.append(translator(signal_key, msg=signal_summary))
+
+
 
 def _append_strategy_line(lines, *, strategy_display_name, translator):
     name = str(strategy_display_name or "").strip()
@@ -555,9 +574,25 @@ def run_strategy(
             signal_key="signal",
         )
         tg_lines.extend([separator, translator("order_logs_title"), formatted_logs])
-        tg_message = "\n".join(tg_lines)
-        print(with_prefix(tg_message), flush=True)
-        send_tg_message(tg_message)
+        detailed_tg_message = "\n".join(tg_lines)
+        compact_lines = [translator("rebalance_title")]
+        _append_strategy_line(
+            compact_lines,
+            strategy_display_name=strategy_display_name,
+            translator=translator,
+        )
+        if dry_run_only:
+            compact_lines.append(translator("dry_run_banner"))
+        _append_compact_status_lines(
+            compact_lines,
+            execution=execution,
+            translator=translator,
+            signal_key="signal",
+        )
+        compact_lines.extend([separator, translator("order_logs_title"), formatted_logs])
+        compact_tg_message = "\n".join(compact_lines)
+        print(with_prefix(detailed_tg_message), flush=True)
+        send_tg_message(compact_tg_message)
     else:
         equity_text = f"{total_strategy_equity:,.2f}"
         cash_summary = translator(
@@ -610,8 +645,35 @@ def run_strategy(
                 f"{translator('notes_title')}\n"
                 + "\n".join(f"  - {log}" for log in note_logs)
             )
+        compact_no_trade_lines = [
+            translator("heartbeat_title"),
+        ]
+        _append_strategy_line(
+            compact_no_trade_lines,
+            strategy_display_name=strategy_display_name,
+            translator=translator,
+        )
+        compact_no_trade_lines.append(translator("equity", value=equity_text))
+        if dry_run_only:
+            compact_no_trade_lines.append(translator("dry_run_banner"))
+        _append_compact_status_lines(
+            compact_no_trade_lines,
+            execution=execution,
+            translator=translator,
+            signal_key="heartbeat_signal",
+        )
+        compact_no_trade_lines.append(
+            translator("no_executable_orders") if (skip_logs or note_logs) else translator("no_trades")
+        )
+        if skip_logs:
+            compact_no_trade_lines.extend([separator, translator("skipped_actions")])
+            compact_no_trade_lines.extend(f"  - {log}" for log in skip_logs)
+        if note_logs:
+            compact_no_trade_lines.extend([separator, translator("notes_title")])
+            compact_no_trade_lines.extend(f"  - {log}" for log in note_logs)
+        compact_no_trade_message = "\n".join(compact_no_trade_lines)
         print(with_prefix(no_trade_message), flush=True)
-        send_tg_message(no_trade_message)
+        send_tg_message(compact_no_trade_message)
 
 
 def safe_quote_last_price(quote_context, symbol, *, fetch_last_price, notify_issue):
