@@ -131,6 +131,36 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             lines,
         )
 
+    def test_append_status_lines_localizes_runtime_diagnostic_tail_for_zh(self):
+        lines = []
+        rebalance_service._append_status_lines(
+            lines,
+            execution={
+                "status_display": (
+                    "no-op | reason=outside_monthly_execution_window "
+                    "snapshot=2026-04-10 allowed=2026-04-13"
+                ),
+                "signal_display": (
+                    "monthly snapshot cadence | waiting inside execution window | "
+                    "small_account_warning=true portfolio_equity=$0 "
+                    "min_recommended_equity=$1,000 "
+                    "reason=integer_shares_min_position_value_may_prevent_backtest_replication"
+                ),
+            },
+            translator=build_translator("zh"),
+            signal_key="heartbeat_signal",
+        )
+
+        self.assertIn(
+            "📊 市场状态: 不执行 | 原因=当前不在月度执行窗口 快照日期=2026-04-10 允许日期=2026-04-13",
+            lines,
+        )
+        self.assertIn(
+            "🎯 信号: 月度快照节奏 | 等待进入执行窗口 | 小账户提示=是 净值=$0 "
+            "建议最低净值=$1,000 原因=整数股和最小仓位限制可能导致实盘无法完全复现回测",
+            lines,
+        )
+
     def _run_strategy(
         self,
         plan,
