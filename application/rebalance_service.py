@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import traceback
 from datetime import datetime
 
@@ -79,6 +80,7 @@ _ZH_REASON_REPLACEMENTS = (
     ("fail_closed", "关闭执行"),
     ("reason=", "原因="),
 )
+_DETAIL_FIELD_SPLIT_RE = re.compile(r"\s+(?=[^\s=:：]+[=:：])")
 
 
 def _plan_portfolio(plan):
@@ -116,6 +118,33 @@ def _localize_notification_text(text, *, translator):
     return localized
 
 
+def _split_detail_segment(text):
+    value = str(text or "").strip()
+    if not value:
+        return []
+    if "=" not in value and ":" not in value and "：" not in value:
+        return [value]
+    return [part.strip() for part in _DETAIL_FIELD_SPLIT_RE.split(value) if part.strip()]
+
+
+def _split_labeled_text(text):
+    segments = [segment.strip() for segment in str(text or "").split(" | ") if segment.strip()]
+    if not segments:
+        return []
+    lines = [segments[0]]
+    for segment in segments[1:]:
+        lines.extend(_split_detail_segment(segment))
+    return lines
+
+
+def _append_labeled_text(lines, template_key, value, *, translator, value_key):
+    parts = _split_labeled_text(value)
+    if not parts:
+        return
+    lines.append(translator(template_key, **{value_key: parts[0]}))
+    lines.extend(f"  - {part}" for part in parts[1:])
+
+
 def _has_benchmark_context(execution):
     return any(
         float(execution.get(key) or 0.0) > 0.0
@@ -123,17 +152,19 @@ def _has_benchmark_context(execution):
     )
 
 
-def _build_benchmark_line(execution):
+def _build_benchmark_lines(execution, *, translator):
     if not _has_benchmark_context(execution):
-        return None
+        return []
     benchmark_symbol = str(execution.get("benchmark_symbol") or "QQQ")
     benchmark_price = float(execution.get("benchmark_price") or 0.0)
     long_trend_value = float(execution.get("long_trend_value") or 0.0)
     exit_line = float(execution.get("exit_line") or 0.0)
-    return (
-        f"{benchmark_symbol}: {benchmark_price:.2f} | "
-        f"MA200: {long_trend_value:.2f} | Exit: {exit_line:.2f}"
-    )
+    return [
+        translator("benchmark_title", symbol=benchmark_symbol),
+        f"  - {translator('benchmark_price', symbol=benchmark_symbol, value=f'{benchmark_price:.2f}')}",
+        f"  - {translator('benchmark_ma200', value=f'{long_trend_value:.2f}')}",
+        f"  - {translator('benchmark_exit', value=f'{exit_line:.2f}')}",
+    ]
 
 
 def _format_holdings_lines(portfolio_rows, market_values, *, translator) -> list[str]:
@@ -147,7 +178,7 @@ def _format_holdings_lines(portfolio_rows, market_values, *, translator) -> list
 def _append_status_lines(lines, *, execution, translator, signal_key):
     status_display = _localize_notification_text(execution.get("status_display"), translator=translator)
     if status_display:
-        lines.append(translator("market_status", status=status_display))
+        _append_labeled_text(lines, "market_status", status_display, translator=translator, value_key="status")
 
     deploy_ratio_text = str(execution.get("deploy_ratio_text") or "").strip()
     if deploy_ratio_text:
@@ -163,11 +194,9 @@ def _append_status_lines(lines, *, execution, translator, signal_key):
 
     signal_display = _localize_notification_text(execution.get("signal_display"), translator=translator)
     if signal_display:
-        lines.append(translator(signal_key, msg=signal_display))
+        _append_labeled_text(lines, signal_key, signal_display, translator=translator, value_key="msg")
 
-    benchmark_line = _build_benchmark_line(execution)
-    if benchmark_line:
-        lines.append(benchmark_line)
+    lines.extend(_build_benchmark_lines(execution, translator=translator))
 
 
 

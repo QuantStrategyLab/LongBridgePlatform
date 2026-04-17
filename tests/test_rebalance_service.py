@@ -103,7 +103,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             signal_key="heartbeat_signal",
         )
 
-        self.assertIn("📊 市场状态: 关闭执行 | 原因=缺少特征快照路径", lines)
+        self.assertIn("📊 市场状态: 关闭执行", lines)
+        self.assertIn("  - 原因=缺少特征快照路径", lines)
         self.assertIn("🎯 信号: 特征快照校验阻止执行", lines)
 
     def test_append_status_lines_localizes_qqq_tech_diagnostics_for_zh(self):
@@ -122,9 +123,12 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "📊 市场状态: 市场阶段=软防御 | 市场宽度=41.2% | 目标股票仓位=60.0% | 实际股票仓位=60.0%",
+            "📊 市场状态: 市场阶段=软防御",
             lines,
         )
+        self.assertIn("  - 市场宽度=41.2%", lines)
+        self.assertIn("  - 目标股票仓位=60.0%", lines)
+        self.assertIn("  - 实际股票仓位=60.0%", lines)
         self.assertIn(
             "🎯 触发信号: 市场阶段=软防御 市场宽度=41.2% 基准趋势=向下 "
             "目标股票仓位=60.0% 实际股票仓位=60.0% 入选标的数=8 前排标的=CIEN(0.92)",
@@ -152,14 +156,18 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "📊 市场状态: 不执行 | 原因=当前不在月度执行窗口 快照日期=2026-04-10 允许日期=2026-04-13",
+            "📊 市场状态: 不执行",
             lines,
         )
-        self.assertIn(
-            "🎯 信号: 月度快照节奏 | 等待进入执行窗口 | 小账户提示=是 净值=$0 "
-            "建议最低净值=$1,000 原因=整数股和最小仓位限制可能导致实盘无法完全复现回测",
-            lines,
-        )
+        self.assertIn("  - 原因=当前不在月度执行窗口", lines)
+        self.assertIn("  - 快照日期=2026-04-10", lines)
+        self.assertIn("  - 允许日期=2026-04-13", lines)
+        self.assertIn("🎯 信号: 月度快照节奏", lines)
+        self.assertIn("  - 等待进入执行窗口", lines)
+        self.assertIn("  - 小账户提示=是", lines)
+        self.assertIn("  - 净值=$0", lines)
+        self.assertIn("  - 建议最低净值=$1,000", lines)
+        self.assertIn("  - 原因=整数股和最小仓位限制可能导致实盘无法完全复现回测", lines)
 
     def _run_strategy(
         self,
@@ -609,6 +617,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("💓 【心跳检测】", sent_messages[0])
         self.assertIn("可投资现金", sent_messages[0])
+        self.assertIn("💵 资金\n  - 账户现金:", sent_messages[0])
         self.assertIn("💼 持仓", sent_messages[0])
         self.assertIn("  - SOXX:", sent_messages[0])
 
@@ -655,8 +664,9 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("  - TQQQ: $0.00", sent_messages[0])
         self.assertIn("  - BOXX: $0.00", sent_messages[0])
         self.assertIn("  - QQQI: $0.00", sent_messages[0])
-        self.assertIn("QQQ: 588.50 | MA200: 595.25 | Exit: 573.00", sent_messages[0])
+        self.assertIn("📈 QQQ 基准\n  - QQQ: 588.50\n  - MA200: 595.25\n  - 退出线: 573.00", sent_messages[0])
         self.assertIn("🎯 信号: 💤 等待信号", sent_messages[0])
+        self.assertNotIn("账户现金: $0.00 | 可投资现金", sent_messages[0])
         self.assertNotIn("TQQQ: $0.00  BOXX", sent_messages[0])
         self.assertNotIn("📊 市场状态: ", sent_messages[0])
         self.assertNotIn("💼 交易层风险仓位: ", sent_messages[0])
