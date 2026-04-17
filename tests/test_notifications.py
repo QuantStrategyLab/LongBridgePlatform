@@ -14,6 +14,7 @@ from notifications.telegram import (
     build_strategy_display_name,
     build_translator,
 )
+from strategy_registry import SUPPORTED_STRATEGY_PROFILES
 
 
 class FakeRequests:
@@ -29,6 +30,17 @@ class NotificationTests(unittest.TestCase):
     def test_build_translator_supports_chinese(self):
         translate = build_translator("zh")
         self.assertEqual(translate("equity", value="123.45"), "💰 净值: $123.45")
+        self.assertEqual(translate("market_status_blend_gate_risk_on", asset="SOXX+SOXL"), "🚀 风险开启（SOXX+SOXL）")
+        self.assertEqual(
+            translate(
+                "signal_blend_gate_risk_on",
+                trend_symbol="SOXX",
+                window=140,
+                soxl_ratio="70.0%",
+                soxx_ratio="20.0%",
+            ),
+            "SOXX 站上 140 日门槛线，持有 SOXL 70.0% + SOXX 20.0%",
+        )
 
     def test_build_strategy_display_name_supports_i18n(self):
         zh_translate = build_translator("zh")
@@ -37,6 +49,14 @@ class NotificationTests(unittest.TestCase):
         en_name = build_strategy_display_name(en_translate)("soxl_soxx_trend_income")
         self.assertEqual(zh_name, "SOXL/SOXX 半导体趋势收益")
         self.assertEqual(en_name, "SOXL/SOXX Semiconductor Trend Income")
+
+    def test_supported_strategy_profiles_have_translated_names(self):
+        zh_name = build_strategy_display_name(build_translator("zh"))
+        en_name = build_strategy_display_name(build_translator("en"))
+
+        for profile in SUPPORTED_STRATEGY_PROFILES:
+            self.assertNotEqual(zh_name(profile), profile)
+            self.assertNotEqual(en_name(profile), profile)
 
     def test_build_prefixer_prefers_account_prefix_only(self):
         with_prefix = build_prefixer("HK", "longbridge-quant-semiconductor-rotation-income-hk")
