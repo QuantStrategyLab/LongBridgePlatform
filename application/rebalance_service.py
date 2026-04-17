@@ -136,6 +136,14 @@ def _build_benchmark_line(execution):
     )
 
 
+def _format_holdings_lines(portfolio_rows, market_values, *, translator) -> list[str]:
+    lines = [translator("holdings_title")]
+    for row in portfolio_rows:
+        for symbol in row:
+            lines.append(f"  - {symbol}: ${market_values[symbol]:,.2f}")
+    return lines
+
+
 def _append_status_lines(lines, *, execution, translator, signal_key):
     status_display = _localize_notification_text(execution.get("status_display"), translator=translator)
     if status_display:
@@ -501,7 +509,7 @@ def run_strategy(
             available=f"{available_cash:.2f}",
             investable=f"{investable_cash:.2f}",
         )
-        formatted_logs = "\n".join(f"  {log}" for log in [*logs, *skip_logs, *note_logs])
+        formatted_logs = "\n".join(f"  - {log}" for log in [*logs, *skip_logs, *note_logs])
         tg_lines = [translator("rebalance_title")]
         _append_strategy_line(
             tg_lines,
@@ -517,7 +525,7 @@ def run_strategy(
             translator=translator,
             signal_key="signal",
         )
-        tg_lines.extend([separator, formatted_logs])
+        tg_lines.extend([separator, translator("order_logs_title"), formatted_logs])
         tg_message = "\n".join(tg_lines)
         print(with_prefix(tg_message), flush=True)
         send_tg_message(tg_message)
@@ -528,14 +536,7 @@ def run_strategy(
             available=f"{available_cash:.2f}",
             investable=f"{investable_cash:.2f}",
         )
-        holdings_lines = []
-        for row in portfolio_rows:
-            holdings_lines.append(
-                "  ".join(
-                    f"{symbol}: ${market_values[symbol]:,.2f}"
-                    for symbol in row
-                )
-            )
+        holdings_lines = _format_holdings_lines(portfolio_rows, market_values, translator=translator)
         no_trade_lines = [
             translator("heartbeat_title"),
         ]
@@ -572,13 +573,13 @@ def run_strategy(
             no_trade_message += (
                 f"\n{separator}\n"
                 f"{translator('skipped_actions')}\n"
-                + "\n".join(f"  {log}" for log in skip_logs)
+                + "\n".join(f"  - {log}" for log in skip_logs)
             )
         if note_logs:
             no_trade_message += (
                 f"\n{separator}\n"
                 f"{translator('notes_title')}\n"
-                + "\n".join(f"  {log}" for log in note_logs)
+                + "\n".join(f"  - {log}" for log in note_logs)
             )
         print(with_prefix(no_trade_message), flush=True)
         send_tg_message(no_trade_message)

@@ -609,7 +609,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("💓 【心跳检测】", sent_messages[0])
         self.assertIn("可投资现金", sent_messages[0])
-        self.assertIn("SOXX", sent_messages[0])
+        self.assertIn("💼 持仓", sent_messages[0])
+        self.assertIn("  - SOXX:", sent_messages[0])
 
     def test_hybrid_heartbeat_hides_empty_semiconductor_fields_and_shows_benchmark_line(self):
         plan = _build_plan(
@@ -650,8 +651,13 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("💓 【心跳检测】", sent_messages[0])
         self.assertIn("🧭 策略: TQQQ 增长收益", sent_messages[0])
         self.assertIn("🧪 模拟运行模式", sent_messages[0])
+        self.assertIn("💼 持仓", sent_messages[0])
+        self.assertIn("  - TQQQ: $0.00", sent_messages[0])
+        self.assertIn("  - BOXX: $0.00", sent_messages[0])
+        self.assertIn("  - QQQI: $0.00", sent_messages[0])
         self.assertIn("QQQ: 588.50 | MA200: 595.25 | Exit: 573.00", sent_messages[0])
         self.assertIn("🎯 信号: 💤 等待信号", sent_messages[0])
+        self.assertNotIn("TQQQ: $0.00  BOXX", sent_messages[0])
         self.assertNotIn("📊 市场状态: ", sent_messages[0])
         self.assertNotIn("💼 交易层风险仓位: ", sent_messages[0])
         self.assertNotIn("🏦 收入层锁定占比: ", sent_messages[0])
