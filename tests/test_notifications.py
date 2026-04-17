@@ -30,8 +30,13 @@ class NotificationTests(unittest.TestCase):
     def test_build_translator_supports_chinese(self):
         translate = build_translator("zh")
         self.assertEqual(translate("equity", value="123.45"), "💰 净值: $123.45")
+        self.assertEqual(
+            translate("cash_summary", available="1.00", investable="2.00"),
+            "💵 资金\n  - 账户现金: $1.00\n  - 可投资现金: $2.00",
+        )
         self.assertEqual(translate("holdings_title"), "💼 持仓")
         self.assertEqual(translate("order_logs_title"), "🧾 执行明细")
+        self.assertEqual(translate("benchmark_title", symbol="QQQ"), "📈 QQQ 基准")
         self.assertEqual(translate("market_status_blend_gate_risk_on", asset="SOXX+SOXL"), "🚀 风险开启（SOXX+SOXL）")
         self.assertEqual(
             translate(
