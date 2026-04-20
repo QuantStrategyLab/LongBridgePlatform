@@ -197,49 +197,18 @@ def _has_positive_non_usd_cash(cash_by_currency: Mapping[str, float]) -> bool:
     )
 
 
-def _append_portfolio_summary_lines(
-    lines,
-    *,
-    total_strategy_equity,
-    available_cash,
-    investable_cash,
-    cash_by_currency,
-    portfolio_rows,
-    market_values,
-    quantities,
-    translator,
-) -> None:
-    lines.append(translator("portfolio_summary_title"))
-    lines.append(
-        "  - "
-        + translator(
-            "portfolio_total_assets",
-            value=f"{total_strategy_equity:,.2f}",
-        )
+def _format_dashboard_text(text) -> str:
+    return "\n".join(
+        line.rstrip()
+        for line in str(text or "").splitlines()
+        if line.strip()
     )
-    lines.append(
-        "  - "
-        + translator(
-            "portfolio_buying_power",
-            available=f"{available_cash:.2f}",
-            investable=f"{investable_cash:.2f}",
-        )
-    )
-    formatted_cash = _format_cash_by_currency(cash_by_currency)
-    if formatted_cash:
-        lines.append(translator("cash_by_currency", currencies=formatted_cash))
-    lines.append("  - " + translator("holdings_title"))
-    for row in portfolio_rows:
-        for symbol in row:
-            lines.append(
-                "    - "
-                + translator(
-                    "holding_line",
-                    symbol=symbol,
-                    value=f"{market_values[symbol]:,.2f}",
-                    qty=quantities.get(symbol, 0),
-                )
-            )
+
+
+def _append_dashboard_lines(lines, *, execution) -> None:
+    dashboard_text = _format_dashboard_text(execution.get("dashboard_text"))
+    if dashboard_text:
+        lines.extend(dashboard_text.splitlines())
 
 
 def _append_status_lines(lines, *, execution, translator, signal_key):
@@ -384,12 +353,10 @@ def run_strategy(
     quantities = dict(portfolio["quantities"])
     sellable_quantities = dict(portfolio["sellable_quantities"])
     target_values = dict(allocation["targets"])
-    total_strategy_equity = float(portfolio["total_equity"])
     available_cash = float(portfolio["liquid_cash"])
     cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
     investable_cash = float(execution["investable_cash"])
     current_min_trade = float(execution["current_min_trade"])
-    portfolio_rows = tuple(portfolio["portfolio_rows"])
     def record_dry_run(symbol, side, quantity, price, *, order_type):
         price_text = f"${price:.2f}" if price is not None else translator("order_type_market")
         side_key = "side_buy" if str(side).lower() == "buy" else "side_sell"
@@ -507,12 +474,10 @@ def run_strategy(
         quantities = dict(portfolio["quantities"])
         sellable_quantities = dict(portfolio["sellable_quantities"])
         target_values = dict(allocation["targets"])
-        total_strategy_equity = float(portfolio["total_equity"])
         available_cash = float(portfolio["liquid_cash"])
         cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
         investable_cash = float(execution["investable_cash"])
         current_min_trade = float(execution["current_min_trade"])
-        portfolio_rows = tuple(portfolio["portfolio_rows"])
 
     if (
         available_cash <= 0.0
@@ -645,17 +610,7 @@ def run_strategy(
         )
         if dry_run_only:
             tg_lines.append(translator("dry_run_banner"))
-        _append_portfolio_summary_lines(
-            tg_lines,
-            total_strategy_equity=total_strategy_equity,
-            available_cash=available_cash,
-            investable_cash=investable_cash,
-            cash_by_currency=cash_by_currency,
-            portfolio_rows=portfolio_rows,
-            market_values=market_values,
-            quantities=quantities,
-            translator=translator,
-        )
+        _append_dashboard_lines(tg_lines, execution=execution)
         _append_status_lines(
             tg_lines,
             execution=execution,
@@ -672,17 +627,7 @@ def run_strategy(
         )
         if dry_run_only:
             compact_lines.append(translator("dry_run_banner"))
-        _append_portfolio_summary_lines(
-            compact_lines,
-            total_strategy_equity=total_strategy_equity,
-            available_cash=available_cash,
-            investable_cash=investable_cash,
-            cash_by_currency=cash_by_currency,
-            portfolio_rows=portfolio_rows,
-            market_values=market_values,
-            quantities=quantities,
-            translator=translator,
-        )
+        _append_dashboard_lines(compact_lines, execution=execution)
         _append_compact_status_lines(
             compact_lines,
             execution=execution,
@@ -694,7 +639,6 @@ def run_strategy(
         print(with_prefix(detailed_tg_message), flush=True)
         send_tg_message(compact_tg_message)
     else:
-        equity_text = f"{total_strategy_equity:,.2f}"
         no_trade_lines = [
             translator("heartbeat_title"),
         ]
@@ -703,20 +647,9 @@ def run_strategy(
             strategy_display_name=strategy_display_name,
             translator=translator,
         )
-        no_trade_lines.append(translator("equity", value=equity_text))
         if dry_run_only:
             no_trade_lines.append(translator("dry_run_banner"))
-        _append_portfolio_summary_lines(
-            no_trade_lines,
-            total_strategy_equity=total_strategy_equity,
-            available_cash=available_cash,
-            investable_cash=investable_cash,
-            cash_by_currency=cash_by_currency,
-            portfolio_rows=portfolio_rows,
-            market_values=market_values,
-            quantities=quantities,
-            translator=translator,
-        )
+        _append_dashboard_lines(no_trade_lines, execution=execution)
         no_trade_lines.append(separator)
         _append_status_lines(
             no_trade_lines,
@@ -751,20 +684,9 @@ def run_strategy(
             strategy_display_name=strategy_display_name,
             translator=translator,
         )
-        compact_no_trade_lines.append(translator("equity", value=equity_text))
         if dry_run_only:
             compact_no_trade_lines.append(translator("dry_run_banner"))
-        _append_portfolio_summary_lines(
-            compact_no_trade_lines,
-            total_strategy_equity=total_strategy_equity,
-            available_cash=available_cash,
-            investable_cash=investable_cash,
-            cash_by_currency=cash_by_currency,
-            portfolio_rows=portfolio_rows,
-            market_values=market_values,
-            quantities=quantities,
-            translator=translator,
-        )
+        _append_dashboard_lines(compact_no_trade_lines, execution=execution)
         _append_compact_status_lines(
             compact_no_trade_lines,
             execution=execution,

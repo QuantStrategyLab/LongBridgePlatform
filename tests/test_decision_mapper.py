@@ -65,6 +65,7 @@ class DecisionMapperTests(unittest.TestCase):
                     "trade_threshold_value": 250.0,
                     "signal_display": "signal",
                     "status_display": "risk-on",
+                    "dashboard_text": "strategy dashboard",
                     "deploy_ratio_text": "60.0%",
                     "income_ratio_text": "10.0%",
                     "income_locked_ratio_text": "10.0%",
@@ -91,6 +92,7 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["execution"]["trade_threshold_value"], 250.0)
         self.assertEqual(plan["execution"]["status_display"], "risk-on")
         self.assertEqual(plan["execution"]["signal_display"], "signal")
+        self.assertEqual(plan["execution"]["dashboard_text"], "strategy dashboard")
         self.assertEqual(plan["execution"]["investable_cash"], 9000.0)
 
     def test_maps_hybrid_decision_from_snapshot_source(self):
@@ -149,6 +151,7 @@ class DecisionMapperTests(unittest.TestCase):
             diagnostics={
                 "signal_description": "risk on",
                 "status_description": "regime=soft_defense | breadth=55.0%",
+                "dashboard": "tech dashboard",
                 "benchmark_symbol": "QQQ",
             },
         )
@@ -174,8 +177,38 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["allocation"]["targets"]["BOXX"], 6000.0)
         self.assertEqual(plan["execution"]["signal_display"], "risk on")
         self.assertEqual(plan["execution"]["status_display"], "regime=soft_defense | breadth=55.0%")
+        self.assertEqual(plan["execution"]["dashboard_text"], "tech dashboard")
         self.assertEqual(plan["execution"]["benchmark_symbol"], "QQQ")
         self.assertEqual(plan["portfolio"]["portfolio_rows"], (("AAPL", "MSFT", "BOXX"),))
+
+    def test_keeps_cash_by_currency_from_snapshot_metadata(self):
+        decision = StrategyDecision(
+            positions=(PositionTarget(symbol="SOXL", target_value=0.0),),
+            diagnostics={
+                "execution_annotations": {
+                    "trade_threshold_value": 100.0,
+                    "investable_cash": 0.0,
+                }
+            },
+        )
+        snapshot = PortfolioSnapshot(
+            as_of=datetime.now(timezone.utc),
+            total_equity=0.0,
+            buying_power=0.0,
+            positions=(),
+            metadata={
+                "account_hash": "longbridge-sg",
+                "cash_by_currency": {"USD": 0.0, "SGD": 350.0},
+            },
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            snapshot=snapshot,
+            strategy_profile="soxl_soxx_trend_income",
+        )
+
+        self.assertEqual(plan["portfolio"]["cash_by_currency"], {"USD": 0.0, "SGD": 350.0})
 
     def test_translates_weight_decision_for_global_etf_rotation(self):
         decision = StrategyDecision(

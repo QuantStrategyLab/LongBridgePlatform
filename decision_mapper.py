@@ -56,6 +56,22 @@ def _cash_by_currency_from_account_state(
     return cash_by_currency
 
 
+def _cash_by_currency_from_snapshot(snapshot: Any | None) -> dict[str, float]:
+    metadata = getattr(snapshot, "metadata", {}) or {}
+    if not isinstance(metadata, Mapping):
+        return {}
+    raw_cash = metadata.get("cash_by_currency")
+    if not isinstance(raw_cash, Mapping):
+        return {}
+    cash_by_currency: dict[str, float] = {}
+    for currency, amount in raw_cash.items():
+        normalized_currency = str(currency or "").strip().upper()
+        if not normalized_currency:
+            continue
+        cash_by_currency[normalized_currency] = float(amount)
+    return cash_by_currency
+
+
 def _symbol_role(symbol: str) -> str | None:
     normalized = str(symbol or "").strip().upper()
     if normalized in _SAFE_HAVEN_SYMBOLS:
@@ -76,6 +92,8 @@ def _build_weight_translation_annotations(
     liquid_cash: float,
 ) -> ValueTargetExecutionAnnotations:
     diagnostics = dict(decision.diagnostics)
+    raw_annotations = diagnostics.get("execution_annotations")
+    execution_annotations = dict(raw_annotations) if isinstance(raw_annotations, Mapping) else {}
     threshold_value = _default_threshold_value(total_equity)
     signal_display = str(
         diagnostics.get("signal_description")
@@ -89,12 +107,18 @@ def _build_weight_translation_annotations(
         or diagnostics.get("canary_status")
         or ""
     ).strip() or None
+    dashboard_text = str(
+        execution_annotations.get("dashboard_text")
+        or diagnostics.get("dashboard")
+        or ""
+    ).strip() or None
     benchmark_symbol = str(diagnostics.get("benchmark_symbol") or "").strip().upper() or None
     return ValueTargetExecutionAnnotations(
         trade_threshold_value=threshold_value,
         reserved_cash=0.0,
         signal_display=signal_display,
         status_display=status_display,
+        dashboard_text=dashboard_text,
         benchmark_symbol=benchmark_symbol,
         benchmark_price=(
             float(diagnostics["benchmark_price"])
@@ -202,6 +226,7 @@ def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[
                 "reserved_cash",
                 "signal_display",
                 "status_display",
+                "dashboard_text",
                 "benchmark_symbol",
                 "benchmark_price",
                 "long_trend_value",
@@ -213,6 +238,7 @@ def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[
                 "reserved_cash": 0.0,
                 "signal_display": "",
                 "status_display": "",
+                "dashboard_text": "",
                 "benchmark_symbol": "QQQ",
                 "benchmark_price": 0.0,
                 "long_trend_value": 0.0,
@@ -312,6 +338,8 @@ def map_strategy_decision_to_plan(
         execution_defaults=execution_defaults,
     )
     cash_by_currency = _cash_by_currency_from_account_state(account_state)
+    if not cash_by_currency:
+        cash_by_currency = _cash_by_currency_from_snapshot(snapshot)
     if cash_by_currency:
         plan["portfolio"]["cash_by_currency"] = cash_by_currency
     return plan
