@@ -52,6 +52,7 @@ def _build_plan(
     benchmark_price=0.0,
     long_trend_value=0.0,
     exit_line=0.0,
+    cash_by_currency=None,
 ):
     return {
         "strategy_profile": strategy_profile,
@@ -71,6 +72,7 @@ def _build_plan(
             "sellable_quantities": dict(sellable_quantities),
             "total_equity": float(total_strategy_equity),
             "liquid_cash": float(available_cash),
+            "cash_by_currency": dict(cash_by_currency or {}),
         },
         "execution": {
             "trade_threshold_value": float(trade_threshold_value),
@@ -321,7 +323,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("可投资现金", sent_messages[0])
         self.assertIn("SOXX.US", sent_messages[0])
 
-    def test_zero_investable_cash_is_silently_skipped(self):
+    def test_zero_investable_cash_reports_buying_power_without_trade_note(self):
         plan = _build_plan(
             strategy_symbols=("BOXX",),
             safe_haven_symbols=("BOXX",),
@@ -349,7 +351,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
         self.assertEqual(len(sent_messages), 1)
         self.assertNotIn("账户现金", sent_messages[0])
-        self.assertNotIn("可投资现金: $0.00", sent_messages[0])
+        self.assertIn("购买力: $3065.61 | 可投资现金: $0.00", sent_messages[0])
+        self.assertIn("BOXX: $24,880.00 / 214股", sent_messages[0])
         self.assertIn("✅ 无需调仓", sent_messages[0])
         self.assertNotIn("本轮没有可执行订单", sent_messages[0])
         self.assertNotIn("说明", sent_messages[0])
@@ -385,6 +388,42 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("券商估算可买数量为 0", sent_messages[0])
         self.assertIn("可能有未完成挂单", sent_messages[0])
+
+    def test_non_usd_cash_is_reported_when_usd_cash_is_zero(self):
+        plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"),
+            risk_symbols=("SOXL", "SOXX"),
+            income_symbols=("QQQI", "SPYI"),
+            safe_haven_symbols=("BOXX",),
+            targets={"SOXL": 0.0, "SOXX": 0.0, "BOXX": 0.0, "QQQI": 0.0, "SPYI": 0.0},
+            market_values={"SOXL": 0.0, "SOXX": 0.0, "BOXX": 0.0, "QQQI": 0.0, "SPYI": 0.0},
+            sellable_quantities={"SOXL": 0, "SOXX": 0, "BOXX": 0, "QQQI": 0, "SPYI": 0},
+            quantities={"SOXL": 0, "SOXX": 0, "BOXX": 0, "QQQI": 0, "SPYI": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=0.0,
+            market_status="🚀 RISK-ON (SOXX+SOXL)",
+            deploy_ratio_text="90.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXX 站上 140 日门槛线，持有 SOXL 70.0% + SOXX 20.0%",
+            available_cash=0.0,
+            total_strategy_equity=0.0,
+            portfolio_rows=(("SOXL", "SOXX"), ("QQQI", "SPYI"), ("BOXX",)),
+            cash_by_currency={"USD": 0.0, "SGD": 350.0},
+        )
+
+        sent_messages, _, _ = self._run_strategy(
+            plan,
+            prices={},
+            dry_run_only=True,
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("各币种现金: SGD 350.00", sent_messages[0])
+        self.assertIn("检测到非 USD 现金", sent_messages[0])
+        self.assertIn("本轮没有可执行订单", sent_messages[0])
+        self.assertNotIn("✅ 无需调仓", sent_messages[0])
 
     def test_refreshes_account_state_after_sell_and_can_place_followup_buy(self):
         initial_plan = _build_plan(
@@ -618,8 +657,10 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("💓 【心跳检测】", sent_messages[0])
         self.assertIn("可投资现金", sent_messages[0])
         self.assertNotIn("💵 资金\n  - 账户现金:", sent_messages[0])
-        self.assertNotIn("💼 持仓", sent_messages[0])
-        self.assertNotIn("  - SOXX:", sent_messages[0])
+        self.assertIn("📌 账户概览", sent_messages[0])
+        self.assertIn("总资产（策略标的+现金）: $60,000.00", sent_messages[0])
+        self.assertIn("购买力: $101.95 | 可投资现金: $101.95", sent_messages[0])
+        self.assertIn("SOXX: $0.00 / 0股", sent_messages[0])
 
     def test_hybrid_heartbeat_hides_empty_semiconductor_fields_and_shows_benchmark_line(self):
         plan = _build_plan(
@@ -660,10 +701,11 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("💓 【心跳检测】", sent_messages[0])
         self.assertIn("🧭 策略: TQQQ 增长收益", sent_messages[0])
         self.assertIn("🧪 模拟运行模式", sent_messages[0])
-        self.assertNotIn("💼 持仓", sent_messages[0])
-        self.assertNotIn("  - TQQQ: $0.00", sent_messages[0])
-        self.assertNotIn("  - BOXX: $0.00", sent_messages[0])
-        self.assertNotIn("  - QQQI: $0.00", sent_messages[0])
+        self.assertIn("📌 账户概览", sent_messages[0])
+        self.assertIn("TQQQ: $0.00 / 0股", sent_messages[0])
+        self.assertIn("BOXX: $0.00 / 0股", sent_messages[0])
+        self.assertIn("QQQI: $0.00 / 0股", sent_messages[0])
+        self.assertIn("SPYI: $0.00 / 0股", sent_messages[0])
         self.assertNotIn("📈 QQQ 基准\n  - QQQ: 588.50\n  - MA200: 595.25\n  - 退出线: 573.00", sent_messages[0])
         self.assertIn("🎯 信号: 💤 等待信号", sent_messages[0])
         self.assertNotIn("账户现金: $0.00 | 可投资现金", sent_messages[0])

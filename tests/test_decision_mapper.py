@@ -36,6 +36,7 @@ class DecisionMapperTests(unittest.TestCase):
             "quantities": {"SOXL": 0, "SOXX": 0, "BOXX": 50, "QQQI": 10, "SPYI": 10},
             "sellable_quantities": {"SOXL": 0, "SOXX": 0, "BOXX": 50, "QQQI": 10, "SPYI": 10},
             "total_strategy_equity": 50000.0,
+            "cash_by_currency": {"USD": 10000.0, "SGD": 350.0},
         }
 
         plan = map_strategy_decision_to_plan(
@@ -48,6 +49,7 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["allocation"]["strategy_symbols"], ("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"))
         self.assertEqual(plan["allocation"]["targets"]["BOXX"], 15000.0)
         self.assertEqual(plan["portfolio"]["portfolio_rows"], (("SOXL", "SOXX"), ("QQQI", "SPYI"), ("BOXX",)))
+        self.assertEqual(plan["portfolio"]["cash_by_currency"], {"USD": 10000.0, "SGD": 350.0})
         self.assertEqual(plan["portfolio"]["sellable_quantities"]["BOXX"], 50)
         self.assertEqual(plan["execution"]["trade_threshold_value"], 500.0)
         self.assertEqual(plan["execution"]["investable_cash"], 9000.0)

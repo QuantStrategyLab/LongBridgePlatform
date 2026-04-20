@@ -35,6 +35,15 @@ class NotificationTests(unittest.TestCase):
             "💵 资金\n  - 账户现金: $1.00\n  - 可投资现金: $2.00",
         )
         self.assertEqual(translate("holdings_title"), "💼 持仓")
+        self.assertEqual(translate("portfolio_summary_title"), "📌 账户概览")
+        self.assertEqual(
+            translate("portfolio_buying_power", available="1.00", investable="2.00"),
+            "购买力: $1.00 | 可投资现金: $2.00",
+        )
+        self.assertEqual(
+            translate("holding_line", symbol="SOXL", value="123.45", qty=3),
+            "SOXL: $123.45 / 3股",
+        )
         self.assertEqual(translate("order_logs_title"), "🧾 执行明细")
         self.assertEqual(translate("benchmark_title", symbol="QQQ"), "📈 QQQ 基准")
         self.assertEqual(translate("market_status_blend_gate_risk_on", asset="SOXX+SOXL"), "🚀 风险开启（SOXX+SOXL）")

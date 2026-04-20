@@ -39,6 +39,23 @@ def _build_portfolio_inputs(
     raise ValueError("LongBridge plan mapping requires account_state or snapshot")
 
 
+def _cash_by_currency_from_account_state(
+    account_state: Mapping[str, Any] | None,
+) -> dict[str, float]:
+    if account_state is None:
+        return {}
+    raw_cash = account_state.get("cash_by_currency")
+    if not isinstance(raw_cash, Mapping):
+        return {}
+    cash_by_currency: dict[str, float] = {}
+    for currency, amount in raw_cash.items():
+        normalized_currency = str(currency or "").strip().upper()
+        if not normalized_currency:
+            continue
+        cash_by_currency[normalized_currency] = float(amount)
+    return cash_by_currency
+
+
 def _symbol_role(symbol: str) -> str | None:
     normalized = str(symbol or "").strip().upper()
     if normalized in _SAFE_HAVEN_SYMBOLS:
@@ -283,7 +300,7 @@ def map_strategy_decision_to_plan(
     strategy_symbols_order, portfolio_rows_layout, execution_fields, execution_defaults = _resolve_layout(
         canonical_profile
     )
-    return build_value_target_runtime_plan(
+    plan = build_value_target_runtime_plan(
         normalized_decision,
         strategy_profile=canonical_profile,
         portfolio_inputs=portfolio_inputs,
@@ -294,3 +311,7 @@ def map_strategy_decision_to_plan(
         execution_fields=execution_fields,
         execution_defaults=execution_defaults,
     )
+    cash_by_currency = _cash_by_currency_from_account_state(account_state)
+    if cash_by_currency:
+        plan["portfolio"]["cash_by_currency"] = cash_by_currency
+    return plan

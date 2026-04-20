@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import traceback
+from collections.abc import Mapping
 from datetime import datetime
 
 _ZH_REASON_REPLACEMENTS = (
@@ -167,12 +168,78 @@ def _build_benchmark_lines(execution, *, translator):
     ]
 
 
-def _format_holdings_lines(portfolio_rows, market_values, *, translator) -> list[str]:
-    lines = [translator("holdings_title")]
+def _normalize_cash_by_currency(raw_cash) -> dict[str, float]:
+    if not isinstance(raw_cash, Mapping):
+        return {}
+    cash_by_currency: dict[str, float] = {}
+    for currency, amount in raw_cash.items():
+        normalized_currency = str(currency or "").strip().upper()
+        if not normalized_currency:
+            continue
+        cash_by_currency[normalized_currency] = float(amount)
+    return cash_by_currency
+
+
+def _format_cash_by_currency(cash_by_currency: Mapping[str, float]) -> str:
+    parts = []
+    for currency in sorted(cash_by_currency, key=lambda value: (value != "USD", value)):
+        amount = float(cash_by_currency[currency])
+        if amount == 0.0:
+            continue
+        parts.append(f"{currency} {amount:,.2f}")
+    return ", ".join(parts)
+
+
+def _has_positive_non_usd_cash(cash_by_currency: Mapping[str, float]) -> bool:
+    return any(
+        currency != "USD" and float(amount) > 0.0
+        for currency, amount in cash_by_currency.items()
+    )
+
+
+def _append_portfolio_summary_lines(
+    lines,
+    *,
+    total_strategy_equity,
+    available_cash,
+    investable_cash,
+    cash_by_currency,
+    portfolio_rows,
+    market_values,
+    quantities,
+    translator,
+) -> None:
+    lines.append(translator("portfolio_summary_title"))
+    lines.append(
+        "  - "
+        + translator(
+            "portfolio_total_assets",
+            value=f"{total_strategy_equity:,.2f}",
+        )
+    )
+    lines.append(
+        "  - "
+        + translator(
+            "portfolio_buying_power",
+            available=f"{available_cash:.2f}",
+            investable=f"{investable_cash:.2f}",
+        )
+    )
+    formatted_cash = _format_cash_by_currency(cash_by_currency)
+    if formatted_cash:
+        lines.append(translator("cash_by_currency", currencies=formatted_cash))
+    lines.append("  - " + translator("holdings_title"))
     for row in portfolio_rows:
         for symbol in row:
-            lines.append(f"  - {symbol}: ${market_values[symbol]:,.2f}")
-    return lines
+            lines.append(
+                "    - "
+                + translator(
+                    "holding_line",
+                    symbol=symbol,
+                    value=f"{market_values[symbol]:,.2f}",
+                    qty=quantities.get(symbol, 0),
+                )
+            )
 
 
 def _append_status_lines(lines, *, execution, translator, signal_key):
@@ -319,6 +386,7 @@ def run_strategy(
     target_values = dict(allocation["targets"])
     total_strategy_equity = float(portfolio["total_equity"])
     available_cash = float(portfolio["liquid_cash"])
+    cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
     investable_cash = float(execution["investable_cash"])
     current_min_trade = float(execution["current_min_trade"])
     portfolio_rows = tuple(portfolio["portfolio_rows"])
@@ -441,9 +509,25 @@ def run_strategy(
         target_values = dict(allocation["targets"])
         total_strategy_equity = float(portfolio["total_equity"])
         available_cash = float(portfolio["liquid_cash"])
+        cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
         investable_cash = float(execution["investable_cash"])
         current_min_trade = float(execution["current_min_trade"])
         portfolio_rows = tuple(portfolio["portfolio_rows"])
+
+    if (
+        available_cash <= 0.0
+        and investable_cash <= 0.0
+        and _has_positive_non_usd_cash(cash_by_currency)
+    ):
+        record_note_log(
+            note_logs,
+            translator=translator,
+            with_prefix=with_prefix,
+            kind="buy_deferred_non_usd_cash",
+            available=f"{available_cash:.2f}",
+            investable=f"{investable_cash:.2f}",
+            currencies=_format_cash_by_currency(cash_by_currency),
+        )
     buy_candidates = [
         symbol
         for symbol in strategy_assets
@@ -552,11 +636,6 @@ def run_strategy(
             )
 
     if action_done:
-        cash_summary = translator(
-            "cash_summary",
-            available=f"{available_cash:.2f}",
-            investable=f"{investable_cash:.2f}",
-        )
         formatted_logs = "\n".join(f"  - {log}" for log in [*logs, *skip_logs, *note_logs])
         tg_lines = [translator("rebalance_title")]
         _append_strategy_line(
@@ -566,7 +645,17 @@ def run_strategy(
         )
         if dry_run_only:
             tg_lines.append(translator("dry_run_banner"))
-        tg_lines.append(cash_summary)
+        _append_portfolio_summary_lines(
+            tg_lines,
+            total_strategy_equity=total_strategy_equity,
+            available_cash=available_cash,
+            investable_cash=investable_cash,
+            cash_by_currency=cash_by_currency,
+            portfolio_rows=portfolio_rows,
+            market_values=market_values,
+            quantities=quantities,
+            translator=translator,
+        )
         _append_status_lines(
             tg_lines,
             execution=execution,
@@ -583,6 +672,17 @@ def run_strategy(
         )
         if dry_run_only:
             compact_lines.append(translator("dry_run_banner"))
+        _append_portfolio_summary_lines(
+            compact_lines,
+            total_strategy_equity=total_strategy_equity,
+            available_cash=available_cash,
+            investable_cash=investable_cash,
+            cash_by_currency=cash_by_currency,
+            portfolio_rows=portfolio_rows,
+            market_values=market_values,
+            quantities=quantities,
+            translator=translator,
+        )
         _append_compact_status_lines(
             compact_lines,
             execution=execution,
@@ -595,12 +695,6 @@ def run_strategy(
         send_tg_message(compact_tg_message)
     else:
         equity_text = f"{total_strategy_equity:,.2f}"
-        cash_summary = translator(
-            "cash_summary",
-            available=f"{available_cash:.2f}",
-            investable=f"{investable_cash:.2f}",
-        )
-        holdings_lines = _format_holdings_lines(portfolio_rows, market_values, translator=translator)
         no_trade_lines = [
             translator("heartbeat_title"),
         ]
@@ -612,14 +706,18 @@ def run_strategy(
         no_trade_lines.append(translator("equity", value=equity_text))
         if dry_run_only:
             no_trade_lines.append(translator("dry_run_banner"))
-        no_trade_lines.extend(
-            [
-                cash_summary,
-                separator,
-                *holdings_lines,
-                separator,
-            ]
+        _append_portfolio_summary_lines(
+            no_trade_lines,
+            total_strategy_equity=total_strategy_equity,
+            available_cash=available_cash,
+            investable_cash=investable_cash,
+            cash_by_currency=cash_by_currency,
+            portfolio_rows=portfolio_rows,
+            market_values=market_values,
+            quantities=quantities,
+            translator=translator,
         )
+        no_trade_lines.append(separator)
         _append_status_lines(
             no_trade_lines,
             execution=execution,
@@ -656,6 +754,17 @@ def run_strategy(
         compact_no_trade_lines.append(translator("equity", value=equity_text))
         if dry_run_only:
             compact_no_trade_lines.append(translator("dry_run_banner"))
+        _append_portfolio_summary_lines(
+            compact_no_trade_lines,
+            total_strategy_equity=total_strategy_equity,
+            available_cash=available_cash,
+            investable_cash=investable_cash,
+            cash_by_currency=cash_by_currency,
+            portfolio_rows=portfolio_rows,
+            market_values=market_values,
+            quantities=quantities,
+            translator=translator,
+        )
         _append_compact_status_lines(
             compact_no_trade_lines,
             execution=execution,
