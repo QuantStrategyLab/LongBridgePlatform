@@ -8,6 +8,8 @@ import traceback
 from collections.abc import Mapping
 from datetime import datetime
 
+from notifications.events import NotificationPublisher, RenderedNotification
+
 _ZH_REASON_REPLACEMENTS = (
     ("feature snapshot guard blocked execution", "特征快照校验阻止执行"),
     ("feature snapshot required", "需要特征快照"),
@@ -303,6 +305,10 @@ def run_strategy(
     sleeper=_noop_sleep,
 ):
     print(with_prefix(f"[{datetime.now()}] Starting strategy..."), flush=True)
+    notification_publisher = NotificationPublisher(
+        log_message=lambda message: print(with_prefix(message), flush=True),
+        send_message=send_tg_message,
+    )
 
     token = refresh_token_if_needed(
         fetch_token_from_secret(project_id, secret_name),
@@ -636,8 +642,12 @@ def run_strategy(
         )
         compact_lines.extend([separator, translator("order_logs_title"), formatted_logs])
         compact_tg_message = "\n".join(compact_lines)
-        print(with_prefix(detailed_tg_message), flush=True)
-        send_tg_message(compact_tg_message)
+        notification_publisher.publish(
+            RenderedNotification(
+                detailed_text=detailed_tg_message,
+                compact_text=compact_tg_message,
+            )
+        )
     else:
         no_trade_lines = [
             translator("heartbeat_title"),
@@ -703,8 +713,12 @@ def run_strategy(
             compact_no_trade_lines.extend([separator, translator("notes_title")])
             compact_no_trade_lines.extend(f"  - {log}" for log in note_logs)
         compact_no_trade_message = "\n".join(compact_no_trade_lines)
-        print(with_prefix(no_trade_message), flush=True)
-        send_tg_message(compact_no_trade_message)
+        notification_publisher.publish(
+            RenderedNotification(
+                detailed_text=no_trade_message,
+                compact_text=compact_no_trade_message,
+            )
+        )
 
 
 def safe_quote_last_price(quote_context, symbol, *, fetch_last_price, notify_issue):
