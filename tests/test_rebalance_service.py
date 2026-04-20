@@ -47,13 +47,37 @@ def _build_plan(
     available_cash,
     total_strategy_equity,
     portfolio_rows,
-    dashboard_text="",
+    dashboard_text=None,
     benchmark_symbol="",
     benchmark_price=0.0,
     long_trend_value=0.0,
     exit_line=0.0,
     cash_by_currency=None,
 ):
+    if dashboard_text is None:
+        dashboard_lines = [
+            "📌 策略账户概览",
+            f"  - 总资产（策略标的+现金）: ${float(total_strategy_equity):,.2f}",
+            f"  - 购买力: ${float(available_cash):.2f} | 可投资现金: ${float(investable_cash):.2f}",
+        ]
+        nonzero_cash = {
+            currency: amount
+            for currency, amount in dict(cash_by_currency or {}).items()
+            if float(amount) != 0.0
+        }
+        if nonzero_cash and (len(nonzero_cash) > 1 or "USD" not in nonzero_cash):
+            formatted_cash = ", ".join(
+                f"{currency} {float(nonzero_cash[currency]):,.2f}"
+                for currency in sorted(nonzero_cash, key=lambda value: (value != "USD", value))
+            )
+            dashboard_lines.append(f"  - 各币种现金: {formatted_cash}")
+        dashboard_lines.append("💼 策略持仓")
+        for row in portfolio_rows:
+            for symbol in row:
+                dashboard_lines.append(
+                    f"  - {symbol}: ${float(market_values[symbol]):,.2f} / {quantities.get(symbol, 0)}股"
+                )
+        dashboard_text = "\n".join(dashboard_lines)
     return {
         "strategy_profile": strategy_profile,
         "allocation": {
@@ -657,7 +681,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("💓 【心跳检测】", sent_messages[0])
         self.assertIn("可投资现金", sent_messages[0])
         self.assertNotIn("💵 资金\n  - 账户现金:", sent_messages[0])
-        self.assertIn("📌 账户概览", sent_messages[0])
+        self.assertIn("📌 策略账户概览", sent_messages[0])
         self.assertIn("总资产（策略标的+现金）: $60,000.00", sent_messages[0])
         self.assertIn("购买力: $101.95 | 可投资现金: $101.95", sent_messages[0])
         self.assertIn("SOXX: $0.00 / 0股", sent_messages[0])
@@ -701,7 +725,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("💓 【心跳检测】", sent_messages[0])
         self.assertIn("🧭 策略: TQQQ 增长收益", sent_messages[0])
         self.assertIn("🧪 模拟运行模式", sent_messages[0])
-        self.assertIn("📌 账户概览", sent_messages[0])
+        self.assertIn("📌 策略账户概览", sent_messages[0])
         self.assertIn("TQQQ: $0.00 / 0股", sent_messages[0])
         self.assertIn("BOXX: $0.00 / 0股", sent_messages[0])
         self.assertIn("QQQI: $0.00 / 0股", sent_messages[0])
