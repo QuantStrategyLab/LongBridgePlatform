@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import requests
 
+from notifications.events import NotificationPublisher, RenderedNotification
+
 
 SIGNAL_ICONS = {
     "hold": "💎",
@@ -223,9 +225,18 @@ def build_sender(token, chat_id, *, with_prefix_fn, requests_module=requests):
 
 
 def build_issue_notifier(*, with_prefix_fn, send_tg_message_fn):
+    publisher = NotificationPublisher(
+        log_message=lambda message: print(with_prefix_fn(message), flush=True),
+        send_message=send_tg_message_fn,
+    )
+
     def notify_issue(title, detail):
         message = f"{title}\n{detail}"
-        print(with_prefix_fn(message), flush=True)
-        send_tg_message_fn(message)
+        publisher.publish(
+            RenderedNotification(
+                detailed_text=message,
+                compact_text=message,
+            )
+        )
 
     return notify_issue

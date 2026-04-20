@@ -24,6 +24,7 @@ from notifications.order_alerts import (
     send_order_status_message as notifications_send_order_status_message,
     submit_order_with_alert as notifications_submit_order_with_alert,
 )
+from notifications.events import NotificationPublisher, RenderedNotification
 from notifications.telegram import (
     build_issue_notifier,
     build_prefixer,
@@ -130,6 +131,20 @@ def with_prefix(message: str) -> str:
 
 def send_tg_message(message):
     return build_sender(TG_TOKEN, TG_CHAT_ID, with_prefix_fn=with_prefix)(message)
+
+
+def publish_notification(*, detailed_text, compact_text):
+    publisher = NotificationPublisher(
+        log_message=lambda message: print(with_prefix(message), flush=True),
+        send_message=send_tg_message,
+    )
+    publisher.publish(
+        RenderedNotification(
+            detailed_text=detailed_text,
+            compact_text=compact_text,
+        )
+    )
+
 
 def notify_issue(title, detail):
     return build_issue_notifier(with_prefix_fn=with_prefix, send_tg_message_fn=send_tg_message)(title, detail)
@@ -447,8 +462,10 @@ def run_strategy():
             error_message=str(exc),
         )
         err = traceback.format_exc()
-        print(with_prefix(f"Strategy error:\n{err}"), flush=True)
-        send_tg_message(f"{t('error_title')}\n{err}")
+        publish_notification(
+            detailed_text=f"Strategy error:\n{err}",
+            compact_text=f"{t('error_title')}\n{err}",
+        )
     finally:
         try:
             report_path = persist_execution_report(report)
