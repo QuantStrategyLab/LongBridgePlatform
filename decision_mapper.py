@@ -90,10 +90,16 @@ def _build_weight_translation_annotations(
     *,
     total_equity: float,
     liquid_cash: float,
+    runtime_metadata: Mapping[str, Any] | None = None,
 ) -> ValueTargetExecutionAnnotations:
-    diagnostics = dict(decision.diagnostics)
+    diagnostics = {**dict(runtime_metadata or {}), **dict(decision.diagnostics)}
+    execution_annotations: dict[str, Any] = {}
+    raw_runtime_annotations = runtime_metadata.get("execution_annotations") if isinstance(runtime_metadata, Mapping) else None
+    if isinstance(raw_runtime_annotations, Mapping):
+        execution_annotations.update(raw_runtime_annotations)
     raw_annotations = diagnostics.get("execution_annotations")
-    execution_annotations = dict(raw_annotations) if isinstance(raw_annotations, Mapping) else {}
+    if isinstance(raw_annotations, Mapping):
+        execution_annotations.update(raw_annotations)
     threshold_value = _default_threshold_value(total_equity)
     signal_display = str(
         diagnostics.get("signal_description")
@@ -135,6 +141,40 @@ def _build_weight_translation_annotations(
             if diagnostics.get("exit_line") is not None
             else None
         ),
+        signal_date=(
+            str(execution_annotations.get("signal_date") or diagnostics.get("signal_date") or "").strip() or None
+        ),
+        effective_date=(
+            str(execution_annotations.get("effective_date") or diagnostics.get("effective_date") or "").strip()
+            or None
+        ),
+        execution_timing_contract=(
+            str(
+                execution_annotations.get("execution_timing_contract")
+                or diagnostics.get("execution_timing_contract")
+                or ""
+            ).strip()
+            or None
+        ),
+        execution_calendar_source=(
+            str(
+                execution_annotations.get("execution_calendar_source")
+                or diagnostics.get("execution_calendar_source")
+                or ""
+            ).strip()
+            or None
+        ),
+        signal_effective_after_trading_days=(
+            int(signal_delay)
+            if (
+                signal_delay := execution_annotations.get(
+                    "signal_effective_after_trading_days",
+                    diagnostics.get("signal_effective_after_trading_days"),
+                )
+            )
+            is not None
+            else None
+        ),
         current_min_trade=threshold_value,
         investable_cash=max(0.0, float(liquid_cash)),
     )
@@ -157,6 +197,7 @@ def _normalize_to_value_target_decision(
     decision: StrategyDecision,
     *,
     portfolio_inputs,
+    runtime_metadata: Mapping[str, Any] | None = None,
 ) -> tuple[StrategyDecision, ValueTargetExecutionAnnotations | None]:
     target_mode = resolve_decision_target_mode(decision)
     no_execute = "no_execute" in set(decision.risk_flags)
@@ -174,6 +215,7 @@ def _normalize_to_value_target_decision(
             decision,
             total_equity=float(portfolio_inputs.total_equity),
             liquid_cash=float(portfolio_inputs.liquid_cash),
+            runtime_metadata=runtime_metadata,
         )
 
     synthetic = _build_hold_current_value_decision(portfolio_inputs)
@@ -181,6 +223,7 @@ def _normalize_to_value_target_decision(
         decision,
         total_equity=float(portfolio_inputs.total_equity),
         liquid_cash=float(portfolio_inputs.liquid_cash),
+        runtime_metadata=runtime_metadata,
     )
     return synthetic, synthetic_annotations
 
@@ -197,6 +240,11 @@ def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[
                 "signal_display",
                 "status_display",
                 "dashboard_text",
+                "signal_date",
+                "effective_date",
+                "execution_timing_contract",
+                "execution_calendar_source",
+                "signal_effective_after_trading_days",
                 "benchmark_symbol",
                 "benchmark_price",
                 "long_trend_value",
@@ -209,6 +257,11 @@ def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[
                 "signal_display": "",
                 "status_display": "",
                 "dashboard_text": "",
+                "signal_date": "",
+                "effective_date": "",
+                "execution_timing_contract": "",
+                "execution_calendar_source": "",
+                "signal_effective_after_trading_days": None,
                 "benchmark_symbol": "QQQ",
                 "benchmark_price": 0.0,
                 "long_trend_value": 0.0,
@@ -227,6 +280,11 @@ def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[
                 "signal_display",
                 "status_display",
                 "dashboard_text",
+                "signal_date",
+                "effective_date",
+                "execution_timing_contract",
+                "execution_calendar_source",
+                "signal_effective_after_trading_days",
                 "benchmark_symbol",
                 "benchmark_price",
                 "long_trend_value",
@@ -239,6 +297,11 @@ def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[
                 "signal_display": "",
                 "status_display": "",
                 "dashboard_text": "",
+                "signal_date": "",
+                "effective_date": "",
+                "execution_timing_contract": "",
+                "execution_calendar_source": "",
+                "signal_effective_after_trading_days": None,
                 "benchmark_symbol": "QQQ",
                 "benchmark_price": 0.0,
                 "long_trend_value": 0.0,
@@ -255,6 +318,11 @@ def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[
             "signal_display",
             "status_display",
             "dashboard_text",
+            "signal_date",
+            "effective_date",
+            "execution_timing_contract",
+            "execution_calendar_source",
+            "signal_effective_after_trading_days",
             "benchmark_symbol",
             "benchmark_price",
             "long_trend_value",
@@ -270,6 +338,11 @@ def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[
             "signal_display": "",
             "status_display": "",
             "dashboard_text": "",
+            "signal_date": "",
+            "effective_date": "",
+            "execution_timing_contract": "",
+            "execution_calendar_source": "",
+            "signal_effective_after_trading_days": None,
             "deploy_ratio_text": "",
             "income_ratio_text": "",
             "income_locked_ratio_text": "",
@@ -285,16 +358,35 @@ def map_strategy_decision_to_plan(
     account_state: Mapping[str, Any] | None = None,
     snapshot: Any | None = None,
     strategy_profile: str,
+    runtime_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     canonical_profile = resolve_canonical_profile(strategy_profile)
     portfolio_inputs = _build_portfolio_inputs(account_state=account_state, snapshot=snapshot)
     normalized_decision, normalized_annotations = _normalize_to_value_target_decision(
         decision,
         portfolio_inputs=portfolio_inputs,
+        runtime_metadata=runtime_metadata,
     )
     annotations = normalized_annotations
     if annotations is None:
-        annotations = build_value_target_execution_annotations(normalized_decision)
+        merged_diagnostics = {**dict(runtime_metadata or {}), **dict(normalized_decision.diagnostics)}
+        merged_execution_annotations: dict[str, Any] = {}
+        raw_runtime_annotations = runtime_metadata.get("execution_annotations") if isinstance(runtime_metadata, Mapping) else None
+        if isinstance(raw_runtime_annotations, Mapping):
+            merged_execution_annotations.update(raw_runtime_annotations)
+        raw_decision_annotations = merged_diagnostics.get("execution_annotations")
+        if isinstance(raw_decision_annotations, Mapping):
+            merged_execution_annotations.update(raw_decision_annotations)
+        merged_decision = StrategyDecision(
+            positions=normalized_decision.positions,
+            budgets=normalized_decision.budgets,
+            risk_flags=normalized_decision.risk_flags,
+            diagnostics={
+                **merged_diagnostics,
+                "execution_annotations": merged_execution_annotations,
+            },
+        )
+        annotations = build_value_target_execution_annotations(merged_decision)
         investable_cash = annotations.investable_cash
         if investable_cash is None:
             investable_cash = max(
@@ -315,6 +407,11 @@ def map_strategy_decision_to_plan(
             benchmark_price=annotations.benchmark_price,
             long_trend_value=annotations.long_trend_value,
             exit_line=annotations.exit_line,
+            signal_date=annotations.signal_date,
+            effective_date=annotations.effective_date,
+            execution_timing_contract=annotations.execution_timing_contract,
+            execution_calendar_source=annotations.execution_calendar_source,
+            signal_effective_after_trading_days=annotations.signal_effective_after_trading_days,
             deploy_ratio_text=annotations.deploy_ratio_text,
             income_ratio_text=annotations.income_ratio_text,
             income_locked_ratio_text=annotations.income_locked_ratio_text,

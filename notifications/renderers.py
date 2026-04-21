@@ -1,14 +1,11 @@
-"""Application orchestration for LongBridgePlatform."""
+"""Notification rendering helpers for LongBridgePlatform."""
 
 from __future__ import annotations
 
 import re
-from datetime import datetime
 
-from application.execution_service import execute_rebalance_cycle
-from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
-from notifications.events import NotificationPublisher
-from notifications import renderers as notification_renderers
+from notifications.events import RenderedNotification
+
 
 _ZH_REASON_REPLACEMENTS = (
     ("feature snapshot guard blocked execution", "特征快照校验阻止执行"),
@@ -86,21 +83,6 @@ _ZH_REASON_REPLACEMENTS = (
 _DETAIL_FIELD_SPLIT_RE = re.compile(r"\s+(?=[^\s=:：]+[=:：])")
 
 
-def _plan_portfolio(plan):
-    return dict(plan.get("portfolio") or {})
-
-
-def _plan_execution(plan):
-    return dict(plan.get("execution") or {})
-
-
-def _plan_allocation(plan):
-    return dict(plan.get("allocation") or {})
-
-
-def _noop_sleep(_seconds):
-    return None
-
 def _translator_uses_zh(translator) -> bool:
     sample = str(translator("no_trades"))
     return any("\u4e00" <= ch <= "\u9fff" for ch in sample)
@@ -143,6 +125,22 @@ def _append_labeled_text(lines, template_key, value, *, translator, value_key):
     lines.extend(f"  - {part}" for part in parts[1:])
 
 
+def _build_timing_audit_lines(execution, *, translator):
+    signal_date = str(execution.get("signal_date") or "").strip()
+    effective_date = str(execution.get("effective_date") or "").strip()
+    contract = str(execution.get("execution_timing_contract") or "").strip()
+    if not signal_date and not effective_date and not contract:
+        return []
+    label = "⏱ 执行时点" if _translator_uses_zh(translator) else "⏱ Timing"
+    if signal_date and effective_date:
+        value = f"{signal_date} -> {effective_date}"
+    else:
+        value = signal_date or effective_date or contract
+    if contract and contract not in value:
+        value = f"{value} ({contract})" if value else contract
+    return [f"{label}: {value}"]
+
+
 def _has_benchmark_context(execution):
     return any(
         float(execution.get(key) or 0.0) > 0.0
@@ -177,6 +175,10 @@ def _append_dashboard_lines(lines, *, execution) -> None:
     dashboard_text = _format_dashboard_text(execution.get("dashboard_text"))
     if dashboard_text:
         lines.extend(dashboard_text.splitlines())
+
+
+def _append_timing_lines(lines, *, execution, translator) -> None:
+    lines.extend(_build_timing_audit_lines(execution, translator=translator))
 
 
 def _append_status_lines(lines, *, execution, translator, signal_key):
@@ -222,103 +224,123 @@ def _append_compact_status_lines(lines, *, execution, translator, signal_key):
         lines.append(translator(signal_key, msg=signal_summary))
 
 
-
 def _append_strategy_line(lines, *, strategy_display_name, translator):
     name = str(strategy_display_name or "").strip()
     if name:
         lines.append(translator("strategy_label", name=name))
 
 
-_localize_notification_text = notification_renderers._localize_notification_text
-_format_dashboard_text = notification_renderers._format_dashboard_text
-_append_status_lines = notification_renderers._append_status_lines
-
-
-
-def run_strategy(
+def render_rebalance_notification(
     *,
-    runtime: LongBridgeRebalanceRuntime,
-    config: LongBridgeRebalanceConfig,
-):
-    print(config.with_prefix(f"[{datetime.now()}] Starting strategy..."), flush=True)
-    notification_publisher = NotificationPublisher(
-        log_message=lambda message: print(config.with_prefix(message), flush=True),
-        send_message=runtime.notifications.send_text,
-    )
-    quote_context, trade_context, indicators = runtime.bootstrap()
-    market_data_port = runtime.market_data_port_factory(quote_context)
-    execution_port = runtime.execution_port_factory(trade_context)
-
-    def load_plan(*, current_snapshot):
-        current_plan = runtime.resolve_rebalance_plan(
-            indicators=indicators,
-            snapshot=current_snapshot,
-        )
-        current_portfolio = _plan_portfolio(current_plan)
-        current_execution = _plan_execution(current_plan)
-        current_allocation = _plan_allocation(current_plan)
-        if current_allocation.get("target_mode") != "value":
-            raise ValueError("LongBridgePlatform requires allocation.target_mode=value")
-        return current_plan, current_portfolio, current_execution, current_allocation
-
-    def fetch_replanned_state():
-        current_snapshot = runtime.portfolio_port_factory(
-            quote_context,
-            trade_context,
-        ).get_portfolio_snapshot()
-        return load_plan(current_snapshot=current_snapshot)
-
-    plan, portfolio, execution, allocation = fetch_replanned_state()
-
-    execution_result = execute_rebalance_cycle(
-        trade_context=trade_context,
-        plan=plan,
-        portfolio=portfolio,
+    execution,
+    logs,
+    skip_logs,
+    note_logs,
+    translator,
+    separator,
+    strategy_display_name,
+    dry_run_only,
+) -> RenderedNotification:
+    formatted_logs = "\n".join(f"  - {log}" for log in [*logs, *skip_logs, *note_logs])
+    detailed_lines = [translator("rebalance_title")]
+    _append_strategy_line(detailed_lines, strategy_display_name=strategy_display_name, translator=translator)
+    if dry_run_only:
+        detailed_lines.append(translator("dry_run_banner"))
+    _append_dashboard_lines(detailed_lines, execution=execution)
+    _append_timing_lines(detailed_lines, execution=execution, translator=translator)
+    _append_status_lines(
+        detailed_lines,
         execution=execution,
-        allocation=allocation,
-        fetch_replanned_state=fetch_replanned_state,
-        market_data_port=market_data_port,
-        estimate_max_purchase_quantity=runtime.estimate_max_purchase_quantity,
-        execution_port=execution_port,
-        post_submit_order=runtime.post_submit_order,
-        notify_issue=runtime.notify_issue,
-        translator=config.translator,
-        with_prefix=config.with_prefix,
-        limit_sell_discount=config.limit_sell_discount,
-        limit_buy_premium=config.limit_buy_premium,
-        dry_run_only=config.dry_run_only,
-        post_sell_refresh_attempts=config.post_sell_refresh_attempts,
-        post_sell_refresh_interval_sec=config.post_sell_refresh_interval_sec,
-        sleeper=config.sleeper or _noop_sleep,
+        translator=translator,
+        signal_key="signal",
     )
-    execution = execution_result.execution
-    logs = list(execution_result.logs)
-    skip_logs = list(execution_result.skip_logs)
-    note_logs = list(execution_result.note_logs)
-    action_done = execution_result.action_done
+    detailed_lines.extend([separator, translator("order_logs_title"), formatted_logs])
 
-    if action_done:
-        notification_publisher.publish(
-            notification_renderers.render_rebalance_notification(
-                execution=execution,
-                logs=logs,
-                skip_logs=skip_logs,
-                note_logs=note_logs,
-                translator=config.translator,
-                separator=config.separator,
-                strategy_display_name=config.strategy_display_name,
-                dry_run_only=config.dry_run_only,
-            )
+    compact_lines = [translator("rebalance_title")]
+    _append_strategy_line(compact_lines, strategy_display_name=strategy_display_name, translator=translator)
+    if dry_run_only:
+        compact_lines.append(translator("dry_run_banner"))
+    _append_dashboard_lines(compact_lines, execution=execution)
+    _append_timing_lines(compact_lines, execution=execution, translator=translator)
+    _append_compact_status_lines(
+        compact_lines,
+        execution=execution,
+        translator=translator,
+        signal_key="signal",
+    )
+    compact_lines.extend([separator, translator("order_logs_title"), formatted_logs])
+    return RenderedNotification(
+        detailed_text="\n".join(detailed_lines),
+        compact_text="\n".join(compact_lines),
+    )
+
+
+def render_heartbeat_notification(
+    *,
+    execution,
+    skip_logs,
+    note_logs,
+    translator,
+    separator,
+    strategy_display_name,
+    dry_run_only,
+) -> RenderedNotification:
+    detailed_lines = [translator("heartbeat_title")]
+    _append_strategy_line(detailed_lines, strategy_display_name=strategy_display_name, translator=translator)
+    if dry_run_only:
+        detailed_lines.append(translator("dry_run_banner"))
+    _append_dashboard_lines(detailed_lines, execution=execution)
+    _append_timing_lines(detailed_lines, execution=execution, translator=translator)
+    detailed_lines.append(separator)
+    _append_status_lines(
+        detailed_lines,
+        execution=execution,
+        translator=translator,
+        signal_key="heartbeat_signal",
+    )
+    detailed_lines.extend(
+        [
+            separator,
+            translator("no_executable_orders") if (skip_logs or note_logs) else translator("no_trades"),
+        ]
+    )
+    detailed_text = "\n".join(detailed_lines)
+    if skip_logs:
+        detailed_text += (
+            f"\n{separator}\n"
+            f"{translator('skipped_actions')}\n"
+            + "\n".join(f"  - {log}" for log in skip_logs)
         )
-    else:
-        notification_publisher.publish(
-            notification_renderers.render_heartbeat_notification(
-                execution=execution,
-                skip_logs=skip_logs,
-                note_logs=note_logs,
-                translator=config.translator,
-                separator=config.separator,
-                strategy_display_name=config.strategy_display_name,
-                dry_run_only=config.dry_run_only,
-            )
+    if note_logs:
+        detailed_text += (
+            f"\n{separator}\n"
+            f"{translator('notes_title')}\n"
+            + "\n".join(f"  - {log}" for log in note_logs)
         )
+
+    compact_lines = [translator("heartbeat_title")]
+    _append_strategy_line(compact_lines, strategy_display_name=strategy_display_name, translator=translator)
+    if dry_run_only:
+        compact_lines.append(translator("dry_run_banner"))
+    _append_dashboard_lines(compact_lines, execution=execution)
+    _append_timing_lines(compact_lines, execution=execution, translator=translator)
+    _append_compact_status_lines(
+        compact_lines,
+        execution=execution,
+        translator=translator,
+        signal_key="heartbeat_signal",
+    )
+    compact_lines.append(
+        translator("no_executable_orders") if (skip_logs or note_logs) else translator("no_trades")
+    )
+    if skip_logs:
+        compact_lines.extend([separator, translator("skipped_actions")])
+        compact_lines.extend(f"  - {log}" for log in skip_logs)
+    if note_logs:
+        compact_lines.extend([separator, translator("notes_title")])
+        compact_lines.extend(f"  - {log}" for log in note_logs)
+
+    return RenderedNotification(
+        detailed_text=detailed_text,
+        compact_text="\n".join(compact_lines),
+    )

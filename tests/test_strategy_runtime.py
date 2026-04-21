@@ -126,6 +126,11 @@ def _build_runtime_settings(
 
 class StrategyRuntimeTests(unittest.TestCase):
     def test_market_history_runtime_loads_loader_into_context(self):
+        class _FixedDatetime:
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 4, 1, tzinfo=tz or timezone.utc)
+
         class _GlobalEntrypoint:
             manifest = StrategyManifest(
                 profile="global_etf_rotation",
@@ -143,7 +148,10 @@ class StrategyRuntimeTests(unittest.TestCase):
         entrypoint = _GlobalEntrypoint()
         runtime = strategy_runtime_module.LoadedStrategyRuntime(
             entrypoint=entrypoint,
-            runtime_adapter=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            runtime_adapter=StrategyRuntimeAdapter(
+                portfolio_input_name="portfolio_snapshot",
+                runtime_policy=StrategyRuntimePolicy(signal_effective_after_trading_days=1),
+            ),
             runtime_settings=_build_runtime_settings("global_etf_rotation"),
             merged_runtime_config={"safe_haven": "BIL", "ranking_pool": ("VOO", "VGK")},
         )
@@ -157,44 +165,62 @@ class StrategyRuntimeTests(unittest.TestCase):
             buying_power=200.0,
             positions=(),
         )
-        result = runtime.evaluate(
-            market_history=market_history_loader,
-            portfolio_snapshot=snapshot,
-            translator=lambda key, **_kwargs: key,
-        )
+        with patch.object(strategy_runtime_module, "datetime", _FixedDatetime):
+            result = runtime.evaluate(
+                market_history=market_history_loader,
+                portfolio_snapshot=snapshot,
+                translator=lambda key, **_kwargs: key,
+            )
 
         self.assertIs(entrypoint.ctx.market_data["market_history"], market_history_loader)
         self.assertIs(entrypoint.ctx.portfolio, snapshot)
+        self.assertEqual(entrypoint.ctx.runtime_config["signal_effective_after_trading_days"], 1)
         self.assertEqual(result.metadata["strategy_profile"], "global_etf_rotation")
+        self.assertEqual(result.metadata["signal_date"], "2026-04-01")
+        self.assertEqual(result.metadata["effective_date"], "2026-04-02")
+        self.assertEqual(result.metadata["execution_timing_contract"], "next_trading_day")
 
     def test_runtime_exposes_managed_symbols_and_injects_translator(self):
+        class _FixedDatetime:
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 4, 1, tzinfo=tz or timezone.utc)
+
         entrypoint = _SemiconductorEntrypoint()
         runtime = strategy_runtime_module.LoadedStrategyRuntime(
             entrypoint=entrypoint,
-            runtime_adapter=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            runtime_adapter=StrategyRuntimeAdapter(
+                portfolio_input_name="portfolio_snapshot",
+                runtime_policy=StrategyRuntimePolicy(signal_effective_after_trading_days=1),
+            ),
             runtime_settings=_build_runtime_settings("soxl_soxx_trend_income"),
             merged_runtime_config={"managed_symbols": ("SOXL", "SOXX", "BOXX", "QQQI", "SPYI")},
         )
 
-        result = runtime.evaluate(
-            derived_indicators={"soxl": {"price": 1.0, "ma_trend": 2.0}},
-            portfolio_snapshot=PortfolioSnapshot(
-                as_of=datetime.now(timezone.utc),
-                total_equity=100.0,
-                buying_power=100.0,
-                positions=(),
-            ),
-            translator=lambda key, **_kwargs: key,
-            signal_text_fn=lambda icon: f"signal:{icon}",
-        )
+        with patch.object(strategy_runtime_module, "datetime", _FixedDatetime):
+            result = runtime.evaluate(
+                derived_indicators={"soxl": {"price": 1.0, "ma_trend": 2.0}},
+                portfolio_snapshot=PortfolioSnapshot(
+                    as_of=datetime.now(timezone.utc),
+                    total_equity=100.0,
+                    buying_power=100.0,
+                    positions=(),
+                ),
+                translator=lambda key, **_kwargs: key,
+                signal_text_fn=lambda icon: f"signal:{icon}",
+            )
 
         self.assertEqual(runtime.managed_symbols, ("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"))
         self.assertEqual(entrypoint.ctx.market_data["derived_indicators"]["soxl"]["price"], 1.0)
         self.assertEqual(entrypoint.ctx.portfolio.total_equity, 100.0)
         self.assertIn("translator", entrypoint.ctx.runtime_config)
         self.assertEqual(entrypoint.ctx.runtime_config["signal_text_fn"]("idle"), "signal:idle")
+        self.assertEqual(entrypoint.ctx.runtime_config["signal_effective_after_trading_days"], 1)
         self.assertEqual(result.metadata["strategy_profile"], "soxl_soxx_trend_income")
         self.assertEqual(result.metadata["strategy_display_name"], "SOXL/SOXX Semiconductor Trend Income")
+        self.assertEqual(result.metadata["signal_date"], "2026-04-01")
+        self.assertEqual(result.metadata["effective_date"], "2026-04-02")
+        self.assertEqual(result.metadata["execution_timing_contract"], "next_trading_day")
 
     def test_load_strategy_runtime_uses_entrypoint_default_config(self):
         entrypoint = _SemiconductorEntrypoint()

@@ -6,44 +6,26 @@ Runs on Cloud Run; token from Secret Manager, orders via LongPort OpenAPI, alert
 import os
 import time
 import traceback
-from datetime import datetime, timezone
-import pandas as pd
+from datetime import datetime
 
 from flask import Flask
 
 import google.auth
+from application.runtime_broker_adapters import build_runtime_broker_adapters
+from application.runtime_composer import build_runtime_composer
 from application.rebalance_service import run_strategy as run_rebalance_cycle
+from application.runtime_strategy_adapters import build_runtime_strategy_adapters
 from entrypoints.cloud_run import is_market_open_now
 from runtime_config_support import load_platform_runtime_settings
-from decision_mapper import map_strategy_decision_to_plan
-from notifications.order_alerts import (
-    is_filled_status as notifications_is_filled_status,
-    is_partial_filled_status as notifications_is_partial_filled_status,
-    is_terminal_error_status as notifications_is_terminal_error_status,
-    monitor_submitted_order_status as notifications_monitor_submitted_order_status,
-    send_order_status_message as notifications_send_order_status_message,
-    submit_order_with_alert as notifications_submit_order_with_alert,
-)
-from notifications.events import NotificationPublisher, RenderedNotification
-from notifications.telegram import (
-    build_issue_notifier,
-    build_prefixer,
-    build_sender,
-    build_signal_text,
-    build_strategy_display_name,
-    build_translator,
-)
+from notifications.telegram import build_signal_text, build_strategy_display_name, build_translator
 from quant_platform_kit.common.runtime_reports import (
     append_runtime_report_error,
     build_runtime_report_base,
     finalize_runtime_report,
     persist_runtime_report,
 )
-from quant_platform_kit.strategy_contracts import (
-    build_portfolio_snapshot_from_account_state as qpk_build_portfolio_snapshot_from_account_state,
-    build_strategy_evaluation_inputs,
-)
-from runtime_logging import RuntimeLogContext, build_run_id, emit_runtime_log
+from quant_platform_kit.strategy_contracts import build_strategy_evaluation_inputs
+from runtime_logging import build_run_id, emit_runtime_log
 from quant_platform_kit.longbridge import (
     build_contexts,
     calculate_rotation_indicators,
@@ -56,6 +38,7 @@ from quant_platform_kit.longbridge import (
     submit_order,
 )
 from strategy_runtime import load_strategy_runtime
+from decision_mapper import map_strategy_decision_to_plan
 
 app = Flask(__name__)
 
@@ -88,6 +71,11 @@ STRATEGY_RUNTIME_CONFIG = dict(STRATEGY_RUNTIME.merged_runtime_config)
 MANAGED_SYMBOLS = STRATEGY_RUNTIME.managed_symbols
 AVAILABLE_INPUTS = frozenset(STRATEGY_RUNTIME.runtime_adapter.available_inputs)
 BENCHMARK_SYMBOL = str(STRATEGY_RUNTIME_CONFIG.get("benchmark_symbol", "QQQ"))
+SIGNAL_EFFECTIVE_AFTER_TRADING_DAYS = getattr(
+    getattr(STRATEGY_RUNTIME.runtime_adapter, "runtime_policy", None),
+    "signal_effective_after_trading_days",
+    None,
+)
 
 # Order pricing: limit order discount/premium relative to last price
 LIMIT_SELL_DISCOUNT = 0.995               # sell limit at 0.5% below last
@@ -111,294 +99,99 @@ strategy_display_name = build_strategy_display_name(t)(
     STRATEGY_PROFILE,
     fallback_name=STRATEGY_DISPLAY_NAME,
 )
-RUNTIME_LOG_CONTEXT = RuntimeLogContext(
-    platform="longbridge",
-    deploy_target="cloud_run",
-    service_name=os.getenv("K_SERVICE", "longbridge-platform"),
+BROKER_ADAPTERS = build_runtime_broker_adapters(
+    strategy_symbols=tuple(MANAGED_SYMBOLS),
+    account_hash=ACCOUNT_PREFIX or ACCOUNT_REGION or "longbridge",
+    fetch_last_price_fn=fetch_last_price,
+    fetch_strategy_account_state_fn=lambda quote_context, trade_context: fetch_strategy_account_state(
+        quote_context,
+        trade_context,
+        list(MANAGED_SYMBOLS),
+    ),
+    submit_order_fn=submit_order,
+)
+STRATEGY_ADAPTERS = build_runtime_strategy_adapters(
+    strategy_runtime=STRATEGY_RUNTIME,
     strategy_profile=STRATEGY_PROFILE,
-    account_scope=ACCOUNT_REGION,
-    account_region=ACCOUNT_REGION,
-    project_id=PROJECT_ID,
-    extra_fields={
-        "account_prefix": ACCOUNT_PREFIX,
-        "strategy_display_name": STRATEGY_DISPLAY_NAME,
-        "strategy_display_name_localized": strategy_display_name,
-    },
+    strategy_runtime_config=STRATEGY_RUNTIME_CONFIG,
+    available_inputs=AVAILABLE_INPUTS,
+    benchmark_symbol=BENCHMARK_SYMBOL,
+    signal_text_fn=signal_text,
+    translator=t,
+    broker_adapters=BROKER_ADAPTERS,
+    calculate_rotation_indicators_fn=calculate_rotation_indicators,
+    build_strategy_evaluation_inputs_fn=build_strategy_evaluation_inputs,
+    map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan,
 )
 
-def with_prefix(message: str) -> str:
-    return build_prefixer(ACCOUNT_PREFIX)(message)
 
-def send_tg_message(message):
-    return build_sender(TG_TOKEN, TG_CHAT_ID, with_prefix_fn=with_prefix)(message)
-
-
-def publish_notification(*, detailed_text, compact_text):
-    publisher = NotificationPublisher(
-        log_message=lambda message: print(with_prefix(message), flush=True),
-        send_message=send_tg_message,
-    )
-    publisher.publish(
-        RenderedNotification(
-            detailed_text=detailed_text,
-            compact_text=compact_text,
-        )
-    )
-
-
-def notify_issue(title, detail):
-    return build_issue_notifier(with_prefix_fn=with_prefix, send_tg_message_fn=send_tg_message)(title, detail)
-
-
-def log_runtime_event(log_context, event, **fields):
-    return emit_runtime_log(
-        log_context,
-        event,
-        printer=lambda line: print(line, flush=True),
-        **fields,
-    )
-
-
-def build_execution_report(log_context):
-    return build_runtime_report_base(
-        platform=log_context.platform,
-        deploy_target=log_context.deploy_target,
-        service_name=log_context.service_name,
+def build_composer():
+    return build_runtime_composer(
+        project_id=PROJECT_ID,
+        secret_name=SECRET_NAME,
+        token_refresh_threshold_days=TOKEN_REFRESH_THRESHOLD_DAYS,
+        account_prefix=ACCOUNT_PREFIX,
+        account_region=ACCOUNT_REGION,
         strategy_profile=STRATEGY_PROFILE,
+        strategy_display_name=STRATEGY_DISPLAY_NAME,
+        strategy_display_name_localized=strategy_display_name,
         strategy_domain=RUNTIME_SETTINGS.strategy_domain,
-        account_scope=log_context.account_scope,
-        account_region=log_context.account_region,
-        run_id=log_context.run_id,
-        run_source="cloud_run",
-        dry_run=RUNTIME_SETTINGS.dry_run_only,
-        started_at=datetime.now(timezone.utc),
-        summary={
-            "managed_symbols": list(MANAGED_SYMBOLS),
-            "account_prefix": ACCOUNT_PREFIX,
-            "benchmark_symbol": BENCHMARK_SYMBOL,
-            "strategy_display_name": STRATEGY_DISPLAY_NAME,
-            "strategy_display_name_localized": strategy_display_name,
-        },
-    )
-
-
-def persist_execution_report(report):
-    persisted = persist_runtime_report(
-        report,
-        base_dir=os.getenv("EXECUTION_REPORT_OUTPUT_DIR"),
-        gcs_prefix_uri=os.getenv("EXECUTION_REPORT_GCS_URI"),
-        gcp_project_id=PROJECT_ID,
-    )
-    return persisted.gcs_uri or persisted.local_path
-
-
-def is_filled_status(status):
-    return notifications_is_filled_status(status)
-
-def is_partial_filled_status(status):
-    return notifications_is_partial_filled_status(status)
-
-def is_terminal_error_status(status):
-    return notifications_is_terminal_error_status(status)
-
-def send_order_status_message(title, symbol, side_text, quantity, order_id, status, executed_qty="0", executed_price="0", reason=""):
-    del title
-    notifications_send_order_status_message(
-        symbol,
-        side_text,
-        quantity,
-        order_id,
-        status,
-        translator=t,
-        send_tg_message=send_tg_message,
-        executed_qty=executed_qty,
-        executed_price=executed_price,
-        reason=reason,
-    )
-
-
-def safe_quote_last_price(q_ctx, symbol):
-    """Get last done price for a symbol; returns None if quote unavailable."""
-    try:
-        return fetch_last_price(q_ctx, symbol)
-    except Exception as e:
-        notify_issue("Quote failed", f"Symbol: {symbol}\n{e}")
-        return None
-
-
-def estimate_cash_buy_quantity_safe(t_ctx, symbol, order_kind, ref_price):
-    """Max buy quantity by cash; ref_price required even for market orders. Returns None on error."""
-    try:
-        return estimate_max_purchase_quantity(
-            t_ctx,
-            symbol,
-            order_kind=order_kind,
-            ref_price=ref_price,
-        )
-    except Exception:
-        notify_issue(
-            "Estimate max buy failed",
-            f"Symbol: {symbol}\nOrderKind: {order_kind}\n{traceback.format_exc()}"
-        )
-        return None
-
-def monitor_submitted_order_status(t_ctx, symbol, side_text, quantity, order_id):
-    notifications_monitor_submitted_order_status(
-        t_ctx,
-        symbol,
-        side_text,
-        quantity,
-        order_id,
-        fetch_order_status=fetch_order_status,
+        notify_lang=NOTIFY_LANG,
+        tg_token=TG_TOKEN,
+        tg_chat_id=TG_CHAT_ID,
+        managed_symbols=tuple(MANAGED_SYMBOLS),
+        benchmark_symbol=BENCHMARK_SYMBOL,
+        signal_effective_after_trading_days=SIGNAL_EFFECTIVE_AFTER_TRADING_DAYS,
+        separator=SEPARATOR,
+        limit_sell_discount=LIMIT_SELL_DISCOUNT,
+        limit_buy_premium=LIMIT_BUY_PREMIUM,
         order_poll_interval_sec=ORDER_POLL_INTERVAL_SEC,
         order_poll_max_attempts=ORDER_POLL_MAX_ATTEMPTS,
+        dry_run_only=RUNTIME_SETTINGS.dry_run_only,
+        broker_adapters=BROKER_ADAPTERS,
+        strategy_adapters=STRATEGY_ADAPTERS,
+        estimate_max_purchase_quantity_fn=estimate_max_purchase_quantity,
+        fetch_order_status_fn=fetch_order_status,
+        fetch_token_from_secret_fn=fetch_token_from_secret,
+        refresh_token_if_needed_fn=refresh_token_if_needed,
+        build_contexts_fn=build_contexts,
+        run_id_builder=build_run_id,
+        event_logger=emit_runtime_log,
+        report_builder=build_runtime_report_base,
+        report_persister=persist_runtime_report,
         translator=t,
-        send_tg_message=send_tg_message,
-        notify_issue=notify_issue,
+        env_reader=os.getenv,
         sleeper=time.sleep,
-    )
-
-def submit_order_with_alert(t_ctx, symbol, order_type, side, quantity, logs, log_message, submitted_price=None):
-    return notifications_submit_order_with_alert(
-        t_ctx,
-        symbol,
-        order_type,
-        side,
-        quantity,
-        logs,
-        log_message,
-        submit_order=submit_order,
-        fetch_order_status=fetch_order_status,
-        translator=t,
-        send_tg_message=send_tg_message,
-        notify_issue=notify_issue,
-        order_poll_interval_sec=ORDER_POLL_INTERVAL_SEC,
-        order_poll_max_attempts=ORDER_POLL_MAX_ATTEMPTS,
-        sleeper=time.sleep,
-        print_with_prefix=lambda message: print(with_prefix(message), flush=True),
-        submitted_price=submitted_price,
-    )
-
-# ---------------------------------------------------------------------------
-# Strategy: NYSE hours check, indicators, balance/positions, target allocation, sell then buy
-# ---------------------------------------------------------------------------
-def calculate_strategy_indicators(quote_context):
-    if "feature_snapshot" in AVAILABLE_INPUTS and not ({"benchmark_history", "qqq_history", "derived_indicators", "indicators"} & AVAILABLE_INPUTS):
-        return {}
-    if "market_history" in AVAILABLE_INPUTS:
-        market_inputs = {"market_history": build_market_history_loader(quote_context)}
-        if "benchmark_history" in AVAILABLE_INPUTS:
-            market_inputs["benchmark_history"] = fetch_daily_price_history(quote_context, f"{BENCHMARK_SYMBOL}.US")
-        if "qqq_history" in AVAILABLE_INPUTS:
-            market_inputs["qqq_history"] = fetch_daily_price_history(quote_context, f"{BENCHMARK_SYMBOL}.US")
-        return market_inputs
-    if "benchmark_history" in AVAILABLE_INPUTS or "qqq_history" in AVAILABLE_INPUTS:
-        return fetch_daily_price_history(quote_context, f"{BENCHMARK_SYMBOL}.US")
-    trend_ma_window = int(STRATEGY_RUNTIME_CONFIG.get("trend_ma_window", 150))
-    return calculate_rotation_indicators(quote_context, trend_window=trend_ma_window)
-
-
-def build_market_history_loader(quote_context):
-    def load_market_history(_broker_client, symbol, *_args, **_kwargs):
-        history = fetch_daily_price_history(quote_context, f"{str(symbol).strip().upper()}.US")
-        if not history:
-            return pd.Series(dtype=float)
-        index = pd.bdate_range(end=pd.Timestamp.utcnow().normalize(), periods=len(history))
-        closes = [float(bar["close"]) for bar in history]
-        return pd.Series(closes, index=index, dtype=float)
-
-    return load_market_history
-
-
-def fetch_daily_price_history(quote_context, symbol: str, *, lookback: int = 260):
-    from longport.openapi import AdjustType, Period
-
-    bars = quote_context.candlesticks(symbol, Period.Day, lookback, AdjustType.ForwardAdjust)
-    if not bars:
-        return None
-    history = []
-    for bar in bars:
-        close = float(bar.close)
-        history.append(
-            {
-                "close": close,
-                "high": float(getattr(bar, "high", close)),
-                "low": float(getattr(bar, "low", close)),
-            }
-        )
-    return history
-
-
-def fetch_managed_account_state(quote_context, trade_context):
-    return fetch_strategy_account_state(quote_context, trade_context, list(MANAGED_SYMBOLS))
-
-
-def build_portfolio_snapshot_from_account_state(account_state):
-    return qpk_build_portfolio_snapshot_from_account_state(
-        account_state,
-        strategy_symbols=MANAGED_SYMBOLS,
-        metadata={"account_hash": ACCOUNT_PREFIX or ACCOUNT_REGION or "longbridge"},
-    )
-
-
-def resolve_rebalance_plan(*, indicators, account_state):
-    snapshot = None
-    if "portfolio_snapshot" in AVAILABLE_INPUTS or "snapshot" in AVAILABLE_INPUTS:
-        snapshot = build_portfolio_snapshot_from_account_state(account_state)
-    market_inputs = {
-        "market_history": indicators,
-        "derived_indicators": indicators,
-        "indicators": indicators,
-        "benchmark_history": indicators,
-        "qqq_history": indicators,
-    }
-    if isinstance(indicators, dict) and any(
-        key in indicators for key in ("market_history", "benchmark_history", "qqq_history")
-    ):
-        market_inputs.update(indicators)
-    evaluation_inputs = build_strategy_evaluation_inputs(
-        available_inputs=AVAILABLE_INPUTS,
-        market_inputs=market_inputs,
-        portfolio_snapshot=snapshot,
-        account_state=account_state,
-        translator=t,
-        signal_text_fn=signal_text,
-    )
-    evaluation = STRATEGY_RUNTIME.evaluate(
-        **evaluation_inputs,
-    )
-    return map_strategy_decision_to_plan(
-        evaluation.decision,
-        account_state=account_state if "account_state" in AVAILABLE_INPUTS else None,
-        snapshot=snapshot,
-        strategy_profile=STRATEGY_PROFILE,
+        printer=print,
     )
 
 
 def run_strategy():
-    log_context = RUNTIME_LOG_CONTEXT.with_run(build_run_id())
-    report = build_execution_report(log_context)
+    composer = build_composer()
+    reporting_adapters = composer.build_reporting_adapters()
+    log_context, report = reporting_adapters.start_run()
+    notification_adapters = composer.build_notification_adapters()
     try:
-        log_runtime_event(
+        reporting_adapters.log_event(
             log_context,
             "strategy_cycle_started",
             message="Starting strategy execution",
         )
-        print(with_prefix(f"[{datetime.now()}] Starting strategy..."), flush=True)
+        print(composer.with_prefix(f"[{datetime.now()}] Starting strategy..."), flush=True)
 
         market_open = is_market_open_now()
         if isinstance(market_open, tuple):
             market_open, error = market_open
-            log_runtime_event(
+            reporting_adapters.log_event(
                 log_context,
                 "market_hours_check_failed",
                 message="Market hours check failed",
                 severity="WARNING",
                 error_message=str(error),
             )
-            print(with_prefix(f"Market hours check failed: {error}"), flush=True)
+            print(composer.with_prefix(f"Market hours check failed: {error}"), flush=True)
         if not market_open:
-            log_runtime_event(
+            reporting_adapters.log_event(
                 log_context,
                 "outside_market_hours",
                 message="Outside market hours; skip execution",
@@ -410,36 +203,14 @@ def run_strategy():
                     "skip_reason": "market_closed",
                 },
             )
-            print(with_prefix("Outside market hours; skip."), flush=True)
+            print(composer.with_prefix("Outside market hours; skip."), flush=True)
             return
         run_rebalance_cycle(
-            project_id=PROJECT_ID,
-            secret_name=SECRET_NAME,
-            token_refresh_threshold_days=TOKEN_REFRESH_THRESHOLD_DAYS,
-            limit_sell_discount=LIMIT_SELL_DISCOUNT,
-            limit_buy_premium=LIMIT_BUY_PREMIUM,
-            separator=SEPARATOR,
-            translator=t,
-            with_prefix=with_prefix,
-            send_tg_message=send_tg_message,
-            notify_issue=notify_issue,
-            fetch_token_from_secret=fetch_token_from_secret,
-            refresh_token_if_needed=refresh_token_if_needed,
-            build_contexts=build_contexts,
-            calculate_strategy_indicators=calculate_strategy_indicators,
-            fetch_strategy_account_state=fetch_managed_account_state,
-            resolve_rebalance_plan=resolve_rebalance_plan,
-            fetch_last_price=fetch_last_price,
-            estimate_max_purchase_quantity=estimate_max_purchase_quantity,
-            submit_order_with_alert=submit_order_with_alert,
-            dry_run_only=RUNTIME_SETTINGS.dry_run_only,
-            strategy_display_name=strategy_display_name,
-            post_sell_refresh_attempts=ORDER_POLL_MAX_ATTEMPTS,
-            post_sell_refresh_interval_sec=ORDER_POLL_INTERVAL_SEC,
-            sleeper=time.sleep,
+            runtime=composer.build_rebalance_runtime(),
+            config=composer.build_rebalance_config(),
         )
         finalize_runtime_report(report, status="ok")
-        log_runtime_event(
+        reporting_adapters.log_event(
             log_context,
             "strategy_cycle_completed",
             message="Strategy execution completed",
@@ -453,7 +224,7 @@ def run_strategy():
             error_type=type(exc).__name__,
         )
         finalize_runtime_report(report, status="error")
-        log_runtime_event(
+        reporting_adapters.log_event(
             log_context,
             "strategy_cycle_failed",
             message="Strategy execution failed",
@@ -462,13 +233,13 @@ def run_strategy():
             error_message=str(exc),
         )
         err = traceback.format_exc()
-        publish_notification(
+        notification_adapters.publish_cycle_notification(
             detailed_text=f"Strategy error:\n{err}",
             compact_text=f"{t('error_title')}\n{err}",
         )
     finally:
         try:
-            report_path = persist_execution_report(report)
+            report_path = reporting_adapters.persist_execution_report(report)
             print(f"execution_report {report_path}", flush=True)
         except Exception as persist_exc:
             print(f"failed to persist execution report: {persist_exc}", flush=True)

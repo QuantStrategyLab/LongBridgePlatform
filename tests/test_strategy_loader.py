@@ -44,34 +44,27 @@ class StrategyLoaderTests(unittest.TestCase):
             ("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"),
         )
 
-    def test_load_strategy_entrypoint_resolves_mega_cap_dynamic_top20(self):
+    def test_load_strategy_entrypoint_rejects_archived_mega_cap_dynamic_top20(self):
         try:
             from strategy_loader import load_strategy_entrypoint_for_profile
 
-            entrypoint = load_strategy_entrypoint_for_profile("mega_cap_leader_rotation_dynamic_top20")
+            with self.assertRaises(ValueError):
+                load_strategy_entrypoint_for_profile("mega_cap_leader_rotation_dynamic_top20")
         except ModuleNotFoundError as exc:
             if exc.name in {"numpy", "pandas"}:
                 self.skipTest(f"{exc.name} is not installed")
             raise
 
-        self.assertEqual(entrypoint.manifest.profile, "mega_cap_leader_rotation_dynamic_top20")
-        self.assertEqual(entrypoint.manifest.required_inputs, frozenset({"feature_snapshot"}))
-
-    def test_load_strategy_entrypoint_resolves_dynamic_mega_leveraged_pullback(self):
+    def test_load_strategy_entrypoint_rejects_archived_dynamic_mega_leveraged_pullback(self):
         try:
             from strategy_loader import load_strategy_entrypoint_for_profile
 
-            entrypoint = load_strategy_entrypoint_for_profile("dynamic_mega_leveraged_pullback")
+            with self.assertRaises(ValueError):
+                load_strategy_entrypoint_for_profile("dynamic_mega_leveraged_pullback")
         except ModuleNotFoundError as exc:
             if exc.name in {"numpy", "pandas"}:
                 self.skipTest(f"{exc.name} is not installed")
             raise
-
-        self.assertEqual(entrypoint.manifest.profile, "dynamic_mega_leveraged_pullback")
-        self.assertEqual(
-            entrypoint.manifest.required_inputs,
-            frozenset({"feature_snapshot", "market_history", "benchmark_history", "portfolio_snapshot"}),
-        )
 
     def test_load_strategy_entrypoint_rejects_legacy_soxl_alias(self):
         try:
@@ -118,31 +111,17 @@ class StrategyLoaderTests(unittest.TestCase):
         self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
         self.assertEqual(adapter.status_icon, "📏")
 
-    def test_load_strategy_runtime_adapter_declares_mega_cap_inputs(self):
+    def test_load_strategy_runtime_adapter_rejects_archived_mega_cap_inputs(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
 
-        adapter = load_strategy_runtime_adapter_for_profile("mega_cap_leader_rotation_dynamic_top20")
+        with self.assertRaises(ValueError):
+            load_strategy_runtime_adapter_for_profile("mega_cap_leader_rotation_dynamic_top20")
 
-        self.assertEqual(
-            adapter.available_inputs,
-            frozenset({"feature_snapshot", "portfolio_snapshot"}),
-        )
-        self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
-        self.assertTrue(adapter.require_snapshot_manifest)
-        self.assertEqual(adapter.status_icon, "👑")
-
-    def test_load_strategy_runtime_adapter_declares_dynamic_mega_leveraged_inputs(self):
+    def test_load_strategy_runtime_adapter_rejects_archived_dynamic_mega_leveraged_inputs(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
 
-        adapter = load_strategy_runtime_adapter_for_profile("dynamic_mega_leveraged_pullback")
-
-        self.assertEqual(
-            adapter.available_inputs,
-            frozenset({"feature_snapshot", "market_history", "benchmark_history", "portfolio_snapshot"}),
-        )
-        self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
-        self.assertTrue(adapter.require_snapshot_manifest)
-        self.assertEqual(adapter.status_icon, "2x")
+        with self.assertRaises(ValueError):
+            load_strategy_runtime_adapter_for_profile("dynamic_mega_leveraged_pullback")
 
     def test_load_strategy_runtime_adapter_declares_hybrid_inputs(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
