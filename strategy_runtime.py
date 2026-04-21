@@ -13,6 +13,8 @@ from quant_platform_kit.strategy_contracts import (
     StrategyDecision,
     StrategyEntrypoint,
     StrategyRuntimeAdapter,
+    apply_runtime_policy_to_runtime_config,
+    build_execution_timing_metadata,
     build_strategy_context_from_available_inputs,
 )
 from runtime_config_support import PlatformRuntimeSettings
@@ -66,6 +68,7 @@ class LoadedStrategyRuntime:
         runtime_config.setdefault("translator", translator)
         if signal_text_fn is not None:
             runtime_config.setdefault("signal_text_fn", signal_text_fn)
+        apply_runtime_policy_to_runtime_config(runtime_config, self.runtime_adapter)
 
         if _FEATURE_SNAPSHOT_INPUT in frozenset(self.entrypoint.manifest.required_inputs):
             return self._evaluate_feature_snapshot_strategy(
@@ -73,10 +76,11 @@ class LoadedStrategyRuntime:
                 available_inputs=available_inputs,
             )
 
+        as_of = datetime.now(timezone.utc)
         ctx = build_strategy_context_from_available_inputs(
             entrypoint=self.entrypoint,
             runtime_adapter=self.runtime_adapter,
-            as_of=datetime.now(timezone.utc),
+            as_of=as_of,
             available_inputs=available_inputs,
             runtime_config=runtime_config,
         )
@@ -86,6 +90,12 @@ class LoadedStrategyRuntime:
             metadata={
                 "strategy_profile": self.profile,
                 "strategy_display_name": self.display_name,
+                **build_execution_timing_metadata(
+                    signal_date=as_of,
+                    signal_effective_after_trading_days=(
+                        self.runtime_adapter.runtime_policy.signal_effective_after_trading_days
+                    ),
+                ),
             },
         )
 

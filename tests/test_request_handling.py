@@ -98,7 +98,8 @@ def install_stub_modules():
         merged_runtime_config={"trend_ma_window": 150},
         managed_symbols=("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"),
         runtime_adapter=types.SimpleNamespace(
-            available_inputs=frozenset({"derived_indicators", "portfolio_snapshot"})
+            available_inputs=frozenset({"derived_indicators", "portfolio_snapshot"}),
+            runtime_policy=types.SimpleNamespace(signal_effective_after_trading_days=1),
         ),
         evaluate=lambda **_kwargs: None,
     )
@@ -156,8 +157,7 @@ def load_module():
             clear=False,
         ):
             sys.modules.pop("main", None)
-            module = importlib.import_module("main")
-            return importlib.reload(module)
+            return importlib.import_module("main")
 
 
 class RequestHandlingTests(unittest.TestCase):
@@ -218,8 +218,11 @@ class RequestHandlingTests(unittest.TestCase):
         module.emit_runtime_log = lambda *args, **kwargs: None
         module.is_market_open_now = lambda: True
         module.run_rebalance_cycle = lambda **_kwargs: None
-        module.persist_execution_report = (
-            lambda report: observed_reports.append(dict(report)) or "/tmp/runtime-report.json"
+        module.persist_runtime_report = (
+            lambda report, **_kwargs: observed_reports.append(dict(report)) or types.SimpleNamespace(
+                local_path="/tmp/runtime-report.json",
+                gcs_uri=None,
+            )
         )
 
         module.run_strategy()
@@ -234,6 +237,9 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(report["summary"]["managed_symbols"], list(module.MANAGED_SYMBOLS))
         self.assertEqual(report["summary"]["strategy_display_name"], module.STRATEGY_DISPLAY_NAME)
         self.assertEqual(report["summary"]["strategy_display_name_localized"], module.strategy_display_name)
+        self.assertEqual(report["summary"]["execution_timing_contract"], "next_trading_day")
+        self.assertTrue(report["summary"]["signal_date"])
+        self.assertTrue(report["summary"]["effective_date"])
 
 
 if __name__ == "__main__":

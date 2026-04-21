@@ -1,7 +1,6 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,9 +19,19 @@ import types
 requests_stub = types.ModuleType("requests")
 requests_stub.post = lambda *args, **kwargs: None
 
-with patch.dict(sys.modules, {"requests": requests_stub}):
+_original_requests_module = sys.modules.get("requests")
+sys.modules["requests"] = requests_stub
+try:
     from application import rebalance_service
+    from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
     from notifications.telegram import build_translator
+    from quant_platform_kit.common.models import ExecutionReport, PortfolioSnapshot, Position, QuoteSnapshot
+    from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort, CallableNotificationPort, CallablePortfolioPort
+finally:
+    if _original_requests_module is None:
+        sys.modules.pop("requests", None)
+    else:
+        sys.modules["requests"] = _original_requests_module
 
 
 def _build_plan(
@@ -53,6 +62,9 @@ def _build_plan(
     long_trend_value=0.0,
     exit_line=0.0,
     cash_by_currency=None,
+    signal_date="2026-04-21",
+    effective_date="2026-04-22",
+    execution_timing_contract="next_trading_day",
 ):
     if dashboard_text is None:
         dashboard_lines = [
@@ -112,11 +124,193 @@ def _build_plan(
             "benchmark_price": float(benchmark_price),
             "long_trend_value": float(long_trend_value),
             "exit_line": float(exit_line),
+            "signal_date": signal_date,
+            "effective_date": effective_date,
+            "execution_timing_contract": execution_timing_contract,
         },
     }
 
 
+def _build_snapshot(plan, *, phase=""):
+    portfolio = dict(plan["portfolio"])
+    metadata = {"cash_by_currency": dict(portfolio.get("cash_by_currency") or {})}
+    if phase:
+        metadata["phase"] = phase
+    return PortfolioSnapshot(
+        as_of="2026-04-21",
+        total_equity=float(portfolio["total_equity"]),
+        buying_power=float(portfolio["liquid_cash"]),
+        cash_balance=float(portfolio["liquid_cash"]),
+        positions=tuple(
+            Position(
+                symbol=symbol,
+                quantity=float(portfolio["quantities"].get(symbol, 0)),
+                market_value=float(portfolio["market_values"].get(symbol, 0.0)),
+            )
+            for symbol in portfolio["strategy_symbols"]
+        ),
+        metadata=metadata,
+    )
+
+
 class RebalanceServiceNotificationTests(unittest.TestCase):
+    def test_run_strategy_prefers_portfolio_port_runtime_path(self):
+        sent_messages = []
+        observed = {}
+        snapshot = PortfolioSnapshot(
+            as_of="2026-04-21",
+            total_equity=60000.0,
+            buying_power=101.95,
+            cash_balance=101.95,
+            positions=(
+                Position(symbol="SOXX", quantity=0, market_value=0.0),
+            ),
+            metadata={"cash_by_currency": {"USD": 101.95}},
+        )
+        plan = _build_plan(
+            strategy_symbols=("SOXX",),
+            risk_symbols=("SOXX",),
+            targets={"SOXX": 34718.05},
+            market_values={"SOXX": 0.0},
+            sellable_quantities={"SOXX": 0},
+            quantities={"SOXX": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=101.95,
+            market_status="🛡️ DE-LEVER (SOXX)",
+            deploy_ratio_text="57.9%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="38.3%",
+            signal_message="SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
+            available_cash=101.95,
+            total_strategy_equity=60000.0,
+            portfolio_rows=(("SOXX",),),
+        )
+
+        rebalance_service.run_strategy(
+            runtime=LongBridgeRebalanceRuntime(
+                bootstrap=lambda: ("quote-context", "trade-context", {"soxl": {"price": 1.0}}),
+                resolve_rebalance_plan=lambda *, indicators, snapshot=None, account_state=None: (
+                    observed.setdefault("indicators", indicators),
+                    observed.setdefault("snapshot", snapshot),
+                    observed.setdefault("account_state", account_state),
+                    plan,
+                )[-1],
+                market_data_port_factory=lambda _quote_context: CallableMarketDataPort(
+                    quote_loader=lambda symbol: QuoteSnapshot(
+                        symbol=symbol,
+                        as_of="2026-04-21",
+                        last_price=322.74,
+                    )
+                ),
+                estimate_max_purchase_quantity=lambda *args, **kwargs: 0,
+                notifications=CallableNotificationPort(sent_messages.append),
+                notify_issue=lambda title, detail: sent_messages.append(f"{title}\n{detail}"),
+                portfolio_port_factory=lambda _quote_context, _trade_context: CallablePortfolioPort(
+                    lambda: snapshot
+                ),
+                execution_port_factory=lambda _trade_context: CallableExecutionPort(
+                    lambda _order_intent: (_ for _ in ()).throw(AssertionError("unexpected order submit"))
+                ),
+            ),
+            config=LongBridgeRebalanceConfig(
+                limit_sell_discount=0.995,
+                limit_buy_premium=1.005,
+                separator="━━━━━━━━━━━━━━━━━━",
+                translator=build_translator("zh"),
+                with_prefix=lambda message: f"[HK/LongBridgeQuant] {message}",
+                strategy_display_name="SOXL/SOXX 半导体趋势收益",
+            ),
+        )
+
+        self.assertIs(observed["snapshot"], snapshot)
+        self.assertIsNone(observed["account_state"])
+        self.assertEqual(observed["indicators"], {"soxl": {"price": 1.0}})
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("【心跳", sent_messages[0])
+
+    def test_run_strategy_supports_execution_port_runtime_path(self):
+        sent_messages = []
+        observed_orders = []
+        observed_post_submit = []
+        snapshot = PortfolioSnapshot(
+            as_of="2026-04-21",
+            total_equity=60000.0,
+            buying_power=50000.0,
+            cash_balance=50000.0,
+            positions=(Position(symbol="SOXX", quantity=0, market_value=0.0),),
+            metadata={"cash_by_currency": {"USD": 50000.0}},
+        )
+        plan = _build_plan(
+            strategy_symbols=("SOXX",),
+            risk_symbols=("SOXX",),
+            targets={"SOXX": 34718.05},
+            market_values={"SOXX": 0.0},
+            sellable_quantities={"SOXX": 0},
+            quantities={"SOXX": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=50000.0,
+            market_status="🛡️ DE-LEVER (SOXX)",
+            deploy_ratio_text="57.9%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="38.3%",
+            signal_message="SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 57.9%",
+            available_cash=50000.0,
+            total_strategy_equity=60000.0,
+            portfolio_rows=(("SOXX",),),
+        )
+
+        rebalance_service.run_strategy(
+            runtime=LongBridgeRebalanceRuntime(
+                bootstrap=lambda: ("quote-context", "trade-context", {"soxl": {"price": 1.0}}),
+                resolve_rebalance_plan=lambda *, indicators, snapshot=None: plan,
+                market_data_port_factory=lambda _quote_context: CallableMarketDataPort(
+                    quote_loader=lambda symbol: QuoteSnapshot(
+                        symbol=symbol,
+                        as_of="2026-04-21",
+                        last_price=322.74,
+                    )
+                ),
+                estimate_max_purchase_quantity=lambda *args, **kwargs: 200,
+                notifications=CallableNotificationPort(sent_messages.append),
+                notify_issue=lambda title, detail: sent_messages.append(f"{title}\n{detail}"),
+                portfolio_port_factory=lambda _quote_context, _trade_context: CallablePortfolioPort(
+                    lambda: snapshot
+                ),
+                execution_port_factory=lambda _trade_context: CallableExecutionPort(
+                    lambda order_intent: (
+                        observed_orders.append(order_intent),
+                        ExecutionReport(
+                            symbol=order_intent.symbol,
+                            side=order_intent.side,
+                            quantity=order_intent.quantity,
+                            status="submitted",
+                            broker_order_id="lb-order-1",
+                        ),
+                    )[-1]
+                ),
+                post_submit_order=lambda trade_context, order_intent, report: observed_post_submit.append(
+                    (trade_context, order_intent.symbol, report.broker_order_id)
+                ),
+            ),
+            config=LongBridgeRebalanceConfig(
+                limit_sell_discount=0.995,
+                limit_buy_premium=1.005,
+                separator="━━━━━━━━━━━━━━━━━━",
+                translator=build_translator("zh"),
+                with_prefix=lambda message: f"[HK/LongBridgeQuant] {message}",
+                strategy_display_name="SOXL/SOXX 半导体趋势收益",
+            ),
+        )
+
+        self.assertEqual(len(observed_orders), 1)
+        self.assertEqual(observed_orders[0].symbol, "SOXX.US")
+        self.assertEqual(observed_orders[0].order_type, "limit")
+        self.assertEqual(observed_post_submit, [("trade-context", "SOXX.US", "lb-order-1")])
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("【调仓", sent_messages[0])
+
     def test_append_status_lines_localizes_snapshot_guard_text_for_zh(self):
         lines = []
         rebalance_service._append_status_lines(
@@ -201,36 +395,16 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         *,
         prices,
         refreshed_plan=None,
-        account_states=None,
+        portfolio_snapshots=None,
         estimate_max_purchase_quantity_value=0,
         dry_run_only=False,
         strategy_display_name="SOXL/SOXX 半导体趋势收益",
         post_sell_refresh_attempts=1,
     ):
         sent_messages = []
-        observed_account_states = []
+        observed_snapshots = []
+        observed_orders = []
         observed_sleeps = []
-
-        def fake_send_tg_message(message):
-            sent_messages.append(message)
-
-        def fake_notify_issue(title, detail):
-            fake_send_tg_message(f"{title}\n{detail}")
-
-        def fake_submit_order_with_alert(
-            trade_context,
-            symbol,
-            order_type,
-            side,
-            quantity,
-            logs,
-            log_message,
-            *,
-            submitted_price=None,
-        ):
-            del trade_context, order_type, side, quantity, submitted_price
-            logs.append(f"{log_message} （订单号: test-order）")
-            return True
 
         if isinstance(refreshed_plan, (list, tuple)):
             plan_side_effect = [plan, *refreshed_plan]
@@ -238,50 +412,70 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             plan_side_effect = [plan, refreshed_plan or plan]
         observed_plan_inputs = []
 
-        account_state_values = list(account_states or [{}, {}])
+        snapshot_values = list(
+            portfolio_snapshots
+            or [
+                _build_snapshot(plan, phase="before_cycle"),
+                _build_snapshot(refreshed_plan or plan, phase="after_cycle"),
+            ]
+        )
 
-        def fake_fetch_strategy_account_state(quote_context, trade_context):
-            del quote_context, trade_context
-            if not account_state_values:
-                raise AssertionError("unexpected extra fetch_strategy_account_state call")
-            value = account_state_values.pop(0)
-            observed_account_states.append(value)
+        def fake_load_snapshot():
+            if not snapshot_values:
+                raise AssertionError("unexpected extra portfolio snapshot refresh")
+            value = snapshot_values.pop(0)
+            observed_snapshots.append(value)
             return value
 
-        def fake_resolve_rebalance_plan(*, indicators, account_state):
-            observed_plan_inputs.append((indicators, account_state))
+        def fake_resolve_rebalance_plan(*, indicators, snapshot):
+            observed_plan_inputs.append((indicators, snapshot))
             if not plan_side_effect:
                 raise AssertionError("unexpected extra resolve_rebalance_plan call")
             return plan_side_effect.pop(0)
 
         rebalance_service.run_strategy(
-            project_id="project-1",
-            secret_name="secret-1",
-            token_refresh_threshold_days=30,
-            limit_sell_discount=0.995,
-            limit_buy_premium=1.005,
-            separator="━━━━━━━━━━━━━━━━━━",
-            translator=build_translator("zh"),
-            with_prefix=lambda message: f"[HK/LongBridgeQuant] {message}",
-            send_tg_message=fake_send_tg_message,
-            notify_issue=fake_notify_issue,
-            fetch_token_from_secret=lambda project_id, secret_name: "refresh-token",
-            refresh_token_if_needed=lambda *args, **kwargs: "live-token",
-            build_contexts=lambda app_key, app_secret, token: ("quote-context", "trade-context"),
-            calculate_strategy_indicators=lambda quote_context: {"soxl": {"price": 1, "ma_trend": 2}},
-            fetch_strategy_account_state=fake_fetch_strategy_account_state,
-            resolve_rebalance_plan=fake_resolve_rebalance_plan,
-            fetch_last_price=lambda quote_context, symbol: prices[symbol],
-            estimate_max_purchase_quantity=lambda *args, **kwargs: estimate_max_purchase_quantity_value,
-            submit_order_with_alert=fake_submit_order_with_alert,
-            dry_run_only=dry_run_only,
-            strategy_display_name=strategy_display_name,
-            post_sell_refresh_attempts=post_sell_refresh_attempts,
-            post_sell_refresh_interval_sec=0.0,
-            sleeper=observed_sleeps.append,
+            runtime=LongBridgeRebalanceRuntime(
+                bootstrap=lambda: ("quote-context", "trade-context", {"soxl": {"price": 1, "ma_trend": 2}}),
+                resolve_rebalance_plan=fake_resolve_rebalance_plan,
+                market_data_port_factory=lambda _quote_context: CallableMarketDataPort(
+                    quote_loader=lambda symbol: QuoteSnapshot(
+                        symbol=symbol,
+                        as_of="2026-04-21",
+                        last_price=float(prices[symbol]),
+                    )
+                ),
+                estimate_max_purchase_quantity=lambda *args, **kwargs: estimate_max_purchase_quantity_value,
+                notifications=CallableNotificationPort(sent_messages.append),
+                notify_issue=lambda title, detail: sent_messages.append(f"{title}\n{detail}"),
+                portfolio_port_factory=lambda _quote_context, _trade_context: CallablePortfolioPort(fake_load_snapshot),
+                execution_port_factory=lambda _trade_context: CallableExecutionPort(
+                    lambda order_intent: (
+                        observed_orders.append(order_intent),
+                        ExecutionReport(
+                            symbol=order_intent.symbol,
+                            side=order_intent.side,
+                            quantity=order_intent.quantity,
+                            status="submitted",
+                            broker_order_id="test-order",
+                        ),
+                    )[-1]
+                ),
+            ),
+            config=LongBridgeRebalanceConfig(
+                limit_sell_discount=0.995,
+                limit_buy_premium=1.005,
+                separator="━━━━━━━━━━━━━━━━━━",
+                translator=build_translator("zh"),
+                with_prefix=lambda message: f"[HK/LongBridgeQuant] {message}",
+                strategy_display_name=strategy_display_name,
+                dry_run_only=dry_run_only,
+                post_sell_refresh_attempts=post_sell_refresh_attempts,
+                post_sell_refresh_interval_sec=0.0,
+                sleeper=observed_sleeps.append,
+            ),
         )
 
-        return sent_messages, observed_account_states, observed_plan_inputs
+        return sent_messages, observed_snapshots, observed_plan_inputs
 
     def test_sell_then_buy_skip_is_sent_in_single_summary_message(self):
         plan = _build_plan(
@@ -311,6 +505,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("🔔 【调仓指令】", sent_messages[0])
         self.assertIn("🧭 策略: SOXL/SOXX 半导体趋势收益", sent_messages[0])
+        self.assertIn("⏱ 执行时点: 2026-04-21 -> 2026-04-22 (next_trading_day)", sent_messages[0])
         self.assertIn("限价卖出", sent_messages[0])
         self.assertIn("买入说明", sent_messages[0])
         self.assertIn("SOXX.US", sent_messages[0])
@@ -342,6 +537,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("💓 【心跳检测】", sent_messages[0])
+        self.assertIn("⏱ 执行时点: 2026-04-21 -> 2026-04-22 (next_trading_day)", sent_messages[0])
         self.assertIn("本轮没有可执行订单", sent_messages[0])
         self.assertIn("说明", sent_messages[0])
         self.assertIn("可投资现金", sent_messages[0])
@@ -488,15 +684,17 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             total_strategy_equity=60000.0,
             portfolio_rows=(("SOXL", "SOXX"),),
         )
-        sent_messages, observed_account_states, observed_plan_inputs = self._run_strategy(
+        before_sell_snapshot = _build_snapshot(initial_plan, phase="before_sell")
+        after_sell_snapshot = _build_snapshot(refreshed_plan, phase="after_sell")
+        sent_messages, observed_snapshots, observed_plan_inputs = self._run_strategy(
             initial_plan,
             refreshed_plan=refreshed_plan,
-            account_states=[{"phase": "before_sell"}, {"phase": "after_sell"}],
+            portfolio_snapshots=[before_sell_snapshot, after_sell_snapshot],
             prices={"SOXL.US": 45.94, "SOXX.US": 322.74},
             estimate_max_purchase_quantity_value=200,
         )
 
-        self.assertEqual(observed_account_states, [{"phase": "before_sell"}, {"phase": "after_sell"}])
+        self.assertEqual(observed_snapshots, [before_sell_snapshot, after_sell_snapshot])
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("🔔 【调仓指令】", sent_messages[0])
         self.assertIn("限价卖出", sent_messages[0])
@@ -569,13 +767,16 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             portfolio_rows=(("TQQQ", "BOXX"),),
         )
 
-        sent_messages, observed_account_states, observed_plan_inputs = self._run_strategy(
+        before_sell_snapshot = _build_snapshot(initial_plan, phase="before_sell")
+        stale_snapshot = _build_snapshot(stale_refreshed_plan, phase="stale_after_sell")
+        settled_snapshot = _build_snapshot(settled_refreshed_plan, phase="settled_after_sell")
+        sent_messages, observed_snapshots, observed_plan_inputs = self._run_strategy(
             initial_plan,
             refreshed_plan=[stale_refreshed_plan, settled_refreshed_plan],
-            account_states=[
-                {"phase": "before_sell"},
-                {"phase": "stale_after_sell"},
-                {"phase": "settled_after_sell"},
+            portfolio_snapshots=[
+                before_sell_snapshot,
+                stale_snapshot,
+                settled_snapshot,
             ],
             prices={"TQQQ.US": 50.0, "BOXX.US": 100.0},
             estimate_max_purchase_quantity_value=200,
@@ -584,12 +785,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            observed_account_states,
-            [
-                {"phase": "before_sell"},
-                {"phase": "stale_after_sell"},
-                {"phase": "settled_after_sell"},
-            ],
+            observed_snapshots,
+            [before_sell_snapshot, stale_snapshot, settled_snapshot],
         )
         self.assertEqual(len(observed_plan_inputs), 3)
         self.assertEqual(len(sent_messages), 1)
@@ -640,7 +837,10 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         sent_messages, _, _ = self._run_strategy(
             initial_plan,
             refreshed_plan=refreshed_plan,
-            account_states=[{"phase": "before_sell"}, {"phase": "after_sell"}],
+            portfolio_snapshots=[
+                _build_snapshot(initial_plan, phase="before_sell"),
+                _build_snapshot(refreshed_plan, phase="after_sell"),
+            ],
             prices={"SOXL.US": 45.94, "SOXX.US": 322.74},
             estimate_max_purchase_quantity_value=200,
             dry_run_only=True,

@@ -143,7 +143,6 @@ class SharedChatIdTests(unittest.TestCase):
             ):
                 sys.modules.pop("main", None)
                 module = importlib.import_module("main")
-                module = importlib.reload(module)
 
         self.assertEqual(module.TG_CHAT_ID, "shared-chat-id")
 
