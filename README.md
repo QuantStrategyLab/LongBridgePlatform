@@ -129,6 +129,7 @@ Important:
 - `LONGPORT_APP_KEY_SECRET_NAME` and `LONGPORT_APP_SECRET_SECRET_NAME` should also be set on each GitHub Environment. Do not keep one repository-level default for them when `HK` and `SG` use different LongPort credentials.
 - The workflow only becomes strict when `ENABLE_GITHUB_ENV_SYNC=true`. If this variable is unset, the sync job is skipped and the old Google Cloud Trigger-only setup keeps working. Once you set it to `true`, missing env-sync values become a hard failure so you do not get a false green deployment. The selected profile's snapshot/config requirements are resolved from `scripts/print_strategy_profile_status.py --json` instead of a hard-coded strategy-name list.
 - GitHub now authenticates to Google Cloud with OIDC + Workload Identity Federation, so `GCP_SA_KEY` is no longer required for this workflow.
+- If you deploy with `gcloud run deploy --source` or a Cloud Run source trigger, also grant `roles/storage.objectViewer` on `gs://run-sources-<project>-<region>` to the build service account, the deploy service account, and the default compute service account. Otherwise source deploy can fail before Cloud Build starts with `storage.objects.get` denied.
 - Here "shared" only means **shared inside this repository** between the `HK` and `SG` Cloud Run services. The Telegram token can still be shared, but LongPort app credentials should live in Secret Manager and be referenced by per-environment secret-name variables; they are not meant to be a global secret set reused by unrelated quant repos.
 - If you want one cross-project shared layer across multiple quant repos, keep it small: `GLOBAL_TELEGRAM_CHAT_ID` and `NOTIFY_LANG` are reasonable; account credentials and deployment keys are not.
 
@@ -276,6 +277,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 - `LONGPORT_APP_KEY_SECRET_NAME` 和 `LONGPORT_APP_SECRET_SECRET_NAME` 也应该分别放在各自的 GitHub Environment 里。既然 HK 和 SG 用的是不同 LongPort 凭据，就不要再给它们保留一个仓库级默认值。
 - 现在 workflow 只有在 `ENABLE_GITHUB_ENV_SYNC=true` 时才会严格检查配置。没打开这个开关时，它会直接跳过，不影响原来只靠 Google Cloud Trigger 的老流程；一旦打开，缺任何配置都会直接失败，避免你以为已经同步成功。目标策略需要的 snapshot/config 输入会通过 `scripts/print_strategy_profile_status.py --json` 动态解析，不再维护硬编码策略名列表。
 - GitHub 现在通过 OIDC + Workload Identity Federation 登录 Google Cloud，这个 workflow 不再需要 `GCP_SA_KEY`。
+- 如果你用 `gcloud run deploy --source` 或 Cloud Run source trigger 部署，还要给 `gs://run-sources-<project>-<region>` 这个 staging bucket 补 `roles/storage.objectViewer`，对象是 build service account、deploy service account、默认 compute service account。少了这层权限，部署会在 Cloud Build 启动前直接报 `storage.objects.get denied`。
 - 这里的“共享”只是指 **同一个仓库里的 HK / SG 两个服务共享**。Telegram token 可以继续共用，但 LongPort app 凭据建议放到 Secret Manager，并通过各自 Environment 里的 secret-name 变量引用，不建议把它们当成所有 quant 共用的全局 secrets。
 - 如果你真的要在多个 quant 仓库之间保留一层全局共享，建议只保留 `GLOBAL_TELEGRAM_CHAT_ID` 和 `NOTIFY_LANG` 这种低耦合配置。
 
