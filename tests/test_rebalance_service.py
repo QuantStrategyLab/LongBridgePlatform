@@ -505,7 +505,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("🔔 【调仓指令】", sent_messages[0])
         self.assertIn("🧭 策略: SOXL/SOXX 半导体趋势收益", sent_messages[0])
-        self.assertIn("⏱ 执行时点: 2026-04-21 -> 2026-04-22 (next_trading_day)", sent_messages[0])
+        self.assertIn("⏱ 执行时点: 2026-04-21 -> 2026-04-22 (次一交易日执行)", sent_messages[0])
         self.assertIn("限价卖出", sent_messages[0])
         self.assertIn("买入说明", sent_messages[0])
         self.assertIn("SOXX.US", sent_messages[0])
@@ -537,7 +537,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("💓 【心跳检测】", sent_messages[0])
-        self.assertIn("⏱ 执行时点: 2026-04-21 -> 2026-04-22 (next_trading_day)", sent_messages[0])
+        self.assertIn("⏱ 执行时点: 2026-04-21 -> 2026-04-22 (次一交易日执行)", sent_messages[0])
         self.assertIn("本轮没有可执行订单", sent_messages[0])
         self.assertIn("说明", sent_messages[0])
         self.assertIn("可投资现金", sent_messages[0])
