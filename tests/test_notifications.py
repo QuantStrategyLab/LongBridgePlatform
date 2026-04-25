@@ -48,6 +48,20 @@ class NotificationTests(unittest.TestCase):
             "SOXX 站上 140 日门槛线，持有 SOXL 70.0% + SOXX 20.0%",
         )
         self.assertEqual(
+            translate("market_status_blend_gate_overlay_capped", asset="SOXX"),
+            "🧯 过热降档（SOXX）",
+        )
+        self.assertEqual(
+            translate(
+                "signal_blend_gate_overlay_capped",
+                trend_symbol="SOXX",
+                window=140,
+                reasons="RSI 超阈值 + 突破布林上轨",
+                allocation_text="SOXX 15.0%",
+            ),
+            "SOXX 仍在 140 日门槛线上方，但触发过热降档（RSI 超阈值 + 突破布林上轨），目标仓位 SOXX 15.0%",
+        )
+        self.assertEqual(
             translate(
                 "small_account_warning_note",
                 portfolio_equity="$0",
