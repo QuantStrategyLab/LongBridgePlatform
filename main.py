@@ -1,6 +1,6 @@
 """
-LongPort semiconductor rotation + income layer.
-Trading: SOXL/SOXX by 150d MA, remainder in BOXX. Income: QQQI/SPYI above equity threshold.
+LongPort Cloud Run strategy executor.
+Runs the configured shared UsEquityStrategies profile for the deployed LongBridge account.
 Runs on Cloud Run; token from Secret Manager, orders via LongPort OpenAPI, alerts via Telegram.
 """
 import os
