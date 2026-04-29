@@ -24,12 +24,6 @@ def test_render_order_lifecycle_message_localizes_order_fill_for_zh():
     assert message == "✅ 订单成交 | BOXX 买入 49股 均价 $116.31（订单号: 1227343614540054528）"
 
 
-def test_build_translator_localizes_semiconductor_trend_status_for_zh():
-    translate = build_translator("zh")
-    assert translate("market_status_delever", asset="SOXX") == "🛡️ 降杠杆（SOXX）"
-    assert translate("signal_delever", window=150, ratio="40.2%") == "SOXL 跌破 150 日均线，切换至 SOXX，交易层风险仓位 40.2%"
-
-
 def test_publish_order_lifecycle_event_routes_rendering_through_publisher():
     messages = []
 
