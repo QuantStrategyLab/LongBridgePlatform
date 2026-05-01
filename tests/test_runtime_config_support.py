@@ -82,10 +82,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             get_eligible_profiles_for_platform(LONGBRIDGE_PLATFORM),
             frozenset(
                 {
-                    "dynamic_mega_leveraged_pullback",
                     "global_etf_rotation",
-                    "mega_cap_leader_rotation_aggressive",
-                    "mega_cap_leader_rotation_dynamic_top20",
                     "mega_cap_leader_rotation_top50_balanced",
                     "russell_1000_multi_factor_defensive",
                     "tqqq_growth_income",
@@ -176,9 +173,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             set(by_profile),
             {
                 "global_etf_rotation",
-                "dynamic_mega_leveraged_pullback",
-                "mega_cap_leader_rotation_aggressive",
-                "mega_cap_leader_rotation_dynamic_top20",
                 "mega_cap_leader_rotation_top50_balanced",
                 "russell_1000_multi_factor_defensive",
                 "tqqq_growth_income",
@@ -210,21 +204,12 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["eligible"])
         self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["enabled"])
         self.assertEqual(by_profile["tech_communication_pullback_enhancement"]["display_name"], "Tech/Communication Pullback Enhancement")
-        self.assertTrue(by_profile["mega_cap_leader_rotation_dynamic_top20"]["eligible"])
-        self.assertFalse(by_profile["mega_cap_leader_rotation_dynamic_top20"]["enabled"])
-        self.assertEqual(by_profile["mega_cap_leader_rotation_dynamic_top20"]["display_name"], "Mega Cap Leader Rotation Dynamic Top20")
         self.assertTrue(by_profile["mega_cap_leader_rotation_top50_balanced"]["eligible"])
         self.assertTrue(by_profile["mega_cap_leader_rotation_top50_balanced"]["enabled"])
         self.assertEqual(
             by_profile["mega_cap_leader_rotation_top50_balanced"]["display_name"],
             "Mega Cap Leader Rotation Top50 Balanced",
         )
-        self.assertTrue(by_profile["mega_cap_leader_rotation_aggressive"]["eligible"])
-        self.assertFalse(by_profile["mega_cap_leader_rotation_aggressive"]["enabled"])
-        self.assertEqual(by_profile["mega_cap_leader_rotation_aggressive"]["display_name"], "Mega Cap Leader Rotation Aggressive")
-        self.assertTrue(by_profile["dynamic_mega_leveraged_pullback"]["eligible"])
-        self.assertFalse(by_profile["dynamic_mega_leveraged_pullback"]["enabled"])
-        self.assertEqual(by_profile["dynamic_mega_leveraged_pullback"]["display_name"], "Dynamic Mega Leveraged Pullback")
 
     def test_loads_feature_snapshot_env_for_tech_profile(self):
         with patch.dict(
@@ -302,9 +287,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(by_profile["tech_communication_pullback_enhancement"]["input_mode"], "feature_snapshot")
         self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["requires_snapshot_artifacts"])
         self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["requires_strategy_config_path"])
-        self.assertFalse(by_profile["mega_cap_leader_rotation_dynamic_top20"]["enabled"])
-        self.assertFalse(by_profile["mega_cap_leader_rotation_aggressive"]["enabled"])
-        self.assertFalse(by_profile["dynamic_mega_leveraged_pullback"]["enabled"])
         self.assertEqual(by_profile["mega_cap_leader_rotation_top50_balanced"]["profile_group"], "snapshot_backed")
         self.assertEqual(by_profile["mega_cap_leader_rotation_top50_balanced"]["input_mode"], "feature_snapshot")
         self.assertTrue(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_snapshot_artifacts"])
@@ -328,7 +310,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("requires_snapshot_artifacts", result.stdout)
         self.assertIn("soxl_soxx_trend_income", result.stdout)
         self.assertIn("global_etf_rotation", result.stdout)
-        self.assertIn("mega_cap_leader_rotation_dynamic_top20", result.stdout)
         self.assertIn("russell_1000_multi_factor_defensive", result.stdout)
         self.assertIn("Global ETF Rotation", result.stdout)
         self.assertIn("Russell 1000 Multi-Factor", result.stdout)

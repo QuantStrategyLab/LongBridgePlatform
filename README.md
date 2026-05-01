@@ -37,9 +37,6 @@ Platform execution no longer depends on `strategy/allocation.py` or hard-coded s
 | `soxl_soxx_trend_income` | SOXL/SOXX Semiconductor Trend Income | Yes | Yes | `us_equity` | current SG deployment |
 | `tqqq_growth_income` | TQQQ Growth Income | Yes | Yes | `us_equity` | selectable growth line |
 | `tech_communication_pullback_enhancement` | Tech/Communication Pullback Enhancement | Yes | Yes | `us_equity` | current HK feature-snapshot line |
-| `mega_cap_leader_rotation_aggressive` | Mega Cap Leader Rotation Aggressive | Yes | No | `us_equity` | research-only archive |
-| `mega_cap_leader_rotation_dynamic_top20` | Mega Cap Leader Rotation Dynamic Top20 | Yes | No | `us_equity` | research-only archive |
-| `dynamic_mega_leveraged_pullback` | Dynamic Mega Leveraged Pullback | Yes | No | `us_equity` | research-only archive |
 
 Check the current matrix locally:
 
@@ -160,7 +157,7 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 基于 LongPort OpenAPI 和 Google Cloud Run 的量化交易系统。
 
 这个仓库通过 `QuantPlatformKit` 复用 LongPort token 处理、上下文初始化、账户快照、行情读取和下单逻辑。Cloud Run 直接部署这个仓库。
-`LongBridgePlatform` 现在可直接执行 `UsEquityStrategies` 里的 6 条 `runtime_enabled` `us_equity` 策略：`global_etf_rotation`、`mega_cap_leader_rotation_top50_balanced`、`russell_1000_multi_factor_defensive`、`soxl_soxx_trend_income`、`tqqq_growth_income` 和 `tech_communication_pullback_enhancement`；`dynamic_mega_leveraged_pullback`、`mega_cap_leader_rotation_aggressive`、`mega_cap_leader_rotation_dynamic_top20` 保留为 research-only 存档，不进入 LongBridge rollout。仓库本身继续保留 LongPort 运行时、token 刷新、执行和通知流程。
+`LongBridgePlatform` 现在可直接执行 `UsEquityStrategies` 里的 6 条 `runtime_enabled` `us_equity` 策略：`global_etf_rotation`、`mega_cap_leader_rotation_top50_balanced`、`russell_1000_multi_factor_defensive`、`soxl_soxx_trend_income`、`tqqq_growth_income` 和 `tech_communication_pullback_enhancement`。较弱或重复的研究 profile 已从 LongBridge 可配置入口移除。仓库本身继续保留 LongPort 运行时、token 刷新、执行和通知流程。
 
 完整策略说明现在放在 [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies)。下面这些章节只保留 LongBridge 运行时、profile 启用状态、部署和凭据说明。
 
@@ -185,9 +182,6 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 | `soxl_soxx_trend_income` | SOXL/SOXX 半导体趋势收益 | Yes | Yes | `us_equity` | 当前 SG 部署线路 |
 | `tqqq_growth_income` | TQQQ 增长收益 | Yes | Yes | `us_equity` | 可选增长线路 |
 | `tech_communication_pullback_enhancement` | 科技通信回调增强 | Yes | Yes | `us_equity` | 当前 HK feature-snapshot 线路 |
-| `mega_cap_leader_rotation_aggressive` | Mega Cap Leader Rotation Aggressive | Yes | No | `us_equity` | research-only 存档 |
-| `mega_cap_leader_rotation_dynamic_top20` | Mega Cap Leader Rotation Dynamic Top20 | Yes | No | `us_equity` | research-only 存档 |
-| `dynamic_mega_leveraged_pullback` | Dynamic Mega Leveraged Pullback | Yes | No | `us_equity` | research-only 存档 |
 
 本地可直接查看当前矩阵：
 
