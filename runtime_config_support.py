@@ -7,6 +7,9 @@ from typing import Callable
 
 from quant_platform_kit.common.runtime_config import (
     resolve_bool_value,
+    resolve_float_env,
+    resolve_optional_float_env,
+    resolve_quantity_step_env,
     resolve_strategy_runtime_path_settings,
 )
 from strategy_registry import (
@@ -102,14 +105,19 @@ def load_platform_runtime_settings(
         tg_token=os.getenv("TELEGRAM_TOKEN"),
         tg_chat_id=os.getenv("GLOBAL_TELEGRAM_CHAT_ID"),
         dry_run_only=resolve_bool_value(os.getenv("LONGBRIDGE_DRY_RUN_ONLY")),
-        quantity_step=_quantity_step_env(
+        quantity_step=resolve_quantity_step_env(
+            os.environ,
             step_env="LONGBRIDGE_ORDER_QUANTITY_STEP",
             fractional_env="LONGBRIDGE_FRACTIONAL_SHARES_ENABLED",
             fractional_default=True,
         ),
-        min_order_notional=_float_env("LONGBRIDGE_MIN_ORDER_NOTIONAL_USD", default=1.0),
+        min_order_notional=resolve_float_env(
+            os.environ,
+            "LONGBRIDGE_MIN_ORDER_NOTIONAL_USD",
+            default=1.0,
+        ),
         debug_position_snapshot=resolve_bool_value(os.getenv("LONGBRIDGE_DEBUG_POSITION_SNAPSHOT")),
-        income_threshold_usd=_optional_float_env("INCOME_THRESHOLD_USD"),
+        income_threshold_usd=resolve_optional_float_env(os.environ, "INCOME_THRESHOLD_USD"),
         qqqi_income_ratio=_qqqi_income_ratio_env(),
         feature_snapshot_path=runtime_paths.feature_snapshot_path,
         feature_snapshot_manifest_path=runtime_paths.feature_snapshot_manifest_path,
@@ -127,40 +135,8 @@ def _normalize_region(raw_value: str | None) -> str | None:
     return value.upper()
 
 
-def _optional_float_env(name: str) -> float | None:
-    raw_value = os.getenv(name)
-    if raw_value is None or raw_value.strip() == "":
-        return None
-    return float(raw_value)
-
-
-def _float_env(name: str, *, default: float) -> float:
-    raw_value = os.getenv(name)
-    if raw_value is None or raw_value.strip() == "":
-        return float(default)
-    return float(raw_value)
-
-
-def _quantity_step_env(
-    *,
-    step_env: str,
-    fractional_env: str,
-    fractional_default: bool,
-) -> float:
-    explicit_step = _optional_float_env(step_env)
-    if explicit_step is not None:
-        return explicit_step
-    raw_enabled = os.getenv(fractional_env)
-    fractional_enabled = (
-        fractional_default
-        if raw_enabled is None
-        else resolve_bool_value(raw_enabled)
-    )
-    return 0.000001 if fractional_enabled else 1.0
-
-
 def _qqqi_income_ratio_env() -> float | None:
-    value = _optional_float_env("QQQI_INCOME_RATIO")
+    value = resolve_optional_float_env(os.environ, "QQQI_INCOME_RATIO")
     if value is not None and not (0.0 <= value <= 1.0):
         raise ValueError(f"QQQI_INCOME_RATIO must be in [0,1], got {value}")
     return value

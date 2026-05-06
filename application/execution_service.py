@@ -80,6 +80,31 @@ def _floor_order_quantity(quantity, *, quantity_step):
     return normalize_order_quantity(floor_to_quantity_step(quantity, quantity_step))
 
 
+def _sell_order_quantity(
+    *,
+    current_value,
+    target_value,
+    price,
+    sellable_quantity,
+    quantity_step,
+):
+    sellable = max(0.0, float(sellable_quantity or 0.0))
+    if sellable <= 0.0:
+        return 0
+
+    target = max(0.0, float(target_value or 0.0))
+    if target <= 0.0:
+        return _floor_order_quantity(sellable, quantity_step=quantity_step)
+
+    sell_value = max(0.0, float(current_value or 0.0) - target)
+    if sell_value <= 0.0 or float(price or 0.0) <= 0.0:
+        return 0
+    return _floor_order_quantity(
+        min(sell_value / float(price), sellable),
+        quantity_step=quantity_step,
+    )
+
+
 def safe_quote_last_price(symbol, *, market_data_port, notify_issue):
     try:
         return float(market_data_port.get_quote(symbol).last_price)
@@ -241,11 +266,11 @@ def execute_rebalance_cycle(
             )
             if price is None:
                 continue
-            quantity = _floor_order_quantity(
-                min(
-                    floor_to_quantity_step(abs(diff) / price, order_quantity_step),
-                    float(sellable_quantities[symbol]),
-                ),
+            quantity = _sell_order_quantity(
+                current_value=market_values[symbol],
+                target_value=target_values[symbol],
+                price=price,
+                sellable_quantity=sellable_quantities[symbol],
                 quantity_step=order_quantity_step,
             )
             if quantity > 0:

@@ -581,6 +581,36 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("限价买入] SOXX: 0.321699股", sent_messages[0])
         self.assertNotIn("不足买入 1 股", sent_messages[0])
 
+    def test_zero_target_sell_uses_sellable_quantity_not_price_derived_floor(self):
+        plan = _build_plan(
+            strategy_symbols=("SOXL",),
+            risk_symbols=("SOXL",),
+            targets={"SOXL": 0.0},
+            market_values={"SOXL": 327.88},
+            sellable_quantities={"SOXL": 2},
+            quantities={"SOXL": 2},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=891.03,
+            market_status="🧯 过热降档（SOXX）",
+            deploy_ratio_text="0.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXL 目标仓位 0.0%",
+            available_cash=923.66,
+            total_strategy_equity=1087.60,
+            portfolio_rows=(("SOXL",),),
+        )
+
+        sent_messages, _, _ = self._run_strategy(
+            plan,
+            prices={"SOXL.US": 165.85},
+            quantity_step=1.0,
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("限价卖出] SOXL: 2股", sent_messages[0])
+
     def test_fractional_buy_uses_budget_when_broker_estimate_is_whole_share_zero(self):
         plan = _build_plan(
             strategy_symbols=("SOXX",),
