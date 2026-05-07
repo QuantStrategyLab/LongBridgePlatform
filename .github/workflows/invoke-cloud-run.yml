@@ -1,0 +1,92 @@
+name: Invoke Cloud Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "GitHub Environment to invoke"
+        required: true
+        default: "longbridge-sg"
+        type: choice
+        options:
+          - longbridge-hk
+          - longbridge-sg
+      path:
+        description: "HTTP path to call"
+        required: false
+        default: "/"
+        type: string
+
+env:
+  GCP_PROJECT_ID: longbridgequant
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+
+jobs:
+  invoke:
+    name: Invoke ${{ inputs.environment }} Cloud Run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment: ${{ inputs.environment }}
+    env:
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+
+          case "${{ inputs.environment }}" in
+            longbridge-hk|longbridge-sg) ;;
+            *)
+              echo "Unsupported environment: ${{ inputs.environment }}" >&2
+              exit 1
+              ;;
+          esac
+
+          if [ -z "${CLOUD_RUN_REGION:-}" ] || [ -z "${CLOUD_RUN_SERVICE:-}" ]; then
+            echo "CLOUD_RUN_REGION and CLOUD_RUN_SERVICE are required on ${{ inputs.environment }}." >&2
+            exit 1
+          fi
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          version: ">= 416.0.0"
+
+      - name: Invoke service
+        run: |
+          set -euo pipefail
+
+          raw_path="${{ inputs.path }}"
+          if [ -z "${raw_path}" ]; then
+            raw_path="/"
+          fi
+          if [[ "${raw_path}" != /* ]]; then
+            raw_path="/${raw_path}"
+          fi
+
+          service_url="$(
+            gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+              --region "${CLOUD_RUN_REGION}" \
+              --format='value(status.url)'
+          )"
+          if [ -z "${service_url}" ]; then
+            echo "Unable to resolve Cloud Run service URL." >&2
+            exit 1
+          fi
+
+          token="$(gcloud auth print-identity-token --audiences="${service_url}")"
+          curl --fail-with-body --show-error --silent \
+            --request POST \
+            --header "Authorization: Bearer ${token}" \
+            "${service_url}${raw_path}"
