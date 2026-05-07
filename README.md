@@ -146,6 +146,11 @@ Important:
 - If you later rename or move this repository, rebuild the GitHub source binding in Google Cloud for both triggers instead of assuming the existing source binding will follow the rename.
 - For the shared deployment model and trigger migration checklist, see [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md).
 
+### Manual API probes
+
+- `.github/workflows/longbridge-api-probe.yml` can be triggered manually against the `longbridge-hk` GitHub Environment. It checks out a selected `QuantPlatformKit` ref and runs the skipped LongBridge fractional-order API probe with HK simulated-account credentials from Secret Manager.
+- The probe is for broker API validation only. It does not run on normal CI or `main` pushes.
+
 ### Quick deploy
 
 1. Enable **Cloud Run** and **Secret Manager API** in GCP.
@@ -298,6 +303,11 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 - 继续保留两个 trigger 和两个 GitHub Environment，区分键始终是 `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`，运行身份再通过 `STRATEGY_PROFILE + ACCOUNT_REGION` 明确下来。
 - 如果后面改 GitHub 仓库名或再次迁组织，Google Cloud 里的两个 trigger 都要重新选择 GitHub 来源，不要假设旧绑定会自动跟过去。
 - 统一部署模型和触发器迁移清单见 [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md)。
+
+### 手动 API probe
+
+- `.github/workflows/longbridge-api-probe.yml` 可手动触发，固定使用 `longbridge-hk` GitHub Environment。它会 checkout 指定的 `QuantPlatformKit` ref，并用 Secret Manager 中的 HK 模拟盘 LongPort 凭证运行默认跳过的碎股下单 API probe。
+- 这个 probe 只用于券商 API 验证，不会进入普通 CI 或 `main` push 流程。
 
 ### 快速部署
 

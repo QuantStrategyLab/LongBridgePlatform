@@ -1,0 +1,114 @@
+name: LongBridge API Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      qpk_ref:
+        description: "QuantPlatformKit ref containing the probe test"
+        required: false
+        default: "main"
+        type: string
+      symbol:
+        description: "US symbol to use for the probe"
+        required: false
+        default: "SOXX.US"
+        type: string
+      limit_price:
+        description: "Low buy limit price used by the cancellable probe order"
+        required: false
+        default: "0.01"
+        type: string
+
+env:
+  GCP_PROJECT_ID: longbridgequant
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+
+jobs:
+  hk-fractional-order:
+    name: Probe HK Simulated Fractional Orders
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    environment: longbridge-hk
+    env:
+      LONGPORT_APP_KEY_SECRET_NAME: ${{ vars.LONGPORT_APP_KEY_SECRET_NAME }}
+      LONGPORT_APP_SECRET_SECRET_NAME: ${{ vars.LONGPORT_APP_SECRET_SECRET_NAME }}
+      LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+
+          missing_vars=()
+          for var_name in LONGPORT_APP_KEY_SECRET_NAME LONGPORT_APP_SECRET_SECRET_NAME LONGPORT_SECRET_NAME; do
+            if [ -z "${!var_name:-}" ]; then
+              missing_vars+=("${var_name}")
+            fi
+          done
+
+          if [ "${#missing_vars[@]}" -gt 0 ]; then
+            printf 'Missing longbridge-hk variables:\n' >&2
+            printf '  - %s\n' "${missing_vars[@]}" >&2
+            exit 1
+          fi
+
+      - name: Checkout QuantPlatformKit
+        uses: actions/checkout@v6
+        with:
+          repository: QuantStrategyLab/QuantPlatformKit
+          ref: ${{ inputs.qpk_ref }}
+          path: quant-platform-kit
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          version: ">= 416.0.0"
+
+      - name: Export LongPort credentials
+        run: |
+          set -euo pipefail
+
+          longport_app_key="$(gcloud secrets versions access latest --secret="${LONGPORT_APP_KEY_SECRET_NAME}")"
+          longport_app_secret="$(gcloud secrets versions access latest --secret="${LONGPORT_APP_SECRET_SECRET_NAME}")"
+          longport_access_token="$(gcloud secrets versions access latest --secret="${LONGPORT_SECRET_NAME}")"
+
+          echo "::add-mask::${longport_app_key}"
+          echo "::add-mask::${longport_app_secret}"
+          echo "::add-mask::${longport_access_token}"
+
+          {
+            echo "LONGPORT_APP_KEY=${longport_app_key}"
+            echo "LONGPORT_APP_SECRET=${longport_app_secret}"
+            echo "LONGPORT_ACCESS_TOKEN=${longport_access_token}"
+          } >> "$GITHUB_ENV"
+
+      - name: Install probe dependencies
+        run: |
+          set -euo pipefail
+
+          python -m pip install --upgrade pip
+          python -m pip install -e quant-platform-kit pytest longport
+
+      - name: Run HK simulated fractional order probe
+        env:
+          LONGBRIDGE_API_PROBE: "1"
+          LONGBRIDGE_API_PROBE_SYMBOL: ${{ inputs.symbol }}
+          LONGBRIDGE_API_PROBE_LIMIT_PRICE: ${{ inputs.limit_price }}
+        run: |
+          set -euo pipefail
+
+          python -m pytest quant-platform-kit/tests/test_longbridge_fractional_order_api_probe.py -q -s
