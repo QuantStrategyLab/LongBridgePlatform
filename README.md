@@ -149,6 +149,7 @@ Important:
 ### Manual API probes
 
 - `.github/workflows/longbridge-api-probe.yml` can be triggered manually against the `longbridge-hk` GitHub Environment. It checks out a selected `QuantPlatformKit` ref and runs the skipped LongBridge fractional-order API probe with HK simulated-account credentials from Secret Manager.
+- The workflow can also use `LONGPORT_APP_KEY`, `LONGPORT_APP_SECRET`, and `LONGPORT_ACCESS_TOKEN` as GitHub Environment secrets when the deployment service account cannot read Secret Manager versions directly.
 - The probe is for broker API validation only. It does not run on normal CI or `main` pushes.
 
 ### Quick deploy
@@ -307,6 +308,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 ### 手动 API probe
 
 - `.github/workflows/longbridge-api-probe.yml` 可手动触发，固定使用 `longbridge-hk` GitHub Environment。它会 checkout 指定的 `QuantPlatformKit` ref，并用 Secret Manager 中的 HK 模拟盘 LongPort 凭证运行默认跳过的碎股下单 API probe。
+- 如果部署服务账号不能直接读取 Secret Manager version，这个 workflow 也可以改用 GitHub Environment secrets: `LONGPORT_APP_KEY`、`LONGPORT_APP_SECRET`、`LONGPORT_ACCESS_TOKEN`。
 - 这个 probe 只用于券商 API 验证，不会进入普通 CI 或 `main` push 流程。
 
 ### 快速部署
