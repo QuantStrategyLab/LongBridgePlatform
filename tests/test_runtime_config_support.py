@@ -52,7 +52,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.tg_token)
         self.assertIsNone(settings.tg_chat_id)
         self.assertFalse(settings.dry_run_only)
-        self.assertEqual(settings.quantity_step, 0.0001)
+        self.assertEqual(settings.quantity_step, 1.0)
         self.assertEqual(settings.min_order_notional, 1.0)
         self.assertFalse(settings.debug_position_snapshot)
         self.assertIsNone(settings.income_threshold_usd)
@@ -70,6 +70,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             get_supported_profiles_for_platform(LONGBRIDGE_PLATFORM),
             frozenset(
                 {
+                    "global_etf_confidence_vol_gate",
                     "global_etf_rotation",
                     "mega_cap_leader_rotation_top50_balanced",
                     "russell_1000_multi_factor_defensive",
@@ -85,6 +86,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             get_eligible_profiles_for_platform(LONGBRIDGE_PLATFORM),
             frozenset(
                 {
+                    "global_etf_confidence_vol_gate",
                     "global_etf_rotation",
                     "mega_cap_leader_rotation_top50_balanced",
                     "russell_1000_multi_factor_defensive",
@@ -119,6 +121,19 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
         self.assertEqual(settings.quantity_step, 1.0)
         self.assertEqual(settings.min_order_notional, 25.0)
+
+    def test_fractional_quantity_step_must_be_enabled_explicitly(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE,
+                "LONGBRIDGE_FRACTIONAL_SHARES_ENABLED": "true",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertEqual(settings.quantity_step, 0.0001)
 
     def test_debug_position_snapshot_is_loaded_from_env(self):
         with patch.dict(
@@ -204,6 +219,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             set(by_profile),
             {
                 "global_etf_rotation",
+                "global_etf_confidence_vol_gate",
                 "mega_cap_leader_rotation_top50_balanced",
                 "russell_1000_multi_factor_defensive",
                 "tqqq_growth_income",
@@ -232,6 +248,12 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(by_profile["global_etf_rotation"]["display_name"], "Global ETF Rotation")
         self.assertTrue(by_profile["global_etf_rotation"]["eligible"])
         self.assertTrue(by_profile["global_etf_rotation"]["enabled"])
+        self.assertEqual(
+            by_profile["global_etf_confidence_vol_gate"]["display_name"],
+            "Global ETF Confidence Vol Gate",
+        )
+        self.assertTrue(by_profile["global_etf_confidence_vol_gate"]["eligible"])
+        self.assertTrue(by_profile["global_etf_confidence_vol_gate"]["enabled"])
         self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["eligible"])
         self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["enabled"])
         self.assertEqual(by_profile["tech_communication_pullback_enhancement"]["display_name"], "Tech/Communication Pullback Enhancement")
