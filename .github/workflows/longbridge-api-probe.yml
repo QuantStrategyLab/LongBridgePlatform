@@ -33,20 +33,29 @@ jobs:
       id-token: write
     environment: longbridge-hk
     env:
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       LONGPORT_APP_KEY_SECRET_NAME: ${{ vars.LONGPORT_APP_KEY_SECRET_NAME }}
       LONGPORT_APP_SECRET_SECRET_NAME: ${{ vars.LONGPORT_APP_SECRET_SECRET_NAME }}
       LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
+      LONGPORT_APP_KEY_VALUE: ${{ secrets.LONGPORT_APP_KEY }}
+      LONGPORT_APP_SECRET_VALUE: ${{ secrets.LONGPORT_APP_SECRET }}
+      LONGPORT_ACCESS_TOKEN_VALUE: ${{ secrets.LONGPORT_ACCESS_TOKEN }}
     steps:
       - name: Validate inputs
         run: |
           set -euo pipefail
 
           missing_vars=()
-          for var_name in LONGPORT_APP_KEY_SECRET_NAME LONGPORT_APP_SECRET_SECRET_NAME LONGPORT_SECRET_NAME; do
-            if [ -z "${!var_name:-}" ]; then
-              missing_vars+=("${var_name}")
-            fi
-          done
+          if [ -z "${LONGPORT_APP_KEY_VALUE:-}" ] && [ -z "${LONGPORT_APP_KEY_SECRET_NAME:-}" ]; then
+            missing_vars+=("LONGPORT_APP_KEY secret or LONGPORT_APP_KEY_SECRET_NAME variable")
+          fi
+          if [ -z "${LONGPORT_APP_SECRET_VALUE:-}" ] && [ -z "${LONGPORT_APP_SECRET_SECRET_NAME:-}" ]; then
+            missing_vars+=("LONGPORT_APP_SECRET secret or LONGPORT_APP_SECRET_SECRET_NAME variable")
+          fi
+          if [ -z "${LONGPORT_ACCESS_TOKEN_VALUE:-}" ] && [ -z "${LONGPORT_SECRET_NAME:-}" ]; then
+            missing_vars+=("LONGPORT_ACCESS_TOKEN secret or LONGPORT_SECRET_NAME variable")
+          fi
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then
             printf 'Missing longbridge-hk variables:\n' >&2
@@ -82,9 +91,50 @@ jobs:
         run: |
           set -euo pipefail
 
-          longport_app_key="$(gcloud secrets versions access latest --secret="${LONGPORT_APP_KEY_SECRET_NAME}")"
-          longport_app_secret="$(gcloud secrets versions access latest --secret="${LONGPORT_APP_SECRET_SECRET_NAME}")"
-          longport_access_token="$(gcloud secrets versions access latest --secret="${LONGPORT_SECRET_NAME}")"
+          read_secret_manager_value() {
+            local secret_name="$1"
+            local error_file
+            error_file="$(mktemp)"
+            if value="$(gcloud secrets versions access latest --secret="${secret_name}" 2>"${error_file}")"; then
+              rm -f "${error_file}"
+              printf '%s' "${value}"
+              return 0
+            fi
+
+            if [ -n "${CLOUD_RUN_REGION:-}" ] && [ -n "${CLOUD_RUN_SERVICE:-}" ]; then
+              runtime_service_account="$(
+                gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+                  --region "${CLOUD_RUN_REGION}" \
+                  --format='value(spec.template.spec.serviceAccountName)' 2>/dev/null || true
+              )"
+              if [ -n "${runtime_service_account}" ] \
+                && value="$(gcloud secrets versions access latest \
+                  --secret="${secret_name}" \
+                  --impersonate-service-account="${runtime_service_account}" 2>"${error_file}")"; then
+                rm -f "${error_file}"
+                printf '%s' "${value}"
+                return 0
+              fi
+            fi
+
+            cat "${error_file}" >&2
+            rm -f "${error_file}"
+            return 1
+          }
+
+          longport_app_key="${LONGPORT_APP_KEY_VALUE:-}"
+          longport_app_secret="${LONGPORT_APP_SECRET_VALUE:-}"
+          longport_access_token="${LONGPORT_ACCESS_TOKEN_VALUE:-}"
+
+          if [ -z "${longport_app_key}" ]; then
+            longport_app_key="$(read_secret_manager_value "${LONGPORT_APP_KEY_SECRET_NAME}")"
+          fi
+          if [ -z "${longport_app_secret}" ]; then
+            longport_app_secret="$(read_secret_manager_value "${LONGPORT_APP_SECRET_SECRET_NAME}")"
+          fi
+          if [ -z "${longport_access_token}" ]; then
+            longport_access_token="$(read_secret_manager_value "${LONGPORT_SECRET_NAME}")"
+          fi
 
           echo "::add-mask::${longport_app_key}"
           echo "::add-mask::${longport_app_secret}"
