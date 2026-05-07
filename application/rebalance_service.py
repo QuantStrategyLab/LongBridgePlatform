@@ -213,8 +213,6 @@ def run_strategy(
         dry_run_only=config.dry_run_only,
         post_sell_refresh_attempts=config.post_sell_refresh_attempts,
         post_sell_refresh_interval_sec=config.post_sell_refresh_interval_sec,
-        quantity_step=config.quantity_step,
-        min_order_notional=config.min_order_notional,
         sleeper=config.sleeper or _noop_sleep,
     )
     execution = execution_result.execution

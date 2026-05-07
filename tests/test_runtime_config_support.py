@@ -52,8 +52,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.tg_token)
         self.assertIsNone(settings.tg_chat_id)
         self.assertFalse(settings.dry_run_only)
-        self.assertEqual(settings.quantity_step, 1.0)
-        self.assertEqual(settings.min_order_notional, 1.0)
         self.assertFalse(settings.debug_position_snapshot)
         self.assertIsNone(settings.income_threshold_usd)
         self.assertIsNone(settings.qqqi_income_ratio)
@@ -106,34 +104,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
         self.assertTrue(settings.dry_run_only)
-
-    def test_order_quantity_step_can_be_forced_to_whole_shares(self):
-        with patch.dict(
-            os.environ,
-            {
-                "STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE,
-                "LONGBRIDGE_FRACTIONAL_SHARES_ENABLED": "false",
-                "LONGBRIDGE_MIN_ORDER_NOTIONAL_USD": "25",
-            },
-            clear=True,
-        ):
-            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
-
-        self.assertEqual(settings.quantity_step, 1.0)
-        self.assertEqual(settings.min_order_notional, 25.0)
-
-    def test_fractional_quantity_step_must_be_enabled_explicitly(self):
-        with patch.dict(
-            os.environ,
-            {
-                "STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE,
-                "LONGBRIDGE_FRACTIONAL_SHARES_ENABLED": "true",
-            },
-            clear=True,
-        ):
-            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
-
-        self.assertEqual(settings.quantity_step, 0.0001)
 
     def test_debug_position_snapshot_is_loaded_from_env(self):
         with patch.dict(

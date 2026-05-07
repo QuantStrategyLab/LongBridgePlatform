@@ -72,12 +72,8 @@ def record_note_log(note_logs, *, translator, with_prefix, kind, **kwargs):
     print(with_prefix(message), flush=True)
 
 
-def _is_whole_share_step(quantity_step) -> bool:
-    return float(quantity_step or 1.0) >= 1.0
-
-
-def _floor_order_quantity(quantity, *, quantity_step):
-    return normalize_order_quantity(floor_to_quantity_step(quantity, quantity_step))
+def _floor_whole_share_quantity(quantity):
+    return normalize_order_quantity(floor_to_quantity_step(quantity, 1.0))
 
 
 def _sell_order_quantity(
@@ -86,7 +82,6 @@ def _sell_order_quantity(
     target_value,
     price,
     sellable_quantity,
-    quantity_step,
 ):
     sellable = max(0.0, float(sellable_quantity or 0.0))
     if sellable <= 0.0:
@@ -94,14 +89,13 @@ def _sell_order_quantity(
 
     target = max(0.0, float(target_value or 0.0))
     if target <= 0.0:
-        return _floor_order_quantity(sellable, quantity_step=quantity_step)
+        return _floor_whole_share_quantity(sellable)
 
     sell_value = max(0.0, float(current_value or 0.0) - target)
     if sell_value <= 0.0 or float(price or 0.0) <= 0.0:
         return 0
-    return _floor_order_quantity(
+    return _floor_whole_share_quantity(
         min(sell_value / float(price), sellable),
-        quantity_step=quantity_step,
     )
 
 
@@ -157,8 +151,6 @@ def execute_rebalance_cycle(
     dry_run_only=False,
     post_sell_refresh_attempts=1,
     post_sell_refresh_interval_sec=0.0,
-    quantity_step=1.0,
-    min_order_notional=0.0,
     sleeper=_noop_sleep,
 ) -> ExecutionCycleResult:
     logs: list[str] = []
@@ -180,8 +172,6 @@ def execute_rebalance_cycle(
     cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
     investable_cash = float(execution["investable_cash"])
     current_min_trade = float(execution["current_min_trade"])
-    order_quantity_step = float(quantity_step or 1.0)
-    minimum_order_notional = max(0.0, float(min_order_notional or 0.0))
 
     def append_order_id_suffix(log_message, order_id):
         order_id_text = str(order_id or "").strip()
@@ -271,7 +261,6 @@ def execute_rebalance_cycle(
                 target_value=target_values[symbol],
                 price=price,
                 sellable_quantity=sellable_quantities[symbol],
-                quantity_step=order_quantity_step,
             )
             if quantity > 0:
                 quantity_text = format_quantity(quantity)
@@ -395,20 +384,14 @@ def execute_rebalance_cycle(
         if price is None:
             continue
         can_buy_value = min(diff, investable_cash)
-        if (
-            _is_whole_share_step(order_quantity_step)
-            and can_buy_value > price
-        ) or (
-            not _is_whole_share_step(order_quantity_step)
-            and can_buy_value >= minimum_order_notional
-        ):
+        if can_buy_value > price:
             is_limit_order = symbol in limit_order_symbols
             order_kind = "limit" if is_limit_order else "market"
             ref_price = round(price * limit_buy_premium, 2) if is_limit_order else round(price, 2)
             budget_price = ref_price if is_limit_order else price
             budget_quantity = floor_to_quantity_step(
                 can_buy_value / budget_price,
-                order_quantity_step,
+                1.0,
             )
             cash_limit_quantity = estimate_cash_buy_quantity_safe(
                 trade_context,
@@ -421,15 +404,9 @@ def execute_rebalance_cycle(
             if cash_limit_quantity is None:
                 continue
             effective_cash_limit_quantity = float(cash_limit_quantity)
-            if (
-                not _is_whole_share_step(order_quantity_step)
-                and effective_cash_limit_quantity <= 0
-            ):
-                effective_cash_limit_quantity = budget_quantity
 
-            quantity = _floor_order_quantity(
+            quantity = _floor_whole_share_quantity(
                 min(budget_quantity, effective_cash_limit_quantity),
-                quantity_step=order_quantity_step,
             )
             cost_estimate = 0.0
             if quantity <= 0:
@@ -486,7 +463,7 @@ def execute_rebalance_cycle(
             if submitted:
                 investable_cash = max(0, investable_cash - cost_estimate)
                 action_done = True
-        elif _is_whole_share_step(order_quantity_step):
+        else:
             record_note_log(
                 note_logs,
                 translator=translator,
@@ -496,17 +473,6 @@ def execute_rebalance_cycle(
                 diff=f"{diff:.2f}",
                 investable=f"{investable_cash:.2f}",
                 price=f"{price:.2f}",
-            )
-        else:
-            record_note_log(
-                note_logs,
-                translator=translator,
-                with_prefix=with_prefix,
-                kind="buy_deferred_min_notional",
-                symbol=f"{symbol}.US",
-                diff=f"{diff:.2f}",
-                investable=f"{investable_cash:.2f}",
-                min_notional=f"{minimum_order_notional:.2f}",
             )
 
     return ExecutionCycleResult(

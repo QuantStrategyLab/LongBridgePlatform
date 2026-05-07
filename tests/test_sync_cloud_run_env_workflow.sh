@@ -40,9 +40,6 @@ grep -Fq 'LONGBRIDGE_STRATEGY_CONFIG_PATH: ${{ vars.LONGBRIDGE_STRATEGY_CONFIG_P
 grep -Fq 'INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}' "$workflow_file"
 grep -Fq 'QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}' "$workflow_file"
 grep -Fq 'LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}' "$workflow_file"
-grep -Fq 'LONGBRIDGE_FRACTIONAL_SHARES_ENABLED: ${{ vars.LONGBRIDGE_FRACTIONAL_SHARES_ENABLED }}' "$workflow_file"
-grep -Fq 'LONGBRIDGE_ORDER_QUANTITY_STEP: ${{ vars.LONGBRIDGE_ORDER_QUANTITY_STEP }}' "$workflow_file"
-grep -Fq 'LONGBRIDGE_MIN_ORDER_NOTIONAL_USD: ${{ vars.LONGBRIDGE_MIN_ORDER_NOTIONAL_USD }}' "$workflow_file"
 grep -Fq "STRATEGY_PROFILE: \${{ vars.STRATEGY_PROFILE || 'soxl_soxx_trend_income' }}" "$workflow_file"
 grep -Fq "ACCOUNT_REGION: \${{ vars.ACCOUNT_REGION || 'HK' }}" "$workflow_file"
 grep -Fq "ACCOUNT_REGION: \${{ vars.ACCOUNT_REGION || 'SG' }}" "$workflow_file"
@@ -78,13 +75,13 @@ grep -Fq 'LONGBRIDGE_FEATURE_SNAPSHOT_PATH=${LONGBRIDGE_FEATURE_SNAPSHOT_PATH}' 
 grep -Fq 'LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=${LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH}' "$workflow_file"
 grep -Fq 'LONGBRIDGE_STRATEGY_CONFIG_PATH=${LONGBRIDGE_STRATEGY_CONFIG_PATH}' "$workflow_file"
 grep -Fq 'LONGBRIDGE_DRY_RUN_ONLY=${LONGBRIDGE_DRY_RUN_ONLY}' "$workflow_file"
-grep -Fq 'LONGBRIDGE_FRACTIONAL_SHARES_ENABLED=${LONGBRIDGE_FRACTIONAL_SHARES_ENABLED}' "$workflow_file"
-grep -Fq 'LONGBRIDGE_ORDER_QUANTITY_STEP=${LONGBRIDGE_ORDER_QUANTITY_STEP}' "$workflow_file"
-grep -Fq 'LONGBRIDGE_MIN_ORDER_NOTIONAL_USD=${LONGBRIDGE_MIN_ORDER_NOTIONAL_USD}' "$workflow_file"
 grep -Fq 'INCOME_THRESHOLD_USD=${INCOME_THRESHOLD_USD}' "$workflow_file"
 grep -Fq 'QQQI_INCOME_RATIO=${QQQI_INCOME_RATIO}' "$workflow_file"
 grep -Fq 'STRATEGY_PROFILE=${STRATEGY_PROFILE}' "$workflow_file"
 grep -Fq 'ACCOUNT_REGION=${ACCOUNT_REGION}' "$workflow_file"
+grep -Fq '"LONGBRIDGE_FRACTIONAL_SHARES_ENABLED"' "$workflow_file"
+grep -Fq '"LONGBRIDGE_ORDER_QUANTITY_STEP"' "$workflow_file"
+grep -Fq '"LONGBRIDGE_MIN_ORDER_NOTIONAL_USD"' "$workflow_file"
 grep -Fq '"SERVICE_NAME"' "$workflow_file"
 grep -Fq 'gcloud_args+=(--remove-secrets "$(IFS=,; echo "${remove_secret_vars[*]}")")' "$workflow_file"
 grep -Fq 'gcloud_args+=(--update-secrets "$(IFS=,; echo "${secret_pairs[*]}")")' "$workflow_file"
@@ -96,6 +93,36 @@ fi
 
 if grep -Fq 'SERVICE_NAME=${SERVICE_NAME}' "$workflow_file"; then
   echo "unexpected SERVICE_NAME sync still present" >&2
+  exit 1
+fi
+
+if grep -Fq 'LONGBRIDGE_FRACTIONAL_SHARES_ENABLED: ${{ vars.LONGBRIDGE_FRACTIONAL_SHARES_ENABLED }}' "$workflow_file"; then
+  echo "unexpected LongBridge fractional-share env wiring still present" >&2
+  exit 1
+fi
+
+if grep -Fq 'LONGBRIDGE_ORDER_QUANTITY_STEP: ${{ vars.LONGBRIDGE_ORDER_QUANTITY_STEP }}' "$workflow_file"; then
+  echo "unexpected LongBridge order quantity step env wiring still present" >&2
+  exit 1
+fi
+
+if grep -Fq 'LONGBRIDGE_MIN_ORDER_NOTIONAL_USD: ${{ vars.LONGBRIDGE_MIN_ORDER_NOTIONAL_USD }}' "$workflow_file"; then
+  echo "unexpected LongBridge minimum order notional env wiring still present" >&2
+  exit 1
+fi
+
+if grep -Fq 'LONGBRIDGE_FRACTIONAL_SHARES_ENABLED=${LONGBRIDGE_FRACTIONAL_SHARES_ENABLED}' "$workflow_file"; then
+  echo "unexpected LongBridge fractional-share env sync still present" >&2
+  exit 1
+fi
+
+if grep -Fq 'LONGBRIDGE_ORDER_QUANTITY_STEP=${LONGBRIDGE_ORDER_QUANTITY_STEP}' "$workflow_file"; then
+  echo "unexpected LongBridge order quantity step env sync still present" >&2
+  exit 1
+fi
+
+if grep -Fq 'LONGBRIDGE_MIN_ORDER_NOTIONAL_USD=${LONGBRIDGE_MIN_ORDER_NOTIONAL_USD}' "$workflow_file"; then
+  echo "unexpected LongBridge minimum order notional env sync still present" >&2
   exit 1
 fi
 

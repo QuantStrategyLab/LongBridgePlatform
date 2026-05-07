@@ -7,9 +7,7 @@ from typing import Callable
 
 from quant_platform_kit.common.runtime_config import (
     resolve_bool_value,
-    resolve_float_env,
     resolve_optional_float_env,
-    resolve_quantity_step_env,
     resolve_strategy_runtime_path_settings,
 )
 from strategy_registry import (
@@ -36,8 +34,6 @@ class PlatformRuntimeSettings:
     tg_token: str | None
     tg_chat_id: str | None
     dry_run_only: bool
-    quantity_step: float = 1.0
-    min_order_notional: float = 0.0
     debug_position_snapshot: bool = False
     income_threshold_usd: float | None = None
     qqqi_income_ratio: float | None = None
@@ -105,18 +101,6 @@ def load_platform_runtime_settings(
         tg_token=os.getenv("TELEGRAM_TOKEN"),
         tg_chat_id=os.getenv("GLOBAL_TELEGRAM_CHAT_ID"),
         dry_run_only=resolve_bool_value(os.getenv("LONGBRIDGE_DRY_RUN_ONLY")),
-        quantity_step=resolve_quantity_step_env(
-            os.environ,
-            step_env="LONGBRIDGE_ORDER_QUANTITY_STEP",
-            fractional_env="LONGBRIDGE_FRACTIONAL_SHARES_ENABLED",
-            fractional_default=False,
-            fractional_step=0.0001,
-        ),
-        min_order_notional=resolve_float_env(
-            os.environ,
-            "LONGBRIDGE_MIN_ORDER_NOTIONAL_USD",
-            default=1.0,
-        ),
         debug_position_snapshot=resolve_bool_value(os.getenv("LONGBRIDGE_DEBUG_POSITION_SNAPSHOT")),
         income_threshold_usd=resolve_optional_float_env(os.environ, "INCOME_THRESHOLD_USD"),
         qqqi_income_ratio=_qqqi_income_ratio_env(),

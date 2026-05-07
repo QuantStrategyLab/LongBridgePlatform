@@ -50,8 +50,6 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
         limit_buy_premium=1.005,
         order_poll_interval_sec=1,
         order_poll_max_attempts=8,
-        quantity_step=0.0001,
-        min_order_notional=1.0,
         dry_run_only=True,
         broker_adapters=SimpleNamespace(
             build_market_data_port="market-data-port-factory",
@@ -113,7 +111,5 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     assert runtime.post_submit_order == "post-submit-order"
     assert config.limit_sell_discount == 0.995
     assert config.limit_buy_premium == 1.005
-    assert config.quantity_step == 0.0001
-    assert config.min_order_notional == 1.0
     assert config.strategy_display_name == "SOXL/SOXX 半导体趋势收益"
     assert config.dry_run_only is True

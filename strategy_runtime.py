@@ -154,8 +154,6 @@ def _default_runtime_settings(profile: str, display_name: str) -> PlatformRuntim
         tg_token=None,
         tg_chat_id=None,
         dry_run_only=False,
-        quantity_step=1.0,
-        min_order_notional=0.0,
         debug_position_snapshot=False,
         feature_snapshot_path=None,
         feature_snapshot_manifest_path=None,
