@@ -37,6 +37,9 @@ jobs:
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
       EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI }}
       LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}
+      LONGBRIDGE_FRACTIONAL_SHARES_ENABLED: ${{ vars.LONGBRIDGE_FRACTIONAL_SHARES_ENABLED }}
+      LONGBRIDGE_ORDER_QUANTITY_STEP: ${{ vars.LONGBRIDGE_ORDER_QUANTITY_STEP }}
+      LONGBRIDGE_MIN_ORDER_NOTIONAL_USD: ${{ vars.LONGBRIDGE_MIN_ORDER_NOTIONAL_USD }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
     steps:
@@ -278,6 +281,24 @@ jobs:
             remove_env_vars+=("LONGBRIDGE_DRY_RUN_ONLY")
           fi
 
+          if [ -n "${LONGBRIDGE_FRACTIONAL_SHARES_ENABLED:-}" ]; then
+            env_pairs+=("LONGBRIDGE_FRACTIONAL_SHARES_ENABLED=${LONGBRIDGE_FRACTIONAL_SHARES_ENABLED}")
+          else
+            remove_env_vars+=("LONGBRIDGE_FRACTIONAL_SHARES_ENABLED")
+          fi
+
+          if [ -n "${LONGBRIDGE_ORDER_QUANTITY_STEP:-}" ]; then
+            env_pairs+=("LONGBRIDGE_ORDER_QUANTITY_STEP=${LONGBRIDGE_ORDER_QUANTITY_STEP}")
+          else
+            remove_env_vars+=("LONGBRIDGE_ORDER_QUANTITY_STEP")
+          fi
+
+          if [ -n "${LONGBRIDGE_MIN_ORDER_NOTIONAL_USD:-}" ]; then
+            env_pairs+=("LONGBRIDGE_MIN_ORDER_NOTIONAL_USD=${LONGBRIDGE_MIN_ORDER_NOTIONAL_USD}")
+          else
+            remove_env_vars+=("LONGBRIDGE_MIN_ORDER_NOTIONAL_USD")
+          fi
+
           if [ -n "${INCOME_THRESHOLD_USD:-}" ]; then
             env_pairs+=("INCOME_THRESHOLD_USD=${INCOME_THRESHOLD_USD}")
           else
@@ -334,6 +355,9 @@ jobs:
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
       EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI }}
       LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}
+      LONGBRIDGE_FRACTIONAL_SHARES_ENABLED: ${{ vars.LONGBRIDGE_FRACTIONAL_SHARES_ENABLED }}
+      LONGBRIDGE_ORDER_QUANTITY_STEP: ${{ vars.LONGBRIDGE_ORDER_QUANTITY_STEP }}
+      LONGBRIDGE_MIN_ORDER_NOTIONAL_USD: ${{ vars.LONGBRIDGE_MIN_ORDER_NOTIONAL_USD }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
     steps:
@@ -573,6 +597,24 @@ jobs:
             env_pairs+=("LONGBRIDGE_DRY_RUN_ONLY=${LONGBRIDGE_DRY_RUN_ONLY}")
           else
             remove_env_vars+=("LONGBRIDGE_DRY_RUN_ONLY")
+          fi
+
+          if [ -n "${LONGBRIDGE_FRACTIONAL_SHARES_ENABLED:-}" ]; then
+            env_pairs+=("LONGBRIDGE_FRACTIONAL_SHARES_ENABLED=${LONGBRIDGE_FRACTIONAL_SHARES_ENABLED}")
+          else
+            remove_env_vars+=("LONGBRIDGE_FRACTIONAL_SHARES_ENABLED")
+          fi
+
+          if [ -n "${LONGBRIDGE_ORDER_QUANTITY_STEP:-}" ]; then
+            env_pairs+=("LONGBRIDGE_ORDER_QUANTITY_STEP=${LONGBRIDGE_ORDER_QUANTITY_STEP}")
+          else
+            remove_env_vars+=("LONGBRIDGE_ORDER_QUANTITY_STEP")
+          fi
+
+          if [ -n "${LONGBRIDGE_MIN_ORDER_NOTIONAL_USD:-}" ]; then
+            env_pairs+=("LONGBRIDGE_MIN_ORDER_NOTIONAL_USD=${LONGBRIDGE_MIN_ORDER_NOTIONAL_USD}")
+          else
+            remove_env_vars+=("LONGBRIDGE_MIN_ORDER_NOTIONAL_USD")
           fi
 
           if [ -n "${INCOME_THRESHOLD_USD:-}" ]; then
