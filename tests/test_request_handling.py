@@ -65,6 +65,7 @@ def install_stub_modules():
         tg_token=None,
         tg_chat_id="shared-chat-id",
         dry_run_only=False,
+        fractional_limit_buy_fallback_to_market=False,
     )
 
     qpk_longbridge_module = types.ModuleType("quant_platform_kit.longbridge")

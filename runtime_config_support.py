@@ -34,9 +34,11 @@ class PlatformRuntimeSettings:
     tg_token: str | None
     tg_chat_id: str | None
     dry_run_only: bool
+    fractional_limit_buy_fallback_to_market: bool = False
     debug_position_snapshot: bool = False
     income_threshold_usd: float | None = None
     qqqi_income_ratio: float | None = None
+    runtime_execution_window_trading_days: int | None = None
     feature_snapshot_path: str | None = None
     feature_snapshot_manifest_path: str | None = None
     strategy_config_path: str | None = None
@@ -101,9 +103,15 @@ def load_platform_runtime_settings(
         tg_token=os.getenv("TELEGRAM_TOKEN"),
         tg_chat_id=os.getenv("GLOBAL_TELEGRAM_CHAT_ID"),
         dry_run_only=resolve_bool_value(os.getenv("LONGBRIDGE_DRY_RUN_ONLY")),
+        fractional_limit_buy_fallback_to_market=resolve_bool_value(
+            os.getenv("LONGBRIDGE_FRACTIONAL_LIMIT_BUY_FALLBACK_TO_MARKET")
+        ),
         debug_position_snapshot=resolve_bool_value(os.getenv("LONGBRIDGE_DEBUG_POSITION_SNAPSHOT")),
         income_threshold_usd=resolve_optional_float_env(os.environ, "INCOME_THRESHOLD_USD"),
         qqqi_income_ratio=_qqqi_income_ratio_env(),
+        runtime_execution_window_trading_days=_runtime_execution_window_trading_days_env(
+            strategy_definition.profile
+        ),
         feature_snapshot_path=runtime_paths.feature_snapshot_path,
         feature_snapshot_manifest_path=runtime_paths.feature_snapshot_manifest_path,
         strategy_config_path=runtime_paths.strategy_config_path,
@@ -124,4 +132,23 @@ def _qqqi_income_ratio_env() -> float | None:
     value = resolve_optional_float_env(os.environ, "QQQI_INCOME_RATIO")
     if value is not None and not (0.0 <= value <= 1.0):
         raise ValueError(f"QQQI_INCOME_RATIO must be in [0,1], got {value}")
+    return value
+
+
+def _runtime_execution_window_trading_days_env(strategy_profile: str) -> int | None:
+    if strategy_profile != "tech_communication_pullback_enhancement":
+        return None
+    raw_value = os.getenv("LONGBRIDGE_TECH_RUNTIME_EXECUTION_WINDOW_TRADING_DAYS")
+    if raw_value is None or not str(raw_value).strip():
+        return None
+    try:
+        value = int(str(raw_value).strip())
+    except ValueError as exc:
+        raise ValueError(
+            "LONGBRIDGE_TECH_RUNTIME_EXECUTION_WINDOW_TRADING_DAYS must be a positive integer"
+        ) from exc
+    if value <= 0:
+        raise ValueError(
+            "LONGBRIDGE_TECH_RUNTIME_EXECUTION_WINDOW_TRADING_DAYS must be a positive integer"
+        )
     return value

@@ -52,6 +52,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.tg_token)
         self.assertIsNone(settings.tg_chat_id)
         self.assertFalse(settings.dry_run_only)
+        self.assertFalse(settings.fractional_limit_buy_fallback_to_market)
         self.assertFalse(settings.debug_position_snapshot)
         self.assertIsNone(settings.income_threshold_usd)
         self.assertIsNone(settings.qqqi_income_ratio)
@@ -105,6 +106,19 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
         self.assertTrue(settings.dry_run_only)
 
+    def test_fractional_limit_buy_fallback_is_loaded_from_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE,
+                "LONGBRIDGE_FRACTIONAL_LIMIT_BUY_FALLBACK_TO_MARKET": "true",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertTrue(settings.fractional_limit_buy_fallback_to_market)
+
     def test_debug_position_snapshot_is_loaded_from_env(self):
         with patch.dict(
             os.environ,
@@ -133,6 +147,20 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.strategy_profile, "tqqq_growth_income")
         self.assertEqual(settings.income_threshold_usd, 100000.0)
         self.assertEqual(settings.qqqi_income_ratio, 0.5)
+
+    def test_tech_runtime_execution_window_override_is_loaded_from_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_PROFILE": "tech_communication_pullback_enhancement",
+                "LONGBRIDGE_TECH_RUNTIME_EXECUTION_WINDOW_TRADING_DAYS": "31",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertEqual(settings.strategy_profile, "tech_communication_pullback_enhancement")
+        self.assertEqual(settings.runtime_execution_window_trading_days, 31)
 
     def test_rejects_invalid_qqqi_income_ratio(self):
         with patch.dict(

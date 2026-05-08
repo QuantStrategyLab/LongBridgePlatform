@@ -36,6 +36,7 @@ class LongBridgeRuntimeComposer:
     order_poll_interval_sec: int
     order_poll_max_attempts: int
     dry_run_only: bool = False
+    fractional_limit_buy_fallback_to_market: bool = False
     broker_adapters: Any = None
     strategy_adapters: Any = None
     estimate_max_purchase_quantity_fn: Callable[..., float] | None = None
@@ -166,6 +167,7 @@ class LongBridgeRuntimeComposer:
             with_prefix=self.with_prefix,
             strategy_display_name=self.strategy_display_name_localized,
             dry_run_only=self.dry_run_only,
+            fractional_limit_buy_fallback_to_market=self.fractional_limit_buy_fallback_to_market,
             post_sell_refresh_attempts=self.order_poll_max_attempts,
             post_sell_refresh_interval_sec=self.order_poll_interval_sec,
             sleeper=self.sleeper,
@@ -195,6 +197,7 @@ def build_runtime_composer(
     order_poll_interval_sec: int,
     order_poll_max_attempts: int,
     dry_run_only: bool,
+    fractional_limit_buy_fallback_to_market: bool,
     broker_adapters: Any,
     strategy_adapters: Any,
     estimate_max_purchase_quantity_fn: Callable[..., float],
@@ -234,6 +237,7 @@ def build_runtime_composer(
         order_poll_interval_sec=int(order_poll_interval_sec),
         order_poll_max_attempts=int(order_poll_max_attempts),
         dry_run_only=bool(dry_run_only),
+        fractional_limit_buy_fallback_to_market=bool(fractional_limit_buy_fallback_to_market),
         broker_adapters=broker_adapters,
         strategy_adapters=strategy_adapters,
         estimate_max_purchase_quantity_fn=estimate_max_purchase_quantity_fn,

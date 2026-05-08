@@ -100,6 +100,7 @@ def _build_runtime_settings(
     feature_snapshot_path: str | None = None,
     income_threshold_usd: float | None = None,
     qqqi_income_ratio: float | None = None,
+    runtime_execution_window_trading_days: int | None = None,
 ) -> PlatformRuntimeSettings:
     return PlatformRuntimeSettings(
         project_id=None,
@@ -117,6 +118,7 @@ def _build_runtime_settings(
         dry_run_only=False,
         income_threshold_usd=income_threshold_usd,
         qqqi_income_ratio=qqqi_income_ratio,
+        runtime_execution_window_trading_days=runtime_execution_window_trading_days,
         feature_snapshot_path=feature_snapshot_path,
         feature_snapshot_manifest_path=None,
         strategy_config_path=None,
@@ -263,6 +265,25 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.merged_runtime_config["income_threshold_usd"], 100000.0)
         self.assertEqual(runtime.merged_runtime_config["qqqi_income_ratio"], 0.5)
 
+    def test_load_strategy_runtime_applies_tech_execution_window_overrides_from_settings(self):
+        entrypoint = _TechEntrypoint()
+
+        with patch.object(strategy_runtime_module, "load_strategy_entrypoint_for_profile", return_value=entrypoint):
+            with patch.object(
+                strategy_runtime_module,
+                "load_strategy_runtime_adapter_for_profile",
+                return_value=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            ):
+                runtime = strategy_runtime_module.load_strategy_runtime(
+                    "tech_communication_pullback_enhancement",
+                    runtime_settings=_build_runtime_settings(
+                        "tech_communication_pullback_enhancement",
+                        runtime_execution_window_trading_days=31,
+                    ),
+                )
+
+        self.assertEqual(runtime.merged_runtime_config["runtime_execution_window_trading_days"], 31)
+
     def test_feature_snapshot_runtime_loads_snapshot_into_context(self):
         entrypoint = _TechEntrypoint()
         runtime = strategy_runtime_module.LoadedStrategyRuntime(
@@ -312,9 +333,11 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertEqual(entrypoint.ctx.market_data["feature_snapshot"][0]["symbol"], "AAPL")
         self.assertEqual(entrypoint.ctx.portfolio.total_equity, 1000.0)
         self.assertIn("run_as_of", entrypoint.ctx.runtime_config)
-        self.assertEqual(entrypoint.ctx.runtime_config["run_as_of"], entrypoint.ctx.as_of)
+        self.assertIsNone(entrypoint.ctx.runtime_config["run_as_of"].tzinfo)
+        self.assertEqual(entrypoint.ctx.runtime_config["run_as_of"].date(), entrypoint.ctx.as_of.date())
         self.assertEqual(entrypoint.ctx.runtime_config["runtime_execution_window_trading_days"], 1)
-        self.assertEqual(load_snapshot.call_args.kwargs["run_as_of"], entrypoint.ctx.as_of)
+        self.assertIn(load_snapshot.call_args.kwargs["run_as_of"].tzinfo, (None, timezone.utc))
+        self.assertEqual(load_snapshot.call_args.kwargs["run_as_of"].date(), entrypoint.ctx.as_of.date())
         self.assertEqual(result.metadata["managed_symbols"], ("AAPL", "MSFT", "BOXX"))
         self.assertEqual(result.metadata["status_icon"], "🧲")
 

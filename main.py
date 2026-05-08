@@ -159,6 +159,7 @@ def build_composer():
         order_poll_interval_sec=ORDER_POLL_INTERVAL_SEC,
         order_poll_max_attempts=ORDER_POLL_MAX_ATTEMPTS,
         dry_run_only=RUNTIME_SETTINGS.dry_run_only,
+        fractional_limit_buy_fallback_to_market=RUNTIME_SETTINGS.fractional_limit_buy_fallback_to_market,
         broker_adapters=BROKER_ADAPTERS,
         strategy_adapters=STRATEGY_ADAPTERS,
         estimate_max_purchase_quantity_fn=estimate_max_purchase_quantity,

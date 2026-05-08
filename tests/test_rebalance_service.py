@@ -398,6 +398,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         portfolio_snapshots=None,
         estimate_max_purchase_quantity_value=0,
         dry_run_only=False,
+        fractional_limit_buy_fallback_to_market=False,
         strategy_display_name="SOXL/SOXX 半导体趋势收益",
         post_sell_refresh_attempts=1,
     ):
@@ -469,6 +470,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 with_prefix=lambda message: f"[HK/LongBridgeQuant] {message}",
                 strategy_display_name=strategy_display_name,
                 dry_run_only=dry_run_only,
+                fractional_limit_buy_fallback_to_market=fractional_limit_buy_fallback_to_market,
                 post_sell_refresh_attempts=post_sell_refresh_attempts,
                 post_sell_refresh_interval_sec=0.0,
                 sleeper=observed_sleeps.append,
@@ -581,7 +583,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         plan = _build_plan(
             strategy_symbols=("SOXL",),
             risk_symbols=("SOXL",),
-            targets={"SOXL": 688.17},
+            targets={"SOXL": 900.00},
             market_values={"SOXL": 152.91},
             sellable_quantities={"SOXL": 1},
             quantities={"SOXL": 1},
@@ -605,9 +607,162 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("限价买入] SOXL: 3股", sent_messages[0])
+        self.assertIn("限价买入] SOXL: 4股", sent_messages[0])
         self.assertNotIn("限价买入] SOXL: 3.", sent_messages[0])
-        self.assertNotIn("限价买入] SOXL: 4股", sent_messages[0])
+
+    def test_fractional_limit_buy_can_fallback_to_market(self):
+        plan = _build_plan(
+            strategy_symbols=("SOXL",),
+            risk_symbols=("SOXL",),
+            targets={"SOXL": 900.00},
+            market_values={"SOXL": 152.91},
+            sellable_quantities={"SOXL": 1},
+            quantities={"SOXL": 1},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=726.38,
+            market_status="🧯 过热降档（SOXX+SOXL）",
+            deploy_ratio_text="65.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXX 仍在 140 日门槛线上方，但触发过热降档，目标仓位 SOXL 65.0%",
+            available_cash=758.56,
+            total_strategy_equity=1072.67,
+            portfolio_rows=(("SOXL",),),
+        )
+
+        sent_messages = []
+        observed_orders = []
+        observed_estimates = []
+
+        def estimate_max_purchase_quantity(*args, **kwargs):
+            observed_estimates.append(
+                (
+                    kwargs.get("order_kind"),
+                    kwargs.get("ref_price"),
+                )
+            )
+            if kwargs.get("order_kind") == "limit":
+                return 3.5
+            if kwargs.get("order_kind") == "market":
+                return 3.75
+            return 0
+
+        rebalance_service.run_strategy(
+            runtime=LongBridgeRebalanceRuntime(
+                bootstrap=lambda: ("quote-context", "trade-context", {"soxl": {"price": 1, "ma_trend": 2}}),
+                resolve_rebalance_plan=lambda *, indicators, snapshot=None, account_state=None: plan,
+                market_data_port_factory=lambda _quote_context: CallableMarketDataPort(
+                    quote_loader=lambda symbol: QuoteSnapshot(
+                        symbol=symbol,
+                        as_of="2026-04-21",
+                        last_price=152.93,
+                    )
+                ),
+                estimate_max_purchase_quantity=estimate_max_purchase_quantity,
+                notifications=CallableNotificationPort(sent_messages.append),
+                notify_issue=lambda title, detail: sent_messages.append(f"{title}\n{detail}"),
+                portfolio_port_factory=lambda _quote_context, _trade_context: CallablePortfolioPort(
+                    lambda: _build_snapshot(plan)
+                ),
+                execution_port_factory=lambda _trade_context: CallableExecutionPort(
+                    lambda order_intent: (
+                        observed_orders.append(order_intent),
+                        ExecutionReport(
+                            symbol=order_intent.symbol,
+                            side=order_intent.side,
+                            quantity=order_intent.quantity,
+                            status="submitted",
+                            broker_order_id="market-fallback-order",
+                        ),
+                    )[-1]
+                ),
+            ),
+            config=LongBridgeRebalanceConfig(
+                limit_sell_discount=0.995,
+                limit_buy_premium=1.005,
+                separator="━━━━━━━━━━━━━━━━━━",
+                translator=build_translator("zh"),
+                with_prefix=lambda message: f"[HK/LongBridgeQuant] {message}",
+                strategy_display_name="SOXL/SOXX 半导体趋势收益",
+                fractional_limit_buy_fallback_to_market=True,
+            ),
+        )
+
+        self.assertEqual(len(observed_orders), 1)
+        self.assertEqual(observed_orders[0].order_type, "market")
+        self.assertEqual(float(observed_orders[0].quantity), 3.75)
+        self.assertGreaterEqual(
+            observed_estimates.count(("limit", 153.69)),
+            1,
+        )
+        self.assertGreaterEqual(
+            observed_estimates.count(("market", 152.93)),
+            1,
+        )
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("已改为市价买入", sent_messages[0])
+
+    def test_fractional_limit_sell_preserves_fractional_quantity(self):
+        plan = _build_plan(
+            strategy_symbols=("BOXX",),
+            risk_symbols=("BOXX",),
+            targets={"BOXX": 0.0},
+            market_values={"BOXX": 150.0},
+            sellable_quantities={"BOXX": 1.5},
+            quantities={"BOXX": 1.5},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=0.0,
+            market_status="🧯 过热降档（BOXX）",
+            deploy_ratio_text="0.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="BOXX 目标仓位 0.0%",
+            available_cash=0.0,
+            total_strategy_equity=150.0,
+            portfolio_rows=(("BOXX",),),
+        )
+
+        sent_messages, _, _ = self._run_strategy(
+            plan,
+            prices={"BOXX.US": 100.0},
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("限价卖出] BOXX: 1.5股", sent_messages[0])
+        self.assertNotIn("限价卖出] BOXX: 1股", sent_messages[0])
+
+    def test_fractional_market_buy_preserves_fractional_quantity(self):
+        plan = _build_plan(
+            strategy_symbols=("BOXX",),
+            safe_haven_symbols=("BOXX",),
+            targets={"BOXX": 150.0},
+            market_values={"BOXX": 0.0},
+            sellable_quantities={"BOXX": 0},
+            quantities={"BOXX": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=200.0,
+            market_status="🚀 风险开启（BOXX）",
+            deploy_ratio_text="100.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="BOXX 目标仓位 100.0%",
+            available_cash=200.0,
+            total_strategy_equity=150.0,
+            portfolio_rows=(("BOXX",),),
+        )
+
+        sent_messages, _, _ = self._run_strategy(
+            plan,
+            prices={"BOXX.US": 100.0},
+            estimate_max_purchase_quantity_value=10,
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("市价买入] BOXX: 1.5股", sent_messages[0])
+        self.assertNotIn("市价买入] BOXX: 1股", sent_messages[0])
 
     def test_zero_target_sell_uses_sellable_quantity_not_price_derived_floor(self):
         plan = _build_plan(

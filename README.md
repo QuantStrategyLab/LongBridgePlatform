@@ -66,13 +66,14 @@ Telegram notifications include structured execution and heartbeat messages, with
 | `STRATEGY_PROFILE` | Yes | Strategy profile selector. Set explicitly per deployment; enabled values include `global_etf_confidence_vol_gate`, `global_etf_rotation`, `mega_cap_leader_rotation_top50_balanced`, `russell_1000_multi_factor_defensive`, `soxl_soxx_trend_income`, `tech_communication_pullback_enhancement`, and `tqqq_growth_income` |
 | `ACCOUNT_REGION` | No | Account region marker for platform-style deployment (e.g. `HK`, `SG`; defaults to `ACCOUNT_PREFIX` / `DEFAULT`) |
 | `LONGBRIDGE_DRY_RUN_ONLY` | No | Set to `true` to keep the selected deployment in dry-run mode. |
+| `LONGBRIDGE_FRACTIONAL_LIMIT_BUY_FALLBACK_TO_MARKET` | No | Set to `true` to convert fractional `limit buy` orders to `market buy` orders instead of skipping them. |
 | `LONGBRIDGE_DEBUG_POSITION_SNAPSHOT` | No | Set to `true` to log raw LongBridge position quantity and available quantity for troubleshooting. |
 | `INCOME_THRESHOLD_USD` | No | Optional override for the `tqqq_growth_income` income-layer threshold. Leave unset to use the strategy package default. |
 | `QQQI_INCOME_RATIO` | No | Optional override for QQQI's share of the `tqqq_growth_income` income layer, 0–1. |
 | `NOTIFY_LANG` | No | Notification language: `en` (English, default) or `zh` (Chinese) |
 | `GOOGLE_CLOUD_PROJECT` | No | GCP project ID (defaults to ADC project when unset) |
 
-Strategy allocation can still target fractional dollar values and fractional position weights. The LongBridge execution layer submits whole-share orders only because OpenAPI `submit_order` rejects fractional submitted quantities on the tested accounts. When a target value is zero, sell sizing uses the sellable whole-share position quantity instead of re-deriving shares from current price, so liquidation targets do not leave a residual share because of quote drift.
+Strategy allocation can still target fractional dollar values and fractional position weights. The LongBridge execution layer keeps the tested conservative rule: `limit buy` orders stay whole-share only by default, while `market buy` / `market sell` and `limit sell` can preserve fractional quantities when the target quantity is at least 1 share. If you set `LONGBRIDGE_FRACTIONAL_LIMIT_BUY_FALLBACK_TO_MARKET=true`, fractional `limit buy` orders are downgraded to market buys instead of being skipped. When a target value is zero, sell sizing uses the sellable position quantity instead of re-deriving shares from current price, so liquidation targets do not leave a residual share because of quote drift.
 
 Secret Manager must contain the secret named by `LONGPORT_SECRET_NAME` (default: `longport_token_hk`), where the **latest version = active access token**. The app refreshes it when expiry is within 30 days.
 
