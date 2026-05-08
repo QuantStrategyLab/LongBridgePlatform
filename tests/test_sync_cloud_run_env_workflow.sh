@@ -88,8 +88,10 @@ grep -Fq '"LONGBRIDGE_FRACTIONAL_SHARES_ENABLED"' "$workflow_file"
 grep -Fq '"LONGBRIDGE_ORDER_QUANTITY_STEP"' "$workflow_file"
 grep -Fq '"LONGBRIDGE_MIN_ORDER_NOTIONAL_USD"' "$workflow_file"
 grep -Fq '"SERVICE_NAME"' "$workflow_file"
+grep -Fq 'join_by_delimiter()' "$workflow_file"
 grep -Fq 'gcloud_args+=(--remove-secrets "$(IFS=,; echo "${remove_secret_vars[*]}")")' "$workflow_file"
 grep -Fq 'gcloud_args+=(--update-secrets "$(IFS=,; echo "${secret_pairs[*]}")")' "$workflow_file"
+grep -Fq -- '--update-env-vars "^|^$(join_by_delimiter "|" "${env_pairs[@]}")"' "$workflow_file"
 
 if grep -Fq 'SERVICE_NAME: ${{ vars.SERVICE_NAME }}' "$workflow_file"; then
   echo "unexpected SERVICE_NAME env wiring still present" >&2

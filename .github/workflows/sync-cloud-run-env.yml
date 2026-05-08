@@ -240,6 +240,21 @@ jobs:
         run: |
           set -euo pipefail
 
+          join_by_delimiter() {
+            local delimiter="$1"
+            shift
+            local output=""
+            local item
+            for item in "$@"; do
+              if [ -z "${output}" ]; then
+                output="${item}"
+              else
+                output="${output}${delimiter}${item}"
+              fi
+            done
+            printf '%s' "${output}"
+          }
+
           env_pairs=(
             "GLOBAL_TELEGRAM_CHAT_ID=${GLOBAL_TELEGRAM_CHAT_ID}"
             "NOTIFY_LANG=${NOTIFY_LANG}"
@@ -324,7 +339,7 @@ jobs:
             run services update "${CLOUD_RUN_SERVICE}"
             --region "${CLOUD_RUN_REGION}"
             --remove-env-vars "$(IFS=,; echo "${remove_env_vars[*]}")"
-            --update-env-vars "$(IFS=,; echo "${env_pairs[*]}")"
+            --update-env-vars "^|^$(join_by_delimiter "|" "${env_pairs[@]}")"
           )
 
           if [ "${#remove_secret_vars[@]}" -gt 0 ]; then
