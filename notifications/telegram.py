@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import requests
-
 from notifications.events import NotificationPublisher, RenderedNotification
 
 
@@ -226,7 +224,10 @@ def build_prefixer(account_prefix: str, service_name: str | None = None):
     return with_prefix
 
 
-def build_sender(token, chat_id, *, with_prefix_fn, requests_module=requests):
+def build_sender(token, chat_id, *, with_prefix_fn, requests_module=None):
+    if requests_module is None:
+        import requests as requests_module
+
     def send_tg_message(message):
         if not token or not chat_id:
             return

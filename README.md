@@ -10,7 +10,9 @@
 Quant system on LongPort OpenAPI and Google Cloud Run.
 
 This repository uses `QuantPlatformKit` for LongPort token handling, context bootstrap, account snapshot access, market data, and order submission. Cloud Run deploys this repository directly.
+The runtime now carries a structured `RuntimeTarget` / `RUNTIME_TARGET_JSON` alongside the compatibility `STRATEGY_PROFILE` selector.
 The LongBridge runtime can execute the seven current `runtime_enabled` `us_equity` profiles from `UsEquityStrategies`; `LongBridgePlatform` keeps the LongPort runtime, token refresh, execution, and notification flow.
+`STRATEGY_PROFILE` remains the compatibility selector for strategy routing, while `RuntimeTarget` describes the running service identity.
 
 Full strategy documentation now lives in [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies). The sections below focus on LongBridge runtime behavior, profile enablement, deployment, and credentials.
 This runtime matrix is the authoritative enablement source for LongBridge. `UsEquityStrategies` carries strategy-layer logic, cadence, compatibility, and metadata.
@@ -63,7 +65,7 @@ Telegram notifications include structured execution and heartbeat messages, with
 | `LONGPORT_APP_SECRET` | Yes | LongPort OpenAPI app secret (for token refresh); recommended to inject from the region-specific Secret Manager secret for this deployment, such as `longport-app-secret-hk` / `longport-app-secret-sg` |
 | `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token_hk`) |
 | `ACCOUNT_PREFIX` | No | Alert/log prefix for account/environment (default: `DEFAULT`) |
-| `STRATEGY_PROFILE` | Yes | Strategy profile selector. Set explicitly per deployment; enabled values include `global_etf_confidence_vol_gate`, `global_etf_rotation`, `mega_cap_leader_rotation_top50_balanced`, `russell_1000_multi_factor_defensive`, `soxl_soxx_trend_income`, `tech_communication_pullback_enhancement`, and `tqqq_growth_income` |
+| `STRATEGY_PROFILE` | Yes | Strategy profile selector for compatibility and strategy routing. Set explicitly per deployment; enabled values include `global_etf_confidence_vol_gate`, `global_etf_rotation`, `mega_cap_leader_rotation_top50_balanced`, `russell_1000_multi_factor_defensive`, `soxl_soxx_trend_income`, `tech_communication_pullback_enhancement`, and `tqqq_growth_income`. The structured runtime target is carried separately as `RUNTIME_TARGET_JSON`. |
 | `ACCOUNT_REGION` | No | Account region marker for platform-style deployment (e.g. `HK`, `SG`; defaults to `ACCOUNT_PREFIX` / `DEFAULT`) |
 | `LONGBRIDGE_DRY_RUN_ONLY` | No | Set to `true` to keep the selected deployment in dry-run mode. |
 | `LONGBRIDGE_FRACTIONAL_LIMIT_BUY_FALLBACK_TO_MARKET` | No | Set to `true` to convert fractional `limit buy` orders to `market buy` orders instead of skipping them. |
@@ -93,8 +95,8 @@ Deploy the same codebase as multiple Cloud Run services (e.g. `HK` and `SG`) by 
 
 - `LONGPORT_SECRET_NAME`: point to different secrets (e.g. `longport_token_hk`, `longport_token_sg`)
 - `ACCOUNT_PREFIX`: e.g. `HK`, `SG` (all Telegram/log alerts will include `[ACCOUNT_PREFIX]`)
-- `STRATEGY_PROFILE`: set per service; current live examples are `tech_communication_pullback_enhancement` on HK and `soxl_soxx_trend_income` on SG
-- Current strategy domain is `us_equity`. `STRATEGY_PROFILE` now goes through a platform capability matrix plus a rollout allowlist derived from `runtime_enabled` strategy metadata: `eligible` means the platform can run it in theory, `enabled` means the current rollout really allows it.
+- `STRATEGY_PROFILE`: set per service; current live examples are `tech_communication_pullback_enhancement` on HK and `soxl_soxx_trend_income` on SG. The deployment control plane now also carries `RUNTIME_TARGET_JSON`; treat `STRATEGY_PROFILE` as a compatibility input that still selects the strategy implementation, not the only identity key.
+- Current strategy domain is `us_equity`. `STRATEGY_PROFILE` still goes through a platform capability matrix plus a rollout allowlist derived from `runtime_enabled` strategy metadata: `eligible` means the platform can run it in theory, `enabled` means the current rollout really allows it.
 - `ACCOUNT_REGION`: explicitly mark the deployed account region (`HK` / `SG`); if unset, the app falls back to `ACCOUNT_PREFIX` or `DEFAULT`
 - `LONGBRIDGE_DRY_RUN_ONLY`: set per service when that deployment should stay dry-run
 - `NOTIFY_LANG`: set `en` or `zh` per deployment
@@ -130,6 +132,7 @@ Important:
 - `CLOUD_RUN_REGION` should be set on each GitHub Environment, not as one shared repository variable. This lets `HK` and `SG` live in different Cloud Run regions.
 - `LONGPORT_APP_KEY_SECRET_NAME` and `LONGPORT_APP_SECRET_SECRET_NAME` should also be set on each GitHub Environment. Do not keep one repository-level default for them when `HK` and `SG` use different LongPort credentials.
 - The workflow only becomes strict when `ENABLE_GITHUB_ENV_SYNC=true`. If this variable is unset, the sync job is skipped and the old Google Cloud Trigger-only setup keeps working. Once you set it to `true`, missing env-sync values become a hard failure so you do not get a false green deployment. The selected profile's snapshot/config requirements are resolved from `scripts/print_strategy_profile_status.py --json` instead of a hard-coded strategy-name list.
+- The workflow now also emits `RUNTIME_TARGET_JSON` so Cloud Run receives a structured runtime target alongside the legacy `STRATEGY_PROFILE` input.
 - GitHub now authenticates to Google Cloud with OIDC + Workload Identity Federation, so `GCP_SA_KEY` is no longer required for this workflow.
 - If you deploy with `gcloud run deploy --source` or a Cloud Run source trigger, also grant `roles/storage.objectViewer` on `gs://run-sources-<project>-<region>` to the build service account, the deploy service account, and the default compute service account. Otherwise source deploy can fail before Cloud Build starts with `storage.objects.get` denied.
 - Here "shared" only means **shared inside this repository** between the `HK` and `SG` Cloud Run services. The Telegram token can still be shared, but LongPort app credentials should live in Secret Manager and be referenced by per-environment secret-name variables; they are not meant to be a global secret set reused by unrelated quant repos.
@@ -139,7 +142,7 @@ Important:
 
 - `QuantPlatformKit` is only a shared dependency; Cloud Run still deploys `LongBridgePlatform` itself.
 - Recommended Cloud Run service names: `longbridge-quant-hk-service` and `longbridge-quant-sg-service`.
-- Keep using two triggers and two GitHub Environments. The split key is still `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`, and the runtime identity is now explicit through `STRATEGY_PROFILE + ACCOUNT_REGION`.
+- Keep using two triggers and two GitHub Environments. The split key is still `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`, and the runtime identity is now explicit through `RUNTIME_TARGET_JSON` with `STRATEGY_PROFILE + ACCOUNT_REGION` kept for compatibility.
 - If you later rename or move this repository, rebuild the GitHub source binding in Google Cloud for both triggers instead of assuming the existing source binding will follow the rename.
 - For the shared deployment model and trigger migration checklist, see [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md).
 
@@ -242,7 +245,7 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 
 - `LONGPORT_SECRET_NAME`: 指向不同密钥（如 `longport_token_hk`、`longport_token_sg`）
 - `ACCOUNT_PREFIX`: 如 `HK`、`SG`（所有通知/日志将包含 `[ACCOUNT_PREFIX]`）
-- `STRATEGY_PROFILE`: 按服务分别设置；当前线上 HK 用 `tech_communication_pullback_enhancement`，SG 用 `soxl_soxx_trend_income`
+- `STRATEGY_PROFILE`: 按服务分别设置；当前线上 HK 用 `tech_communication_pullback_enhancement`，SG 用 `soxl_soxx_trend_income`。控制面会另外携带 `RUNTIME_TARGET_JSON`，`STRATEGY_PROFILE` 继续只作为兼容选择器。
 - 当前策略域是 `us_equity`。`STRATEGY_PROFILE` 现在会先经过平台能力矩阵，再经过从 `runtime_enabled` 策略元数据派生的 rollout allowlist：`eligible` 表示平台理论可跑，`enabled` 表示当前 rollout 真正放开。
 - `ACCOUNT_REGION`: 显式标记部署账户区域（`HK` / `SG`）；未设置时会回退到 `ACCOUNT_PREFIX` 或 `DEFAULT`
 - `LONGBRIDGE_DRY_RUN_ONLY`: 需要保持模拟运行时按服务单独设置

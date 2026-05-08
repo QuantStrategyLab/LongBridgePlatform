@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from quant_platform_kit.common import build_runtime_target  # noqa: E402
 from application.runtime_composer import LongBridgeRuntimeComposer
 
 
@@ -52,6 +53,14 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
         order_poll_max_attempts=8,
         dry_run_only=True,
         fractional_limit_buy_fallback_to_market=True,
+        runtime_target=build_runtime_target(
+            platform_id="longbridge",
+            strategy_profile="soxl_soxx_trend_income",
+            dry_run_only=True,
+            deployment_selector="HK",
+            account_scope="HK",
+            service_name="longbridge-platform",
+        ),
         broker_adapters=SimpleNamespace(
             build_market_data_port="market-data-port-factory",
             build_portfolio_port="portfolio-port-factory",
@@ -100,9 +109,13 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     assert notification_adapters.notification_port == "notification-port"
     assert reporting_adapters == "reporting-adapters"
     assert observed["notification_builder"]["fetch_order_status"] == "fetch-order-status"
-    assert observed["reporting_builder"]["service_name"] == "longbridge-platform"
+    assert observed["reporting_builder"]["runtime_assembly"].service_name == "longbridge-platform"
+    assert observed["reporting_builder"]["runtime_assembly"].project_id == "project-1"
     assert observed["reporting_builder"]["report_base_dir"] == "/tmp/runtime-reports"
     assert observed["reporting_builder"]["signal_effective_after_trading_days"] == 1
+    assert observed["reporting_builder"]["runtime_assembly"].runtime_target.platform_id == "longbridge"
+    assert observed["reporting_builder"]["runtime_assembly"].runtime_target.strategy_profile == "soxl_soxx_trend_income"
+    assert observed["reporting_builder"]["runtime_assembly"].runtime_target.execution_mode == "paper"
     assert observed["bootstrap_builder"]["secret_name"] == "secret-1"
     assert observed["bootstrap_builder"]["calculate_strategy_indicators_fn"] == "strategy-indicators"
     assert runtime.bootstrap == "bootstrap"

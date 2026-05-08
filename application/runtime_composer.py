@@ -10,6 +10,9 @@ from application.runtime_bootstrap_adapters import build_runtime_bootstrap
 from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
 from application.runtime_notification_adapters import build_runtime_notification_adapters
 from application.runtime_reporting_adapters import build_runtime_reporting_adapters
+from quant_platform_kit.common.runtime_assembly import build_runtime_assembly
+from quant_platform_kit.common.runtime_target import build_runtime_context_fields
+from quant_platform_kit.common.runtime_target import RuntimeTarget
 from notifications.telegram import build_prefixer, build_sender
 
 
@@ -49,6 +52,7 @@ class LongBridgeRuntimeComposer:
     report_builder: Callable[..., dict[str, Any]] | None = None
     report_persister: Callable[..., Any] | None = None
     translator: Callable[..., str] | None = None
+    runtime_target: RuntimeTarget | None = None
     prefixer_builder: Callable[..., Callable[[str], str]] = build_prefixer
     sender_builder: Callable[..., Callable[[str], None]] = build_sender
     env_reader: Callable[[str, str], str | None] | None = None
@@ -104,21 +108,27 @@ class LongBridgeRuntimeComposer:
         )
 
     def build_reporting_adapters(self):
-        return self.reporting_adapter_builder(
+        runtime_assembly = build_runtime_assembly(
             platform="longbridge",
             deploy_target="cloud_run",
             service_name=self.env_reader("K_SERVICE", "longbridge-platform"),
             strategy_profile=self.strategy_profile,
-            strategy_domain=self.strategy_domain,
+            runtime_target=self.runtime_target,
             account_scope=self.account_region,
             account_region=self.account_region,
             project_id=self.project_id,
-            extra_context_fields={
-                "account_prefix": self.account_prefix,
-                "strategy_display_name": self.strategy_display_name,
-                "strategy_display_name_localized": self.strategy_display_name_localized,
-                **dict(self.extra_reporting_fields),
-            },
+            extra_context_fields=build_runtime_context_fields(
+                {
+                    "account_prefix": self.account_prefix,
+                    "strategy_display_name": self.strategy_display_name,
+                    "strategy_display_name_localized": self.strategy_display_name_localized,
+                    **dict(self.extra_reporting_fields),
+                },
+            ),
+        )
+        return self.reporting_adapter_builder(
+            runtime_assembly=runtime_assembly,
+            strategy_domain=self.strategy_domain,
             managed_symbols=self.managed_symbols,
             account_prefix=self.account_prefix,
             benchmark_symbol=self.benchmark_symbol,
@@ -210,6 +220,7 @@ def build_runtime_composer(
     report_builder: Callable[..., dict[str, Any]],
     report_persister: Callable[..., Any],
     translator: Callable[..., str],
+    runtime_target: RuntimeTarget | None,
     env_reader: Callable[[str, str], str | None],
     sleeper: Callable[[float], None],
     printer: Callable[..., Any] = print,
@@ -250,6 +261,7 @@ def build_runtime_composer(
         report_builder=report_builder,
         report_persister=report_persister,
         translator=translator,
+        runtime_target=runtime_target,
         env_reader=env_reader,
         sleeper=sleeper,
         printer=printer,

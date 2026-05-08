@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from quant_platform_kit.common import build_runtime_assembly, build_runtime_target
 from application.runtime_reporting_adapters import build_runtime_reporting_adapters
 
 
@@ -19,14 +20,24 @@ def test_runtime_reporting_adapters_start_run_builds_context_and_report():
         return {"run_id": kwargs["run_id"]}
 
     adapters = build_runtime_reporting_adapters(
-        platform="longbridge",
-        deploy_target="cloud_run",
-        service_name="longbridge-platform",
-        strategy_profile="soxl_soxx_trend_income",
+        runtime_assembly=build_runtime_assembly(
+            platform="longbridge",
+            deploy_target="cloud_run",
+            service_name="longbridge-platform",
+            strategy_profile="soxl_soxx_trend_income",
+            runtime_target=build_runtime_target(
+                platform_id="longbridge",
+                strategy_profile="soxl_soxx_trend_income",
+                dry_run_only=True,
+                deployment_selector="HK",
+                account_scope="HK",
+                service_name="longbridge-platform",
+            ),
+            account_scope="HK",
+            account_region="HK",
+            project_id="project-1",
+        ),
         strategy_domain="us_equity",
-        account_scope="HK",
-        account_region="HK",
-        project_id="project-1",
         extra_context_fields={"account_prefix": "HK"},
         managed_symbols=("SOXL", "SOXX"),
         account_prefix="HK",
@@ -49,6 +60,10 @@ def test_runtime_reporting_adapters_start_run_builds_context_and_report():
 
     assert log_context.run_id == "run-001"
     assert log_context.extra_fields["account_prefix"] == "HK"
+    assert log_context.runtime_target.platform_id == "longbridge"
+    assert observed["report_builder"]["extra_context_fields"]["account_prefix"] == "HK"
+    assert observed["report_builder"]["runtime_target"].platform_id == "longbridge"
+    assert observed["report_builder"]["runtime_target"].execution_mode == "paper"
     assert observed["report_builder"]["run_id"] == "run-001"
     assert observed["report_builder"]["dry_run"] is True
     summary = observed["report_builder"]["summary"]
@@ -76,14 +91,16 @@ def test_runtime_reporting_adapters_log_and_persist_route_to_dependencies():
         return types.SimpleNamespace(local_path="/tmp/report.json", gcs_uri=None)
 
     adapters = build_runtime_reporting_adapters(
-        platform="longbridge",
-        deploy_target="cloud_run",
-        service_name="longbridge-platform",
-        strategy_profile="soxl_soxx_trend_income",
+        runtime_assembly=build_runtime_assembly(
+            platform="longbridge",
+            deploy_target="cloud_run",
+            service_name="longbridge-platform",
+            strategy_profile="soxl_soxx_trend_income",
+            account_scope="HK",
+            account_region="HK",
+            project_id="project-1",
+        ),
         strategy_domain="us_equity",
-        account_scope="HK",
-        account_region="HK",
-        project_id="project-1",
         managed_symbols=(),
         signal_effective_after_trading_days=1,
         run_id_builder=lambda: "run-001",

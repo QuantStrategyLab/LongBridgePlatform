@@ -15,6 +15,7 @@ for candidate in (ROOT, QPK_SRC, UES_SRC):
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
 
+from quant_platform_kit.common.runtime_target import build_runtime_target  # noqa: E402
 from quant_platform_kit.common.strategies import derive_strategy_artifact_paths  # noqa: E402
 from strategy_registry import (  # noqa: E402
     LONGBRIDGE_PLATFORM,
@@ -48,6 +49,14 @@ def build_switch_plan(profile: str, *, account_region: str | None = None) -> dic
     requires_strategy_config_path = bool(runtime_requirements["requires_strategy_config_path"])
     config_source_policy = str(runtime_requirements.get("config_source_policy") or "none")
     normalized_region = (account_region or "").strip().upper()
+    runtime_target = build_runtime_target(
+        platform_id=LONGBRIDGE_PLATFORM,
+        strategy_profile=definition.profile,
+        dry_run_only=False,
+        deployment_selector=normalized_region or None,
+        account_scope=normalized_region or None,
+        service_name=f"longbridge-quant-{normalized_region.lower()}-service" if normalized_region else None,
+    )
 
     set_env: dict[str, str] = {"STRATEGY_PROFILE": definition.profile}
     if normalized_region:
@@ -112,6 +121,7 @@ def build_switch_plan(profile: str, *, account_region: str | None = None) -> dic
         **runtime_requirements,
         "required_inputs": sorted(definition.required_inputs),
         "target_mode": definition.target_mode,
+        "runtime_target": runtime_target.to_dict(),
         "set_env": set_env,
         "keep_env": keep_env,
         "optional_env": sorted(optional_env),
@@ -131,6 +141,7 @@ def _print_plan(plan: dict[str, object]) -> None:
     print(f"requires_snapshot_artifacts: {plan['requires_snapshot_artifacts']}")
     print(f"requires_strategy_config_path: {plan['requires_strategy_config_path']}")
     print(f"target_mode: {plan['target_mode']}")
+    print(f"runtime_target: {json.dumps(plan['runtime_target'], sort_keys=True)}")
     print("\nset_env:")
     for key, value in plan["set_env"].items():
         print(f"  {key}={value}")

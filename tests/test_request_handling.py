@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
+from quant_platform_kit.common.runtime_target import build_runtime_target
+
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -66,6 +68,15 @@ def install_stub_modules():
         tg_chat_id="shared-chat-id",
         dry_run_only=False,
         fractional_limit_buy_fallback_to_market=False,
+        runtime_target=build_runtime_target(
+            platform_id="longbridge",
+            strategy_profile="soxl_soxx_trend_income",
+            dry_run_only=False,
+            deployment_selector="HK",
+            account_selector=("HK",),
+            account_scope="HK",
+            service_name="longbridge-quant-hk-service",
+        ),
     )
 
     qpk_longbridge_module = types.ModuleType("quant_platform_kit.longbridge")

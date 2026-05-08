@@ -54,10 +54,39 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertFalse(settings.dry_run_only)
         self.assertFalse(settings.fractional_limit_buy_fallback_to_market)
         self.assertFalse(settings.debug_position_snapshot)
+        self.assertIsNotNone(settings.runtime_target)
+        self.assertEqual(settings.runtime_target.platform_id, "longbridge")
+        self.assertEqual(settings.runtime_target.execution_mode, "live")
         self.assertIsNone(settings.income_threshold_usd)
         self.assertIsNone(settings.qqqi_income_ratio)
         self.assertIsNone(settings.feature_snapshot_path)
         self.assertIsNone(settings.strategy_config_path)
+
+    def test_load_platform_runtime_settings_prefers_runtime_target_json(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE,
+                "ACCOUNT_REGION": "hk",
+                "RUNTIME_TARGET_JSON": (
+                    '{"platform_id":"longbridge","strategy_profile":"global_etf_rotation",'
+                    '"dry_run_only":true,"deployment_selector":"SG","account_selector":["SG"],'
+                    '"account_scope":"SG","service_name":"longbridge-quant-sg-service",'
+                    '"execution_mode":"paper"}'
+                ),
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertEqual(settings.strategy_profile, "global_etf_rotation")
+        self.assertEqual(settings.runtime_target.strategy_profile, "global_etf_rotation")
+        self.assertEqual(settings.runtime_target.platform_id, "longbridge")
+        self.assertTrue(settings.runtime_target.dry_run_only)
+        self.assertEqual(settings.runtime_target.execution_mode, "paper")
+        self.assertEqual(settings.runtime_target.deployment_selector, "SG")
+        self.assertEqual(settings.runtime_target.account_selector, ("SG",))
+        self.assertEqual(settings.runtime_target.service_name, "longbridge-quant-sg-service")
 
     def test_load_platform_runtime_settings_requires_strategy_profile(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -387,6 +416,12 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(plan["canonical_profile"], "global_etf_rotation")
         self.assertEqual(plan["set_env"]["ACCOUNT_REGION"], "SG")
         self.assertEqual(plan["set_env"]["ACCOUNT_PREFIX"], "SG")
+        self.assertEqual(plan["runtime_target"]["platform_id"], "longbridge")
+        self.assertEqual(plan["runtime_target"]["strategy_profile"], "global_etf_rotation")
+        self.assertEqual(plan["runtime_target"]["deployment_selector"], "SG")
+        self.assertEqual(plan["runtime_target"]["account_scope"], "SG")
+        self.assertEqual(plan["runtime_target"]["service_name"], "longbridge-quant-sg-service")
+        self.assertEqual(plan["runtime_target"]["execution_mode"], "live")
         self.assertEqual(plan["profile_group"], "direct_runtime_inputs")
         self.assertEqual(plan["input_mode"], "market_history")
         self.assertFalse(plan["requires_snapshot_artifacts"])

@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from quant_platform_kit.strategy_contracts import build_execution_timing_metadata
+from quant_platform_kit.common.runtime_assembly import RuntimeAssembly
+from quant_platform_kit.common.runtime_target import RuntimeTarget
 from runtime_logging import RuntimeLogContext
 
 
@@ -17,14 +19,9 @@ def _utcnow() -> datetime:
 
 @dataclass(frozen=True)
 class LongBridgeRuntimeReportingAdapters:
-    platform: str
-    deploy_target: str
-    service_name: str
-    strategy_profile: str
+    runtime_assembly: RuntimeAssembly
     strategy_domain: str | None
-    account_scope: str | None
-    account_region: str | None
-    project_id: str | None
+    runtime_target: RuntimeTarget | None = None
     extra_context_fields: Mapping[str, Any] = field(default_factory=dict)
     managed_symbols: tuple[str, ...] = ()
     account_prefix: str = ""
@@ -58,28 +55,18 @@ class LongBridgeRuntimeReportingAdapters:
             signal_date=started_at,
             signal_effective_after_trading_days=self.signal_effective_after_trading_days,
         )
-        log_context = RuntimeLogContext(
-            platform=self.platform,
-            deploy_target=self.deploy_target,
-            service_name=self.service_name,
-            strategy_profile=self.strategy_profile,
-            account_scope=self.account_scope,
-            account_region=self.account_region,
-            project_id=self.project_id,
-            extra_fields=dict(self.extra_context_fields),
-        ).with_run(self.run_id_builder())
+        assembly = self.runtime_assembly.with_overrides(
+            runtime_target=self.runtime_target,
+            extra_context_fields=self.extra_context_fields,
+        )
+        log_context = assembly.build_log_context(run_id=self.run_id_builder())
         report = self.report_builder(
-            platform=log_context.platform,
-            deploy_target=log_context.deploy_target,
-            service_name=log_context.service_name,
-            strategy_profile=self.strategy_profile,
-            strategy_domain=self.strategy_domain,
-            account_scope=log_context.account_scope,
-            account_region=log_context.account_region,
-            run_id=log_context.run_id,
-            run_source="cloud_run",
-            dry_run=self.dry_run,
-            started_at=started_at,
+            **assembly.build_report_base_kwargs(
+                run_id=log_context.run_id,
+                dry_run=self.dry_run,
+                started_at=started_at,
+                strategy_domain=self.strategy_domain,
+            ),
             summary={
                 "managed_symbols": list(self.managed_symbols),
                 "account_prefix": self.account_prefix,
@@ -104,7 +91,7 @@ class LongBridgeRuntimeReportingAdapters:
             report,
             base_dir=self.report_base_dir,
             gcs_prefix_uri=self.report_gcs_prefix_uri,
-            gcp_project_id=self.project_id,
+            gcp_project_id=self.runtime_assembly.project_id,
         )
         if isinstance(persisted, str):
             return persisted
@@ -113,14 +100,9 @@ class LongBridgeRuntimeReportingAdapters:
 
 def build_runtime_reporting_adapters(
     *,
-    platform: str,
-    deploy_target: str,
-    service_name: str,
-    strategy_profile: str,
+    runtime_assembly: RuntimeAssembly,
     strategy_domain: str | None,
-    account_scope: str | None,
-    account_region: str | None,
-    project_id: str | None,
+    runtime_target: RuntimeTarget | None = None,
     extra_context_fields: Mapping[str, Any] | None = None,
     managed_symbols: tuple[str, ...],
     account_prefix: str = "",
@@ -139,14 +121,9 @@ def build_runtime_reporting_adapters(
     clock: Callable[[], datetime] = _utcnow,
 ) -> LongBridgeRuntimeReportingAdapters:
     return LongBridgeRuntimeReportingAdapters(
-        platform=platform,
-        deploy_target=deploy_target,
-        service_name=service_name,
-        strategy_profile=strategy_profile,
+        runtime_assembly=runtime_assembly,
         strategy_domain=strategy_domain,
-        account_scope=account_scope,
-        account_region=account_region,
-        project_id=project_id,
+        runtime_target=runtime_target,
         extra_context_fields=dict(extra_context_fields or {}),
         managed_symbols=tuple(managed_symbols),
         account_prefix=str(account_prefix or ""),

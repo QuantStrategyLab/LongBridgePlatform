@@ -10,6 +10,10 @@ from quant_platform_kit.common.runtime_config import (
     resolve_optional_float_env,
     resolve_strategy_runtime_path_settings,
 )
+from quant_platform_kit.common.runtime_target import (
+    RuntimeTarget,
+    resolve_runtime_identity_from_env,
+)
 from strategy_registry import (
     LONGBRIDGE_PLATFORM,
     resolve_strategy_definition,
@@ -43,6 +47,7 @@ class PlatformRuntimeSettings:
     feature_snapshot_manifest_path: str | None = None
     strategy_config_path: str | None = None
     strategy_config_source: str | None = None
+    runtime_target: RuntimeTarget | None = None
 
 
 def resolve_strategy_profile(raw_value: str | None) -> str:
@@ -72,8 +77,23 @@ def load_platform_runtime_settings(
     project_id_resolver: Callable[[], str | None],
 ) -> PlatformRuntimeSettings:
     account_prefix = os.getenv("ACCOUNT_PREFIX", "DEFAULT")
+    resolved_identity = resolve_runtime_identity_from_env(
+        os.environ,
+        platform_id=LONGBRIDGE_PLATFORM,
+        default_strategy_profile=os.getenv("STRATEGY_PROFILE"),
+        dry_run_only=resolve_bool_value(os.getenv("LONGBRIDGE_DRY_RUN_ONLY")),
+        deployment_selector=infer_account_region(
+            os.getenv("ACCOUNT_REGION"),
+            account_prefix=account_prefix,
+        ),
+        account_scope=infer_account_region(
+            os.getenv("ACCOUNT_REGION"),
+            account_prefix=account_prefix,
+        ),
+        service_name=os.getenv("K_SERVICE"),
+    )
     strategy_definition = resolve_strategy_definition(
-        os.getenv("STRATEGY_PROFILE"),
+        resolved_identity.strategy_profile,
         platform_id=LONGBRIDGE_PLATFORM,
     )
     strategy_metadata = resolve_strategy_metadata(
@@ -116,6 +136,7 @@ def load_platform_runtime_settings(
         feature_snapshot_manifest_path=runtime_paths.feature_snapshot_manifest_path,
         strategy_config_path=runtime_paths.strategy_config_path,
         strategy_config_source=runtime_paths.strategy_config_source,
+        runtime_target=resolved_identity.runtime_target,
     )
 
 

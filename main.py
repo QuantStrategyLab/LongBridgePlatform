@@ -172,6 +172,7 @@ def build_composer():
         report_builder=build_runtime_report_base,
         report_persister=persist_runtime_report,
         translator=t,
+        runtime_target=RUNTIME_SETTINGS.runtime_target,
         env_reader=os.getenv,
         sleeper=time.sleep,
         printer=print,
