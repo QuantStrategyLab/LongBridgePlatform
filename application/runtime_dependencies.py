@@ -22,6 +22,7 @@ class LongBridgeRebalanceConfig:
     post_sell_refresh_attempts: int = 1
     post_sell_refresh_interval_sec: float = 0.0
     sleeper: Callable[[float], None] | None = None
+    extra_notification_lines: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -168,7 +168,7 @@ class LongBridgeRuntimeComposer:
             post_submit_order=notification_adapters.post_submit_order,
         )
 
-    def build_rebalance_config(self) -> LongBridgeRebalanceConfig:
+    def build_rebalance_config(self, *, strategy_plugin_signals=()) -> LongBridgeRebalanceConfig:
         return LongBridgeRebalanceConfig(
             limit_sell_discount=self.limit_sell_discount,
             limit_buy_premium=self.limit_buy_premium,
@@ -181,6 +181,24 @@ class LongBridgeRuntimeComposer:
             post_sell_refresh_attempts=self.order_poll_max_attempts,
             post_sell_refresh_interval_sec=self.order_poll_interval_sec,
             sleeper=self.sleeper,
+            extra_notification_lines=getattr(
+                self.strategy_adapters,
+                "build_strategy_plugin_notification_lines",
+                lambda _signals: (),
+            )(strategy_plugin_signals),
+        )
+
+    def load_strategy_plugin_signals(self, raw_mounts):
+        return getattr(self.strategy_adapters, "load_strategy_plugin_signals", lambda _raw_mounts: ((), None))(raw_mounts)
+
+    def attach_strategy_plugin_report(self, report, *, signals, error: str | None = None):
+        attach = getattr(self.strategy_adapters, "attach_strategy_plugin_report", None)
+        if attach is None:
+            return None
+        return attach(
+            report,
+            signals=signals,
+            error=error,
         )
 
 

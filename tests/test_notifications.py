@@ -63,6 +63,27 @@ class NotificationTests(unittest.TestCase):
         )
         self.assertEqual(
             translate(
+                "blend_gate_reason_volatility_delever",
+                symbol="SOXX",
+                window=20,
+                volatility="55.0%",
+                threshold="50.0%",
+                redirect_symbol="SOXX",
+            ),
+            "SOXX 20 日年化波动率 55.0% 高于 50.0%，SOXL 转向 SOXX",
+        )
+        self.assertEqual(
+            translate(
+                "strategy_plugin_line",
+                plugin=translate("strategy_plugin_name_crisis_response_shadow"),
+                mode=translate("strategy_plugin_mode_shadow"),
+                route=translate("strategy_plugin_route_no_action"),
+                action=translate("strategy_plugin_action_monitor"),
+            ),
+            "🧩 插件：危机响应观察 | 模式：影子观察 | 路由：不操作 | 建议：监控",
+        )
+        self.assertEqual(
+            translate(
                 "small_account_warning_note",
                 portfolio_equity="$0",
                 min_recommended_equity="$1,000",

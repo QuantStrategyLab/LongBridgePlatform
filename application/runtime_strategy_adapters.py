@@ -20,6 +20,54 @@ class LongBridgeRuntimeStrategyAdapters:
     calculate_rotation_indicators_fn: Callable[..., Any]
     build_strategy_evaluation_inputs_fn: Callable[..., dict[str, Any]]
     map_strategy_decision_to_plan_fn: Callable[..., dict[str, Any]]
+    build_strategy_plugin_report_payload_fn: Callable[..., dict[str, Any]] | None = None
+    load_configured_strategy_plugin_signals_fn: Callable[..., Any] | None = None
+    parse_strategy_plugin_mounts_fn: Callable[..., Any] | None = None
+
+    def load_strategy_plugin_signals(self, raw_mounts):
+        if not raw_mounts or self.parse_strategy_plugin_mounts_fn is None or self.load_configured_strategy_plugin_signals_fn is None:
+            return (), None
+        try:
+            mounts = self.parse_strategy_plugin_mounts_fn(raw_mounts)
+            if not mounts:
+                return (), None
+            return (
+                self.load_configured_strategy_plugin_signals_fn(
+                    mounts,
+                    strategy_profile=self.strategy_profile,
+                ),
+                None,
+            )
+        except Exception as exc:
+            return (), f"{type(exc).__name__}: {exc}"
+
+    def attach_strategy_plugin_report(self, report, *, signals, error: str | None = None):
+        if signals and self.build_strategy_plugin_report_payload_fn is not None:
+            report.setdefault("summary", {}).update(self.build_strategy_plugin_report_payload_fn(signals))
+        if error:
+            report.setdefault("diagnostics", {})["strategy_plugin_error"] = error
+
+    def translate_strategy_plugin_value(self, category: str, raw_value: str | None) -> str:
+        value = str(raw_value or "").strip() or "unknown"
+        key = f"strategy_plugin_{category}_{value}"
+        translated = self.translator(key)
+        return translated if translated != key else value
+
+    def build_strategy_plugin_notification_lines(self, signals) -> tuple[str, ...]:
+        lines = []
+        for signal in signals:
+            route = signal.canonical_route or "unknown_route"
+            action = signal.suggested_action or "unknown_action"
+            lines.append(
+                self.translator(
+                    "strategy_plugin_line",
+                    plugin=self.translate_strategy_plugin_value("name", signal.plugin),
+                    mode=self.translate_strategy_plugin_value("mode", signal.effective_mode),
+                    route=self.translate_strategy_plugin_value("route", route),
+                    action=self.translate_strategy_plugin_value("action", action),
+                )
+            )
+        return tuple(lines)
 
     def calculate_strategy_indicators(self, quote_context):
         available_inputs = set(self.available_inputs)
@@ -99,6 +147,9 @@ def build_runtime_strategy_adapters(
     calculate_rotation_indicators_fn: Callable[..., Any],
     build_strategy_evaluation_inputs_fn: Callable[..., dict[str, Any]],
     map_strategy_decision_to_plan_fn: Callable[..., dict[str, Any]],
+    build_strategy_plugin_report_payload_fn: Callable[..., dict[str, Any]] | None = None,
+    load_configured_strategy_plugin_signals_fn: Callable[..., Any] | None = None,
+    parse_strategy_plugin_mounts_fn: Callable[..., Any] | None = None,
 ) -> LongBridgeRuntimeStrategyAdapters:
     return LongBridgeRuntimeStrategyAdapters(
         strategy_runtime=strategy_runtime,
@@ -112,4 +163,7 @@ def build_runtime_strategy_adapters(
         calculate_rotation_indicators_fn=calculate_rotation_indicators_fn,
         build_strategy_evaluation_inputs_fn=build_strategy_evaluation_inputs_fn,
         map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan_fn,
+        build_strategy_plugin_report_payload_fn=build_strategy_plugin_report_payload_fn,
+        load_configured_strategy_plugin_signals_fn=load_configured_strategy_plugin_signals_fn,
+        parse_strategy_plugin_mounts_fn=parse_strategy_plugin_mounts_fn,
     )

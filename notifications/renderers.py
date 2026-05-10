@@ -171,6 +171,13 @@ def _append_strategy_line(lines, *, strategy_display_name, translator):
         lines.append(translator("strategy_label", name=name))
 
 
+def _append_extra_notification_lines(lines, extra_notification_lines) -> None:
+    for line in extra_notification_lines or ():
+        text = str(line or "").strip()
+        if text:
+            lines.append(text)
+
+
 def render_rebalance_notification(
     *,
     execution,
@@ -181,12 +188,14 @@ def render_rebalance_notification(
     separator,
     strategy_display_name,
     dry_run_only,
+    extra_notification_lines=(),
 ) -> RenderedNotification:
     formatted_logs = "\n".join(f"  - {log}" for log in [*logs, *skip_logs, *note_logs])
     detailed_lines = [translator("rebalance_title")]
     _append_strategy_line(detailed_lines, strategy_display_name=strategy_display_name, translator=translator)
     if dry_run_only:
         detailed_lines.append(translator("dry_run_banner"))
+    _append_extra_notification_lines(detailed_lines, extra_notification_lines)
     _append_dashboard_lines(detailed_lines, execution=execution)
     _append_timing_lines(detailed_lines, execution=execution, translator=translator)
     _append_status_lines(
@@ -201,6 +210,7 @@ def render_rebalance_notification(
     _append_strategy_line(compact_lines, strategy_display_name=strategy_display_name, translator=translator)
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
+    _append_extra_notification_lines(compact_lines, extra_notification_lines)
     _append_dashboard_lines(compact_lines, execution=execution)
     _append_timing_lines(compact_lines, execution=execution, translator=translator)
     _append_compact_status_lines(
@@ -225,11 +235,13 @@ def render_heartbeat_notification(
     separator,
     strategy_display_name,
     dry_run_only,
+    extra_notification_lines=(),
 ) -> RenderedNotification:
     detailed_lines = [translator("heartbeat_title")]
     _append_strategy_line(detailed_lines, strategy_display_name=strategy_display_name, translator=translator)
     if dry_run_only:
         detailed_lines.append(translator("dry_run_banner"))
+    _append_extra_notification_lines(detailed_lines, extra_notification_lines)
     _append_dashboard_lines(detailed_lines, execution=execution)
     _append_timing_lines(detailed_lines, execution=execution, translator=translator)
     detailed_lines.append(separator)
@@ -263,6 +275,7 @@ def render_heartbeat_notification(
     _append_strategy_line(compact_lines, strategy_display_name=strategy_display_name, translator=translator)
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
+    _append_extra_notification_lines(compact_lines, extra_notification_lines)
     _append_dashboard_lines(compact_lines, execution=execution)
     _append_timing_lines(compact_lines, execution=execution, translator=translator)
     _append_compact_status_lines(

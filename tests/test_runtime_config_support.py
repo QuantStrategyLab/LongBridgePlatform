@@ -108,6 +108,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.qqqi_income_ratio)
         self.assertIsNone(settings.feature_snapshot_path)
         self.assertIsNone(settings.strategy_config_path)
+        self.assertIsNone(settings.strategy_plugin_mounts_json)
 
     def test_load_platform_runtime_settings_prefers_runtime_target_json(self):
         with patch.dict(
@@ -188,6 +189,21 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
         self.assertTrue(settings.debug_position_snapshot)
+
+    def test_strategy_plugin_mounts_are_loaded_from_env(self):
+        mount_config = '{"strategy_plugins":[{"strategy":"soxl_soxx_trend_income","plugin":"crisis_response_shadow","signal_path":"gs://bucket/latest_signal.json"}]}'
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "STRATEGY_PLUGIN_MOUNTS_JSON": '{"strategy_plugins":[{"plugin":"global"}]}',
+                "LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON": mount_config,
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertEqual(settings.strategy_plugin_mounts_json, mount_config)
 
     def test_income_layer_overrides_are_loaded_from_env(self):
         with patch.dict(

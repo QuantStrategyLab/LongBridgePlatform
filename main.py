@@ -24,6 +24,11 @@ from quant_platform_kit.common.runtime_reports import (
     finalize_runtime_report,
     persist_runtime_report,
 )
+from quant_platform_kit.common.strategy_plugins import (
+    build_strategy_plugin_report_payload,
+    load_configured_strategy_plugin_signals,
+    parse_strategy_plugin_mounts,
+)
 from quant_platform_kit.strategy_contracts import build_strategy_evaluation_inputs
 from runtime_logging import build_run_id, emit_runtime_log
 from quant_platform_kit.longbridge import (
@@ -133,6 +138,9 @@ STRATEGY_ADAPTERS = build_runtime_strategy_adapters(
     calculate_rotation_indicators_fn=calculate_rotation_indicators,
     build_strategy_evaluation_inputs_fn=build_strategy_evaluation_inputs,
     map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan,
+    build_strategy_plugin_report_payload_fn=build_strategy_plugin_report_payload,
+    load_configured_strategy_plugin_signals_fn=load_configured_strategy_plugin_signals,
+    parse_strategy_plugin_mounts_fn=parse_strategy_plugin_mounts,
 )
 
 
@@ -184,6 +192,14 @@ def run_strategy():
     reporting_adapters = composer.build_reporting_adapters()
     log_context, report = reporting_adapters.start_run()
     notification_adapters = composer.build_notification_adapters()
+    strategy_plugin_signals, strategy_plugin_error = composer.load_strategy_plugin_signals(
+        getattr(RUNTIME_SETTINGS, "strategy_plugin_mounts_json", None)
+    )
+    composer.attach_strategy_plugin_report(
+        report,
+        signals=strategy_plugin_signals,
+        error=strategy_plugin_error,
+    )
     try:
         reporting_adapters.log_event(
             log_context,
@@ -220,7 +236,7 @@ def run_strategy():
             return
         run_rebalance_cycle(
             runtime=composer.build_rebalance_runtime(),
-            config=composer.build_rebalance_config(),
+            config=composer.build_rebalance_config(strategy_plugin_signals=strategy_plugin_signals),
         )
         finalize_runtime_report(report, status="ok")
         reporting_adapters.log_event(

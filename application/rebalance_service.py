@@ -233,6 +233,7 @@ def run_strategy(
                 separator=config.separator,
                 strategy_display_name=config.strategy_display_name,
                 dry_run_only=config.dry_run_only,
+                extra_notification_lines=config.extra_notification_lines,
             )
         )
     else:
@@ -245,5 +246,6 @@ def run_strategy(
                 separator=config.separator,
                 strategy_display_name=config.strategy_display_name,
                 dry_run_only=config.dry_run_only,
+                extra_notification_lines=config.extra_notification_lines,
             )
         )

@@ -47,6 +47,7 @@ class PlatformRuntimeSettings:
     feature_snapshot_manifest_path: str | None = None
     strategy_config_path: str | None = None
     strategy_config_source: str | None = None
+    strategy_plugin_mounts_json: str | None = None
     runtime_target: RuntimeTarget | None = None
 
 
@@ -125,6 +126,10 @@ def load_platform_runtime_settings(
         feature_snapshot_manifest_path=runtime_paths.feature_snapshot_manifest_path,
         strategy_config_path=runtime_paths.strategy_config_path,
         strategy_config_source=runtime_paths.strategy_config_source,
+        strategy_plugin_mounts_json=(
+            os.getenv("LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON")
+            or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
+        ),
         runtime_target=runtime_target,
     )
 

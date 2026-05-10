@@ -138,3 +138,57 @@ def test_runtime_strategy_adapters_resolve_plan_builds_inputs_and_maps_decision(
         },
     )
     assert result == {"plan": True}
+
+
+def test_runtime_strategy_adapters_loads_and_reports_plugin_signals():
+    observed = {}
+    signal = SimpleNamespace(
+        plugin="crisis_response_shadow",
+        effective_mode="shadow",
+        canonical_route="no_action",
+        suggested_action="monitor",
+    )
+
+    def fake_parse(raw_mounts):
+        observed["raw_mounts"] = raw_mounts
+        return ("mount-1",)
+
+    def fake_load(mounts, *, strategy_profile):
+        observed["load_call"] = (mounts, strategy_profile)
+        return (signal,)
+
+    adapters = build_runtime_strategy_adapters(
+        strategy_runtime=SimpleNamespace(evaluate=lambda **_kwargs: None),
+        strategy_profile="soxl_soxx_trend_income",
+        strategy_runtime_config={},
+        available_inputs=(),
+        benchmark_symbol="SOXX",
+        signal_text_fn=lambda icon: f"signal:{icon}",
+        translator=lambda key, **kwargs: {
+            "strategy_plugin_line": "plugin={plugin}|mode={mode}|route={route}|action={action}",
+            "strategy_plugin_name_crisis_response_shadow": "Crisis",
+            "strategy_plugin_mode_shadow": "shadow",
+            "strategy_plugin_route_no_action": "no action",
+            "strategy_plugin_action_monitor": "monitor",
+        }.get(key, key).format(**kwargs),
+        broker_adapters=SimpleNamespace(),
+        calculate_rotation_indicators_fn=lambda *_args, **_kwargs: {},
+        build_strategy_evaluation_inputs_fn=lambda **_kwargs: {},
+        map_strategy_decision_to_plan_fn=lambda *_args, **_kwargs: {},
+        build_strategy_plugin_report_payload_fn=lambda signals: {"strategy_plugins": list(signals)},
+        load_configured_strategy_plugin_signals_fn=fake_load,
+        parse_strategy_plugin_mounts_fn=fake_parse,
+    )
+
+    signals, error = adapters.load_strategy_plugin_signals('{"strategy_plugins":[]}')
+    report = {}
+    adapters.attach_strategy_plugin_report(report, signals=signals, error=error)
+
+    assert error is None
+    assert signals == (signal,)
+    assert observed["raw_mounts"] == '{"strategy_plugins":[]}'
+    assert observed["load_call"] == (("mount-1",), "soxl_soxx_trend_income")
+    assert report["summary"]["strategy_plugins"] == [signal]
+    assert adapters.build_strategy_plugin_notification_lines(signals) == (
+        "plugin=Crisis|mode=shadow|route=no action|action=monitor",
+    )
