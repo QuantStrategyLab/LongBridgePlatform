@@ -80,7 +80,7 @@ class NotificationTests(unittest.TestCase):
                 route=translate("strategy_plugin_route_no_action"),
                 action=translate("strategy_plugin_action_monitor"),
             ),
-            "🧩 插件：危机响应观察 | 模式：影子观察 | 路由：不操作 | 建议：监控",
+            "🧩 插件：危机观察通知 | 状态：未触发危机 | 提醒：持续观察",
         )
         self.assertEqual(
             translate(
