@@ -10,6 +10,7 @@ on:
         type: choice
         options:
           - longbridge-hk
+          - longbridge-paper
           - longbridge-sg
       path:
         description: "HTTP path to call"
@@ -39,7 +40,7 @@ jobs:
           set -euo pipefail
 
           case "${{ inputs.environment }}" in
-            longbridge-hk|longbridge-sg) ;;
+            longbridge-hk|longbridge-paper|longbridge-sg) ;;
             *)
               echo "Unsupported environment: ${{ inputs.environment }}" >&2
               exit 1

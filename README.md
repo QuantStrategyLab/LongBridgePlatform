@@ -119,20 +119,20 @@ Recommended setup:
 - **Repository Secrets (shared):**
   - Optional fallback only: `TELEGRAM_TOKEN`
 - **GitHub Environment: `longbridge-paper`**
-  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `RUNTIME_TARGET_JSON`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
   - Optional variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`, `LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`, `LONGBRIDGE_STRATEGY_CONFIG_PATH`, `LONGBRIDGE_DRY_RUN_ONLY`, `LONGBRIDGE_DEBUG_POSITION_SNAPSHOT`, `INCOME_THRESHOLD_USD`, `QQQI_INCOME_RATIO` (strategy overrides only; leave unset to inherit `UsEquityStrategies`)
   - Current live example: `STRATEGY_PROFILE=mega_cap_leader_rotation_top50_balanced`
   - Recommended secret-name values: `longport-app-key-paper`, `longport-app-secret-paper`
 - **GitHub Environment: `longbridge-sg`**
-  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `RUNTIME_TARGET_JSON`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
   - Optional variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`, `LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`, `LONGBRIDGE_STRATEGY_CONFIG_PATH`, `LONGBRIDGE_DRY_RUN_ONLY`, `LONGBRIDGE_DEBUG_POSITION_SNAPSHOT`, `INCOME_THRESHOLD_USD`, `QQQI_INCOME_RATIO` (strategy overrides only; leave unset to inherit `UsEquityStrategies`)
   - Current live example: `STRATEGY_PROFILE=soxl_soxx_trend_income`
   - Recommended secret-name values: `longport-app-key-sg`, `longport-app-secret-sg`
-- **GitHub Environment: `longbridge-hk`** (reserved for later)
-  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
+- **GitHub Environment: `longbridge-hk`**
+  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `RUNTIME_TARGET_JSON`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
   - Optional variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`, `LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`, `LONGBRIDGE_STRATEGY_CONFIG_PATH`, `LONGBRIDGE_DRY_RUN_ONLY`, `LONGBRIDGE_DEBUG_POSITION_SNAPSHOT`, `INCOME_THRESHOLD_USD`, `QQQI_INCOME_RATIO` (strategy overrides only; leave unset to inherit `UsEquityStrategies`)
-  - Current target example: `STRATEGY_PROFILE=<runtime_enabled us_equity profile>`
-  - Recommended secret-name values: `longport-app-key-paper`, `longport-app-secret-paper`
+  - Current live example: `STRATEGY_PROFILE=tech_communication_pullback_enhancement`
+  - Recommended secret-name values: `longport-app-key-hk`, `longport-app-secret-hk`
 
 On every push to `main`, the workflow updates the configured Cloud Run services with the shared and per-environment values above, and removes `TELEGRAM_CHAT_ID` from each Cloud Run service.
 
@@ -151,8 +151,8 @@ Important:
 
 - `QuantPlatformKit` is only a shared dependency; Cloud Run still deploys `LongBridgePlatform` itself.
 - Recommended Cloud Run service names: `longbridge-quant-paper-service`, `longbridge-quant-hk-service`, and `longbridge-quant-sg-service`.
-- Keep using two triggers and two GitHub Environments today; add `HK` with the same pattern later. The split key is still `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`, and the runtime identity is now explicit through `RUNTIME_TARGET_JSON` with `STRATEGY_PROFILE + ACCOUNT_REGION` kept for compatibility.
-- If you later rename or move this repository, rebuild the GitHub source binding in Google Cloud for both triggers instead of assuming the existing source binding will follow the rename.
+- Keep using three triggers and three GitHub Environments today: `longbridge-paper`, `longbridge-hk`, and `longbridge-sg`. The split key is still `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`, and the runtime identity is now explicit through `RUNTIME_TARGET_JSON` with `STRATEGY_PROFILE + ACCOUNT_REGION` kept for compatibility.
+- If you later rename or move this repository, rebuild the GitHub source binding in Google Cloud for all Cloud Build triggers instead of assuming the existing source binding will follow the rename.
 - For the shared deployment model and trigger migration checklist, see [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md).
 
 ### Quick deploy
@@ -279,19 +279,19 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 - **仓库级 Secrets（共享）：**
   - 仅保留为 fallback：`TELEGRAM_TOKEN`
 - **GitHub Environment: `longbridge-paper`**
-  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`RUNTIME_TARGET_JSON`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
   - 可选 Variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`、`LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`、`LONGBRIDGE_STRATEGY_CONFIG_PATH`、`LONGBRIDGE_DRY_RUN_ONLY`、`LONGBRIDGE_DEBUG_POSITION_SNAPSHOT`、`INCOME_THRESHOLD_USD`、`QQQI_INCOME_RATIO`（仅策略 override；不填则继承 `UsEquityStrategies`）
   - 当前线上示例：`STRATEGY_PROFILE=mega_cap_leader_rotation_top50_balanced`
   - 建议的 secret-name 值：`longport-app-key-paper`、`longport-app-secret-paper`
 - **GitHub Environment: `longbridge-sg`**
-  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
+  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`RUNTIME_TARGET_JSON`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
   - 可选 Variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`、`LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`、`LONGBRIDGE_STRATEGY_CONFIG_PATH`、`LONGBRIDGE_DRY_RUN_ONLY`、`LONGBRIDGE_DEBUG_POSITION_SNAPSHOT`、`INCOME_THRESHOLD_USD`、`QQQI_INCOME_RATIO`（仅策略 override；不填则继承 `UsEquityStrategies`）
   - 当前线上示例：`STRATEGY_PROFILE=soxl_soxx_trend_income`
   - 建议的 secret-name 值：`longport-app-key-sg`、`longport-app-secret-sg`
-- **GitHub Environment: `longbridge-hk`**（保留给后续补齐）
-  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
+- **GitHub Environment: `longbridge-hk`**
+  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`RUNTIME_TARGET_JSON`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
   - 可选 Variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`、`LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`、`LONGBRIDGE_STRATEGY_CONFIG_PATH`、`LONGBRIDGE_DRY_RUN_ONLY`、`LONGBRIDGE_DEBUG_POSITION_SNAPSHOT`、`INCOME_THRESHOLD_USD`、`QQQI_INCOME_RATIO`（仅策略 override；不填则继承 `UsEquityStrategies`）
-  - 当前目标示例：`STRATEGY_PROFILE=<runtime_enabled us_equity profile>`
+  - 当前线上示例：`STRATEGY_PROFILE=tech_communication_pullback_enhancement`
   - 建议的 secret-name 值：`longport-app-key-hk`、`longport-app-secret-hk`
 
 每次 push 到 `main` 时，这个 workflow 会更新配置的 Cloud Run 服务，把共享和各自隔离的变量同步进去，并删除旧的 `TELEGRAM_CHAT_ID`。
@@ -310,8 +310,8 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 
 - `QuantPlatformKit` 只是共享依赖，不单独部署；Cloud Run 继续只部署 `LongBridgePlatform`。
 - 推荐 Cloud Run 服务名：`longbridge-quant-paper-service`、`longbridge-quant-hk-service` 和 `longbridge-quant-sg-service`。
-- 继续保留两个 trigger 和两个 GitHub Environment today；HK 补齐后再按同样模式扩展第三个环境。区分键始终是 `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`，运行身份再通过 `STRATEGY_PROFILE + ACCOUNT_REGION` 明确下来。
-- 如果后面改 GitHub 仓库名或再次迁组织，Google Cloud 里的两个 trigger 都要重新选择 GitHub 来源，不要假设旧绑定会自动跟过去。
+- 现在使用三个 trigger 和三个 GitHub Environment：`longbridge-paper`、`longbridge-hk`、`longbridge-sg`。区分键始终是 `CLOUD_RUN_SERVICE + CLOUD_RUN_REGION`，运行身份通过 `RUNTIME_TARGET_JSON` 明确，`STRATEGY_PROFILE + ACCOUNT_REGION` 保留为兼容输入。
+- 如果后面改 GitHub 仓库名或再次迁组织，Google Cloud 里的所有 Cloud Build trigger 都要重新选择 GitHub 来源，不要假设旧绑定会自动跟过去。
 - 统一部署模型和触发器迁移清单见 [`QuantPlatformKit/docs/deployment_model.md`](../QuantPlatformKit/docs/deployment_model.md)。
 
 ### 快速部署
