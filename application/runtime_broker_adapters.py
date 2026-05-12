@@ -10,9 +10,6 @@ from typing import Any
 import pandas as pd
 
 from quant_platform_kit.common.models import PricePoint, PriceSeries, QuoteSnapshot
-from quant_platform_kit.common.runtime_inputs import (
-    DEFAULT_SEMICONDUCTOR_ROTATION_HISTORY_LOOKBACK,
-)
 from quant_platform_kit.common.port_adapters import (
     CallableExecutionPort,
     CallableMarketDataPort,
@@ -23,6 +20,13 @@ from quant_platform_kit.strategy_contracts import (
     build_account_state_from_portfolio_snapshot,
     build_portfolio_snapshot_from_account_state,
 )
+
+try:
+    from quant_platform_kit.common.runtime_inputs import (
+        DEFAULT_SEMICONDUCTOR_ROTATION_HISTORY_LOOKBACK,
+    )
+except ImportError:  # pragma: no cover - compatibility with older packaged wheels
+    DEFAULT_SEMICONDUCTOR_ROTATION_HISTORY_LOOKBACK = 420
 
 
 def _utcnow() -> datetime:
