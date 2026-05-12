@@ -480,15 +480,6 @@ def execute_rebalance_cycle(
             if submitted:
                 action_done = True
                 sell_submitted = True
-                cash_sweep_sold_this_cycle = True
-                if dry_run_only:
-                    dry_run_sale_events.append(
-                        (
-                            cash_sweep_symbol,
-                            sweep_quantity,
-                            sweep_quantity * sweep_price,
-                        )
-                    )
 
     if sell_submitted:
         previous_investable_cash = investable_cash
