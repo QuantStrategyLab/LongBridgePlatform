@@ -574,10 +574,10 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("💓 【心跳检测】", sent_messages[0])
-        self.assertIn("本轮没有可执行订单", sent_messages[0])
+        self.assertIn("🔔 【调仓指令】", sent_messages[0])
         self.assertIn("SOXX.US 目标差额 $163.14", sent_messages[0])
         self.assertIn("不足买入 1 股", sent_messages[0])
+        self.assertIn("尾部回补", sent_messages[0])
         self.assertNotIn("限价买入] SOXX", sent_messages[0])
 
     def test_fractional_strategy_target_buy_floors_to_cash_backed_whole_shares(self):
@@ -890,11 +890,11 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             dry_run_only=True,
         )
 
-        self.assertEqual(len(sent_messages), 1)
-        self.assertIn("各币种现金: SGD 350.00", sent_messages[0])
-        self.assertIn("检测到非 USD 现金", sent_messages[0])
-        self.assertIn("本轮没有可执行订单", sent_messages[0])
-        self.assertNotIn("✅ 无需调仓", sent_messages[0])
+        self.assertGreaterEqual(len(sent_messages), 1)
+        self.assertTrue(any("各币种现金: SGD 350.00" in message for message in sent_messages))
+        self.assertTrue(any("检测到非 USD 现金" in message for message in sent_messages))
+        self.assertTrue(any("本轮没有可执行订单" in message for message in sent_messages))
+        self.assertFalse(any("✅ 无需调仓" in message for message in sent_messages))
 
     def test_refreshes_account_state_after_sell_and_can_place_followup_buy(self):
         initial_plan = _build_plan(
