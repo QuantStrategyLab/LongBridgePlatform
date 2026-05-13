@@ -149,7 +149,7 @@ STRATEGY_ADAPTERS = build_runtime_strategy_adapters(
 )
 
 
-def build_composer():
+def build_composer(*, dry_run_only_override: bool | None = None):
     return build_runtime_composer(
         project_id=PROJECT_ID,
         secret_name=SECRET_NAME,
@@ -172,6 +172,7 @@ def build_composer():
         order_poll_interval_sec=ORDER_POLL_INTERVAL_SEC,
         order_poll_max_attempts=ORDER_POLL_MAX_ATTEMPTS,
         dry_run_only=RUNTIME_SETTINGS.dry_run_only,
+        dry_run_only_override=dry_run_only_override,
         fractional_limit_buy_fallback_to_market=RUNTIME_SETTINGS.fractional_limit_buy_fallback_to_market,
         broker_adapters=BROKER_ADAPTERS,
         strategy_adapters=STRATEGY_ADAPTERS,
@@ -192,8 +193,8 @@ def build_composer():
     )
 
 
-def run_strategy(*, force_run: bool = False):
-    composer = build_composer()
+def run_strategy(*, force_run: bool = False, validation_only: bool = False):
+    composer = build_composer(dry_run_only_override=True if validation_only else None)
     reporting_adapters = composer.build_reporting_adapters()
     log_context, report = reporting_adapters.start_run()
     notification_adapters = composer.build_notification_adapters()
@@ -245,7 +246,12 @@ def run_strategy(*, force_run: bool = False):
                 "market_hours_bypassed",
                 message="Market hours bypassed for backfill execution",
             )
-            print(composer.with_prefix("Market hours bypassed for backfill execution."), flush=True)
+            print(
+                composer.with_prefix(
+                    "Market hours bypassed for backfill verification; validation only, no orders will be submitted."
+                ),
+                flush=True,
+            )
         run_rebalance_cycle(
             runtime=composer.build_rebalance_runtime(),
             config=composer.build_rebalance_config(strategy_plugin_signals=strategy_plugin_signals),
@@ -294,8 +300,8 @@ def handle_trigger():
 
 @app.route("/backfill", methods=["POST", "GET"])
 def handle_backfill():
-    """Manual backfill entrypoint that bypasses market-hours guards."""
-    run_strategy(force_run=True)
+    """Manual backfill entrypoint for verification-only execution."""
+    run_strategy(force_run=True, validation_only=True)
     return "OK", 200
 
 

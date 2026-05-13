@@ -217,10 +217,11 @@ class RequestHandlingTests(unittest.TestCase):
 
     def test_handle_backfill_forces_strategy_run(self):
         module = load_module()
-        observed = {"force_run": None}
+        observed = {"force_run": None, "validation_only": None}
 
-        def fake_run_strategy(*, force_run=False):
+        def fake_run_strategy(*, force_run=False, validation_only=False):
             observed["force_run"] = force_run
+            observed["validation_only"] = validation_only
 
         module.run_strategy = fake_run_strategy
 
@@ -230,6 +231,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body, "OK")
         self.assertTrue(observed["force_run"])
+        self.assertTrue(observed["validation_only"])
 
     def test_run_strategy_emits_structured_runtime_events(self):
         module = load_module()
@@ -263,6 +265,46 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertIn("market_hours_bypassed", events)
         self.assertIn("strategy_cycle_completed", events)
         self.assertIn(("rebalance", "called", {}), observed)
+
+    def test_run_strategy_validation_only_uses_dry_run_composer(self):
+        module = load_module()
+        observed = {"override": None}
+
+        class FakeComposer:
+            def build_reporting_adapters(self):
+                return types.SimpleNamespace(
+                    start_run=lambda: (types.SimpleNamespace(run_id="run-001"), {"status": "pending"}),
+                    log_event=lambda *args, **kwargs: None,
+                    persist_execution_report=lambda report: types.SimpleNamespace(local_path="/tmp/report.json"),
+                )
+
+            def build_notification_adapters(self):
+                return types.SimpleNamespace(publish_cycle_notification=lambda **_kwargs: None)
+
+            def load_strategy_plugin_signals(self, *_args, **_kwargs):
+                return (), None
+
+            def attach_strategy_plugin_report(self, *_args, **_kwargs):
+                return None
+
+            def with_prefix(self, message):
+                return message
+
+            def build_rebalance_runtime(self):
+                return types.SimpleNamespace()
+
+            def build_rebalance_config(self, *, strategy_plugin_signals=()):
+                return types.SimpleNamespace()
+
+        module.build_composer = lambda *, dry_run_only_override=None: observed.__setitem__("override", dry_run_only_override) or FakeComposer()
+        module.is_market_open_now = lambda: False
+        module.run_rebalance_cycle = lambda **_kwargs: None
+        module.persist_execution_report = lambda report: types.SimpleNamespace(local_path="/tmp/report.json")
+        module.build_run_id = lambda: "run-001"
+
+        module.run_strategy(force_run=True, validation_only=True)
+
+        self.assertTrue(observed["override"])
 
     def test_run_strategy_persists_machine_readable_report(self):
         module = load_module()
