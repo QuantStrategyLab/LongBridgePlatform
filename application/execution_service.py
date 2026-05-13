@@ -6,9 +6,42 @@ import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from quant_platform_kit.common.cash_sweep import (
-    estimate_cash_sweep_sale_quantity_to_fund_buy,
-)
+try:
+    from quant_platform_kit.common.cash_sweep import (
+        estimate_cash_sweep_sale_quantity_to_fund_buy,
+    )
+except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
+    import math
+
+    def estimate_cash_sweep_sale_quantity_to_fund_buy(
+        max_quantity,
+        cash_sweep_price,
+        base_buying_power,
+        funding_needs,
+    ):
+        if max_quantity <= 0:
+            return 0
+        sweep_price = float(cash_sweep_price or 0.0)
+        if sweep_price <= 0.0:
+            return 0
+        current_buying_power = max(0.0, float(base_buying_power or 0.0))
+
+        for underweight_value, ask_price in funding_needs:
+            needed_value = float(underweight_value or 0.0)
+            quote_price = float(ask_price or 0.0)
+            if needed_value <= 0.0 or quote_price <= 0.0:
+                continue
+            max_buy_quantity = int(needed_value // quote_price)
+            if max_buy_quantity <= 0:
+                continue
+            required_buying_power = max_buy_quantity * quote_price
+            if current_buying_power >= required_buying_power:
+                return 0
+            return min(
+                int(max_quantity),
+                max(1, math.ceil((required_buying_power - current_buying_power) / sweep_price)),
+            )
+        return 0
 from quant_platform_kit.common.quantity import (
     floor_to_quantity_step,
     format_quantity,
