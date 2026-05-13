@@ -193,7 +193,7 @@ def build_composer(*, dry_run_only_override: bool | None = None):
     )
 
 
-def run_strategy(*, force_run: bool = False, validation_only: bool = False):
+def run_strategy(*, force_run: bool = False, validation_only: bool = False, validation_label: str = "backfill"):
     composer = build_composer(dry_run_only_override=True if validation_only else None)
     reporting_adapters = composer.build_reporting_adapters()
     log_context, report = reporting_adapters.start_run()
@@ -244,11 +244,11 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False):
             reporting_adapters.log_event(
                 log_context,
                 "market_hours_bypassed",
-                message="Market hours bypassed for backfill execution",
+                message=f"Market hours bypassed for {validation_label} execution",
             )
             print(
                 composer.with_prefix(
-                    "Market hours bypassed for backfill verification; validation only, no orders will be submitted."
+                    f"Market hours bypassed for {validation_label} verification; validation only, no orders will be submitted."
                 ),
                 flush=True,
             )
@@ -303,6 +303,13 @@ def handle_backfill():
     """Manual backfill entrypoint for verification-only execution."""
     run_strategy(force_run=True, validation_only=True)
     return "OK", 200
+
+
+@app.route("/precheck", methods=["POST", "GET"])
+def handle_precheck():
+    """Pre-market / post-open verification entrypoint for dry-run only execution."""
+    run_strategy(force_run=True, validation_only=True, validation_label="precheck")
+    return "Precheck OK", 200
 
 
 if __name__ == "__main__":

@@ -1106,6 +1106,74 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("🧪 模拟限价买入 SOXL.US", sent_messages[0])
         self.assertNotIn("买入说明", sent_messages[0])
 
+    def test_dry_run_cash_sweep_ignores_zero_estimator_after_sell_settlement(self):
+        initial_plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX", "BOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            safe_haven_symbols=("BOXX",),
+            targets={"SOXL": 500.0, "SOXX": 0.0, "BOXX": 1000.0},
+            market_values={"SOXL": 0.0, "SOXX": 0.0, "BOXX": 1000.0},
+            sellable_quantities={"SOXL": 0, "SOXX": 0, "BOXX": 10},
+            quantities={"SOXL": 0, "SOXX": 0, "BOXX": 10},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=0.0,
+            market_status="🧯 过热降档（SOXX）",
+            deploy_ratio_text="15.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXX 仍在 140 日门槛线上方，但触发过热降档，目标仓位 SOXL 15.0%",
+            available_cash=0.0,
+            total_strategy_equity=1000.0,
+            portfolio_rows=(("SOXL", "SOXX"), ("BOXX",)),
+        )
+
+        sent_messages, _, _ = self._run_strategy(
+            initial_plan,
+            prices={"SOXL.US": 100.0, "SOXX.US": 200.0, "BOXX.US": 100.0},
+            estimate_max_purchase_quantity_value=0,
+            dry_run_only=True,
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("🧪 模拟运行模式", sent_messages[0])
+        self.assertIn("🧪 模拟市价卖出 BOXX.US", sent_messages[0])
+        self.assertIn("🧪 模拟限价买入 SOXL.US", sent_messages[0])
+        self.assertNotIn("券商估算可买数量为 0", sent_messages[0])
+
+    def test_dry_run_rebuys_cash_sweep_symbol_with_remaining_investable_cash(self):
+        initial_plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX", "BOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            safe_haven_symbols=("BOXX",),
+            targets={"SOXL": 0.0, "SOXX": 0.0, "BOXX": 0.0},
+            market_values={"SOXL": 0.0, "SOXX": 0.0, "BOXX": 0.0},
+            sellable_quantities={"SOXL": 0, "SOXX": 0, "BOXX": 0},
+            quantities={"SOXL": 0, "SOXX": 0, "BOXX": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=500.0,
+            market_status="🧯 过热降档（SOXX）",
+            deploy_ratio_text="0.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="无其他买单，仅保留现金回补",
+            available_cash=500.0,
+            total_strategy_equity=500.0,
+            portfolio_rows=(("SOXL", "SOXX"), ("BOXX",)),
+        )
+
+        sent_messages, _, _ = self._run_strategy(
+            initial_plan,
+            prices={"SOXL.US": 100.0, "SOXX.US": 200.0, "BOXX.US": 100.0},
+            estimate_max_purchase_quantity_value=10,
+            dry_run_only=True,
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("🧪 模拟运行模式", sent_messages[0])
+        self.assertIn("🧪 模拟市价买入 BOXX.US", sent_messages[0])
+
     def test_retries_account_refresh_after_sell_until_buying_power_updates(self):
         initial_plan = _build_plan(
             strategy_profile="tqqq_growth_income",

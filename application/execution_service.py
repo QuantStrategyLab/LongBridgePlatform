@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import math
 import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from quant_platform_kit.common.cash_sweep import (
+    estimate_cash_sweep_sale_quantity_to_fund_buy,
+)
 from quant_platform_kit.common.quantity import (
     floor_to_quantity_step,
     format_quantity,
@@ -166,6 +168,7 @@ def _estimate_buy_quantity_candidate(
     can_buy_value,
     estimate_max_purchase_quantity,
     notify_issue,
+    dry_run_only=False,
 ):
     budget_quantity = floor_to_quantity_step(can_buy_value / ref_price, 0.0001)
     cash_limit_quantity = estimate_cash_buy_quantity_safe(
@@ -178,6 +181,8 @@ def _estimate_buy_quantity_candidate(
     )
     if cash_limit_quantity is None:
         return None
+    if dry_run_only and float(cash_limit_quantity or 0.0) <= 0.0:
+        cash_limit_quantity = budget_quantity
     candidate_quantity = _normalize_trade_quantity(
         min(budget_quantity, float(cash_limit_quantity)),
         allow_fractional=True,
@@ -229,6 +234,7 @@ def execute_rebalance_cycle(
     investable_cash = float(execution["investable_cash"])
     current_min_trade = float(execution["current_min_trade"])
     dry_run_sale_proceeds = 0.0
+    cash_sweep_sold_this_cycle = False
 
     def append_order_id_suffix(log_message, order_id):
         order_id_text = str(order_id or "").strip()
@@ -325,6 +331,7 @@ def execute_rebalance_cycle(
         if cash_sweep_price is None or cash_sweep_price <= 0.0:
             return 0
         base_buying_power = max(0.0, float(investable_cash))
+        funding_needs = []
         for buy_symbol in candidate_symbols:
             underweight_value = target_values[buy_symbol] - market_values[buy_symbol]
             if underweight_value <= threshold_value:
@@ -336,18 +343,18 @@ def execute_rebalance_cycle(
             )
             if buy_price is None:
                 continue
-            ask = round(buy_price * limit_buy_premium, 2) if buy_symbol in limit_order_symbols else round(buy_price, 2)
-            max_buy_quantity = int(underweight_value // ask)
-            if max_buy_quantity <= 0:
-                continue
-            required_buying_power = max_buy_quantity * ask
-            if base_buying_power >= required_buying_power:
-                return 0
-            return min(
-                max_quantity,
-                max(1, math.ceil((required_buying_power - base_buying_power) / cash_sweep_price)),
+            ask = (
+                round(buy_price * limit_buy_premium, 2)
+                if buy_symbol in limit_order_symbols
+                else round(buy_price, 2)
             )
-        return 0
+            funding_needs.append((underweight_value, ask))
+        return estimate_cash_sweep_sale_quantity_to_fund_buy(
+            max_quantity,
+            cash_sweep_price,
+            base_buying_power,
+            funding_needs,
+        )
 
     for symbol in strategy_assets:
         diff = target_values[symbol] - market_values[symbol]
@@ -413,6 +420,8 @@ def execute_rebalance_cycle(
                 if submitted:
                     action_done = True
                     sell_submitted = True
+                    if symbol == cash_sweep_symbol:
+                        cash_sweep_sold_this_cycle = True
                 elif sellable_quantities[symbol] <= 0 and quantities[symbol] > 0:
                     record_skip_log(
                         skip_logs,
@@ -485,6 +494,7 @@ def execute_rebalance_cycle(
             if submitted:
                 action_done = True
                 sell_submitted = True
+                cash_sweep_sold_this_cycle = True
 
     if sell_submitted:
         if dry_run_only and dry_run_sale_proceeds > 0.0:
@@ -576,6 +586,7 @@ def execute_rebalance_cycle(
                 can_buy_value=can_buy_value,
                 estimate_max_purchase_quantity=estimate_max_purchase_quantity,
                 notify_issue=notify_issue,
+                dry_run_only=dry_run_only,
             )
             if limit_candidate is None:
                 continue
@@ -602,6 +613,7 @@ def execute_rebalance_cycle(
                     can_buy_value=can_buy_value,
                     estimate_max_purchase_quantity=estimate_max_purchase_quantity,
                     notify_issue=notify_issue,
+                    dry_run_only=dry_run_only,
                 )
                 if market_candidate is not None:
                     market_quantity, _market_budget_quantity, _market_cash_limit_quantity = market_candidate
@@ -684,6 +696,52 @@ def execute_rebalance_cycle(
                 investable=f"{investable_cash:.2f}",
                 price=f"{price:.2f}",
             )
+
+    if (
+        not cash_sweep_sold_this_cycle
+        and cash_sweep_symbol
+        and cash_sweep_symbol in strategy_assets
+    ):
+        cash_sweep_price = safe_quote_last_price(
+            f"{cash_sweep_symbol}.US",
+            market_data_port=market_data_port,
+            notify_issue=notify_issue,
+        )
+        if cash_sweep_price is not None and cash_sweep_price > 0.0 and investable_cash > cash_sweep_price * 2:
+            quantity = int(investable_cash // cash_sweep_price)
+            if quantity > 0:
+                quantity_text = format_quantity(quantity)
+                if dry_run_only:
+                    submitted = record_dry_run(
+                        f"{cash_sweep_symbol}.US",
+                        "buy",
+                        quantity_text,
+                        round(cash_sweep_price, 2),
+                        order_type="market",
+                    )
+                else:
+                    submitted = submit_order_via_port(
+                        f"{cash_sweep_symbol}.US",
+                        "market",
+                        "buy",
+                        quantity,
+                        translator(
+                            "market_buy",
+                            symbol=cash_sweep_symbol,
+                            qty=quantity_text,
+                            price=round(cash_sweep_price, 2),
+                        ),
+                    )
+                if submitted:
+                    rebuy_message = translator(
+                        "cash_sweep_rebuy",
+                        symbol=f"{cash_sweep_symbol}.US",
+                        qty=quantity_text,
+                        price=f"{cash_sweep_price:.2f}",
+                    )
+                    note_logs.append(rebuy_message)
+                    print(with_prefix(rebuy_message), flush=True)
+                    action_done = True
 
     return ExecutionCycleResult(
         plan=dict(plan or {}),

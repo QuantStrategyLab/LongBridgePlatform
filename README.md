@@ -161,7 +161,7 @@ Important:
 2. Create secret `longport_token_paper` for paper / `longport_token_hk` for HK / `longport_token_sg` for SG (or your custom `LONGPORT_SECRET_NAME`) in Secret Manager and add your LongPort access token as the first version.
 3. Set the required env vars above on the Cloud Run service.
 4. Deploy the app to Cloud Run (e.g. `gcloud run deploy` from repo root with Dockerfile or buildpack).
-5. Create a Cloud Scheduler job that POSTs to the Cloud Run URL. Choose the cron from the strategy-layer cadence in `UsEquityStrategies`; this platform repo only owns the runtime trigger wiring.
+5. Create two Cloud Scheduler jobs that POST to the Cloud Run URL. Use `"/precheck"` after the open window and `"/"` near the close window. Choose both crons from the strategy-layer cadence in `UsEquityStrategies`; this platform repo only owns the runtime trigger wiring.
 
 IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Accessor for the configured `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, and `LONGPORT_APP_SECRET_SECRET_NAME`, such as `longport_token_paper`, `longport-app-key-paper`, `longport-app-secret-paper`) and **Logs Writer**. Build/deploy typically uses a separate account with Artifact Registry Writer, Cloud Run Admin, Service Account User.
 
@@ -320,6 +320,6 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 2. 在 Secret Manager 中为 paper 创建 `longport_token_paper`、为 HK 创建 `longport_token_hk`、为 SG 创建 `longport_token_sg`（或使用你自定义的 `LONGPORT_SECRET_NAME`），并将 LongPort access token 作为第一个版本写入。
 3. 在 Cloud Run 服务上配置上述环境变量。
 4. 部署至 Cloud Run（如从仓库根目录执行 `gcloud run deploy`）。
-5. 创建 Cloud Scheduler 定时任务，POST 到 Cloud Run URL。cron 频率以 `UsEquityStrategies` 里的策略层 cadence 为准；这个平台仓只维护运行时触发 wiring。
+5. 创建两个 Cloud Scheduler 定时任务，POST 到 Cloud Run URL。开盘后窗口走 `"/precheck"`，临近收盘窗口走 `"/"`。cron 频率以 `UsEquityStrategies` 里的策略层 cadence 为准；这个平台仓只维护运行时触发 wiring。
 
 IAM: Cloud Run 服务账号需要 **Secret Manager Admin**（或当前 `LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME` 对应 secret 的 Secret Accessor，例如 `longport_token_paper`、`longport-app-key-paper`、`longport-app-secret-paper`）和 **Logs Writer** 权限。
