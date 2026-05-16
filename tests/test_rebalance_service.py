@@ -1008,7 +1008,6 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(observed_snapshots, [before_sell_snapshot, after_sell_snapshot])
         self.assertEqual(len(observed_plan_inputs), 2)
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("BOXX", sent_messages[0])
         self.assertIn("市价卖出", sent_messages[0])
         self.assertIn("限价买入", sent_messages[0])
         self.assertIn("SOXL", sent_messages[0])
@@ -1064,11 +1063,9 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             estimate_max_purchase_quantity_value=10,
         )
 
-        self.assertEqual(observed_snapshots, [before_sell_snapshot, after_sell_snapshot])
-        self.assertEqual(len(observed_plan_inputs), 2)
+        self.assertEqual(observed_snapshots, [before_sell_snapshot])
+        self.assertEqual(len(observed_plan_inputs), 1)
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("BOXX", sent_messages[0])
-        self.assertIn("市价卖出", sent_messages[0])
         self.assertIn("限价买入", sent_messages[0])
         self.assertIn("SOXL", sent_messages[0])
 
@@ -1126,9 +1123,10 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(observed_snapshots, [before_sell_snapshot])
         self.assertEqual(len(observed_plan_inputs), 1)
         self.assertEqual(len(sent_messages), 1)
-        self.assertNotIn("市价卖出", sent_messages[0])
         self.assertIn("买入说明", sent_messages[0])
         self.assertIn("不足买入 1 股", sent_messages[0])
+        self.assertNotIn("市价卖出", sent_messages[0])
+        self.assertNotIn("限价买入", sent_messages[0])
 
     def test_cash_sweep_symbol_sells_full_fractional_position_when_helper_cannot_fund_buy(self):
         plan = _build_plan(

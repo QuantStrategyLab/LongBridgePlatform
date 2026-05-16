@@ -9,6 +9,7 @@ from dataclasses import dataclass
 try:
     from quant_platform_kit.common.cash_sweep import (
         estimate_cash_sweep_sale_quantity_to_fund_buy,
+        should_sell_cash_sweep_to_fund_whole_share_buy,
     )
 except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
     import math
@@ -38,8 +39,35 @@ except ImportError:  # pragma: no cover - compatibility with older pinned shared
             return min(
                 int(max_quantity),
                 max(1, math.ceil((required_buying_power - current_buying_power) / sweep_price)),
-            )
+        )
         return 0
+
+    def should_sell_cash_sweep_to_fund_whole_share_buy(
+        max_quantity,
+        cash_sweep_price,
+        base_buying_power,
+        funding_needs,
+    ):
+        if max_quantity <= 0:
+            return False
+        sweep_price = float(cash_sweep_price or 0.0)
+        if sweep_price <= 0.0:
+            return False
+        current_buying_power = max(0.0, float(base_buying_power or 0.0))
+        sweep_capacity = float(max_quantity) * sweep_price
+        if sweep_capacity <= 0.0:
+            return False
+
+        for underweight_value, ask_price in funding_needs:
+            _ = underweight_value
+            quote_price = float(ask_price or 0.0)
+            if quote_price <= 0.0:
+                continue
+            if current_buying_power >= quote_price:
+                return False
+            if current_buying_power + sweep_capacity >= quote_price:
+                return True
+        return False
 from quant_platform_kit.common.quantity import (
     floor_to_quantity_step,
     format_quantity,
@@ -453,8 +481,7 @@ def execute_rebalance_cycle(
             notify_issue=notify_issue,
         )
         if sweep_price is not None and sweep_price > 0.0:
-            available_sweep_cash = float(sellable_quantities[cash_sweep_symbol]) * sweep_price
-            can_fund_whole_share_buy = False
+            funding_needs = []
             for buy_symbol in funding_buy_candidates:
                 buy_price = safe_quote_last_price(
                     f"{buy_symbol}.US",
@@ -463,16 +490,20 @@ def execute_rebalance_cycle(
                 )
                 if buy_price is None:
                     continue
-                ask = (
-                    round(buy_price * limit_buy_premium, 2)
-                    if buy_symbol in limit_order_symbols
-                    else round(buy_price, 2)
+                funding_needs.append(
+                    (
+                        target_values[buy_symbol] - market_values[buy_symbol],
+                        round(buy_price * limit_buy_premium, 2)
+                        if buy_symbol in limit_order_symbols
+                        else round(buy_price, 2),
+                    )
                 )
-                if float(investable_cash) + available_sweep_cash >= ask:
-                    can_fund_whole_share_buy = True
-                    break
-
-            if can_fund_whole_share_buy:
+            if should_sell_cash_sweep_to_fund_whole_share_buy(
+                float(sellable_quantities[cash_sweep_symbol]),
+                sweep_price,
+                investable_cash,
+                funding_needs,
+            ):
                 sweep_quantity = float(sellable_quantities[cash_sweep_symbol])
                 quantity_text = format_quantity(sweep_quantity)
                 if dry_run_only:
