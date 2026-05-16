@@ -1130,6 +1130,66 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("市价卖出", sent_messages[0])
         self.assertNotIn("买入跳过", sent_messages[0])
 
+    def test_cash_sweep_symbol_sells_full_fractional_position_when_helper_cannot_fund_buy(self):
+        plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX", "BOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            safe_haven_symbols=("BOXX",),
+            targets={"SOXL": 167.79, "SOXX": 0.0, "BOXX": 1000.0},
+            market_values={"SOXL": 0.0, "SOXX": 0.0, "BOXX": 1000.0},
+            sellable_quantities={"SOXL": 0, "SOXX": 0, "BOXX": 1.3823},
+            quantities={"SOXL": 0, "SOXX": 0, "BOXX": 1.3823},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=14.46,
+            market_status="🧯 过热降档（SOXX）",
+            deploy_ratio_text="15.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXX 仍在 140 日门槛线上方，但触发过热降档，目标仓位 SOXL 15.0%",
+            available_cash=14.46,
+            total_strategy_equity=1000.0,
+            portfolio_rows=(("SOXL", "SOXX"), ("BOXX",)),
+        )
+        refreshed_plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX", "BOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            safe_haven_symbols=("BOXX",),
+            targets={"SOXL": 167.79, "SOXX": 0.0, "BOXX": 1000.0},
+            market_values={"SOXL": 0.0, "SOXX": 0.0, "BOXX": 838.64},
+            sellable_quantities={"SOXL": 0, "SOXX": 0, "BOXX": 0},
+            quantities={"SOXL": 0, "SOXX": 0, "BOXX": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=175.46,
+            market_status="🧯 过热降档（SOXX）",
+            deploy_ratio_text="15.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXX 仍在 140 日门槛线上方，但触发过热降档，目标仓位 SOXL 15.0%",
+            available_cash=175.46,
+            total_strategy_equity=1000.0,
+            portfolio_rows=(("SOXL", "SOXX"), ("BOXX",)),
+        )
+
+        sent_messages, observed_snapshots, observed_plan_inputs = self._run_strategy(
+            plan,
+            refreshed_plan=refreshed_plan,
+            portfolio_snapshots=[
+                _build_snapshot(plan, phase="before_cash_sweep_fractional"),
+                _build_snapshot(refreshed_plan, phase="after_cash_sweep_fractional"),
+            ],
+            prices={"SOXL.US": 167.79, "SOXX.US": 200.0, "BOXX.US": 116.59},
+            estimate_max_purchase_quantity_value=10,
+        )
+
+        self.assertEqual(len(observed_snapshots), 2)
+        self.assertEqual(len(observed_plan_inputs), 2)
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("市价卖出", sent_messages[0])
+        self.assertIn("BOXX", sent_messages[0])
+        self.assertIn("SOXL", sent_messages[0])
+
     def test_dry_run_cash_sweep_can_simulate_buy_after_sell_settlement(self):
         initial_plan = _build_plan(
             strategy_symbols=("SOXL", "SOXX", "BOXX"),

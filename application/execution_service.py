@@ -538,7 +538,7 @@ def execute_rebalance_cycle(
             funding_buy_candidates,
         )
         if sweep_quantity <= 0:
-            sweep_quantity = 1
+            sweep_quantity = float(sellable_quantities[cash_sweep_symbol])
         sweep_price = safe_quote_last_price(
             f"{cash_sweep_symbol}.US",
             market_data_port=market_data_port,
