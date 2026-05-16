@@ -52,7 +52,6 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
         order_poll_interval_sec=1,
         order_poll_max_attempts=8,
         dry_run_only=True,
-        fractional_limit_buy_fallback_to_market=True,
         runtime_target=build_runtime_target(
             platform_id="longbridge",
             strategy_profile="soxl_soxx_trend_income",
@@ -127,4 +126,3 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     assert config.limit_buy_premium == 1.005
     assert config.strategy_display_name == "SOXL/SOXX 半导体趋势收益"
     assert config.dry_run_only is True
-    assert config.fractional_limit_buy_fallback_to_market is True

@@ -18,7 +18,6 @@ class LongBridgeRebalanceConfig:
     with_prefix: Callable[[str], str]
     strategy_display_name: str = ""
     dry_run_only: bool = False
-    fractional_limit_buy_fallback_to_market: bool = False
     post_sell_refresh_attempts: int = 1
     post_sell_refresh_interval_sec: float = 0.0
     sleeper: Callable[[float], None] | None = None

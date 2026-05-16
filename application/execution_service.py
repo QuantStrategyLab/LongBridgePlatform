@@ -138,24 +138,11 @@ def _floor_whole_share_quantity(quantity):
     return normalize_order_quantity(floor_to_quantity_step(quantity, 1.0))
 
 
-def _supports_fractional_quantity(*, order_kind: str, side: str) -> bool:
-    return not (order_kind == "limit" and side == "buy")
-
-
-def _normalize_trade_quantity(quantity, *, allow_fractional: bool):
+def _normalize_trade_quantity(quantity):
     raw_quantity = max(0.0, float(quantity or 0.0))
     if raw_quantity <= 0.0:
         return 0
-    if allow_fractional:
-        if raw_quantity < 1.0:
-            return 0
-        return normalize_order_quantity(raw_quantity)
     return _floor_whole_share_quantity(raw_quantity)
-
-
-def _has_fractional_quantity(quantity) -> bool:
-    value = float(quantity or 0.0)
-    return value > 0.0 and not value.is_integer()
 
 
 def _sell_order_quantity(
@@ -164,7 +151,6 @@ def _sell_order_quantity(
     target_value,
     price,
     sellable_quantity,
-    allow_fractional: bool,
 ):
     sellable = max(0.0, float(sellable_quantity or 0.0))
     if sellable <= 0.0:
@@ -172,17 +158,13 @@ def _sell_order_quantity(
 
     target = max(0.0, float(target_value or 0.0))
     if target <= 0.0:
-        return _normalize_trade_quantity(
-            sellable,
-            allow_fractional=allow_fractional,
-        )
+        return _normalize_trade_quantity(sellable)
 
     sell_value = max(0.0, float(current_value or 0.0) - target)
     if sell_value <= 0.0 or float(price or 0.0) <= 0.0:
         return 0
     return _normalize_trade_quantity(
         min(sell_value / float(price), sellable),
-        allow_fractional=allow_fractional,
     )
 
 
@@ -229,7 +211,7 @@ def _estimate_buy_quantity_candidate(
     notify_issue,
     dry_run_only=False,
 ):
-    budget_quantity = floor_to_quantity_step(can_buy_value / ref_price, 0.0001)
+    budget_quantity = floor_to_quantity_step(can_buy_value / ref_price, 1.0)
     cash_limit_quantity = estimate_cash_buy_quantity_safe(
         trade_context,
         symbol,
@@ -240,11 +222,8 @@ def _estimate_buy_quantity_candidate(
     )
     if cash_limit_quantity is None:
         return None
-    if dry_run_only and float(cash_limit_quantity or 0.0) <= 0.0:
-        cash_limit_quantity = budget_quantity
     candidate_quantity = _normalize_trade_quantity(
         min(budget_quantity, float(cash_limit_quantity)),
-        allow_fractional=True,
     )
     return candidate_quantity, budget_quantity, float(cash_limit_quantity)
 
@@ -267,7 +246,6 @@ def execute_rebalance_cycle(
     limit_sell_discount,
     limit_buy_premium,
     dry_run_only=False,
-    fractional_limit_buy_fallback_to_market=False,
     post_sell_refresh_attempts=1,
     post_sell_refresh_interval_sec=0.0,
     sleeper=_noop_sleep,
@@ -305,15 +283,10 @@ def execute_rebalance_cycle(
         return f"{log_message} {suffix}"
 
     def submit_order_via_port(symbol, order_type, side, quantity, log_message, *, submitted_price=None):
-        allow_fractional = _supports_fractional_quantity(order_kind=order_type, side=side)
         order_intent = OrderIntent(
             symbol=symbol,
             side=side,
-            quantity=(
-                _normalize_trade_quantity(quantity, allow_fractional=allow_fractional)
-                if allow_fractional
-                else _floor_whole_share_quantity(quantity)
-            ),
+            quantity=_floor_whole_share_quantity(quantity),
             order_type=order_type,
             limit_price=float(submitted_price) if submitted_price is not None else None,
         )
@@ -394,10 +367,6 @@ def execute_rebalance_cycle(
                 target_value=target_values[symbol],
                 price=price,
                 sellable_quantity=sellable_quantities[symbol],
-                allow_fractional=_supports_fractional_quantity(
-                    order_kind="limit" if symbol in limit_order_symbols else "market",
-                    side="sell",
-                ),
             )
             if quantity > 0:
                 quantity_text = format_quantity(quantity)
@@ -629,45 +598,10 @@ def execute_rebalance_cycle(
             if limit_candidate is None:
                 continue
             limit_candidate_quantity, limit_budget_quantity, limit_cash_limit_quantity = limit_candidate
-            if is_limit_order:
-                limit_quantity = _normalize_trade_quantity(
-                    limit_candidate_quantity,
-                    allow_fractional=False,
-                )
-            else:
-                limit_quantity = limit_candidate_quantity
+            limit_quantity = _normalize_trade_quantity(limit_candidate_quantity)
             order_kind = limit_order_kind
             ref_price = limit_ref_price
             quantity = limit_quantity
-            if is_limit_order and fractional_limit_buy_fallback_to_market and _has_fractional_quantity(
-                limit_candidate_quantity
-            ):
-                market_ref_price = round(price, 2)
-                market_candidate = _estimate_buy_quantity_candidate(
-                    trade_context,
-                    f"{symbol}.US",
-                    "market",
-                    market_ref_price,
-                    can_buy_value=can_buy_value,
-                    estimate_max_purchase_quantity=estimate_max_purchase_quantity,
-                    notify_issue=notify_issue,
-                    dry_run_only=dry_run_only,
-                )
-                if market_candidate is not None:
-                    market_quantity, _market_budget_quantity, _market_cash_limit_quantity = market_candidate
-                    if market_quantity >= 1.0:
-                        order_kind = "market"
-                        ref_price = market_ref_price
-                        quantity = market_quantity
-                        fallback_message = translator(
-                            "fractional_limit_buy_fallback_to_market",
-                            symbol=symbol,
-                            qty=format_quantity(quantity),
-                            limit_price=limit_ref_price,
-                            market_price=market_ref_price,
-                        )
-                        note_logs.append(fallback_message)
-                        print(with_prefix(fallback_message), flush=True)
             cost_estimate = 0.0
             if quantity <= 0:
                 record_note_log(

@@ -38,7 +38,6 @@ class PlatformRuntimeSettings:
     tg_token: str | None
     tg_chat_id: str | None
     dry_run_only: bool
-    fractional_limit_buy_fallback_to_market: bool = False
     debug_position_snapshot: bool = False
     income_threshold_usd: float | None = None
     qqqi_income_ratio: float | None = None
@@ -113,9 +112,6 @@ def load_platform_runtime_settings(
         tg_token=os.getenv("TELEGRAM_TOKEN"),
         tg_chat_id=os.getenv("GLOBAL_TELEGRAM_CHAT_ID"),
         dry_run_only=resolve_bool_value(os.getenv("LONGBRIDGE_DRY_RUN_ONLY")),
-        fractional_limit_buy_fallback_to_market=resolve_bool_value(
-            os.getenv("LONGBRIDGE_FRACTIONAL_LIMIT_BUY_FALLBACK_TO_MARKET")
-        ),
         debug_position_snapshot=resolve_bool_value(os.getenv("LONGBRIDGE_DEBUG_POSITION_SNAPSHOT")),
         income_threshold_usd=resolve_optional_float_env(os.environ, "INCOME_THRESHOLD_USD"),
         qqqi_income_ratio=_qqqi_income_ratio_env(),

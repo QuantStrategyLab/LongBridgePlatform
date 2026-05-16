@@ -399,7 +399,6 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         portfolio_snapshots=None,
         estimate_max_purchase_quantity_value=0,
         dry_run_only=False,
-        fractional_limit_buy_fallback_to_market=False,
         strategy_display_name="SOXL/SOXX 半导体趋势收益",
         post_sell_refresh_attempts=1,
     ):
@@ -471,7 +470,6 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 with_prefix=lambda message: f"[HK/LongBridgeQuant] {message}",
                 strategy_display_name=strategy_display_name,
                 dry_run_only=dry_run_only,
-                fractional_limit_buy_fallback_to_market=fractional_limit_buy_fallback_to_market,
                 post_sell_refresh_attempts=post_sell_refresh_attempts,
                 post_sell_refresh_interval_sec=0.0,
                 sleeper=observed_sleeps.append,
@@ -546,7 +544,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("可投资现金", sent_messages[0])
         self.assertIn("SOXX.US", sent_messages[0])
 
-    def test_fractional_strategy_target_rebuys_cash_sweep_symbol_after_buy_skip(self):
+    def test_strategy_target_rebuys_cash_sweep_symbol_after_buy_skip(self):
         plan = _build_plan(
             strategy_symbols=("SOXL", "SOXX", "BOXX"),
             risk_symbols=("SOXL", "SOXX"),
@@ -583,7 +581,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("买入说明", sent_messages[0])
         self.assertNotIn("限价买入] SOXX", sent_messages[0])
 
-    def test_fractional_strategy_target_buy_floors_to_cash_backed_whole_shares(self):
+    def test_strategy_target_buy_floors_to_cash_backed_whole_shares(self):
         plan = _build_plan(
             strategy_symbols=("SOXL",),
             risk_symbols=("SOXL",),
@@ -614,7 +612,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("限价买入] SOXL: 4股", sent_messages[0])
         self.assertNotIn("限价买入] SOXL: 3.", sent_messages[0])
 
-    def test_fractional_limit_buy_can_fallback_to_market(self):
+    def test_limit_buy_floors_to_whole_shares(self):
         plan = _build_plan(
             strategy_symbols=("SOXL",),
             risk_symbols=("SOXL",),
@@ -689,25 +687,20 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 translator=build_translator("zh"),
                 with_prefix=lambda message: f"[HK/LongBridgeQuant] {message}",
                 strategy_display_name="SOXL/SOXX 半导体趋势收益",
-                fractional_limit_buy_fallback_to_market=True,
             ),
         )
 
         self.assertEqual(len(observed_orders), 1)
-        self.assertEqual(observed_orders[0].order_type, "market")
-        self.assertEqual(float(observed_orders[0].quantity), 3.75)
+        self.assertEqual(observed_orders[0].order_type, "limit")
+        self.assertEqual(float(observed_orders[0].quantity), 3.0)
         self.assertGreaterEqual(
             observed_estimates.count(("limit", 153.69)),
             1,
         )
-        self.assertGreaterEqual(
-            observed_estimates.count(("market", 152.93)),
-            1,
-        )
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("已改为市价买入", sent_messages[0])
+        self.assertIn("限价买入", sent_messages[0])
 
-    def test_fractional_limit_sell_preserves_fractional_quantity(self):
+    def test_limit_sell_floors_to_whole_shares(self):
         plan = _build_plan(
             strategy_symbols=("BOXX",),
             risk_symbols=("BOXX",),
@@ -734,10 +727,10 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("限价卖出] BOXX: 1.5股", sent_messages[0])
-        self.assertNotIn("限价卖出] BOXX: 1股", sent_messages[0])
+        self.assertIn("限价卖出] BOXX: 1股", sent_messages[0])
+        self.assertNotIn("限价卖出] BOXX: 1.5股", sent_messages[0])
 
-    def test_fractional_market_buy_preserves_fractional_quantity(self):
+    def test_market_buy_floors_to_whole_shares(self):
         plan = _build_plan(
             strategy_symbols=("BOXX",),
             safe_haven_symbols=("BOXX",),
@@ -765,8 +758,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("市价买入] BOXX: 1.5股", sent_messages[0])
-        self.assertNotIn("市价买入] BOXX: 1股", sent_messages[0])
+        self.assertIn("市价买入] BOXX: 1股", sent_messages[0])
+        self.assertNotIn("市价买入] BOXX: 1.5股", sent_messages[0])
 
     def test_zero_target_sell_uses_sellable_quantity_not_price_derived_floor(self):
         plan = _build_plan(
@@ -1130,7 +1123,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertNotIn("市价卖出", sent_messages[0])
         self.assertNotIn("限价买入", sent_messages[0])
 
-    def test_cash_sweep_symbol_sells_full_fractional_position_when_helper_cannot_fund_buy(self):
+    def test_cash_sweep_symbol_sells_full_position_when_helper_cannot_fund_buy(self):
         plan = _build_plan(
             strategy_symbols=("SOXL", "SOXX", "BOXX"),
             risk_symbols=("SOXL", "SOXX"),
@@ -1176,8 +1169,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             plan,
             refreshed_plan=refreshed_plan,
             portfolio_snapshots=[
-                _build_snapshot(plan, phase="before_cash_sweep_fractional"),
-                _build_snapshot(refreshed_plan, phase="after_cash_sweep_fractional"),
+                _build_snapshot(plan, phase="before_cash_sweep_whole_share"),
+                _build_snapshot(refreshed_plan, phase="after_cash_sweep_whole_share"),
             ],
             prices={"SOXL.US": 167.79, "SOXX.US": 200.0, "BOXX.US": 116.59},
             estimate_max_purchase_quantity_value=10,
@@ -1222,10 +1215,10 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("🧪 模拟运行模式", sent_messages[0])
         self.assertIn("🧪 模拟市价卖出 BOXX.US", sent_messages[0])
-        self.assertIn("🧪 模拟限价买入 SOXL.US", sent_messages[0])
+        self.assertIn("🧪 模拟限价买入 SOXL.US: 4股 @ $100.50", sent_messages[0])
         self.assertNotIn("买入说明", sent_messages[0])
 
-    def test_dry_run_cash_sweep_ignores_zero_estimator_after_sell_settlement(self):
+    def test_dry_run_cash_sweep_reports_note_when_estimator_is_zero(self):
         initial_plan = _build_plan(
             strategy_symbols=("SOXL", "SOXX", "BOXX"),
             risk_symbols=("SOXL", "SOXX"),
@@ -1257,8 +1250,11 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("🧪 模拟运行模式", sent_messages[0])
         self.assertIn("🧪 模拟市价卖出 BOXX.US", sent_messages[0])
-        self.assertIn("🧪 模拟限价买入 SOXL.US", sent_messages[0])
-        self.assertNotIn("券商估算可买数量为 0", sent_messages[0])
+        self.assertIn(
+            "ℹ️ [买入说明] SOXL.US 目标差额 $500.00，预算可买 4 股，但券商估算可买数量为 0；可能有未完成挂单、结算或购买力占用",
+            sent_messages[0],
+        )
+        self.assertNotIn("🧪 模拟限价买入 SOXL.US", sent_messages[0])
 
     def test_dry_run_rebuys_cash_sweep_symbol_with_remaining_investable_cash(self):
         initial_plan = _build_plan(

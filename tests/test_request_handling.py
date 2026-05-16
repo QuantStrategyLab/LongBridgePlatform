@@ -66,7 +66,6 @@ def install_stub_modules():
         tg_token=None,
         tg_chat_id="shared-chat-id",
         dry_run_only=False,
-        fractional_limit_buy_fallback_to_market=False,
         runtime_target=build_runtime_target(
             platform_id="longbridge",
             strategy_profile="soxl_soxx_trend_income",

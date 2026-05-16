@@ -99,7 +99,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.tg_token)
         self.assertIsNone(settings.tg_chat_id)
         self.assertFalse(settings.dry_run_only)
-        self.assertFalse(settings.fractional_limit_buy_fallback_to_market)
         self.assertFalse(settings.debug_position_snapshot)
         self.assertIsNotNone(settings.runtime_target)
         self.assertEqual(settings.runtime_target.platform_id, "longbridge")
@@ -163,19 +162,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
         self.assertTrue(settings.dry_run_only)
-
-    def test_fractional_limit_buy_fallback_is_loaded_from_env(self):
-        with patch.dict(
-            os.environ,
-            {
-                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
-                "LONGBRIDGE_FRACTIONAL_LIMIT_BUY_FALLBACK_TO_MARKET": "true",
-            },
-            clear=True,
-        ):
-            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
-
-        self.assertTrue(settings.fractional_limit_buy_fallback_to_market)
 
     def test_debug_position_snapshot_is_loaded_from_env(self):
         with patch.dict(
