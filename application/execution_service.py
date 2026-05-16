@@ -31,9 +31,7 @@ except ImportError:  # pragma: no cover - compatibility with older pinned shared
             quote_price = float(ask_price or 0.0)
             if needed_value <= 0.0 or quote_price <= 0.0:
                 continue
-            max_buy_quantity = int(needed_value // quote_price)
-            if max_buy_quantity <= 0:
-                continue
+            max_buy_quantity = max(1, int(needed_value // quote_price))
             required_buying_power = max_buy_quantity * quote_price
             if current_buying_power >= required_buying_power:
                 return 0
@@ -522,6 +520,53 @@ def execute_rebalance_cycle(
                         symbol=cash_sweep_symbol,
                         qty=format_quantity(sweep_quantity),
                         price=sweep_price,
+                    ),
+                )
+            if submitted:
+                action_done = True
+                sell_submitted = True
+                cash_sweep_sold_this_cycle = True
+
+    if (
+        not sell_submitted
+        and funding_buy_candidates
+        and cash_sweep_symbol
+        and sellable_quantities.get(cash_sweep_symbol, 0.0) > 0.0
+    ):
+        sweep_quantity = cash_sweep_sale_quantity_to_fund_buy(
+            int(sellable_quantities[cash_sweep_symbol]),
+            funding_buy_candidates,
+        )
+        if sweep_quantity <= 0:
+            sweep_quantity = 1
+        sweep_price = safe_quote_last_price(
+            f"{cash_sweep_symbol}.US",
+            market_data_port=market_data_port,
+            notify_issue=notify_issue,
+        )
+        if sweep_price is not None and sweep_price > 0.0:
+            quantity_text = format_quantity(sweep_quantity)
+            if dry_run_only:
+                submitted = record_dry_run(
+                    f"{cash_sweep_symbol}.US",
+                    "sell",
+                    quantity_text,
+                    round(sweep_price, 2),
+                    order_type="market",
+                )
+                if submitted:
+                    dry_run_sale_proceeds += float(sweep_quantity) * round(sweep_price, 2)
+            else:
+                submitted = submit_order_via_port(
+                    f"{cash_sweep_symbol}.US",
+                    "market",
+                    "sell",
+                    sweep_quantity,
+                    translator(
+                        "market_sell",
+                        symbol=cash_sweep_symbol,
+                        qty=quantity_text,
+                        price=round(sweep_price, 2),
                     ),
                 )
             if submitted:
