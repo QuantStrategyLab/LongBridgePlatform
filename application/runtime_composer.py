@@ -10,6 +10,7 @@ from application.runtime_bootstrap_adapters import build_runtime_bootstrap
 from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
 from application.runtime_notification_adapters import build_runtime_notification_adapters
 from application.runtime_reporting_adapters import build_runtime_reporting_adapters
+from quant_platform_kit.common.port_adapters import CallableNotificationPort
 from quant_platform_kit.common.runtime_assembly import build_runtime_assembly
 from quant_platform_kit.common.runtime_target import build_runtime_context_fields
 from quant_platform_kit.common.runtime_target import RuntimeTarget
@@ -144,8 +145,13 @@ class LongBridgeRuntimeComposer:
             printer=lambda line: self.printer(line, flush=True),
         )
 
-    def build_rebalance_runtime(self) -> LongBridgeRebalanceRuntime:
+    def build_rebalance_runtime(self, *, silent_cycle_notifications: bool = False) -> LongBridgeRebalanceRuntime:
         notification_adapters = self.build_notification_adapters()
+        notifications = (
+            CallableNotificationPort(lambda _message: None)
+            if silent_cycle_notifications
+            else notification_adapters.notification_port
+        )
         return LongBridgeRebalanceRuntime(
             bootstrap=self.bootstrap_builder(
                 project_id=self.project_id,
@@ -160,7 +166,7 @@ class LongBridgeRuntimeComposer:
             resolve_rebalance_plan=self.strategy_adapters.resolve_rebalance_plan,
             market_data_port_factory=self.broker_adapters.build_market_data_port,
             estimate_max_purchase_quantity=self.estimate_max_purchase_quantity_fn,
-            notifications=notification_adapters.notification_port,
+            notifications=notifications,
             notify_issue=notification_adapters.notify_issue,
             portfolio_port_factory=self.broker_adapters.build_portfolio_port,
             execution_port_factory=self.broker_adapters.build_execution_port,

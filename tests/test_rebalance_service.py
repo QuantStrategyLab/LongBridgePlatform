@@ -574,12 +574,47 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("🔔 【调仓指令】", sent_messages[0])
         self.assertIn("SOXX.US 目标差额 $163.14", sent_messages[0])
-        self.assertIn("不足买入 1 股", sent_messages[0])
+        self.assertIn("SOXX.US 目标差额 $163.14 未超过 1 股价格 $504.60", sent_messages[0])
+        self.assertNotIn("可投资现金 $891.03 不足买入 1 股", sent_messages[0])
         self.assertNotIn("市价卖出] BOXX", sent_messages[0])
         self.assertNotIn("市价买入] SOXX", sent_messages[0])
         self.assertIn("市价买入] BOXX: 7股", sent_messages[0])
         self.assertIn("买入说明", sent_messages[0])
         self.assertNotIn("限价买入] SOXX", sent_messages[0])
+
+    def test_target_gap_below_one_share_does_not_report_cash_shortage(self):
+        plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"),
+            risk_symbols=("SOXL", "SOXX"),
+            income_symbols=("QQQI", "SPYI"),
+            safe_haven_symbols=("BOXX",),
+            targets={"SOXL": 636.28, "SOXX": 218.01, "BOXX": 105.08, "QQQI": 0.0, "SPYI": 0.0},
+            market_values={"SOXL": 636.28, "SOXX": 218.01, "BOXX": 0.0, "QQQI": 0.0, "SPYI": 0.0},
+            sellable_quantities={"SOXL": 4, "SOXX": 0.4326, "BOXX": 0, "QQQI": 0, "SPYI": 0},
+            quantities={"SOXL": 4, "SOXX": 0.4326, "BOXX": 0, "QQQI": 0, "SPYI": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=164.98,
+            market_status="🚀 风险开启（SOXX+SOXL）",
+            deploy_ratio_text="90.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXX 站上 140 日门槛线，持有 SOXL 70.0% + SOXX 20.0%",
+            available_cash=196.50,
+            total_strategy_equity=1050.79,
+            portfolio_rows=(("SOXL", "SOXX"), ("BOXX", "QQQI", "SPYI")),
+        )
+
+        sent_messages, _, _ = self._run_strategy(
+            plan,
+            prices={"BOXX.US": 116.74},
+            dry_run_only=True,
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("💓 【心跳检测】", sent_messages[0])
+        self.assertIn("BOXX.US 目标差额 $105.08 未超过 1 股价格 $116.74", sent_messages[0])
+        self.assertNotIn("可投资现金 $164.98 不足买入 1 股", sent_messages[0])
 
     def test_strategy_target_buy_floors_to_cash_backed_whole_shares(self):
         plan = _build_plan(

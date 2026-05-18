@@ -658,15 +658,27 @@ def execute_rebalance_cycle(
                 investable_cash = max(0, investable_cash - cost_estimate)
                 action_done = True
         else:
+            if diff <= investable_cash:
+                note_kind = "buy_deferred_small_target_gap"
+                note_kwargs = {
+                    "symbol": f"{symbol}.US",
+                    "diff": f"{diff:.2f}",
+                    "price": f"{price:.2f}",
+                }
+            else:
+                note_kind = "buy_deferred_small_cash"
+                note_kwargs = {
+                    "symbol": f"{symbol}.US",
+                    "diff": f"{diff:.2f}",
+                    "investable": f"{investable_cash:.2f}",
+                    "price": f"{price:.2f}",
+                }
             record_note_log(
                 note_logs,
                 translator=translator,
                 with_prefix=with_prefix,
-                kind="buy_deferred_small_cash",
-                symbol=f"{symbol}.US",
-                diff=f"{diff:.2f}",
-                investable=f"{investable_cash:.2f}",
-                price=f"{price:.2f}",
+                kind=note_kind,
+                **note_kwargs,
             )
 
     if (

@@ -103,6 +103,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     notification_adapters = composer.build_notification_adapters()
     reporting_adapters = composer.build_reporting_adapters()
     runtime = composer.build_rebalance_runtime()
+    silent_runtime = composer.build_rebalance_runtime(silent_cycle_notifications=True)
     config = composer.build_rebalance_config()
 
     assert notification_adapters.notification_port == "notification-port"
@@ -121,6 +122,8 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     assert runtime.resolve_rebalance_plan == "resolve-plan"
     assert runtime.market_data_port_factory == "market-data-port-factory"
     assert runtime.notifications == "notification-port"
+    silent_runtime.notifications.send_text("precheck heartbeat")
+    assert observed["sent_message"] == ("tg-token", "chat-id", "[HK] hello")
     assert runtime.post_submit_order == "post-submit-order"
     assert config.limit_sell_discount == 0.995
     assert config.limit_buy_premium == 1.005

@@ -252,7 +252,9 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 flush=True,
             )
         run_rebalance_cycle(
-            runtime=composer.build_rebalance_runtime(),
+            runtime=composer.build_rebalance_runtime(
+                silent_cycle_notifications=validation_only,
+            ),
             config=composer.build_rebalance_config(strategy_plugin_signals=strategy_plugin_signals),
         )
         finalize_runtime_report(report, status="ok")
@@ -290,6 +292,95 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         except Exception as persist_exc:
             print(f"failed to persist execution report: {persist_exc}", flush=True)
 
+
+def run_probe(*, response_body: str = "Probe OK"):
+    composer = None
+    reporting_adapters = None
+    log_context = None
+    report = None
+    try:
+        composer = build_composer(dry_run_only_override=True)
+        reporting_adapters = composer.build_reporting_adapters()
+        log_context, report = reporting_adapters.start_run()
+        strategy_plugin_signals, strategy_plugin_error = composer.load_strategy_plugin_signals(
+            getattr(RUNTIME_SETTINGS, "strategy_plugin_mounts_json", None)
+        )
+        composer.attach_strategy_plugin_report(
+            report,
+            signals=strategy_plugin_signals,
+            error=strategy_plugin_error,
+        )
+        reporting_adapters.log_event(
+            log_context,
+            "health_probe_received",
+            message="Received health probe request",
+            execution_window="probe",
+        )
+        runtime = composer.build_rebalance_runtime(silent_cycle_notifications=True)
+        quote_context, trade_context, _indicators = runtime.bootstrap()
+        snapshot = runtime.portfolio_port_factory(
+            quote_context,
+            trade_context,
+        ).get_portfolio_snapshot()
+        positions = tuple(getattr(snapshot, "positions", ()) or ())
+        buying_power = float(getattr(snapshot, "buying_power", 0.0) or 0.0)
+        total_equity = float(getattr(snapshot, "total_equity", 0.0) or 0.0)
+        finalize_runtime_report(
+            report,
+            status="ok",
+            summary={
+                "buying_power": buying_power,
+                "total_equity": total_equity,
+                "positions_count": len(positions),
+            },
+        )
+        reporting_adapters.log_event(
+            log_context,
+            "health_probe_completed",
+            message="Health probe completed",
+            execution_window="probe",
+            buying_power=buying_power,
+            total_equity=total_equity,
+            positions_count=len(positions),
+        )
+        return response_body, 200
+    except Exception as exc:
+        if report is not None:
+            append_runtime_report_error(
+                report,
+                stage="health_probe",
+                message=str(exc),
+                error_type=type(exc).__name__,
+            )
+            finalize_runtime_report(report, status="error")
+        if reporting_adapters is not None and log_context is not None:
+            reporting_adapters.log_event(
+                log_context,
+                "health_probe_failed",
+                message="Health probe failed",
+                severity="ERROR",
+                execution_window="probe",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+        err = f"{t('health_probe_title')}\n{t('health_probe_error_prefix')}{traceback.format_exc()}"
+        if composer is not None:
+            composer.build_notification_adapters().publish_cycle_notification(
+                detailed_text=err,
+                compact_text=err,
+            )
+        else:
+            print(err, flush=True)
+        return "Error", 500
+    finally:
+        try:
+            if reporting_adapters is not None and report is not None:
+                report_path = reporting_adapters.persist_execution_report(report)
+                print(f"execution_report {report_path}", flush=True)
+        except Exception as persist_exc:
+            print(f"failed to persist execution report: {persist_exc}", flush=True)
+
+
 @app.route("/", methods=["POST", "GET"])
 def handle_trigger():
     """Entrypoint for Cloud Run / scheduler: run strategy and return 200."""
@@ -309,6 +400,12 @@ def handle_precheck():
     """Pre-market / post-open verification entrypoint for dry-run only execution."""
     run_strategy(force_run=True, validation_only=True, validation_label="precheck")
     return "Precheck OK", 200
+
+
+@app.route("/probe", methods=["POST", "GET"])
+def handle_probe():
+    """Post-open broker/account health probe; notify only on failure."""
+    return run_probe()
 
 
 if __name__ == "__main__":

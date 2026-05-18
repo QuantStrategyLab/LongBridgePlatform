@@ -251,6 +251,113 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertTrue(observed["validation_only"])
         self.assertEqual(observed["validation_label"], "precheck")
 
+    def test_handle_probe_checks_account_snapshot_without_success_notification(self):
+        module = load_module()
+        observed = {"override": None, "events": [], "notifications": []}
+        snapshot = types.SimpleNamespace(
+            buying_power=123.0,
+            total_equity=456.0,
+            positions=(types.SimpleNamespace(symbol="SOXL"),),
+        )
+
+        class FakePortfolioPort:
+            def get_portfolio_snapshot(self):
+                observed["snapshot_called"] = True
+                return snapshot
+
+        class FakeRuntime:
+            def __init__(self):
+                self.bootstrap = lambda: ("quote-context", "trade-context", {"trend": "ok"})
+                self.portfolio_port_factory = lambda quote_context, trade_context: FakePortfolioPort()
+
+        class FakeComposer:
+            def build_reporting_adapters(self):
+                return types.SimpleNamespace(
+                    start_run=lambda: (types.SimpleNamespace(run_id="run-001"), {"status": "pending"}),
+                    log_event=lambda context, event, **fields: observed["events"].append((event, fields)),
+                    persist_execution_report=lambda report: observed.setdefault("report", dict(report)) or "/tmp/report.json",
+                )
+
+            def build_rebalance_runtime(self, *, silent_cycle_notifications=False):
+                observed["silent_cycle_notifications"] = silent_cycle_notifications
+                return FakeRuntime()
+
+            def build_notification_adapters(self):
+                raise AssertionError("probe success should stay silent")
+
+            def load_strategy_plugin_signals(self, *_args, **_kwargs):
+                return (), None
+
+            def attach_strategy_plugin_report(self, *_args, **_kwargs):
+                return None
+
+        module.build_composer = lambda *, dry_run_only_override=None: observed.__setitem__("override", dry_run_only_override) or FakeComposer()
+
+        with module.app.test_request_context("/probe", method="POST"):
+            body, status = module.handle_probe()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, "Probe OK")
+        self.assertTrue(observed["override"])
+        self.assertTrue(observed["silent_cycle_notifications"])
+        self.assertTrue(observed["snapshot_called"])
+        self.assertEqual(
+            [event for event, _fields in observed["events"]],
+            ["health_probe_received", "health_probe_completed"],
+        )
+        self.assertEqual(observed["report"]["status"], "ok")
+        self.assertEqual(observed["report"]["summary"]["buying_power"], 123.0)
+        self.assertEqual(observed["report"]["summary"]["total_equity"], 456.0)
+        self.assertEqual(observed["report"]["summary"]["positions_count"], 1)
+
+    def test_handle_probe_failure_sends_notification(self):
+        module = load_module()
+        observed = {"events": [], "notifications": []}
+
+        class FakeRuntime:
+            def bootstrap(self):
+                raise RuntimeError("probe failed")
+
+        class FakeNotifications:
+            def publish_cycle_notification(self, **kwargs):
+                observed["notifications"].append(kwargs)
+
+        class FakeComposer:
+            def build_reporting_adapters(self):
+                return types.SimpleNamespace(
+                    start_run=lambda: (types.SimpleNamespace(run_id="run-001"), {"status": "pending"}),
+                    log_event=lambda context, event, **fields: observed["events"].append((event, fields)),
+                    persist_execution_report=lambda report: observed.setdefault("report", dict(report)) or "/tmp/report.json",
+                )
+
+            def build_rebalance_runtime(self, *, silent_cycle_notifications=False):
+                return FakeRuntime()
+
+            def build_notification_adapters(self):
+                return FakeNotifications()
+
+            def load_strategy_plugin_signals(self, *_args, **_kwargs):
+                return (), None
+
+            def attach_strategy_plugin_report(self, *_args, **_kwargs):
+                return None
+
+        module.build_composer = lambda *, dry_run_only_override=None: FakeComposer()
+
+        with module.app.test_request_context("/probe", method="POST"):
+            body, status = module.handle_probe()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(body, "Error")
+        self.assertEqual(observed["report"]["status"], "error")
+        self.assertEqual(observed["report"]["errors"][0]["stage"], "health_probe")
+        self.assertEqual(
+            [event for event, _fields in observed["events"]],
+            ["health_probe_received", "health_probe_failed"],
+        )
+        self.assertEqual(len(observed["notifications"]), 1)
+        self.assertIn("probe failed", observed["notifications"][0]["detailed_text"])
+
     def test_run_strategy_emits_structured_runtime_events(self):
         module = load_module()
         observed = []
@@ -308,7 +415,8 @@ class RequestHandlingTests(unittest.TestCase):
             def with_prefix(self, message):
                 return message
 
-            def build_rebalance_runtime(self):
+            def build_rebalance_runtime(self, *, silent_cycle_notifications=False):
+                observed["silent_cycle_notifications"] = silent_cycle_notifications
                 return types.SimpleNamespace()
 
             def build_rebalance_config(self, *, strategy_plugin_signals=()):
@@ -323,6 +431,7 @@ class RequestHandlingTests(unittest.TestCase):
         module.run_strategy(force_run=True, validation_only=True)
 
         self.assertTrue(observed["override"])
+        self.assertTrue(observed["silent_cycle_notifications"])
 
     def test_run_strategy_persists_machine_readable_report(self):
         module = load_module()
