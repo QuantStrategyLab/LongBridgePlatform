@@ -112,9 +112,10 @@ def _format_dashboard_text(text) -> str:
     )
 
 
-def _append_dashboard_lines(lines, *, execution) -> None:
+def _append_dashboard_block(lines, *, execution, separator) -> None:
     dashboard_text = _format_dashboard_text(execution.get("dashboard_text"))
     if dashboard_text:
+        lines.append(separator)
         lines.extend(dashboard_text.splitlines())
 
 
@@ -196,7 +197,7 @@ def render_rebalance_notification(
     if dry_run_only:
         detailed_lines.append(translator("dry_run_banner"))
     _append_extra_notification_lines(detailed_lines, extra_notification_lines)
-    _append_dashboard_lines(detailed_lines, execution=execution)
+    _append_dashboard_block(detailed_lines, execution=execution, separator=separator)
     _append_timing_lines(detailed_lines, execution=execution, translator=translator)
     _append_status_lines(
         detailed_lines,
@@ -211,7 +212,7 @@ def render_rebalance_notification(
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
     _append_extra_notification_lines(compact_lines, extra_notification_lines)
-    _append_dashboard_lines(compact_lines, execution=execution)
+    _append_dashboard_block(compact_lines, execution=execution, separator=separator)
     _append_timing_lines(compact_lines, execution=execution, translator=translator)
     _append_compact_status_lines(
         compact_lines,
@@ -242,7 +243,7 @@ def render_heartbeat_notification(
     if dry_run_only:
         detailed_lines.append(translator("dry_run_banner"))
     _append_extra_notification_lines(detailed_lines, extra_notification_lines)
-    _append_dashboard_lines(detailed_lines, execution=execution)
+    _append_dashboard_block(detailed_lines, execution=execution, separator=separator)
     _append_timing_lines(detailed_lines, execution=execution, translator=translator)
     detailed_lines.append(separator)
     _append_status_lines(
@@ -276,7 +277,7 @@ def render_heartbeat_notification(
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
     _append_extra_notification_lines(compact_lines, extra_notification_lines)
-    _append_dashboard_lines(compact_lines, execution=execution)
+    _append_dashboard_block(compact_lines, execution=execution, separator=separator)
     _append_timing_lines(compact_lines, execution=execution, translator=translator)
     _append_compact_status_lines(
         compact_lines,
@@ -284,8 +285,11 @@ def render_heartbeat_notification(
         translator=translator,
         signal_key="heartbeat_signal",
     )
-    compact_lines.append(
-        translator("no_executable_orders") if (skip_logs or note_logs) else translator("no_trades")
+    compact_lines.extend(
+        [
+            separator,
+            translator("no_executable_orders") if (skip_logs or note_logs) else translator("no_trades"),
+        ]
     )
     if skip_logs:
         compact_lines.extend([separator, translator("skipped_actions")])
