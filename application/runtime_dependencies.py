@@ -20,6 +20,7 @@ class LongBridgeRebalanceConfig:
     dry_run_only: bool = False
     post_sell_refresh_attempts: int = 1
     post_sell_refresh_interval_sec: float = 0.0
+    safe_haven_cash_substitute_threshold_usd: float = 1000.0
     sleeper: Callable[[float], None] | None = None
     extra_notification_lines: tuple[str, ...] = ()
 

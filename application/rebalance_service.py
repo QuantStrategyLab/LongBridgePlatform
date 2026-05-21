@@ -214,6 +214,7 @@ def run_strategy(
         post_sell_refresh_attempts=config.post_sell_refresh_attempts,
         post_sell_refresh_interval_sec=config.post_sell_refresh_interval_sec,
         sleeper=config.sleeper or _noop_sleep,
+        safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
     )
     execution = execution_result.execution
     logs = list(execution_result.logs)

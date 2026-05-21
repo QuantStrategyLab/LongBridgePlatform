@@ -88,8 +88,51 @@ class ExecutionCycleResult:
     action_done: bool
 
 
+DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
+
+
 def _noop_sleep(_seconds):
     return None
+
+
+def _safe_haven_cash_symbols(*, portfolio: dict, allocation: dict) -> tuple[str, ...]:
+    symbols: list[str] = []
+    for symbol in allocation.get("safe_haven_symbols", ()):
+        normalized = str(symbol or "").strip().upper()
+        if normalized:
+            symbols.append(normalized)
+    cash_sweep_symbol = str(portfolio.get("cash_sweep_symbol") or "").strip().upper()
+    if cash_sweep_symbol:
+        symbols.append(cash_sweep_symbol)
+    return tuple(dict.fromkeys(symbols))
+
+
+def _apply_safe_haven_cash_substitution(
+    *,
+    plan,
+    portfolio,
+    allocation,
+    threshold_usd,
+) -> tuple[dict, dict]:
+    threshold = max(0.0, float(threshold_usd or 0.0))
+    target_values = {
+        str(symbol).strip().upper(): float(value or 0.0)
+        for symbol, value in dict(allocation.get("targets") or {}).items()
+    }
+    if threshold <= 0.0:
+        return dict(plan or {}), {**dict(allocation or {}), "targets": target_values}
+
+    changed = False
+    for symbol in _safe_haven_cash_symbols(portfolio=portfolio, allocation=allocation):
+        target_value = float(target_values.get(symbol, 0.0) or 0.0)
+        if 0.0 < target_value < threshold:
+            target_values[symbol] = 0.0
+            changed = True
+    adjusted_allocation = {**dict(allocation or {}), "targets": target_values}
+    adjusted_plan = dict(plan or {})
+    if changed:
+        adjusted_plan["allocation"] = adjusted_allocation
+    return adjusted_plan, adjusted_allocation
 
 
 def _normalize_cash_by_currency(raw_cash) -> dict[str, float]:
@@ -249,6 +292,7 @@ def execute_rebalance_cycle(
     post_sell_refresh_attempts=1,
     post_sell_refresh_interval_sec=0.0,
     sleeper=_noop_sleep,
+    safe_haven_cash_substitute_threshold_usd=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
 ) -> ExecutionCycleResult:
     logs: list[str] = []
     skip_logs: list[str] = []
@@ -264,6 +308,12 @@ def execute_rebalance_cycle(
     market_values = dict(portfolio["market_values"])
     quantities = dict(portfolio["quantities"])
     sellable_quantities = dict(portfolio["sellable_quantities"])
+    plan, allocation = _apply_safe_haven_cash_substitution(
+        plan=plan,
+        portfolio=portfolio,
+        allocation=allocation,
+        threshold_usd=safe_haven_cash_substitute_threshold_usd,
+    )
     target_values = dict(allocation["targets"])
     cash_sweep_symbol = str(portfolio.get("cash_sweep_symbol") or "").strip().upper()
     available_cash = float(portfolio["liquid_cash"])
@@ -533,6 +583,12 @@ def execute_rebalance_cycle(
                     best_refreshed_state = refreshed_state
                     break
             plan, portfolio, execution, allocation = best_refreshed_state
+            plan, allocation = _apply_safe_haven_cash_substitution(
+                plan=plan,
+                portfolio=portfolio,
+                allocation=allocation,
+                threshold_usd=safe_haven_cash_substitute_threshold_usd,
+            )
             threshold_value = float(execution["trade_threshold_value"])
             limit_order_symbols = set(
                 allocation.get("risk_symbols", ()) + allocation.get("income_symbols", ())
@@ -692,7 +748,14 @@ def execute_rebalance_cycle(
             notify_issue=notify_issue,
         )
         if cash_sweep_price is not None and cash_sweep_price > 0.0 and investable_cash > cash_sweep_price * 2:
-            quantity = int(investable_cash // cash_sweep_price)
+            substitution_threshold = max(
+                0.0,
+                float(safe_haven_cash_substitute_threshold_usd or 0.0),
+            )
+            if substitution_threshold <= 0.0 or investable_cash >= substitution_threshold:
+                quantity = int(investable_cash // cash_sweep_price)
+            else:
+                quantity = 0
             if quantity > 0:
                 quantity_text = format_quantity(quantity)
                 if dry_run_only:
