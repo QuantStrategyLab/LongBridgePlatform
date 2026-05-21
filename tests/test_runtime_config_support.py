@@ -20,6 +20,7 @@ SWITCH_PLAN_SCRIPT_PATH = ROOT / "scripts" / "print_strategy_switch_env_plan.py"
 from runtime_config_support import (
     DEFAULT_ACCOUNT_REGION,
     DEFAULT_LONGPORT_SECRET_NAME,
+    DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
     infer_account_region,
     load_platform_runtime_settings,
 )
@@ -99,6 +100,10 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.tg_token)
         self.assertIsNone(settings.tg_chat_id)
         self.assertFalse(settings.dry_run_only)
+        self.assertEqual(
+            settings.safe_haven_cash_substitute_threshold_usd,
+            DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
+        )
         self.assertFalse(settings.debug_position_snapshot)
         self.assertIsNotNone(settings.runtime_target)
         self.assertEqual(settings.runtime_target.platform_id, "longbridge")
@@ -175,6 +180,19 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
         self.assertTrue(settings.debug_position_snapshot)
+
+    def test_safe_haven_cash_substitute_threshold_is_loaded_from_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD": "750",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertEqual(settings.safe_haven_cash_substitute_threshold_usd, 750.0)
 
     def test_strategy_plugin_mounts_are_loaded_from_env(self):
         mount_config = '{"strategy_plugins":[{"strategy":"soxl_soxx_trend_income","plugin":"crisis_response_shadow","signal_path":"gs://bucket/latest_signal.json"}]}'
@@ -463,6 +481,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(plan["input_mode"], "market_history")
         self.assertFalse(plan["requires_snapshot_artifacts"])
         self.assertFalse(plan["requires_strategy_config_path"])
+        self.assertIn("LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD", plan["optional_env"])
         self.assertIn("LONGBRIDGE_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
 
     def test_print_strategy_switch_env_plan_for_russell(self):

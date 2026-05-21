@@ -70,7 +70,10 @@ def build_switch_plan(profile: str, *, account_region: str | None = None) -> dic
         "LONGPORT_APP_KEY_SECRET_NAME",
         "LONGPORT_APP_SECRET_SECRET_NAME",
     ]
-    optional_env = ["LONGBRIDGE_DRY_RUN_ONLY"]
+    optional_env = [
+        "LONGBRIDGE_DRY_RUN_ONLY",
+        "LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD",
+    ]
     remove_if_present: list[str] = []
     notes = [
         "Keep ACCOUNT_PREFIX and ACCOUNT_REGION aligned to the current paper or SG service identity.",

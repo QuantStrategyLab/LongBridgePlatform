@@ -23,6 +23,7 @@ from us_equity_strategies import get_strategy_catalog
 
 DEFAULT_ACCOUNT_REGION = "DEFAULT"
 DEFAULT_LONGPORT_SECRET_NAME = "longport_token_hk"
+DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class PlatformRuntimeSettings:
     tg_token: str | None
     tg_chat_id: str | None
     dry_run_only: bool
+    safe_haven_cash_substitute_threshold_usd: float = DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD
     debug_position_snapshot: bool = False
     income_threshold_usd: float | None = None
     qqqi_income_ratio: float | None = None
@@ -77,6 +79,10 @@ def load_platform_runtime_settings(
     project_id_resolver: Callable[[], str | None],
 ) -> PlatformRuntimeSettings:
     account_prefix = os.getenv("ACCOUNT_PREFIX", "DEFAULT")
+    safe_haven_cash_substitute_threshold_usd = resolve_optional_float_env(
+        os.environ,
+        "LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD",
+    )
     runtime_target = resolve_runtime_target_from_env(
         env=os.environ,
         expected_platform_id=LONGBRIDGE_PLATFORM,
@@ -112,6 +118,11 @@ def load_platform_runtime_settings(
         tg_token=os.getenv("TELEGRAM_TOKEN"),
         tg_chat_id=os.getenv("GLOBAL_TELEGRAM_CHAT_ID"),
         dry_run_only=resolve_bool_value(os.getenv("LONGBRIDGE_DRY_RUN_ONLY")),
+        safe_haven_cash_substitute_threshold_usd=(
+            max(0.0, safe_haven_cash_substitute_threshold_usd)
+            if safe_haven_cash_substitute_threshold_usd is not None
+            else DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD
+        ),
         debug_position_snapshot=resolve_bool_value(os.getenv("LONGBRIDGE_DEBUG_POSITION_SNAPSHOT")),
         income_threshold_usd=resolve_optional_float_env(os.environ, "INCOME_THRESHOLD_USD"),
         qqqi_income_ratio=_qqqi_income_ratio_env(),

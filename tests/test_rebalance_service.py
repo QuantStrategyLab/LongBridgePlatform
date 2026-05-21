@@ -23,6 +23,7 @@ _original_requests_module = sys.modules.get("requests")
 sys.modules["requests"] = requests_stub
 try:
     from application import rebalance_service
+    from application.execution_service import execute_rebalance_cycle
     from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
     from notifications.telegram import build_translator
     from quant_platform_kit.common.models import ExecutionReport, PortfolioSnapshot, Position, QuoteSnapshot
@@ -155,6 +156,61 @@ def _build_snapshot(plan, *, phase=""):
 
 
 class RebalanceServiceNotificationTests(unittest.TestCase):
+    def test_safe_haven_target_below_cash_substitute_threshold_stays_cash(self):
+        submitted_orders = []
+        plan = _build_plan(
+            strategy_symbols=("BOXX",),
+            safe_haven_symbols=("BOXX",),
+            targets={"BOXX": 750.0},
+            market_values={"BOXX": 0.0},
+            sellable_quantities={"BOXX": 0},
+            quantities={"BOXX": 0},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=750.0,
+            market_status="Cash substitute",
+            deploy_ratio_text="0.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="Small safe-haven sleeve",
+            available_cash=750.0,
+            total_strategy_equity=750.0,
+            portfolio_rows=(("BOXX",),),
+        )
+
+        result = execute_rebalance_cycle(
+            trade_context=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_replanned_state=lambda: (
+                plan,
+                plan["portfolio"],
+                plan["execution"],
+                plan["allocation"],
+            ),
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-04-21",
+                    last_price=100.0,
+                )
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 10,
+            execution_port=CallableExecutionPort(lambda order_intent: submitted_orders.append(order_intent)),
+            notify_issue=lambda _title, _detail: None,
+            translator=build_translator("zh"),
+            with_prefix=lambda message: message,
+            limit_sell_discount=0.995,
+            limit_buy_premium=1.0,
+            safe_haven_cash_substitute_threshold_usd=1000.0,
+        )
+
+        self.assertFalse(result.action_done)
+        self.assertEqual(submitted_orders, [])
+        self.assertEqual(result.allocation["targets"]["BOXX"], 0.0)
+
     def test_run_strategy_prefers_portfolio_port_runtime_path(self):
         sent_messages = []
         observed = {}
@@ -549,20 +605,20 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             strategy_symbols=("SOXL", "SOXX", "BOXX"),
             risk_symbols=("SOXL", "SOXX"),
             safe_haven_symbols=("BOXX",),
-            targets={"SOXL": 0.0, "SOXX": 163.14, "BOXX": 924.46},
+            targets={"SOXL": 0.0, "SOXX": 163.14, "BOXX": 1224.46},
             market_values={"SOXL": 0.0, "SOXX": 0.0, "BOXX": 699.54},
             sellable_quantities={"SOXL": 0, "SOXX": 0, "BOXX": 6},
             quantities={"SOXL": 0, "SOXX": 0, "BOXX": 6},
             current_min_trade=100.0,
             trade_threshold_value=100.0,
-            investable_cash=891.03,
+            investable_cash=1191.03,
             market_status="🧯 过热降档（SOXX）",
             deploy_ratio_text="15.0%",
             income_ratio_text="0.0%",
             income_locked_ratio_text="0.0%",
             signal_message="SOXX 目标仓位 15.0%",
-            available_cash=923.66,
-            total_strategy_equity=1087.60,
+            available_cash=1223.66,
+            total_strategy_equity=1387.60,
             portfolio_rows=(("SOXL", "SOXX"), ("BOXX",)),
         )
 
@@ -575,10 +631,10 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("🔔 【调仓指令】", sent_messages[0])
         self.assertIn("SOXX.US 目标差额 $163.14", sent_messages[0])
         self.assertIn("SOXX.US 目标差额 $163.14 未超过 1 股价格 $504.60", sent_messages[0])
-        self.assertNotIn("可投资现金 $891.03 不足买入 1 股", sent_messages[0])
+        self.assertNotIn("可投资现金 $1191.03 不足买入 1 股", sent_messages[0])
         self.assertNotIn("市价卖出] BOXX", sent_messages[0])
         self.assertNotIn("市价买入] SOXX", sent_messages[0])
-        self.assertIn("市价买入] BOXX: 7股", sent_messages[0])
+        self.assertIn("市价买入] BOXX: 10股", sent_messages[0])
         self.assertIn("买入说明", sent_messages[0])
         self.assertNotIn("限价买入] SOXX", sent_messages[0])
 
@@ -588,32 +644,32 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             risk_symbols=("SOXL", "SOXX"),
             income_symbols=("QQQI", "SPYI"),
             safe_haven_symbols=("BOXX",),
-            targets={"SOXL": 636.28, "SOXX": 218.01, "BOXX": 105.08, "QQQI": 0.0, "SPYI": 0.0},
+            targets={"SOXL": 636.28, "SOXX": 218.01, "BOXX": 1005.08, "QQQI": 0.0, "SPYI": 0.0},
             market_values={"SOXL": 636.28, "SOXX": 218.01, "BOXX": 0.0, "QQQI": 0.0, "SPYI": 0.0},
             sellable_quantities={"SOXL": 4, "SOXX": 0.4326, "BOXX": 0, "QQQI": 0, "SPYI": 0},
             quantities={"SOXL": 4, "SOXX": 0.4326, "BOXX": 0, "QQQI": 0, "SPYI": 0},
             current_min_trade=100.0,
             trade_threshold_value=100.0,
-            investable_cash=164.98,
+            investable_cash=1064.98,
             market_status="🚀 风险开启（SOXX+SOXL）",
             deploy_ratio_text="90.0%",
             income_ratio_text="0.0%",
             income_locked_ratio_text="0.0%",
             signal_message="SOXX 站上 140 日门槛线，持有 SOXL 70.0% + SOXX 20.0%",
-            available_cash=196.50,
-            total_strategy_equity=1050.79,
+            available_cash=1096.50,
+            total_strategy_equity=1950.79,
             portfolio_rows=(("SOXL", "SOXX"), ("BOXX", "QQQI", "SPYI")),
         )
 
         sent_messages, _, _ = self._run_strategy(
             plan,
-            prices={"BOXX.US": 116.74},
+            prices={"BOXX.US": 1167.40},
             dry_run_only=True,
         )
 
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("💓 【心跳检测】", sent_messages[0])
-        self.assertIn("BOXX.US 目标差额 $105.08 未超过 1 股价格 $116.74", sent_messages[0])
+        self.assertIn("BOXX.US 目标差额 $1005.08 未超过 1 股价格 $1167.40", sent_messages[0])
         self.assertNotIn("可投资现金 $164.98 不足买入 1 股", sent_messages[0])
 
     def test_strategy_target_buy_floors_to_cash_backed_whole_shares(self):
@@ -769,20 +825,20 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         plan = _build_plan(
             strategy_symbols=("BOXX",),
             safe_haven_symbols=("BOXX",),
-            targets={"BOXX": 150.0},
+            targets={"BOXX": 1150.0},
             market_values={"BOXX": 0.0},
             sellable_quantities={"BOXX": 0},
             quantities={"BOXX": 0},
             current_min_trade=100.0,
             trade_threshold_value=100.0,
-            investable_cash=200.0,
+            investable_cash=1200.0,
             market_status="🚀 风险开启（BOXX）",
             deploy_ratio_text="100.0%",
             income_ratio_text="0.0%",
             income_locked_ratio_text="0.0%",
             signal_message="BOXX 目标仓位 100.0%",
-            available_cash=200.0,
-            total_strategy_equity=150.0,
+            available_cash=1200.0,
+            total_strategy_equity=1150.0,
             portfolio_rows=(("BOXX",),),
         )
 
@@ -793,8 +849,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("市价买入] BOXX: 1股", sent_messages[0])
-        self.assertNotIn("市价买入] BOXX: 1.5股", sent_messages[0])
+        self.assertIn("市价买入] BOXX: 10股", sent_messages[0])
+        self.assertNotIn("市价买入] BOXX: 10.5股", sent_messages[0])
 
     def test_zero_target_sell_uses_sellable_quantity_not_price_derived_floor(self):
         plan = _build_plan(
@@ -1015,7 +1071,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             quantities={"SOXL": 0, "SOXX": 0, "BOXX": 5},
             current_min_trade=100.0,
             trade_threshold_value=100.0,
-            investable_cash=500.0,
+            investable_cash=1200.0,
             market_status="🧯 过热降档（SOXX）",
             deploy_ratio_text="15.0%",
             income_ratio_text="0.0%",
@@ -1302,14 +1358,14 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             quantities={"SOXL": 0, "SOXX": 0, "BOXX": 0},
             current_min_trade=100.0,
             trade_threshold_value=100.0,
-            investable_cash=500.0,
+            investable_cash=1200.0,
             market_status="🧯 过热降档（SOXX）",
             deploy_ratio_text="0.0%",
             income_ratio_text="0.0%",
             income_locked_ratio_text="0.0%",
             signal_message="无其他买单，仅保留现金回补",
-            available_cash=500.0,
-            total_strategy_equity=500.0,
+            available_cash=1200.0,
+            total_strategy_equity=1200.0,
             portfolio_rows=(("SOXL", "SOXX"), ("BOXX",)),
         )
 

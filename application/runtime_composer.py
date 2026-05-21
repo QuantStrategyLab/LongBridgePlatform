@@ -39,6 +39,7 @@ class LongBridgeRuntimeComposer:
     limit_buy_premium: float
     order_poll_interval_sec: int
     order_poll_max_attempts: int
+    safe_haven_cash_substitute_threshold_usd: float
     dry_run_only: bool = False
     broker_adapters: Any = None
     strategy_adapters: Any = None
@@ -184,6 +185,7 @@ class LongBridgeRuntimeComposer:
             dry_run_only=self.dry_run_only,
             post_sell_refresh_attempts=self.order_poll_max_attempts,
             post_sell_refresh_interval_sec=self.order_poll_interval_sec,
+            safe_haven_cash_substitute_threshold_usd=self.safe_haven_cash_substitute_threshold_usd,
             sleeper=self.sleeper,
             extra_notification_lines=getattr(
                 self.strategy_adapters,
@@ -228,6 +230,7 @@ def build_runtime_composer(
     limit_buy_premium: float,
     order_poll_interval_sec: int,
     order_poll_max_attempts: int,
+    safe_haven_cash_substitute_threshold_usd: float,
     dry_run_only: bool,
     dry_run_only_override: bool | None = None,
     broker_adapters: Any,
@@ -269,6 +272,7 @@ def build_runtime_composer(
         limit_buy_premium=float(limit_buy_premium),
         order_poll_interval_sec=int(order_poll_interval_sec),
         order_poll_max_attempts=int(order_poll_max_attempts),
+        safe_haven_cash_substitute_threshold_usd=float(safe_haven_cash_substitute_threshold_usd),
         dry_run_only=bool(dry_run_only if dry_run_only_override is None else dry_run_only_override),
         broker_adapters=broker_adapters,
         strategy_adapters=strategy_adapters,
