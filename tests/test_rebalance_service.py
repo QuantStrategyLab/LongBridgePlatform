@@ -211,6 +211,101 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(submitted_orders, [])
         self.assertEqual(result.allocation["targets"]["BOXX"], 0.0)
 
+    def test_small_account_whole_share_layer_sells_unbuyable_soxx_sleeve(self):
+        submitted_orders = []
+        prices = {"SOXL": 191.15, "SOXX": 536.88, "BOXX": 100.0}
+        plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX", "BOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            safe_haven_symbols=("BOXX",),
+            targets={"SOXL": 541.58, "SOXX": 154.74, "BOXX": 77.37},
+            market_values={"SOXL": 0.0, "SOXX": 536.88, "BOXX": 0.0},
+            sellable_quantities={"SOXL": 0, "SOXX": 1, "BOXX": 0},
+            quantities={"SOXL": 0, "SOXX": 1, "BOXX": 0},
+            current_min_trade=7.74,
+            trade_threshold_value=7.74,
+            investable_cash=213.60,
+            market_status="Risk on",
+            deploy_ratio_text="90.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXX above gate",
+            available_cash=236.81,
+            total_strategy_equity=773.69,
+            portfolio_rows=(("SOXL", "SOXX"), ("BOXX",)),
+        )
+        refreshed_plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX", "BOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            safe_haven_symbols=("BOXX",),
+            targets={"SOXL": 541.58, "SOXX": 154.74, "BOXX": 77.37},
+            market_values={"SOXL": 0.0, "SOXX": 0.0, "BOXX": 0.0},
+            sellable_quantities={"SOXL": 0, "SOXX": 0, "BOXX": 0},
+            quantities={"SOXL": 0, "SOXX": 0, "BOXX": 0},
+            current_min_trade=7.74,
+            trade_threshold_value=7.74,
+            investable_cash=750.48,
+            market_status="Risk on",
+            deploy_ratio_text="90.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXX above gate",
+            available_cash=773.69,
+            total_strategy_equity=773.69,
+            portfolio_rows=(("SOXL", "SOXX"), ("BOXX",)),
+        )
+
+        result = execute_rebalance_cycle(
+            trade_context=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_replanned_state=lambda: (
+                refreshed_plan,
+                refreshed_plan["portfolio"],
+                refreshed_plan["execution"],
+                refreshed_plan["allocation"],
+            ),
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-05-22",
+                    last_price=prices[str(symbol).replace(".US", "")],
+                )
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 10,
+            execution_port=CallableExecutionPort(
+                lambda order_intent: (
+                    submitted_orders.append(order_intent),
+                    ExecutionReport(
+                        symbol=order_intent.symbol,
+                        side=order_intent.side,
+                        quantity=order_intent.quantity,
+                        status="accepted",
+                        broker_order_id=f"order-{len(submitted_orders)}",
+                    ),
+                )[-1]
+            ),
+            notify_issue=lambda _title, _detail: None,
+            translator=build_translator("zh"),
+            with_prefix=lambda message: message,
+            limit_sell_discount=1.0,
+            limit_buy_premium=1.0,
+            safe_haven_cash_substitute_threshold_usd=1000.0,
+        )
+
+        self.assertTrue(result.action_done)
+        self.assertEqual(result.allocation["targets"]["SOXX"], 0.0)
+        self.assertEqual(
+            result.allocation["small_account_whole_share_substituted_symbols"],
+            ("SOXX",),
+        )
+        self.assertEqual([(order.symbol, order.side, order.quantity) for order in submitted_orders], [
+            ("SOXX.US", "sell", 1),
+            ("SOXL.US", "buy", 2),
+        ])
+
     def test_run_strategy_prefers_portfolio_port_runtime_path(self):
         sent_messages = []
         observed = {}
@@ -629,13 +724,12 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("🔔 【调仓指令】", sent_messages[0])
-        self.assertIn("SOXX.US 目标差额 $163.14", sent_messages[0])
-        self.assertIn("SOXX.US 目标差额 $163.14 未超过 1 股价格 $504.60", sent_messages[0])
+        self.assertNotIn("SOXX.US 目标差额 $163.14", sent_messages[0])
         self.assertNotIn("可投资现金 $1191.03 不足买入 1 股", sent_messages[0])
         self.assertNotIn("市价卖出] BOXX", sent_messages[0])
         self.assertNotIn("市价买入] SOXX", sent_messages[0])
         self.assertIn("市价买入] BOXX: 10股", sent_messages[0])
-        self.assertIn("买入说明", sent_messages[0])
+        self.assertIn("BOXX.US 目标差额 $524.92", sent_messages[0])
         self.assertNotIn("限价买入] SOXX", sent_messages[0])
 
     def test_target_gap_below_one_share_does_not_report_cash_shortage(self):

@@ -68,6 +68,42 @@ except ImportError:  # pragma: no cover - compatibility with older pinned shared
             if current_buying_power + sweep_capacity >= quote_price:
                 return True
         return False
+try:
+    from quant_platform_kit.common.small_account_compatibility import (
+        project_unbuyable_value_targets_to_cash,
+    )
+except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
+    def project_unbuyable_value_targets_to_cash(
+        target_values,
+        prices,
+        *,
+        symbols=None,
+        quantity_step=1.0,
+    ):
+        adjusted = {
+            str(symbol or "").strip().upper(): float(value or 0.0)
+            for symbol, value in dict(target_values or {}).items()
+        }
+        step = max(0.0, float(quantity_step or 0.0))
+        if step <= 0.0:
+            return adjusted, ()
+        candidate_symbols = (
+            tuple(adjusted)
+            if symbols is None
+            else tuple(dict.fromkeys(str(symbol or "").strip().upper() for symbol in symbols))
+        )
+        normalized_prices = {
+            str(symbol or "").strip().upper(): float(price or 0.0)
+            for symbol, price in dict(prices or {}).items()
+        }
+        substituted = []
+        for symbol in candidate_symbols:
+            target_value = max(0.0, float(adjusted.get(symbol, 0.0) or 0.0))
+            price = max(0.0, float(normalized_prices.get(symbol, 0.0) or 0.0))
+            if price > 0.0 and 0.0 < target_value < (price * step):
+                adjusted[symbol] = 0.0
+                substituted.append(symbol)
+        return adjusted, tuple(dict.fromkeys(substituted))
 from quant_platform_kit.common.quantity import (
     floor_to_quantity_step,
     format_quantity,
@@ -219,6 +255,49 @@ def safe_quote_last_price(symbol, *, market_data_port, notify_issue):
         return None
 
 
+def _apply_small_account_whole_share_compatibility(
+    *,
+    plan,
+    allocation,
+    strategy_assets,
+    market_data_port,
+    notify_issue,
+) -> tuple[dict, dict]:
+    target_values = dict(allocation.get("targets") or {})
+    candidate_symbols = tuple(
+        dict.fromkeys(
+            tuple(allocation.get("risk_symbols", ()))
+            + tuple(allocation.get("income_symbols", ()))
+        )
+    )
+    if not candidate_symbols:
+        safe_haven_symbols = set(allocation.get("safe_haven_symbols", ()))
+        candidate_symbols = tuple(
+            symbol for symbol in target_values if symbol not in safe_haven_symbols
+        )
+    quote_prices = {}
+    for symbol in candidate_symbols:
+        try:
+            price = float(market_data_port.get_quote(f"{symbol}.US").last_price)
+        except Exception:
+            continue
+        if price > 0.0:
+            quote_prices[symbol] = price
+    adjusted_targets, substituted = project_unbuyable_value_targets_to_cash(
+        target_values,
+        quote_prices,
+        symbols=candidate_symbols,
+        quantity_step=1.0,
+    )
+    adjusted_allocation = {**dict(allocation or {}), "targets": adjusted_targets}
+    if substituted:
+        adjusted_allocation["small_account_whole_share_substituted_symbols"] = substituted
+    adjusted_plan = dict(plan or {})
+    if substituted:
+        adjusted_plan["allocation"] = adjusted_allocation
+    return adjusted_plan, adjusted_allocation
+
+
 def estimate_cash_buy_quantity_safe(
     trade_context,
     symbol,
@@ -314,8 +393,15 @@ def execute_rebalance_cycle(
         allocation=allocation,
         threshold_usd=safe_haven_cash_substitute_threshold_usd,
     )
-    target_values = dict(allocation["targets"])
     cash_sweep_symbol = str(portfolio.get("cash_sweep_symbol") or "").strip().upper()
+    plan, allocation = _apply_small_account_whole_share_compatibility(
+        plan=plan,
+        allocation=allocation,
+        strategy_assets=strategy_assets,
+        market_data_port=market_data_port,
+        notify_issue=notify_issue,
+    )
+    target_values = dict(allocation["targets"])
     available_cash = float(portfolio["liquid_cash"])
     cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
     investable_cash = float(execution["investable_cash"])
@@ -588,6 +674,13 @@ def execute_rebalance_cycle(
                 portfolio=portfolio,
                 allocation=allocation,
                 threshold_usd=safe_haven_cash_substitute_threshold_usd,
+            )
+            plan, allocation = _apply_small_account_whole_share_compatibility(
+                plan=plan,
+                allocation=allocation,
+                strategy_assets=tuple(allocation["strategy_symbols"]),
+                market_data_port=market_data_port,
+                notify_issue=notify_issue,
             )
             threshold_value = float(execution["trade_threshold_value"])
             limit_order_symbols = set(
