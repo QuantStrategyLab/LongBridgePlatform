@@ -393,7 +393,6 @@ class RequestHandlingTests(unittest.TestCase):
             would_trade_if_enabled=True,
             as_of="2026-05-24",
         )
-        alert_message = types.SimpleNamespace(subject="Crisis alert", body="body")
         observed = {"alerts": []}
 
         class FakeComposer:
@@ -425,12 +424,26 @@ class RequestHandlingTests(unittest.TestCase):
         module.build_composer = lambda *, dry_run_only_override=None: FakeComposer()
         module.is_market_open_now = lambda: True
         module.run_rebalance_cycle = lambda **_kwargs: None
-        module.build_strategy_plugin_alert_messages = lambda signals: (alert_message,)
-        module.send_crisis_alert_email = lambda message: observed["alerts"].append(message) or True
+
+        def fake_publish(signals, **kwargs):
+            observed["alerts"].append((tuple(signals), kwargs))
+            return types.SimpleNamespace(
+                sent_count=1,
+                to_report_fields=lambda: {
+                    "strategy_plugin_alert_email_attempted_count": 1,
+                    "strategy_plugin_alert_email_sent_count": 1,
+                    "strategy_plugin_alert_email_skipped_count": 0,
+                    "strategy_plugin_alert_email_failed_count": 0,
+                    "strategy_plugin_alert_email_deliveries": [],
+                },
+            )
+
+        module.publish_strategy_plugin_email_alerts = fake_publish
 
         module.run_strategy()
 
-        self.assertEqual(observed["alerts"], [alert_message])
+        self.assertEqual(observed["alerts"][0][0], (signal,))
+        self.assertIn("longbridge", observed["alerts"][0][1]["context_label"])
 
     def test_run_strategy_force_runs_when_market_closed(self):
         module = load_module()
