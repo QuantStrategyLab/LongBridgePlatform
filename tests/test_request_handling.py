@@ -430,15 +430,15 @@ class RequestHandlingTests(unittest.TestCase):
             return types.SimpleNamespace(
                 sent_count=1,
                 to_report_fields=lambda: {
-                    "strategy_plugin_alert_email_attempted_count": 1,
-                    "strategy_plugin_alert_email_sent_count": 1,
-                    "strategy_plugin_alert_email_skipped_count": 0,
-                    "strategy_plugin_alert_email_failed_count": 0,
-                    "strategy_plugin_alert_email_deliveries": [],
+                    "strategy_plugin_alert_google_voice_attempted_count": 1,
+                    "strategy_plugin_alert_google_voice_sent_count": 1,
+                    "strategy_plugin_alert_google_voice_skipped_count": 0,
+                    "strategy_plugin_alert_google_voice_failed_count": 0,
+                    "strategy_plugin_alert_google_voice_deliveries": [],
                 },
             )
 
-        module.publish_strategy_plugin_email_alerts = fake_publish
+        module.publish_strategy_plugin_google_voice_alerts = fake_publish
 
         module.run_strategy()
 
