@@ -144,6 +144,10 @@ STRATEGY_ADAPTERS = build_runtime_strategy_adapters(
     calculate_rotation_indicators_fn=calculate_rotation_indicators,
     build_strategy_evaluation_inputs_fn=build_strategy_evaluation_inputs,
     map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan,
+    execution_policy={
+        "reserved_cash_floor_usd": getattr(RUNTIME_SETTINGS, "reserved_cash_floor_usd", 0.0),
+        "reserved_cash_ratio": getattr(RUNTIME_SETTINGS, "reserved_cash_ratio", 0.0),
+    },
     build_strategy_plugin_report_payload_fn=build_strategy_plugin_report_payload,
     load_configured_strategy_plugin_signals_fn=load_configured_strategy_plugin_signals,
     parse_strategy_plugin_mounts_fn=parse_strategy_plugin_mounts,

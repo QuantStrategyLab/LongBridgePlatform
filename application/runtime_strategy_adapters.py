@@ -20,6 +20,7 @@ class LongBridgeRuntimeStrategyAdapters:
     calculate_rotation_indicators_fn: Callable[..., Any]
     build_strategy_evaluation_inputs_fn: Callable[..., dict[str, Any]]
     map_strategy_decision_to_plan_fn: Callable[..., dict[str, Any]]
+    execution_policy: Mapping[str, Any] | None = None
     build_strategy_plugin_report_payload_fn: Callable[..., dict[str, Any]] | None = None
     load_configured_strategy_plugin_signals_fn: Callable[..., Any] | None = None
     parse_strategy_plugin_mounts_fn: Callable[..., Any] | None = None
@@ -125,12 +126,15 @@ class LongBridgeRuntimeStrategyAdapters:
             signal_text_fn=self.signal_text_fn,
         )
         evaluation = self.strategy_runtime.evaluate(**evaluation_inputs)
+        runtime_metadata = dict(getattr(evaluation, "metadata", None) or {})
+        if self.execution_policy is not None:
+            runtime_metadata["longbridge_execution_policy"] = dict(self.execution_policy)
         return self.map_strategy_decision_to_plan_fn(
             evaluation.decision,
             account_state=resolved_account_state if "account_state" in available_inputs else None,
             snapshot=resolved_snapshot,
             strategy_profile=self.strategy_profile,
-            runtime_metadata=getattr(evaluation, "metadata", None),
+            runtime_metadata=runtime_metadata,
         )
 
 
@@ -147,6 +151,7 @@ def build_runtime_strategy_adapters(
     calculate_rotation_indicators_fn: Callable[..., Any],
     build_strategy_evaluation_inputs_fn: Callable[..., dict[str, Any]],
     map_strategy_decision_to_plan_fn: Callable[..., dict[str, Any]],
+    execution_policy: Mapping[str, Any] | None = None,
     build_strategy_plugin_report_payload_fn: Callable[..., dict[str, Any]] | None = None,
     load_configured_strategy_plugin_signals_fn: Callable[..., Any] | None = None,
     parse_strategy_plugin_mounts_fn: Callable[..., Any] | None = None,
@@ -163,6 +168,7 @@ def build_runtime_strategy_adapters(
         calculate_rotation_indicators_fn=calculate_rotation_indicators_fn,
         build_strategy_evaluation_inputs_fn=build_strategy_evaluation_inputs_fn,
         map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan_fn,
+        execution_policy=dict(execution_policy) if execution_policy is not None else None,
         build_strategy_plugin_report_payload_fn=build_strategy_plugin_report_payload_fn,
         load_configured_strategy_plugin_signals_fn=load_configured_strategy_plugin_signals_fn,
         parse_strategy_plugin_mounts_fn=parse_strategy_plugin_mounts_fn,

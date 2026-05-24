@@ -181,6 +181,70 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["execution"]["benchmark_symbol"], "QQQ")
         self.assertEqual(plan["portfolio"]["portfolio_rows"], (("AAPL", "MSFT", "BOXX"),))
 
+    def test_applies_platform_reserved_cash_policy_to_weight_decision(self):
+        decision = StrategyDecision(
+            positions=(
+                PositionTarget(symbol="AAPL", target_weight=0.5),
+                PositionTarget(symbol="MSFT", target_weight=0.5),
+            ),
+            diagnostics={"signal_description": "risk on"},
+        )
+        snapshot = PortfolioSnapshot(
+            as_of=datetime.now(timezone.utc),
+            total_equity=20000.0,
+            buying_power=4000.0,
+            positions=(Position(symbol="AAPL", quantity=10, market_value=1500.0),),
+            metadata={"account_hash": "longbridge-reserve"},
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            snapshot=snapshot,
+            strategy_profile="mega_cap_leader_rotation_top50_balanced",
+            runtime_metadata={
+                "longbridge_execution_policy": {
+                    "reserved_cash_floor_usd": 1500.0,
+                    "reserved_cash_ratio": 0.03,
+                }
+            },
+        )
+
+        self.assertEqual(plan["execution"]["reserved_cash"], 1500.0)
+        self.assertEqual(plan["execution"]["investable_cash"], 2500.0)
+
+    def test_platform_reserved_cash_policy_does_not_lower_strategy_reserve(self):
+        decision = StrategyDecision(
+            positions=(PositionTarget(symbol="TQQQ", target_value=5000.0),),
+            diagnostics={
+                "execution_annotations": {
+                    "trade_threshold_value": 100.0,
+                    "reserved_cash": 1200.0,
+                }
+            },
+        )
+        snapshot = PortfolioSnapshot(
+            as_of=datetime.now(timezone.utc),
+            total_equity=10000.0,
+            buying_power=3000.0,
+            positions=(),
+            metadata={"account_hash": "longbridge-reserve"},
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            snapshot=snapshot,
+            strategy_profile="tqqq_growth_income",
+            runtime_metadata={
+                "longbridge_execution_policy": {
+                    "reserved_cash_floor_usd": 150.0,
+                    "reserved_cash_ratio": 0.03,
+                }
+            },
+        )
+
+        self.assertEqual(plan["execution"]["reserved_cash"], 1200.0)
+        self.assertEqual(plan["execution"]["investable_cash"], 1800.0)
+
     def test_keeps_cash_by_currency_from_snapshot_metadata(self):
         decision = StrategyDecision(
             positions=(PositionTarget(symbol="SOXL", target_value=0.0),),

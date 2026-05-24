@@ -72,6 +72,8 @@ def build_switch_plan(profile: str, *, account_region: str | None = None) -> dic
     ]
     optional_env = [
         "LONGBRIDGE_DRY_RUN_ONLY",
+        "LONGBRIDGE_MIN_RESERVED_CASH_USD",
+        "LONGBRIDGE_RESERVED_CASH_RATIO",
         "LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD",
     ]
     remove_if_present: list[str] = []
