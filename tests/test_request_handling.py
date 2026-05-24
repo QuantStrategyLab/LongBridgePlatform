@@ -66,8 +66,6 @@ def install_stub_modules():
         tg_token=None,
         tg_chat_id="shared-chat-id",
         dry_run_only=False,
-        crisis_alert_email_to=(),
-        crisis_alert_email_from=None,
         crisis_alert_smtp_host=None,
         crisis_alert_smtp_port=587,
         crisis_alert_smtp_username=None,
