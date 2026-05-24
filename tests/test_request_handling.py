@@ -66,6 +66,14 @@ def install_stub_modules():
         tg_token=None,
         tg_chat_id="shared-chat-id",
         dry_run_only=False,
+        crisis_alert_email_to=(),
+        crisis_alert_email_from=None,
+        crisis_alert_smtp_host=None,
+        crisis_alert_smtp_port=587,
+        crisis_alert_smtp_username=None,
+        crisis_alert_smtp_password=None,
+        crisis_alert_smtp_starttls=True,
+        crisis_alert_smtp_ssl=False,
         runtime_target=build_runtime_target(
             platform_id="longbridge",
             strategy_profile="soxl_soxx_trend_income",
@@ -374,6 +382,55 @@ class RequestHandlingTests(unittest.TestCase):
             ["strategy_cycle_started", "strategy_cycle_completed"],
         )
         self.assertTrue(all(run_id == "run-001" for run_id, _event, _fields in observed))
+
+    def test_run_strategy_sends_escalated_strategy_plugin_alert(self):
+        module = load_module()
+        signal = types.SimpleNamespace(
+            plugin="crisis_response_shadow",
+            effective_mode="shadow",
+            canonical_route="true_crisis",
+            suggested_action="defend",
+            would_trade_if_enabled=True,
+            as_of="2026-05-24",
+        )
+        alert_message = types.SimpleNamespace(subject="Crisis alert", body="body")
+        observed = {"alerts": []}
+
+        class FakeComposer:
+            def build_reporting_adapters(self):
+                return types.SimpleNamespace(
+                    start_run=lambda: (types.SimpleNamespace(run_id="run-001"), {"status": "pending"}),
+                    log_event=lambda *args, **kwargs: None,
+                    persist_execution_report=lambda report: types.SimpleNamespace(local_path="/tmp/report.json"),
+                )
+
+            def build_notification_adapters(self):
+                return types.SimpleNamespace(publish_cycle_notification=lambda **_kwargs: None)
+
+            def load_strategy_plugin_signals(self, *_args, **_kwargs):
+                return (signal,), None
+
+            def attach_strategy_plugin_report(self, *_args, **_kwargs):
+                return None
+
+            def with_prefix(self, message):
+                return message
+
+            def build_rebalance_runtime(self, *, silent_cycle_notifications=False):
+                return types.SimpleNamespace()
+
+            def build_rebalance_config(self, *, strategy_plugin_signals=()):
+                return types.SimpleNamespace()
+
+        module.build_composer = lambda *, dry_run_only_override=None: FakeComposer()
+        module.is_market_open_now = lambda: True
+        module.run_rebalance_cycle = lambda **_kwargs: None
+        module.build_strategy_plugin_alert_messages = lambda signals: (alert_message,)
+        module.send_crisis_alert_email = lambda message: observed["alerts"].append(message) or True
+
+        module.run_strategy()
+
+        self.assertEqual(observed["alerts"], [alert_message])
 
     def test_run_strategy_force_runs_when_market_closed(self):
         module = load_module()

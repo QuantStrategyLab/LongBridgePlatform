@@ -242,3 +242,49 @@ def test_runtime_strategy_adapters_loads_and_reports_plugin_signals():
     assert adapters.build_strategy_plugin_notification_lines(signals) == (
         "plugin=Crisis|mode=shadow|route=no action|action=monitor",
     )
+    assert adapters.build_strategy_plugin_alert_messages(signals) == ()
+
+
+def test_runtime_strategy_adapters_builds_escalated_plugin_alert_message():
+    signal = SimpleNamespace(
+        plugin="crisis_response_shadow",
+        effective_mode="shadow",
+        canonical_route="true_crisis",
+        suggested_action="defend",
+        would_trade_if_enabled=True,
+        as_of="2026-05-24",
+        source_uri="gs://bucket/latest_signal.json",
+    )
+    translations = {
+        "strategy_plugin_line": "plugin={plugin}|mode={mode}|route={route}|action={action}",
+        "strategy_plugin_alert_subject": "alert:{strategy}:{plugin}:{route}",
+        "strategy_plugin_alert_title": "alert title",
+        "strategy_plugin_alert_strategy": "strategy={strategy}",
+        "strategy_plugin_alert_as_of": "as_of={as_of}",
+        "strategy_plugin_alert_would_trade": "would_trade={value}",
+        "strategy_plugin_alert_source": "source={source}",
+        "strategy_plugin_name_crisis_response_shadow": "Crisis",
+        "strategy_plugin_mode_shadow": "shadow",
+        "strategy_plugin_route_true_crisis": "true crisis",
+        "strategy_plugin_action_defend": "defend",
+    }
+    adapters = build_runtime_strategy_adapters(
+        strategy_runtime=SimpleNamespace(evaluate=lambda **_kwargs: None),
+        strategy_profile="soxl_soxx_trend_income",
+        strategy_runtime_config={},
+        available_inputs=(),
+        benchmark_symbol="SOXX",
+        signal_text_fn=lambda icon: f"signal:{icon}",
+        translator=lambda key, **kwargs: translations.get(key, key).format(**kwargs) if kwargs else translations.get(key, key),
+        broker_adapters=SimpleNamespace(),
+        calculate_rotation_indicators_fn=lambda *_args, **_kwargs: {},
+        build_strategy_evaluation_inputs_fn=lambda **_kwargs: {},
+        map_strategy_decision_to_plan_fn=lambda *_args, **_kwargs: {},
+    )
+
+    alerts = adapters.build_strategy_plugin_alert_messages((signal,))
+
+    assert len(alerts) == 1
+    assert alerts[0].subject == "alert:soxl_soxx_trend_income:Crisis:true crisis"
+    assert "plugin=Crisis|mode=shadow|route=true crisis|action=defend" in alerts[0].body
+    assert "source=gs://bucket/latest_signal.json" in alerts[0].body

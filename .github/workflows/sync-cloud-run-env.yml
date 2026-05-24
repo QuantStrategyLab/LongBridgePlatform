@@ -51,6 +51,14 @@ jobs:
       LONGBRIDGE_MIN_RESERVED_CASH_USD: ${{ vars.LONGBRIDGE_MIN_RESERVED_CASH_USD }}
       LONGBRIDGE_RESERVED_CASH_RATIO: ${{ vars.LONGBRIDGE_RESERVED_CASH_RATIO }}
       LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD: ${{ vars.LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD }}
+      CRISIS_ALERT_EMAIL_TO: ${{ vars.CRISIS_ALERT_EMAIL_TO }}
+      CRISIS_ALERT_EMAIL_FROM: ${{ vars.CRISIS_ALERT_EMAIL_FROM }}
+      CRISIS_ALERT_SMTP_HOST: ${{ vars.CRISIS_ALERT_SMTP_HOST }}
+      CRISIS_ALERT_SMTP_PORT: ${{ vars.CRISIS_ALERT_SMTP_PORT }}
+      CRISIS_ALERT_SMTP_USERNAME: ${{ vars.CRISIS_ALERT_SMTP_USERNAME }}
+      CRISIS_ALERT_SMTP_PASSWORD_SECRET_NAME: ${{ vars.CRISIS_ALERT_SMTP_PASSWORD_SECRET_NAME }}
+      CRISIS_ALERT_SMTP_STARTTLS: ${{ vars.CRISIS_ALERT_SMTP_STARTTLS }}
+      CRISIS_ALERT_SMTP_SSL: ${{ vars.CRISIS_ALERT_SMTP_SSL }}
       # Optional strategy overrides; leave unset to inherit the UsEquityStrategies profile defaults.
       INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}
       QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}
@@ -59,6 +67,7 @@ jobs:
       LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      CRISIS_ALERT_SMTP_PASSWORD: ${{ secrets.CRISIS_ALERT_SMTP_PASSWORD }}
     steps:
       - name: Check whether env sync is enabled
         id: config
@@ -304,6 +313,16 @@ jobs:
             remove_secret_vars+=("TELEGRAM_TOKEN")
           fi
 
+          if [ -n "${CRISIS_ALERT_SMTP_PASSWORD_SECRET_NAME:-}" ]; then
+            secret_pairs+=("CRISIS_ALERT_SMTP_PASSWORD=${CRISIS_ALERT_SMTP_PASSWORD_SECRET_NAME}:latest")
+          elif [ -n "${CRISIS_ALERT_SMTP_PASSWORD:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMTP_PASSWORD=${CRISIS_ALERT_SMTP_PASSWORD}")
+            remove_secret_vars+=("CRISIS_ALERT_SMTP_PASSWORD")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMTP_PASSWORD")
+            remove_secret_vars+=("CRISIS_ALERT_SMTP_PASSWORD")
+          fi
+
           secret_pairs+=("LONGPORT_APP_KEY=${LONGPORT_APP_KEY_SECRET_NAME}:latest")
           remove_env_vars+=("LONGPORT_APP_KEY")
 
@@ -356,6 +375,48 @@ jobs:
             env_pairs+=("LONGBRIDGE_RESERVED_CASH_RATIO=${LONGBRIDGE_RESERVED_CASH_RATIO}")
           else
             remove_env_vars+=("LONGBRIDGE_RESERVED_CASH_RATIO")
+          fi
+
+          if [ -n "${CRISIS_ALERT_EMAIL_TO:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_EMAIL_TO=${CRISIS_ALERT_EMAIL_TO}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_EMAIL_TO")
+          fi
+
+          if [ -n "${CRISIS_ALERT_EMAIL_FROM:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_EMAIL_FROM=${CRISIS_ALERT_EMAIL_FROM}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_EMAIL_FROM")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMTP_HOST:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMTP_HOST=${CRISIS_ALERT_SMTP_HOST}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMTP_HOST")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMTP_PORT:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMTP_PORT=${CRISIS_ALERT_SMTP_PORT}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMTP_PORT")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMTP_USERNAME:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMTP_USERNAME=${CRISIS_ALERT_SMTP_USERNAME}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMTP_USERNAME")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMTP_STARTTLS:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMTP_STARTTLS=${CRISIS_ALERT_SMTP_STARTTLS}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMTP_STARTTLS")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMTP_SSL:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMTP_SSL=${CRISIS_ALERT_SMTP_SSL}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMTP_SSL")
           fi
 
           if [ -n "${LONGBRIDGE_DRY_RUN_ONLY:-}" ]; then
