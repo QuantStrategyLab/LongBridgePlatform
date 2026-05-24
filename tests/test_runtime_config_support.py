@@ -23,6 +23,7 @@ from runtime_config_support import (
     DEFAULT_RESERVED_CASH_FLOOR_USD,
     DEFAULT_RESERVED_CASH_RATIO,
     DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
+    _resolve_non_negative_float_env,
     _resolve_ratio_env,
     infer_account_region,
     load_platform_runtime_settings,
@@ -218,6 +219,37 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         with patch.dict(os.environ, {"LONGBRIDGE_RESERVED_CASH_RATIO": "1.25"}, clear=True):
             with self.assertRaisesRegex(ValueError, "LONGBRIDGE_RESERVED_CASH_RATIO"):
                 _resolve_ratio_env("LONGBRIDGE_RESERVED_CASH_RATIO", default=0.0)
+
+    def test_reserved_cash_floor_rejects_non_finite_env(self):
+        for raw_value in ("nan", "inf", "-inf"):
+            with self.subTest(raw_value=raw_value):
+                with patch.dict(
+                    os.environ,
+                    {"LONGBRIDGE_MIN_RESERVED_CASH_USD": raw_value},
+                    clear=True,
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "LONGBRIDGE_MIN_RESERVED_CASH_USD must be finite",
+                    ):
+                        _resolve_non_negative_float_env(
+                            "LONGBRIDGE_MIN_RESERVED_CASH_USD",
+                            default=0.0,
+                        )
+
+    def test_reserved_cash_ratio_rejects_non_finite_env(self):
+        for raw_value in ("nan", "inf", "-inf"):
+            with self.subTest(raw_value=raw_value):
+                with patch.dict(
+                    os.environ,
+                    {"LONGBRIDGE_RESERVED_CASH_RATIO": raw_value},
+                    clear=True,
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "LONGBRIDGE_RESERVED_CASH_RATIO must be finite",
+                    ):
+                        _resolve_ratio_env("LONGBRIDGE_RESERVED_CASH_RATIO", default=0.0)
 
     def test_strategy_plugin_mounts_are_loaded_from_env(self):
         mount_config = '{"strategy_plugins":[{"strategy":"soxl_soxx_trend_income","plugin":"crisis_response_shadow","signal_path":"gs://bucket/latest_signal.json"}]}'
