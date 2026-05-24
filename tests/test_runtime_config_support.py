@@ -119,6 +119,14 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.feature_snapshot_path)
         self.assertIsNone(settings.strategy_config_path)
         self.assertIsNone(settings.strategy_plugin_mounts_json)
+        self.assertEqual(settings.crisis_alert_email_to, ())
+        self.assertIsNone(settings.crisis_alert_email_from)
+        self.assertIsNone(settings.crisis_alert_smtp_host)
+        self.assertEqual(settings.crisis_alert_smtp_port, 587)
+        self.assertIsNone(settings.crisis_alert_smtp_username)
+        self.assertIsNone(settings.crisis_alert_smtp_password)
+        self.assertTrue(settings.crisis_alert_smtp_starttls)
+        self.assertFalse(settings.crisis_alert_smtp_ssl)
 
     def test_load_platform_runtime_settings_prefers_runtime_target_json(self):
         with patch.dict(
@@ -265,6 +273,33 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
         self.assertEqual(settings.strategy_plugin_mounts_json, mount_config)
+
+    def test_crisis_alert_email_config_is_loaded_from_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "CRISIS_ALERT_EMAIL_TO": "risk@example.com;ops@example.com,risk@example.com",
+                "CRISIS_ALERT_EMAIL_FROM": "bot@example.com",
+                "CRISIS_ALERT_SMTP_HOST": "smtp.example.com",
+                "CRISIS_ALERT_SMTP_PORT": "465",
+                "CRISIS_ALERT_SMTP_USERNAME": "bot",
+                "CRISIS_ALERT_SMTP_PASSWORD": "secret",
+                "CRISIS_ALERT_SMTP_STARTTLS": "false",
+                "CRISIS_ALERT_SMTP_SSL": "true",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertEqual(settings.crisis_alert_email_to, ("risk@example.com", "ops@example.com"))
+        self.assertEqual(settings.crisis_alert_email_from, "bot@example.com")
+        self.assertEqual(settings.crisis_alert_smtp_host, "smtp.example.com")
+        self.assertEqual(settings.crisis_alert_smtp_port, 465)
+        self.assertEqual(settings.crisis_alert_smtp_username, "bot")
+        self.assertEqual(settings.crisis_alert_smtp_password, "secret")
+        self.assertFalse(settings.crisis_alert_smtp_starttls)
+        self.assertTrue(settings.crisis_alert_smtp_ssl)
 
     def test_income_layer_overrides_are_loaded_from_env(self):
         with patch.dict(
