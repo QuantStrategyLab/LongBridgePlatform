@@ -134,10 +134,51 @@ def test_runtime_strategy_adapters_resolve_plan_builds_inputs_and_maps_decision(
             "account_state": {"derived": True},
             "snapshot": "snapshot-1",
             "strategy_profile": "soxl_soxx_trend_income",
-            "runtime_metadata": None,
+            "runtime_metadata": {},
         },
     )
     assert result == {"plan": True}
+
+
+def test_runtime_strategy_adapters_add_execution_policy_to_runtime_metadata():
+    observed = {}
+
+    class FakeBrokerAdapters:
+        def build_account_state_from_snapshot(self, _snapshot):
+            return None
+
+    def fake_evaluate(**_kwargs):
+        return SimpleNamespace(decision="decision-1", metadata={"signal": "ok"})
+
+    def fake_map_plan(decision, **kwargs):
+        observed["map_call"] = (decision, kwargs)
+        return {"plan": True}
+
+    adapters = build_runtime_strategy_adapters(
+        strategy_runtime=SimpleNamespace(evaluate=fake_evaluate),
+        strategy_profile="mega_cap_leader_rotation_top50_balanced",
+        strategy_runtime_config={},
+        available_inputs=("portfolio_snapshot",),
+        benchmark_symbol="QQQ",
+        signal_text_fn=lambda icon: f"signal:{icon}",
+        translator=lambda key, **_kwargs: f"tr:{key}",
+        broker_adapters=FakeBrokerAdapters(),
+        calculate_rotation_indicators_fn=lambda *_args, **_kwargs: {},
+        build_strategy_evaluation_inputs_fn=lambda **kwargs: kwargs,
+        map_strategy_decision_to_plan_fn=fake_map_plan,
+        execution_policy={"reserved_cash_floor_usd": 250.0, "reserved_cash_ratio": 0.03},
+    )
+
+    result = adapters.resolve_rebalance_plan(indicators={}, snapshot="snapshot-1")
+
+    assert result == {"plan": True}
+    assert observed["map_call"][1]["runtime_metadata"] == {
+        "signal": "ok",
+        "longbridge_execution_policy": {
+            "reserved_cash_floor_usd": 250.0,
+            "reserved_cash_ratio": 0.03,
+        },
+    }
 
 
 def test_runtime_strategy_adapters_loads_and_reports_plugin_signals():

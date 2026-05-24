@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from us_equity_strategies.catalog import resolve_canonical_profile
@@ -83,6 +84,50 @@ def _symbol_role(symbol: str) -> str | None:
 
 def _default_threshold_value(total_equity: float) -> float:
     return max(_DEFAULT_MIN_TRADE_FLOOR, float(total_equity) * _DEFAULT_REBALANCE_THRESHOLD_RATIO)
+
+
+def _resolve_platform_reserved_cash(
+    *,
+    total_equity: float,
+    runtime_metadata: Mapping[str, Any] | None,
+) -> float:
+    raw_policy = (runtime_metadata or {}).get("longbridge_execution_policy")
+    if not isinstance(raw_policy, Mapping):
+        return 0.0
+    reserved_cash_floor_usd = max(0.0, float(raw_policy.get("reserved_cash_floor_usd", 0.0) or 0.0))
+    reserved_cash_ratio = float(raw_policy.get("reserved_cash_ratio", 0.0) or 0.0)
+    reserved_cash_ratio = max(0.0, min(1.0, reserved_cash_ratio))
+    return max(reserved_cash_floor_usd, max(0.0, float(total_equity)) * reserved_cash_ratio)
+
+
+def _apply_reserved_cash_policy(
+    annotations: ValueTargetExecutionAnnotations,
+    *,
+    portfolio_inputs,
+    runtime_metadata: Mapping[str, Any] | None,
+) -> ValueTargetExecutionAnnotations:
+    reserved_cash = max(
+        float(annotations.reserved_cash or 0.0),
+        _resolve_platform_reserved_cash(
+            total_equity=float(portfolio_inputs.total_equity),
+            runtime_metadata=runtime_metadata,
+        ),
+    )
+    base_investable_cash = annotations.investable_cash
+    if base_investable_cash is None:
+        base_investable_cash = max(
+            0.0,
+            float(portfolio_inputs.liquid_cash) - float(annotations.reserved_cash or 0.0),
+        )
+    investable_cash = min(
+        max(0.0, float(base_investable_cash)),
+        max(0.0, float(portfolio_inputs.liquid_cash) - reserved_cash),
+    )
+    return replace(
+        annotations,
+        reserved_cash=reserved_cash,
+        investable_cash=investable_cash,
+    )
 
 
 def _build_weight_translation_annotations(
@@ -315,6 +360,7 @@ def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[
         ("risk", "income", "safe"),
         (
             "trade_threshold_value",
+            "reserved_cash",
             "signal_display",
             "status_display",
             "dashboard_text",
@@ -335,6 +381,7 @@ def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[
             "current_min_trade",
         ),
         {
+            "reserved_cash": 0.0,
             "signal_display": "",
             "status_display": "",
             "dashboard_text": "",
@@ -419,6 +466,12 @@ def map_strategy_decision_to_plan(
             current_min_trade=current_min_trade,
             investable_cash=investable_cash,
         )
+
+    annotations = _apply_reserved_cash_policy(
+        annotations,
+        portfolio_inputs=portfolio_inputs,
+        runtime_metadata=runtime_metadata,
+    )
 
     strategy_symbols_order, portfolio_rows_layout, execution_fields, execution_defaults = _resolve_layout(
         canonical_profile

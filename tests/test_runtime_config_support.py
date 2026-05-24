@@ -20,7 +20,10 @@ SWITCH_PLAN_SCRIPT_PATH = ROOT / "scripts" / "print_strategy_switch_env_plan.py"
 from runtime_config_support import (
     DEFAULT_ACCOUNT_REGION,
     DEFAULT_LONGPORT_SECRET_NAME,
+    DEFAULT_RESERVED_CASH_FLOOR_USD,
+    DEFAULT_RESERVED_CASH_RATIO,
     DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
+    _resolve_ratio_env,
     infer_account_region,
     load_platform_runtime_settings,
 )
@@ -104,6 +107,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings.safe_haven_cash_substitute_threshold_usd,
             DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
         )
+        self.assertEqual(settings.reserved_cash_floor_usd, DEFAULT_RESERVED_CASH_FLOOR_USD)
+        self.assertEqual(settings.reserved_cash_ratio, DEFAULT_RESERVED_CASH_RATIO)
         self.assertFalse(settings.debug_position_snapshot)
         self.assertIsNotNone(settings.runtime_target)
         self.assertEqual(settings.runtime_target.platform_id, "longbridge")
@@ -193,6 +198,26 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
         self.assertEqual(settings.safe_haven_cash_substitute_threshold_usd, 750.0)
+
+    def test_reserved_cash_policy_is_loaded_from_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "LONGBRIDGE_MIN_RESERVED_CASH_USD": "250",
+                "LONGBRIDGE_RESERVED_CASH_RATIO": "0.025",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertEqual(settings.reserved_cash_floor_usd, 250.0)
+        self.assertEqual(settings.reserved_cash_ratio, 0.025)
+
+    def test_reserved_cash_ratio_rejects_invalid_env(self):
+        with patch.dict(os.environ, {"LONGBRIDGE_RESERVED_CASH_RATIO": "1.25"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "LONGBRIDGE_RESERVED_CASH_RATIO"):
+                _resolve_ratio_env("LONGBRIDGE_RESERVED_CASH_RATIO", default=0.0)
 
     def test_strategy_plugin_mounts_are_loaded_from_env(self):
         mount_config = '{"strategy_plugins":[{"strategy":"soxl_soxx_trend_income","plugin":"crisis_response_shadow","signal_path":"gs://bucket/latest_signal.json"}]}'
@@ -481,6 +506,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(plan["input_mode"], "market_history")
         self.assertFalse(plan["requires_snapshot_artifacts"])
         self.assertFalse(plan["requires_strategy_config_path"])
+        self.assertIn("LONGBRIDGE_MIN_RESERVED_CASH_USD", plan["optional_env"])
+        self.assertIn("LONGBRIDGE_RESERVED_CASH_RATIO", plan["optional_env"])
         self.assertIn("LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD", plan["optional_env"])
         self.assertIn("LONGBRIDGE_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
 
