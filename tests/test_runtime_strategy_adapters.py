@@ -148,7 +148,16 @@ def test_runtime_strategy_adapters_add_execution_policy_to_runtime_metadata():
             return None
 
     def fake_evaluate(**_kwargs):
-        return SimpleNamespace(decision="decision-1", metadata={"signal": "ok"})
+        return SimpleNamespace(
+            decision="decision-1",
+            metadata={
+                "signal": "ok",
+                "longbridge_execution_policy": {
+                    "reserved_cash_floor_usd": 1.0,
+                    "reserved_cash_ratio": 0.0,
+                },
+            },
+        )
 
     def fake_map_plan(decision, **kwargs):
         observed["map_call"] = (decision, kwargs)

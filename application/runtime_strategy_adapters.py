@@ -128,7 +128,7 @@ class LongBridgeRuntimeStrategyAdapters:
         evaluation = self.strategy_runtime.evaluate(**evaluation_inputs)
         runtime_metadata = dict(getattr(evaluation, "metadata", None) or {})
         if self.execution_policy is not None:
-            runtime_metadata.setdefault("longbridge_execution_policy", dict(self.execution_policy))
+            runtime_metadata["longbridge_execution_policy"] = dict(self.execution_policy)
         return self.map_strategy_decision_to_plan_fn(
             evaluation.decision,
             account_state=resolved_account_state if "account_state" in available_inputs else None,
