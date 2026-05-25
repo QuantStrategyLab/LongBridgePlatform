@@ -119,14 +119,9 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.feature_snapshot_path)
         self.assertIsNone(settings.strategy_config_path)
         self.assertIsNone(settings.strategy_plugin_mounts_json)
-        self.assertEqual(settings.crisis_alert_google_voice_to, ())
-        self.assertIsNone(settings.crisis_alert_smtp_from)
-        self.assertIsNone(settings.crisis_alert_smtp_host)
-        self.assertEqual(settings.crisis_alert_smtp_port, 587)
-        self.assertIsNone(settings.crisis_alert_smtp_username)
-        self.assertIsNone(settings.crisis_alert_smtp_password)
-        self.assertTrue(settings.crisis_alert_smtp_starttls)
-        self.assertFalse(settings.crisis_alert_smtp_ssl)
+        self.assertEqual(settings.crisis_alert_google_voice_gateway, ())
+        self.assertIsNone(settings.crisis_alert_google_voice_gmail_user)
+        self.assertIsNone(settings.crisis_alert_google_voice_gmail_app_password)
 
     def test_load_platform_runtime_settings_prefers_runtime_target_json(self):
         with patch.dict(
@@ -279,27 +274,17 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             os.environ,
             {
                 "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
-                "CRISIS_ALERT_GOOGLE_VOICE_TO": "gateway@txt.voice.google.com",
-                "CRISIS_ALERT_SMTP_FROM": "smtp-from@example.com",
-                "CRISIS_ALERT_SMTP_HOST": "smtp.example.com",
-                "CRISIS_ALERT_SMTP_PORT": "465",
-                "CRISIS_ALERT_SMTP_USERNAME": "bot",
-                "CRISIS_ALERT_SMTP_PASSWORD": "secret",
-                "CRISIS_ALERT_SMTP_STARTTLS": "false",
-                "CRISIS_ALERT_SMTP_SSL": "true",
+                "CRISIS_ALERT_GOOGLE_VOICE_GATEWAY": "gateway@txt.voice.google.com",
+                "CRISIS_ALERT_GOOGLE_VOICE_GMAIL_USER": "sender@gmail.com",
+                "CRISIS_ALERT_GOOGLE_VOICE_GMAIL_APP_PASSWORD": "secret",
             },
             clear=True,
         ):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
-        self.assertEqual(settings.crisis_alert_google_voice_to, ("gateway@txt.voice.google.com",))
-        self.assertEqual(settings.crisis_alert_smtp_from, "smtp-from@example.com")
-        self.assertEqual(settings.crisis_alert_smtp_host, "smtp.example.com")
-        self.assertEqual(settings.crisis_alert_smtp_port, 465)
-        self.assertEqual(settings.crisis_alert_smtp_username, "bot")
-        self.assertEqual(settings.crisis_alert_smtp_password, "secret")
-        self.assertFalse(settings.crisis_alert_smtp_starttls)
-        self.assertTrue(settings.crisis_alert_smtp_ssl)
+        self.assertEqual(settings.crisis_alert_google_voice_gateway, ("gateway@txt.voice.google.com",))
+        self.assertEqual(settings.crisis_alert_google_voice_gmail_user, "sender@gmail.com")
+        self.assertEqual(settings.crisis_alert_google_voice_gmail_app_password, "secret")
 
     def test_income_layer_overrides_are_loaded_from_env(self):
         with patch.dict(
