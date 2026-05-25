@@ -67,8 +67,8 @@ def install_stub_modules():
         tg_chat_id="shared-chat-id",
         dry_run_only=False,
         crisis_alert_google_voice_recipients=(),
-        crisis_alert_google_voice_gmail_user=None,
-        crisis_alert_google_voice_gmail_app_password=None,
+        crisis_alert_google_voice_sender_email=None,
+        crisis_alert_google_voice_sender_password=None,
         runtime_target=build_runtime_target(
             platform_id="longbridge",
             strategy_profile="soxl_soxx_trend_income",
