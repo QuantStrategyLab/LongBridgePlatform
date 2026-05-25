@@ -69,6 +69,9 @@ def install_stub_modules():
         crisis_alert_email_recipients=(),
         crisis_alert_email_sender_email=None,
         crisis_alert_email_sender_password=None,
+        crisis_alert_sms_recipients=(),
+        crisis_alert_sms_account_id=None,
+        crisis_alert_sms_auth_token=None,
         runtime_target=build_runtime_target(
             platform_id="longbridge",
             strategy_profile="soxl_soxx_trend_income",
@@ -388,7 +391,7 @@ class RequestHandlingTests(unittest.TestCase):
             would_trade_if_enabled=True,
             as_of="2026-05-24",
         )
-        observed = {"alerts": []}
+        observed = {"email_alerts": [], "sms_alerts": []}
 
         class FakeComposer:
             def build_reporting_adapters(self):
@@ -420,8 +423,8 @@ class RequestHandlingTests(unittest.TestCase):
         module.is_market_open_now = lambda: True
         module.run_rebalance_cycle = lambda **_kwargs: None
 
-        def fake_publish(signals, **kwargs):
-            observed["alerts"].append((tuple(signals), kwargs))
+        def fake_email_publish(signals, **kwargs):
+            observed["email_alerts"].append((tuple(signals), kwargs))
             return types.SimpleNamespace(
                 sent_count=1,
                 to_report_fields=lambda: {
@@ -433,12 +436,28 @@ class RequestHandlingTests(unittest.TestCase):
                 },
             )
 
-        module.publish_strategy_plugin_email_alerts = fake_publish
+        def fake_sms_publish(signals, **kwargs):
+            observed["sms_alerts"].append((tuple(signals), kwargs))
+            return types.SimpleNamespace(
+                sent_count=1,
+                to_report_fields=lambda: {
+                    "strategy_plugin_alert_sms_attempted_count": 1,
+                    "strategy_plugin_alert_sms_sent_count": 1,
+                    "strategy_plugin_alert_sms_skipped_count": 0,
+                    "strategy_plugin_alert_sms_failed_count": 0,
+                    "strategy_plugin_alert_sms_deliveries": [],
+                },
+            )
+
+        module.publish_strategy_plugin_email_alerts = fake_email_publish
+        module.publish_strategy_plugin_sms_alerts = fake_sms_publish
 
         module.run_strategy()
 
-        self.assertEqual(observed["alerts"][0][0], (signal,))
-        self.assertIn("longbridge", observed["alerts"][0][1]["context_label"])
+        self.assertEqual(observed["email_alerts"][0][0], (signal,))
+        self.assertEqual(observed["sms_alerts"][0][0], (signal,))
+        self.assertIn("longbridge", observed["email_alerts"][0][1]["context_label"])
+        self.assertIn("longbridge", observed["sms_alerts"][0][1]["context_label"])
 
     def test_run_strategy_force_runs_when_market_closed(self):
         module = load_module()
