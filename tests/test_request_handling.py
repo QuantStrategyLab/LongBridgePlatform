@@ -423,41 +423,20 @@ class RequestHandlingTests(unittest.TestCase):
         module.is_market_open_now = lambda: True
         module.run_rebalance_cycle = lambda **_kwargs: None
 
-        def fake_email_publish(signals, **kwargs):
-            observed["email_alerts"].append((tuple(signals), kwargs))
-            return types.SimpleNamespace(
-                sent_count=1,
-                to_report_fields=lambda: {
-                    "strategy_plugin_alert_email_attempted_count": 1,
-                    "strategy_plugin_alert_email_sent_count": 1,
-                    "strategy_plugin_alert_email_skipped_count": 0,
-                    "strategy_plugin_alert_email_failed_count": 0,
-                    "strategy_plugin_alert_email_deliveries": [],
-                },
-            )
+        observed["alerts"] = []
 
-        def fake_sms_publish(signals, **kwargs):
-            observed["sms_alerts"].append((tuple(signals), kwargs))
-            return types.SimpleNamespace(
-                sent_count=1,
-                to_report_fields=lambda: {
-                    "strategy_plugin_alert_sms_attempted_count": 1,
-                    "strategy_plugin_alert_sms_sent_count": 1,
-                    "strategy_plugin_alert_sms_skipped_count": 0,
-                    "strategy_plugin_alert_sms_failed_count": 0,
-                    "strategy_plugin_alert_sms_deliveries": [],
-                },
-            )
+        def fake_dispatch(signals, **kwargs):
+            observed["alerts"].append((tuple(signals), kwargs))
+            return types.SimpleNamespace(attach_to_report=lambda _report: None)
 
-        module.publish_strategy_plugin_email_alerts = fake_email_publish
-        module.publish_strategy_plugin_sms_alerts = fake_sms_publish
+        module.dispatch_strategy_plugin_alerts = fake_dispatch
 
         module.run_strategy()
 
-        self.assertEqual(observed["email_alerts"][0][0], (signal,))
-        self.assertEqual(observed["sms_alerts"][0][0], (signal,))
-        self.assertIn("longbridge", observed["email_alerts"][0][1]["context_label"])
-        self.assertIn("longbridge", observed["sms_alerts"][0][1]["context_label"])
+        self.assertEqual(observed["alerts"][0][0], (signal,))
+        self.assertIn("longbridge", observed["alerts"][0][1]["context_label"])
+        self.assertIs(observed["alerts"][0][1]["notification_settings"], module.RUNTIME_SETTINGS)
+        self.assertIsNotNone(observed["alerts"][0][1]["state_settings"])
 
     def test_run_strategy_force_runs_when_market_closed(self):
         module = load_module()
