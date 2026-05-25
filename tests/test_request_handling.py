@@ -66,7 +66,7 @@ def install_stub_modules():
         tg_token=None,
         tg_chat_id="shared-chat-id",
         dry_run_only=False,
-        crisis_alert_google_voice_gateway=(),
+        crisis_alert_google_voice_recipients=(),
         crisis_alert_google_voice_gmail_user=None,
         crisis_alert_google_voice_gmail_app_password=None,
         runtime_target=build_runtime_target(
