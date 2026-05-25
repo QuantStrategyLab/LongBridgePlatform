@@ -41,7 +41,7 @@ class StrategyLoaderTests(unittest.TestCase):
         self.assertEqual(entrypoint.manifest.profile, "soxl_soxx_trend_income")
         self.assertEqual(
             entrypoint.manifest.default_config["managed_symbols"],
-            ("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"),
+            ("SOXL", "SOXX", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI"),
         )
 
     def test_load_strategy_entrypoint_rejects_archived_mega_cap_dynamic_top20(self):
