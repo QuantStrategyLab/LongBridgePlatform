@@ -143,6 +143,12 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.crisis_alert_push_priority)
         self.assertIsNone(settings.crisis_alert_push_tags)
         self.assertIsNone(settings.crisis_alert_push_body_max_chars)
+        self.assertEqual(settings.crisis_alert_telegram_chat_ids, ())
+        self.assertIsNone(settings.crisis_alert_telegram_bot_token)
+        self.assertIsNone(settings.crisis_alert_telegram_api_base_url)
+        self.assertIsNone(settings.crisis_alert_telegram_parse_mode)
+        self.assertIsNone(settings.crisis_alert_telegram_disable_web_page_preview)
+        self.assertIsNone(settings.crisis_alert_telegram_body_max_chars)
 
     def test_load_platform_runtime_settings_prefers_runtime_target_json(self):
         with patch.dict(
@@ -345,7 +351,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             os.environ,
             {
                 "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
-                "CRISIS_ALERT_CHANNELS": "email;push",
+                "CRISIS_ALERT_CHANNELS": "email;push;telegram",
                 "CRISIS_ALERT_PUSH_RECIPIENTS": "risk-topic; backup-topic",
                 "CRISIS_ALERT_PUSH_PROVIDER": "ntfy",
                 "CRISIS_ALERT_PUSH_APP_TOKEN": "app-token",
@@ -355,12 +361,18 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "CRISIS_ALERT_PUSH_PRIORITY": "5",
                 "CRISIS_ALERT_PUSH_TAGS": "warning",
                 "CRISIS_ALERT_PUSH_BODY_MAX_CHARS": "300",
+                "CRISIS_ALERT_TELEGRAM_CHAT_IDS": "12345; @risk_channel",
+                "CRISIS_ALERT_TELEGRAM_BOT_TOKEN": "telegram-token",
+                "CRISIS_ALERT_TELEGRAM_API_BASE_URL": "https://telegram.example.test",
+                "CRISIS_ALERT_TELEGRAM_PARSE_MODE": "HTML",
+                "CRISIS_ALERT_TELEGRAM_DISABLE_WEB_PAGE_PREVIEW": "false",
+                "CRISIS_ALERT_TELEGRAM_BODY_MAX_CHARS": "900",
             },
             clear=True,
         ):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
-        self.assertEqual(settings.crisis_alert_channels, ("email", "push"))
+        self.assertEqual(settings.crisis_alert_channels, ("email", "push", "telegram"))
         self.assertEqual(settings.crisis_alert_push_recipients, ("risk-topic", "backup-topic"))
         self.assertEqual(settings.crisis_alert_push_provider, "ntfy")
         self.assertEqual(settings.crisis_alert_push_app_token, "app-token")
@@ -370,6 +382,15 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.crisis_alert_push_priority, "5")
         self.assertEqual(settings.crisis_alert_push_tags, "warning")
         self.assertEqual(settings.crisis_alert_push_body_max_chars, "300")
+        self.assertEqual(settings.crisis_alert_telegram_chat_ids, ("12345", "@risk_channel"))
+        self.assertEqual(settings.crisis_alert_telegram_bot_token, "telegram-token")
+        self.assertEqual(
+            settings.crisis_alert_telegram_api_base_url,
+            "https://telegram.example.test",
+        )
+        self.assertEqual(settings.crisis_alert_telegram_parse_mode, "HTML")
+        self.assertEqual(settings.crisis_alert_telegram_disable_web_page_preview, "false")
+        self.assertEqual(settings.crisis_alert_telegram_body_max_chars, "900")
 
     def test_income_layer_overrides_are_loaded_from_env(self):
         with patch.dict(
