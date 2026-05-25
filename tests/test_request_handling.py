@@ -66,9 +66,9 @@ def install_stub_modules():
         tg_token=None,
         tg_chat_id="shared-chat-id",
         dry_run_only=False,
-        crisis_alert_google_voice_recipients=(),
-        crisis_alert_google_voice_sender_email=None,
-        crisis_alert_google_voice_sender_password=None,
+        crisis_alert_email_recipients=(),
+        crisis_alert_email_sender_email=None,
+        crisis_alert_email_sender_password=None,
         runtime_target=build_runtime_target(
             platform_id="longbridge",
             strategy_profile="soxl_soxx_trend_income",
@@ -425,15 +425,15 @@ class RequestHandlingTests(unittest.TestCase):
             return types.SimpleNamespace(
                 sent_count=1,
                 to_report_fields=lambda: {
-                    "strategy_plugin_alert_google_voice_attempted_count": 1,
-                    "strategy_plugin_alert_google_voice_sent_count": 1,
-                    "strategy_plugin_alert_google_voice_skipped_count": 0,
-                    "strategy_plugin_alert_google_voice_failed_count": 0,
-                    "strategy_plugin_alert_google_voice_deliveries": [],
+                    "strategy_plugin_alert_email_attempted_count": 1,
+                    "strategy_plugin_alert_email_sent_count": 1,
+                    "strategy_plugin_alert_email_skipped_count": 0,
+                    "strategy_plugin_alert_email_failed_count": 0,
+                    "strategy_plugin_alert_email_deliveries": [],
                 },
             )
 
-        module.publish_strategy_plugin_google_voice_alerts = fake_publish
+        module.publish_strategy_plugin_email_alerts = fake_publish
 
         module.run_strategy()
 
