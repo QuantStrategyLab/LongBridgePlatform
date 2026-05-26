@@ -313,7 +313,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             runtime=composer.build_rebalance_runtime(
                 silent_cycle_notifications=validation_only,
             ),
-            config=composer.build_rebalance_config(strategy_plugin_signals=strategy_plugin_signals),
+            config=composer.build_rebalance_config(),
         )
         finalize_runtime_report(report, status="ok")
         reporting_adapters.log_event(

@@ -175,6 +175,7 @@ class LongBridgeRuntimeComposer:
         )
 
     def build_rebalance_config(self, *, strategy_plugin_signals=()) -> LongBridgeRebalanceConfig:
+        del strategy_plugin_signals
         return LongBridgeRebalanceConfig(
             limit_sell_discount=self.limit_sell_discount,
             limit_buy_premium=self.limit_buy_premium,
@@ -187,11 +188,7 @@ class LongBridgeRuntimeComposer:
             post_sell_refresh_interval_sec=self.order_poll_interval_sec,
             safe_haven_cash_substitute_threshold_usd=self.safe_haven_cash_substitute_threshold_usd,
             sleeper=self.sleeper,
-            extra_notification_lines=getattr(
-                self.strategy_adapters,
-                "build_strategy_plugin_notification_lines",
-                lambda _signals: (),
-            )(strategy_plugin_signals),
+            extra_notification_lines=(),
         )
 
     def load_strategy_plugin_signals(self, raw_mounts):
