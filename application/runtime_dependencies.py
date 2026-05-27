@@ -16,6 +16,7 @@ class LongBridgeRebalanceConfig:
     separator: str
     translator: Callable[..., str]
     with_prefix: Callable[[str], str]
+    strategy_profile: str = ""
     strategy_display_name: str = ""
     dry_run_only: bool = False
     post_sell_refresh_attempts: int = 1

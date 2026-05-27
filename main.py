@@ -309,13 +309,28 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             )
         if not validation_only:
             publish_strategy_plugin_alerts(strategy_plugin_signals, report=report)
-        run_rebalance_cycle(
+        cycle_result = run_rebalance_cycle(
             runtime=composer.build_rebalance_runtime(
                 silent_cycle_notifications=validation_only,
             ),
             config=composer.build_rebalance_config(),
         )
-        finalize_runtime_report(report, status="ok")
+        signal_snapshot = {}
+        if cycle_result is not None:
+            execution = dict(getattr(cycle_result, "execution", {}) or {})
+            signal_snapshot = dict(execution.get("signal_snapshot") or {})
+        if signal_snapshot:
+            reporting_adapters.log_event(
+                log_context,
+                "strategy_signal_snapshot",
+                message="Strategy signal snapshot",
+                **signal_snapshot,
+            )
+        finalize_runtime_report(
+            report,
+            status="ok",
+            diagnostics={"signal_snapshot": signal_snapshot} if signal_snapshot else None,
+        )
         reporting_adapters.log_event(
             log_context,
             "strategy_cycle_completed",
