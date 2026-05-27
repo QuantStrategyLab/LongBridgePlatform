@@ -7,6 +7,7 @@ from datetime import datetime
 
 from application.execution_service import execute_rebalance_cycle
 from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
+from application.signal_snapshot import build_signal_snapshot
 from notifications.events import NotificationPublisher
 from notifications import renderers as notification_renderers
 from quant_platform_kit.common.notification_localization import (
@@ -217,6 +218,15 @@ def run_strategy(
         safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
     )
     execution = execution_result.execution
+    execution["signal_snapshot"] = build_signal_snapshot(
+        platform="longbridge",
+        strategy_profile=config.strategy_profile,
+        execution={
+            **execution,
+            "latest_price_source": "longbridge_candlesticks",
+        },
+        allocation=execution_result.allocation,
+    )
     logs = list(execution_result.logs)
     skip_logs = list(execution_result.skip_logs)
     note_logs = list(execution_result.note_logs)
@@ -249,3 +259,4 @@ def run_strategy(
                 extra_notification_lines=config.extra_notification_lines,
             )
         )
+    return execution_result

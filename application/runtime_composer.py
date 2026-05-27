@@ -182,6 +182,7 @@ class LongBridgeRuntimeComposer:
             separator=self.separator,
             translator=self.translator,
             with_prefix=self.with_prefix,
+            strategy_profile=self.strategy_profile,
             strategy_display_name=self.strategy_display_name_localized,
             dry_run_only=self.dry_run_only,
             post_sell_refresh_attempts=self.order_poll_max_attempts,
