@@ -724,7 +724,9 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("🔔 【调仓指令】", sent_messages[0])
-        self.assertNotIn("SOXX.US 目标差额 $163.14", sent_messages[0])
+        self.assertIn("SOXX.US 目标金额 $163.14 低于 1 股价格 $504.60", sent_messages[0])
+        self.assertIn("小账户本轮保留现金", sent_messages[0])
+        self.assertIn("不回补 BOXX.US", sent_messages[0])
         self.assertNotIn("可投资现金 $1191.03 不足买入 1 股", sent_messages[0])
         self.assertIn("市价卖出] BOXX: 6股", sent_messages[0])
         self.assertNotIn("市价买入] SOXX", sent_messages[0])
