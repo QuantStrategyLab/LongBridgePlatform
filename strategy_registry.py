@@ -22,8 +22,11 @@ from quant_platform_kit.common.strategies import (
 )
 
 LONGBRIDGE_PLATFORM = "longbridge"
+NASDAQ_SP500_SMART_DCA_PROFILE = "nasdaq_sp500_smart_dca"
 
-LONGBRIDGE_ROLLOUT_ALLOWLIST = get_runtime_enabled_profiles()
+LONGBRIDGE_ROLLOUT_ALLOWLIST = get_runtime_enabled_profiles() - frozenset(
+    {NASDAQ_SP500_SMART_DCA_PROFILE}
+)
 
 PLATFORM_SUPPORTED_DOMAINS: dict[str, frozenset[str]] = {
     LONGBRIDGE_PLATFORM: frozenset({US_EQUITY_DOMAIN}),
@@ -54,7 +57,7 @@ ELIGIBLE_STRATEGY_PROFILES = derive_eligible_profiles_for_platform(
         profile,
         platform_id=LONGBRIDGE_PLATFORM,
     ),
-)
+) - frozenset({NASDAQ_SP500_SMART_DCA_PROFILE})
 LONGBRIDGE_ENABLED_PROFILES = derive_enabled_profiles_for_platform(
     STRATEGY_CATALOG,
     capability_matrix=PLATFORM_CAPABILITY_MATRIX,
