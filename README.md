@@ -119,9 +119,9 @@ Deploy the same codebase as multiple Cloud Run services by setting different val
 - `LONGBRIDGE_DRY_RUN_ONLY`: set per service when that deployment should stay dry-run
 - `NOTIFY_LANG`: set `en` or `zh` per deployment
 
-### GitHub-managed env sync for paper / HK / SG
+### GitHub-managed deploy and env sync for paper / HK / SG
 
-If code deployment still uses Google Cloud Trigger, but you want GitHub to be the single source of truth for runtime env vars, this repo includes `.github/workflows/sync-cloud-run-env.yml`.
+This repo includes `.github/workflows/sync-cloud-run-env.yml` for GitHub-managed Cloud Run automation. Set `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true` on each GitHub Environment when GitHub Actions should build and deploy the container image; set `ENABLE_GITHUB_ENV_SYNC=true` when GitHub Actions should sync runtime env vars. You can enable either flag independently while migrating away from Google Cloud Triggers.
 
 Recommended setup:
 
@@ -134,28 +134,30 @@ Recommended setup:
   - Optional fallback only: `TELEGRAM_TOKEN`
   - Optional fallback only: `CRISIS_ALERT_EMAIL_SENDER_PASSWORD`
 - **GitHub Environment: `longbridge-paper`**
-  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `RUNTIME_TARGET_JSON`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
+  - Variables: `ENABLE_GITHUB_CLOUD_RUN_DEPLOY`, `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `RUNTIME_TARGET_JSON`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
   - Optional variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`, `LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`, `LONGBRIDGE_STRATEGY_CONFIG_PATH`, `LONGBRIDGE_DRY_RUN_ONLY`, `LONGBRIDGE_DEBUG_POSITION_SNAPSHOT`, `LONGBRIDGE_MIN_RESERVED_CASH_USD`, `LONGBRIDGE_RESERVED_CASH_RATIO`, `LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD`, `INCOME_THRESHOLD_USD`, `QQQI_INCOME_RATIO` (leave unset to inherit platform and strategy defaults)
   - Recommended secret-name values: `longport-app-key-paper`, `longport-app-secret-paper`
 - **GitHub Environment: `longbridge-sg`**
-  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `RUNTIME_TARGET_JSON`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
+  - Variables: `ENABLE_GITHUB_CLOUD_RUN_DEPLOY`, `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `RUNTIME_TARGET_JSON`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
   - Optional variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`, `LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`, `LONGBRIDGE_STRATEGY_CONFIG_PATH`, `LONGBRIDGE_DRY_RUN_ONLY`, `LONGBRIDGE_DEBUG_POSITION_SNAPSHOT`, `LONGBRIDGE_MIN_RESERVED_CASH_USD`, `LONGBRIDGE_RESERVED_CASH_RATIO`, `LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD`, `INCOME_THRESHOLD_USD`, `QQQI_INCOME_RATIO` (leave unset to inherit platform and strategy defaults)
   - Recommended secret-name values: `longport-app-key-sg`, `longport-app-secret-sg`
 - **GitHub Environment: `longbridge-hk`**
-  - Variables: `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `RUNTIME_TARGET_JSON`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
+  - Variables: `ENABLE_GITHUB_CLOUD_RUN_DEPLOY`, `CLOUD_RUN_REGION`, `CLOUD_RUN_SERVICE`, `ACCOUNT_PREFIX`, `ACCOUNT_REGION`, `RUNTIME_TARGET_JSON`, `STRATEGY_PROFILE`, `LONGPORT_SECRET_NAME`, `LONGPORT_APP_KEY_SECRET_NAME`, `LONGPORT_APP_SECRET_SECRET_NAME`
   - Optional variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`, `LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`, `LONGBRIDGE_STRATEGY_CONFIG_PATH`, `LONGBRIDGE_DRY_RUN_ONLY`, `LONGBRIDGE_DEBUG_POSITION_SNAPSHOT`, `LONGBRIDGE_MIN_RESERVED_CASH_USD`, `LONGBRIDGE_RESERVED_CASH_RATIO`, `LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD`, `INCOME_THRESHOLD_USD`, `QQQI_INCOME_RATIO` (leave unset to inherit platform and strategy defaults)
   - Recommended secret-name values: `longport-app-key-hk`, `longport-app-secret-hk`
 
-On every push to `main`, the workflow updates the configured Cloud Run services with the shared and per-environment values above, and removes `TELEGRAM_CHAT_ID` from each Cloud Run service.
+On every push to `main`, the workflow can build and deploy the configured Cloud Run services, update their shared and per-environment values, and remove `TELEGRAM_CHAT_ID` from each Cloud Run service.
 
 Important:
 
 - `CLOUD_RUN_REGION` should be set on each GitHub Environment, not as one shared repository variable. This lets `paper`, `HK`, and `SG` live in different Cloud Run regions.
+- The deploy workflow uses `<CLOUD_RUN_REGION>-docker.pkg.dev` by default. Set `GCP_ARTIFACT_REGISTRY_HOSTNAME` on an Environment only when its Artifact Registry repository is in a different region.
 - `LONGPORT_APP_KEY_SECRET_NAME` and `LONGPORT_APP_SECRET_SECRET_NAME` should also be set on each GitHub Environment. Do not keep one repository-level default for them when `paper`, `HK`, and `SG` use different LongPort credentials.
 - The workflow only becomes strict when `ENABLE_GITHUB_ENV_SYNC=true`. If this variable is unset, the sync job is skipped and the old Google Cloud Trigger-only setup keeps working. Once you set it to `true`, missing env-sync values become a hard failure so you do not get a false green deployment. The selected profile's snapshot/config requirements are resolved from `scripts/print_strategy_profile_status.py --json` instead of a hard-coded strategy-name list.
+- The deploy path only becomes active when `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true`. If it is unset, an existing Cloud Build trigger can keep owning code deployment while this workflow only syncs env.
 - The workflow now also emits `RUNTIME_TARGET_JSON` so Cloud Run receives a structured runtime target alongside the legacy `STRATEGY_PROFILE` input.
 - GitHub now authenticates to Google Cloud with OIDC + Workload Identity Federation, so `GCP_SA_KEY` is no longer required for this workflow.
-- If you deploy with `gcloud run deploy --source` or a Cloud Run source trigger, also grant `roles/storage.objectViewer` on `gs://run-sources-<project>-<region>` to the build service account, the deploy service account, and the default compute service account. Otherwise source deploy can fail before Cloud Build starts with `storage.objects.get` denied.
+- GitHub deploy uses the repository Dockerfile and Artifact Registry. The deploy service account needs Artifact Registry writer, Cloud Run admin, and service-account user permissions for the runtime service account.
 - Here "shared" only means **shared inside this repository** between the `paper`, `HK`, and `SG` Cloud Run services. The Telegram token can still be shared, but LongPort app credentials should live in Secret Manager and be referenced by per-environment secret-name variables; they are not meant to be a global secret set reused by unrelated quant repos.
 - If you want one cross-project shared layer across multiple quant repos, keep it small: `GLOBAL_TELEGRAM_CHAT_ID`, `NOTIFY_LANG`, `CRISIS_ALERT_CHANNELS`, and shared crisis alert settings under `CRISIS_ALERT_EMAIL_*`/`CRISIS_ALERT_PUSH_*` are reasonable when the same alert policy applies; account credentials, deployment keys, and alert secrets are not.
 
@@ -292,9 +294,9 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 - `LONGBRIDGE_DRY_RUN_ONLY`: 需要保持模拟运行时按服务单独设置
 - `NOTIFY_LANG`: 每个部署可独立设置 `en` 或 `zh`
 
-### GitHub 统一管理 paper / HK / SG 环境变量
+### GitHub 统一管理 paper / HK / SG 部署和环境变量
 
-如果代码部署继续走 Google Cloud Trigger，但你想把运行时环境变量统一放在 GitHub 管理，这个仓库已经提供 `.github/workflows/sync-cloud-run-env.yml`。
+这个仓库已经提供 `.github/workflows/sync-cloud-run-env.yml` 作为 GitHub 管理 Cloud Run 的入口。每个 GitHub Environment 设置 `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true` 时，GitHub Actions 会构建并发布容器镜像；设置 `ENABLE_GITHUB_ENV_SYNC=true` 时，GitHub Actions 会同步运行时环境变量。迁移期间两个开关可以独立启用，旧的 Google Cloud Trigger 可以先保留。
 
 推荐配置方式：
 
@@ -309,27 +311,29 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
   - 仅保留为 fallback：`TELEGRAM_TOKEN`
   - 仅保留为 fallback：`CRISIS_ALERT_EMAIL_SENDER_PASSWORD`
 - **GitHub Environment: `longbridge-paper`**
-  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`RUNTIME_TARGET_JSON`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
+  - Variables: `ENABLE_GITHUB_CLOUD_RUN_DEPLOY`、`CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`RUNTIME_TARGET_JSON`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
   - 可选 Variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`、`LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`、`LONGBRIDGE_STRATEGY_CONFIG_PATH`、`LONGBRIDGE_DRY_RUN_ONLY`、`LONGBRIDGE_DEBUG_POSITION_SNAPSHOT`、`LONGBRIDGE_MIN_RESERVED_CASH_USD`、`LONGBRIDGE_RESERVED_CASH_RATIO`、`LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD`、`INCOME_THRESHOLD_USD`、`QQQI_INCOME_RATIO`（不填则继承平台和策略默认值）
   - 建议的 secret-name 值：`longport-app-key-paper`、`longport-app-secret-paper`
 - **GitHub Environment: `longbridge-sg`**
-  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`RUNTIME_TARGET_JSON`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
+  - Variables: `ENABLE_GITHUB_CLOUD_RUN_DEPLOY`、`CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`RUNTIME_TARGET_JSON`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
   - 可选 Variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`、`LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`、`LONGBRIDGE_STRATEGY_CONFIG_PATH`、`LONGBRIDGE_DRY_RUN_ONLY`、`LONGBRIDGE_DEBUG_POSITION_SNAPSHOT`、`LONGBRIDGE_MIN_RESERVED_CASH_USD`、`LONGBRIDGE_RESERVED_CASH_RATIO`、`LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD`、`INCOME_THRESHOLD_USD`、`QQQI_INCOME_RATIO`（不填则继承平台和策略默认值）
   - 建议的 secret-name 值：`longport-app-key-sg`、`longport-app-secret-sg`
 - **GitHub Environment: `longbridge-hk`**
-  - Variables: `CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`RUNTIME_TARGET_JSON`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
+  - Variables: `ENABLE_GITHUB_CLOUD_RUN_DEPLOY`、`CLOUD_RUN_REGION`、`CLOUD_RUN_SERVICE`、`ACCOUNT_PREFIX`、`ACCOUNT_REGION`、`RUNTIME_TARGET_JSON`、`STRATEGY_PROFILE`、`LONGPORT_SECRET_NAME`、`LONGPORT_APP_KEY_SECRET_NAME`、`LONGPORT_APP_SECRET_SECRET_NAME`
   - 可选 Variables: `LONGBRIDGE_FEATURE_SNAPSHOT_PATH`、`LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH`、`LONGBRIDGE_STRATEGY_CONFIG_PATH`、`LONGBRIDGE_DRY_RUN_ONLY`、`LONGBRIDGE_DEBUG_POSITION_SNAPSHOT`、`LONGBRIDGE_MIN_RESERVED_CASH_USD`、`LONGBRIDGE_RESERVED_CASH_RATIO`、`LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD`、`INCOME_THRESHOLD_USD`、`QQQI_INCOME_RATIO`（不填则继承平台和策略默认值）
   - 建议的 secret-name 值：`longport-app-key-hk`、`longport-app-secret-hk`
 
-每次 push 到 `main` 时，这个 workflow 会更新配置的 Cloud Run 服务，把共享和各自隔离的变量同步进去，并删除旧的 `TELEGRAM_CHAT_ID`。
+每次 push 到 `main` 时，这个 workflow 可以构建并部署配置的 Cloud Run 服务，把共享和各自隔离的变量同步进去，并删除旧的 `TELEGRAM_CHAT_ID`。
 
 注意：
 
 - `CLOUD_RUN_REGION` 应该分别放在 `longbridge-paper`、`longbridge-hk` 和 `longbridge-sg` 这些 Environment 里，不要再当成一个仓库级共享变量。这样 paper、HK 和 SG 才能各自更新到自己的 region。
+- 部署 workflow 默认使用 `<CLOUD_RUN_REGION>-docker.pkg.dev`。只有 Artifact Registry repository 不在 Cloud Run region 时，才需要在对应 Environment 里设置 `GCP_ARTIFACT_REGISTRY_HOSTNAME`。
 - `LONGPORT_APP_KEY_SECRET_NAME` 和 `LONGPORT_APP_SECRET_SECRET_NAME` 也应该分别放在各自的 GitHub Environment 里。既然 paper、HK 和 SG 用的是不同 LongPort 凭据，就不要再给它们保留一个仓库级默认值。
 - 现在 workflow 只有在 `ENABLE_GITHUB_ENV_SYNC=true` 时才会严格检查配置。没打开这个开关时，它会直接跳过，不影响原来只靠 Google Cloud Trigger 的老流程；一旦打开，缺任何配置都会直接失败，避免你以为已经同步成功。目标策略需要的 snapshot/config 输入会通过 `scripts/print_strategy_profile_status.py --json` 动态解析，不再维护硬编码策略名列表。
+- 只有在 `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true` 时，GitHub Actions 才会接管代码部署；没打开时，旧的 Cloud Build trigger 仍可继续负责发布。
 - GitHub 现在通过 OIDC + Workload Identity Federation 登录 Google Cloud，这个 workflow 不再需要 `GCP_SA_KEY`。
-- 如果你用 `gcloud run deploy --source` 或 Cloud Run source trigger 部署，还要给 `gs://run-sources-<project>-<region>` 这个 staging bucket 补 `roles/storage.objectViewer`，对象是 build service account、deploy service account、默认 compute service account。少了这层权限，部署会在 Cloud Build 启动前直接报 `storage.objects.get denied`。
+- GitHub 部署路径使用仓库里的 Dockerfile 和 Artifact Registry。部署服务账号需要 Artifact Registry 写入、Cloud Run 管理，以及对 runtime service account 的 service-account user 权限。
 - 这里的“共享”只是指 **同一个仓库里的 paper / HK / SG 服务共享**。Telegram token 可以继续共用，但 LongPort app 凭据建议放到 Secret Manager，并通过各自 Environment 里的 secret-name 变量引用，不建议把它们当成所有 quant 共用的全局 secrets。
 - 如果你真的要在多个 quant 仓库之间保留一层全局共享，建议只保留 `GLOBAL_TELEGRAM_CHAT_ID`、`NOTIFY_LANG`、`CRISIS_ALERT_CHANNELS`，以及同一套危机告警策略下的 `CRISIS_ALERT_EMAIL_*`/`CRISIS_ALERT_PUSH_*` 这种低耦合配置。账户凭据、部署 key 和告警 secret 不要做成全局共享。
 
