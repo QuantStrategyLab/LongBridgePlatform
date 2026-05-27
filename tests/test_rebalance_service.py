@@ -695,7 +695,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("可投资现金", sent_messages[0])
         self.assertIn("SOXX.US", sent_messages[0])
 
-    def test_strategy_target_rebuys_cash_sweep_symbol_after_buy_skip(self):
+    def test_strategy_target_keeps_cash_when_only_risk_target_is_unbuyable(self):
         plan = _build_plan(
             strategy_symbols=("SOXL", "SOXX", "BOXX"),
             risk_symbols=("SOXL", "SOXX"),
@@ -726,10 +726,10 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("🔔 【调仓指令】", sent_messages[0])
         self.assertNotIn("SOXX.US 目标差额 $163.14", sent_messages[0])
         self.assertNotIn("可投资现金 $1191.03 不足买入 1 股", sent_messages[0])
-        self.assertNotIn("市价卖出] BOXX", sent_messages[0])
+        self.assertIn("市价卖出] BOXX: 6股", sent_messages[0])
         self.assertNotIn("市价买入] SOXX", sent_messages[0])
-        self.assertIn("市价买入] BOXX: 10股", sent_messages[0])
-        self.assertIn("BOXX.US 目标差额 $524.92", sent_messages[0])
+        self.assertNotIn("市价买入] BOXX", sent_messages[0])
+        self.assertNotIn("BOXX.US 目标差额 $524.92", sent_messages[0])
         self.assertNotIn("限价买入] SOXX", sent_messages[0])
 
     def test_target_gap_below_one_share_does_not_report_cash_shortage(self):
