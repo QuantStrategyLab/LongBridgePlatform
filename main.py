@@ -313,7 +313,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             runtime=composer.build_rebalance_runtime(
                 silent_cycle_notifications=validation_only,
             ),
-            config=composer.build_rebalance_config(),
+            config=composer.build_rebalance_config(strategy_plugin_signals=strategy_plugin_signals),
         )
         signal_snapshot = {}
         if cycle_result is not None:
