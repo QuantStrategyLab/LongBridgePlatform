@@ -14,6 +14,7 @@ from notifications.telegram import (
     build_strategy_display_name,
     build_translator,
 )
+from notifications.renderers import render_heartbeat_notification
 from strategy_registry import SUPPORTED_STRATEGY_PROFILES
 
 
@@ -111,6 +112,30 @@ class NotificationTests(unittest.TestCase):
         for profile in SUPPORTED_STRATEGY_PROFILES:
             self.assertNotEqual(zh_name(profile), profile)
             self.assertNotEqual(en_name(profile), profile)
+
+    def test_heartbeat_signal_snapshot_localizes_price_source(self):
+        rendered = render_heartbeat_notification(
+            execution={
+                "signal_snapshot": {
+                    "market_date": "2026-05-28",
+                    "latest_price_source": "longbridge_candlesticks",
+                    "quote_overlay_used": None,
+                },
+                "status_display": "🚀 风险开启（SOXX+SOXL）",
+                "signal_display": "SOXX 站上 140 日门槛线，持有 SOXL 70.0% + SOXX 20.0%",
+            },
+            skip_logs=(),
+            note_logs=(),
+            translator=build_translator("zh"),
+            separator="━━━━━━━━━━━━━━━━━━",
+            strategy_display_name="SOXL/SOXX 半导体趋势收益",
+            dry_run_only=False,
+        )
+
+        self.assertIn("数据源 LongBridge 日线K线", rendered.compact_text)
+        self.assertIn("报价覆盖 未知", rendered.compact_text)
+        self.assertIn("📊 市场状态: 🚀 风险开启（SOXX+SOXL）", rendered.compact_text)
+        self.assertNotIn("longbridge_candlesticks", rendered.compact_text)
 
     def test_build_prefixer_prefers_account_prefix_only(self):
         with_prefix = build_prefixer("HK", "longbridge-quant-semiconductor-rotation-income-hk")
