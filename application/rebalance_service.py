@@ -14,6 +14,7 @@ from quant_platform_kit.common.notification_localization import (
     localize_notification_text as _base_localize_notification_text,
     translator_uses_zh as _base_translator_uses_zh,
 )
+from quant_platform_kit.common.strategy_plugins import attach_strategy_plugin_metadata
 
 _DETAIL_FIELD_SPLIT_RE = re.compile(r"\s+(?=[^\s=:：]+[=:：])")
 
@@ -175,6 +176,10 @@ def run_strategy(
     execution_port = runtime.execution_port_factory(trade_context)
 
     def load_plan(*, current_snapshot):
+        current_snapshot = attach_strategy_plugin_metadata(
+            current_snapshot,
+            getattr(config, "strategy_plugin_signals", ()) or (),
+        )
         current_plan = runtime.resolve_rebalance_plan(
             indicators=indicators,
             snapshot=current_snapshot,

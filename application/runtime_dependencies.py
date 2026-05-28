@@ -24,6 +24,7 @@ class LongBridgeRebalanceConfig:
     safe_haven_cash_substitute_threshold_usd: float = 1000.0
     sleeper: Callable[[float], None] | None = None
     extra_notification_lines: tuple[str, ...] = ()
+    strategy_plugin_signals: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
