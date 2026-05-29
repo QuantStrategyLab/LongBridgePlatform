@@ -133,7 +133,7 @@ class NotificationTests(unittest.TestCase):
         )
 
         self.assertIn("数据源 LongBridge 日线K线", rendered.compact_text)
-        self.assertIn("报价覆盖 未知", rendered.compact_text)
+        self.assertIn("报价覆盖 否", rendered.compact_text)
         self.assertIn("📊 市场状态: 🚀 风险开启（SOXX+SOXL）", rendered.compact_text)
         self.assertNotIn("longbridge_candlesticks", rendered.compact_text)
 
