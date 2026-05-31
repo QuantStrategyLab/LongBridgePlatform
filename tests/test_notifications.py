@@ -108,6 +108,8 @@ class NotificationTests(unittest.TestCase):
         en_name = build_strategy_display_name(build_translator("en"))
         self.assertEqual(zh_name("global_etf_confidence_vol_gate"), "全球 ETF 置信波动门控")
         self.assertEqual(en_name("global_etf_confidence_vol_gate"), "Global ETF Confidence Vol Gate")
+        self.assertEqual(zh_name("hk_listed_global_etf_rotation"), "港股上市全球 ETF 轮动")
+        self.assertEqual(en_name("hk_listed_global_etf_rotation"), "HK-listed Global ETF Rotation")
 
         for profile in SUPPORTED_STRATEGY_PROFILES:
             self.assertNotEqual(zh_name(profile), profile)
