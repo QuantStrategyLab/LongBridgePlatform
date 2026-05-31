@@ -196,6 +196,7 @@ class LongBridgeRuntimeComposer:
             strategy_profile=self.strategy_profile,
             strategy_display_name=self.strategy_display_name_localized,
             dry_run_only=self.dry_run_only,
+            symbol_suffix=self.symbol_suffix or ".US",
             post_sell_refresh_attempts=self.order_poll_max_attempts,
             post_sell_refresh_interval_sec=self.order_poll_interval_sec,
             safe_haven_cash_substitute_threshold_usd=self.safe_haven_cash_substitute_threshold_usd,

@@ -217,6 +217,7 @@ def run_strategy(
         limit_sell_discount=config.limit_sell_discount,
         limit_buy_premium=config.limit_buy_premium,
         dry_run_only=config.dry_run_only,
+        symbol_suffix=config.symbol_suffix,
         post_sell_refresh_attempts=config.post_sell_refresh_attempts,
         post_sell_refresh_interval_sec=config.post_sell_refresh_interval_sec,
         sleeper=config.sleeper or _noop_sleep,

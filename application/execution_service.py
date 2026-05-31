@@ -356,10 +356,12 @@ def record_small_account_cash_substitution_notes(
     translator,
     with_prefix,
     seen_keys,
+    symbol_suffix=".US",
 ):
     for message in format_small_account_cash_substitution_notes(
         allocation.get("small_account_whole_share_cash_notes") or (),
         translator=translator,
+        symbol_suffix=symbol_suffix,
     ):
         if message in seen_keys:
             continue
@@ -377,6 +379,16 @@ def _normalize_trade_quantity(quantity):
     if raw_quantity <= 0.0:
         return 0
     return _floor_whole_share_quantity(raw_quantity)
+
+
+def _market_symbol(symbol, *, symbol_suffix=".US"):
+    normalized = str(symbol or "").strip().upper()
+    if not normalized:
+        return normalized
+    if "." in normalized:
+        return normalized
+    suffix = str(symbol_suffix or "").strip().upper()
+    return f"{normalized}{suffix}" if suffix else normalized
 
 
 def _sell_order_quantity(
@@ -417,6 +429,7 @@ def _apply_small_account_whole_share_compatibility(
     strategy_assets,
     market_data_port,
     notify_issue,
+    symbol_suffix=".US",
 ) -> tuple[dict, dict]:
     target_values = dict(allocation.get("targets") or {})
     candidate_symbols = tuple(
@@ -439,7 +452,7 @@ def _apply_small_account_whole_share_compatibility(
     quote_prices = {}
     for symbol in candidate_symbols:
         try:
-            price = float(market_data_port.get_quote(f"{symbol}.US").last_price)
+            price = float(market_data_port.get_quote(_market_symbol(symbol, symbol_suffix=symbol_suffix)).last_price)
         except Exception:
             continue
         if price > 0.0:
@@ -543,6 +556,7 @@ def execute_rebalance_cycle(
     limit_sell_discount,
     limit_buy_premium,
     dry_run_only=False,
+    symbol_suffix=".US",
     post_sell_refresh_attempts=1,
     post_sell_refresh_interval_sec=0.0,
     sleeper=_noop_sleep,
@@ -558,6 +572,9 @@ def execute_rebalance_cycle(
     limit_order_symbols = set(
         allocation.get("risk_symbols", ()) + allocation.get("income_symbols", ())
     )
+
+    def market_symbol(symbol):
+        return _market_symbol(symbol, symbol_suffix=symbol_suffix)
 
     strategy_assets = tuple(allocation["strategy_symbols"])
     market_values = dict(portfolio["market_values"])
@@ -576,6 +593,7 @@ def execute_rebalance_cycle(
         strategy_assets=strategy_assets,
         market_data_port=market_data_port,
         notify_issue=notify_issue,
+        symbol_suffix=symbol_suffix,
     )
     record_small_account_cash_substitution_notes(
         note_logs,
@@ -583,6 +601,7 @@ def execute_rebalance_cycle(
         translator=translator,
         with_prefix=with_prefix,
         seen_keys=small_account_cash_note_keys,
+        symbol_suffix=symbol_suffix,
     )
     target_values = dict(allocation["targets"])
     available_cash = float(portfolio["liquid_cash"])
@@ -675,7 +694,7 @@ def execute_rebalance_cycle(
         diff = target_values[symbol] - market_values[symbol]
         if diff < -threshold_value and abs(diff) > current_min_trade:
             price = safe_quote_last_price(
-                f"{symbol}.US",
+                market_symbol(symbol),
                 market_data_port=market_data_port,
                 notify_issue=notify_issue,
             )
@@ -693,7 +712,7 @@ def execute_rebalance_cycle(
                     limit_price = round(price * limit_sell_discount, 2)
                     if dry_run_only:
                         submitted = record_dry_run(
-                            f"{symbol}.US",
+                            market_symbol(symbol),
                             "sell",
                             quantity_text,
                             limit_price,
@@ -701,7 +720,7 @@ def execute_rebalance_cycle(
                         )
                     else:
                         submitted = submit_order_via_port(
-                            f"{symbol}.US",
+                            market_symbol(symbol),
                             "limit",
                             "sell",
                             quantity,
@@ -711,7 +730,7 @@ def execute_rebalance_cycle(
                 else:
                     if dry_run_only:
                         submitted = record_dry_run(
-                            f"{symbol}.US",
+                            market_symbol(symbol),
                             "sell",
                             quantity_text,
                             round(price, 2),
@@ -721,7 +740,7 @@ def execute_rebalance_cycle(
                             dry_run_sale_proceeds += float(quantity) * round(price, 2)
                     else:
                         submitted = submit_order_via_port(
-                            f"{symbol}.US",
+                            market_symbol(symbol),
                             "market",
                             "sell",
                             quantity,
@@ -738,13 +757,13 @@ def execute_rebalance_cycle(
                         skip_logs,
                         translator=translator,
                         with_prefix=with_prefix,
-                    kind="sell_skipped",
-                    detail=(
-                        f"Symbol: {symbol}.US Diff: ${abs(diff):.2f} "
-                        f"Held: {quantities[symbol]} Sellable: {sellable_quantities[symbol]} "
-                        f"(no sellable)"
-                    ),
-                )
+                        kind="sell_skipped",
+                        detail=(
+                            f"Symbol: {market_symbol(symbol)} Diff: ${abs(diff):.2f} "
+                            f"Held: {quantities[symbol]} Sellable: {sellable_quantities[symbol]} "
+                            f"(no sellable)"
+                        ),
+                    )
 
     buy_candidates = [
         symbol
@@ -764,7 +783,7 @@ def execute_rebalance_cycle(
         and sellable_quantities.get(cash_sweep_symbol, 0.0) > 0.0
     ):
         sweep_price = safe_quote_last_price(
-            f"{cash_sweep_symbol}.US",
+            market_symbol(cash_sweep_symbol),
             market_data_port=market_data_port,
             notify_issue=notify_issue,
         )
@@ -772,7 +791,7 @@ def execute_rebalance_cycle(
             funding_needs = []
             for buy_symbol in funding_buy_candidates:
                 buy_price = safe_quote_last_price(
-                    f"{buy_symbol}.US",
+                    market_symbol(buy_symbol),
                     market_data_port=market_data_port,
                     notify_issue=notify_issue,
                 )
@@ -796,7 +815,7 @@ def execute_rebalance_cycle(
                 quantity_text = format_quantity(sweep_quantity)
                 if dry_run_only:
                     submitted = record_dry_run(
-                        f"{cash_sweep_symbol}.US",
+                        market_symbol(cash_sweep_symbol),
                         "sell",
                         quantity_text,
                         round(sweep_price, 2),
@@ -806,7 +825,7 @@ def execute_rebalance_cycle(
                         dry_run_sale_proceeds += float(sweep_quantity) * round(sweep_price, 2)
                 else:
                     submitted = submit_order_via_port(
-                        f"{cash_sweep_symbol}.US",
+                        market_symbol(cash_sweep_symbol),
                         "market",
                         "sell",
                         sweep_quantity,
@@ -864,6 +883,7 @@ def execute_rebalance_cycle(
                 strategy_assets=tuple(allocation["strategy_symbols"]),
                 market_data_port=market_data_port,
                 notify_issue=notify_issue,
+                symbol_suffix=symbol_suffix,
             )
             record_small_account_cash_substitution_notes(
                 note_logs,
@@ -871,6 +891,7 @@ def execute_rebalance_cycle(
                 translator=translator,
                 with_prefix=with_prefix,
                 seen_keys=small_account_cash_note_keys,
+                symbol_suffix=symbol_suffix,
             )
             threshold_value = float(execution["trade_threshold_value"])
             limit_order_symbols = set(
@@ -913,7 +934,7 @@ def execute_rebalance_cycle(
     for symbol in buy_candidates:
         diff = target_values[symbol] - market_values[symbol]
         price = safe_quote_last_price(
-            f"{symbol}.US",
+            market_symbol(symbol),
             market_data_port=market_data_port,
             notify_issue=notify_issue,
         )
@@ -926,7 +947,7 @@ def execute_rebalance_cycle(
             limit_ref_price = round(price * limit_buy_premium, 2) if is_limit_order else round(price, 2)
             limit_candidate = _estimate_buy_quantity_candidate(
                 trade_context,
-                f"{symbol}.US",
+                market_symbol(symbol),
                 limit_order_kind,
                 limit_ref_price,
                 can_buy_value=can_buy_value,
@@ -948,7 +969,7 @@ def execute_rebalance_cycle(
                     translator=translator,
                     with_prefix=with_prefix,
                     kind="buy_deferred_cash_limit",
-                    symbol=f"{symbol}.US",
+                    symbol=market_symbol(symbol),
                     diff=f"{diff:.2f}",
                     budget_qty=format_quantity(limit_budget_quantity),
                 )
@@ -958,7 +979,7 @@ def execute_rebalance_cycle(
             if order_kind == "limit":
                 if dry_run_only:
                     submitted = record_dry_run(
-                        f"{symbol}.US",
+                        market_symbol(symbol),
                         "buy",
                         quantity_text,
                         ref_price,
@@ -966,7 +987,7 @@ def execute_rebalance_cycle(
                     )
                 else:
                     submitted = submit_order_via_port(
-                        f"{symbol}.US",
+                        market_symbol(symbol),
                         "limit",
                         "buy",
                         quantity,
@@ -977,7 +998,7 @@ def execute_rebalance_cycle(
             else:
                 if dry_run_only:
                     submitted = record_dry_run(
-                        f"{symbol}.US",
+                        market_symbol(symbol),
                         "buy",
                         quantity_text,
                         round(price, 2),
@@ -985,7 +1006,7 @@ def execute_rebalance_cycle(
                     )
                 else:
                     submitted = submit_order_via_port(
-                        f"{symbol}.US",
+                        market_symbol(symbol),
                         "market",
                         "buy",
                         quantity,
@@ -1000,14 +1021,14 @@ def execute_rebalance_cycle(
             if diff <= investable_cash:
                 note_kind = "buy_deferred_small_target_gap"
                 note_kwargs = {
-                    "symbol": f"{symbol}.US",
+                    "symbol": market_symbol(symbol),
                     "diff": f"{diff:.2f}",
                     "price": f"{price:.2f}",
                 }
             else:
                 note_kind = "buy_deferred_small_cash"
                 note_kwargs = {
-                    "symbol": f"{symbol}.US",
+                    "symbol": market_symbol(symbol),
                     "diff": f"{diff:.2f}",
                     "investable": f"{investable_cash:.2f}",
                     "price": f"{price:.2f}",
@@ -1033,7 +1054,7 @@ def execute_rebalance_cycle(
         )
     ):
         cash_sweep_price = safe_quote_last_price(
-            f"{cash_sweep_symbol}.US",
+            market_symbol(cash_sweep_symbol),
             market_data_port=market_data_port,
             notify_issue=notify_issue,
         )
@@ -1050,7 +1071,7 @@ def execute_rebalance_cycle(
                 quantity_text = format_quantity(quantity)
                 if dry_run_only:
                     submitted = record_dry_run(
-                        f"{cash_sweep_symbol}.US",
+                        market_symbol(cash_sweep_symbol),
                         "buy",
                         quantity_text,
                         round(cash_sweep_price, 2),
@@ -1058,7 +1079,7 @@ def execute_rebalance_cycle(
                     )
                 else:
                     submitted = submit_order_via_port(
-                        f"{cash_sweep_symbol}.US",
+                        market_symbol(cash_sweep_symbol),
                         "market",
                         "buy",
                         quantity,
@@ -1072,7 +1093,7 @@ def execute_rebalance_cycle(
                 if submitted:
                     rebuy_message = translator(
                         "cash_sweep_rebuy",
-                        symbol=f"{cash_sweep_symbol}.US",
+                        symbol=market_symbol(cash_sweep_symbol),
                         qty=quantity_text,
                         price=f"{cash_sweep_price:.2f}",
                     )
