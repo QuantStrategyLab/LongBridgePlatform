@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
-if str(QPK_SRC) not in sys.path:
+if (QPK_SRC / "quant_platform_kit" / "common" / "runtime_config.py").exists() and str(QPK_SRC) not in sys.path:
     sys.path.insert(0, str(QPK_SRC))
 SCRIPT_PATH = ROOT / "scripts" / "print_strategy_profile_status.py"
 SWITCH_PLAN_SCRIPT_PATH = ROOT / "scripts" / "print_strategy_switch_env_plan.py"
@@ -851,6 +851,60 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("LONGBRIDGE_SYMBOL_SUFFIX", plan["optional_env"])
         self.assertIn("LONGBRIDGE_TRADING_CURRENCY", plan["optional_env"])
         self.assertIn("LONGBRIDGE_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
+
+    def test_print_strategy_switch_env_plan_for_hk_global_etf_dry_run(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SWITCH_PLAN_SCRIPT_PATH),
+                "--profile",
+                "hk_listed_global_etf_rotation",
+                "--account-region",
+                "hk",
+                "--dry-run-only",
+                "--deployment-selector",
+                "hk-verify",
+                "--account-scope",
+                "hk-verify",
+                "--service-name",
+                "longbridge-quant-hk-verify-service",
+                "--json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        plan = json.loads(result.stdout)
+        self.assertEqual(plan["platform"], "longbridge")
+        self.assertEqual(plan["canonical_profile"], "hk_listed_global_etf_rotation")
+        self.assertEqual(plan["domain"], HK_EQUITY_DOMAIN)
+        self.assertEqual(plan["set_env"]["ACCOUNT_REGION"], "HK")
+        self.assertEqual(plan["set_env"]["ACCOUNT_PREFIX"], "HK")
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_DRY_RUN_ONLY"], "true")
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_MARKET"], HK_MARKET)
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_MARKET_CALENDAR"], HK_MARKET_CALENDAR)
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_MARKET_TIMEZONE"], HK_MARKET_TIMEZONE)
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_SYMBOL_SUFFIX"], HK_SYMBOL_SUFFIX)
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_TRADING_CURRENCY"], HK_TRADING_CURRENCY)
+        self.assertTrue(plan["runtime_target"]["dry_run_only"])
+        self.assertEqual(plan["runtime_target"]["execution_mode"], "paper")
+        self.assertEqual(plan["runtime_target"]["deployment_selector"], "hk-verify")
+        self.assertEqual(plan["runtime_target"]["account_scope"], "hk-verify")
+        self.assertEqual(plan["runtime_target"]["service_name"], "longbridge-quant-hk-verify-service")
+        runtime_target_env = json.loads(plan["set_env"]["RUNTIME_TARGET_JSON"])
+        self.assertTrue(runtime_target_env["dry_run_only"])
+        self.assertEqual(runtime_target_env["execution_mode"], "paper")
+        self.assertEqual(plan["profile_group"], "direct_runtime_inputs")
+        self.assertEqual(plan["input_mode"], "market_history")
+        self.assertFalse(plan["requires_snapshot_artifacts"])
+        self.assertIn("LONGBRIDGE_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
+        self.assertTrue(plan["dry_run_plan"]["dry_run_only"])
+        self.assertTrue(plan["dry_run_plan"]["verify_only"])
+        self.assertTrue(any("lot-size" in check for check in plan["dry_run_plan"]["checks"]))
+        self.assertTrue(
+            any("production Cloud Run" in action for action in plan["dry_run_plan"]["blocked_actions"])
+        )
 
     def test_print_strategy_switch_env_plan_for_russell(self):
         result = subprocess.run(
