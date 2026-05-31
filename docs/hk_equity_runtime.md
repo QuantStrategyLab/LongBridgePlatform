@@ -50,7 +50,7 @@ LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=gs://<bucket>/hk_blue_chip_leader_rota
 | `LONGBRIDGE_MARKET` | 从 `ACCOUNT_REGION` 推导，默认 `US` | `HK` | 显式指定市场；优先级高于 `ACCOUNT_REGION`。 |
 | `LONGBRIDGE_MARKET_CALENDAR` | `NYSE` / 港股为 `XHKG` | `XHKG` | 市场开闭市判断使用的 calendar 名称。 |
 | `LONGBRIDGE_MARKET_TIMEZONE` | `America/New_York` / 港股为 `Asia/Hong_Kong` | `Asia/Hong_Kong` | 用于生成交易日日期。 |
-| `LONGBRIDGE_SYMBOL_SUFFIX` | `.US` / 港股为 `.HK` | `.HK` | 平台行情符号后缀。 |
+| `LONGBRIDGE_SYMBOL_SUFFIX` | `.US` / 港股为 `.HK` | `.HK` | 平台行情和订单符号后缀。 |
 | `LONGBRIDGE_TRADING_CURRENCY` | `USD` / 港股为 `HKD` | `HKD` | 账户现金、报价和通知口径。 |
 
 最小港股配置：
@@ -86,7 +86,7 @@ python scripts/print_strategy_switch_env_plan.py \
 - `ACCOUNT_REGION=HK`、`ACCOUNT_PREFIX=HK`、`LONGBRIDGE_DRY_RUN_ONLY=true`。
 - `LONGBRIDGE_MARKET=HK` / `XHKG` / `Asia/Hong_Kong` / `.HK` / `HKD`。
 - `remove_if_present`：清理 snapshot/config 相关环境变量，因为该 profile 直接使用 `market_history`。
-- `dry_run_plan`：检查 HK 行情权限、`.HK` / HKD 映射、整数股和 lot-size、HKD 现金口径、通知和 runtime report。
+- `dry_run_plan`：检查 HK 行情权限、`.HK` / HKD 映射、整数股和 lot-size、HKD 现金口径、dry-run 订单预览、通知和 runtime report。
 
 合并代码或打印计划不会触发生产部署；只有单独执行 Cloud Run env 更新/部署命令才会改变服务配置。
 

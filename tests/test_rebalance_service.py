@@ -7,10 +7,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 PLATFORM_KIT_SRC = ROOT.parent / "QuantPlatformKit" / "src"
-if str(PLATFORM_KIT_SRC) not in sys.path:
+if (PLATFORM_KIT_SRC / "quant_platform_kit" / "common" / "quantity.py").exists() and str(PLATFORM_KIT_SRC) not in sys.path:
     sys.path.insert(0, str(PLATFORM_KIT_SRC))
 US_EQUITY_STRATEGIES_SRC = ROOT.parent / "UsEquityStrategies" / "src"
-if str(US_EQUITY_STRATEGIES_SRC) not in sys.path:
+if (US_EQUITY_STRATEGIES_SRC / "us_equity_strategies").exists() and str(US_EQUITY_STRATEGIES_SRC) not in sys.path:
     sys.path.insert(0, str(US_EQUITY_STRATEGIES_SRC))
 
 import types
@@ -305,6 +305,81 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             ("SOXX.US", "sell", 1),
             ("SOXL.US", "buy", 2),
         ])
+
+    def test_execute_rebalance_cycle_hk_dry_run_uses_hk_suffix_without_broker_submit(self):
+        submitted_orders = []
+        quoted_symbols = []
+        estimated_symbols = []
+        prices = {"02800.HK": 30.0, "03033.HK": 20.0}
+        plan = _build_plan(
+            strategy_profile="hk_listed_global_etf_rotation",
+            strategy_symbols=("02800", "03033"),
+            risk_symbols=("02800", "03033"),
+            targets={"02800": 90000.0, "03033": 70000.0},
+            market_values={"02800": 0.0, "03033": 0.0},
+            sellable_quantities={"02800": 0, "03033": 0},
+            quantities={"02800": 0, "03033": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=196000.0,
+            market_status="Risk on",
+            deploy_ratio_text="80.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="HK ETF rotation dry-run",
+            available_cash=200000.0,
+            total_strategy_equity=200000.0,
+            portfolio_rows=(("02800", "03033"),),
+            cash_by_currency={"HKD": 200000.0},
+        )
+
+        def quote_loader(symbol):
+            quoted_symbols.append(symbol)
+            return QuoteSnapshot(
+                symbol=symbol,
+                as_of="2026-06-01",
+                last_price=prices[symbol],
+            )
+
+        def estimate_max_purchase_quantity(_trade_context, symbol, **_kwargs):
+            estimated_symbols.append(symbol)
+            return 10000
+
+        result = execute_rebalance_cycle(
+            trade_context=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_replanned_state=lambda: (
+                plan,
+                plan["portfolio"],
+                plan["execution"],
+                plan["allocation"],
+            ),
+            market_data_port=CallableMarketDataPort(quote_loader=quote_loader),
+            estimate_max_purchase_quantity=estimate_max_purchase_quantity,
+            execution_port=CallableExecutionPort(lambda order_intent: submitted_orders.append(order_intent)),
+            notify_issue=lambda _title, _detail: None,
+            translator=build_translator("zh"),
+            with_prefix=lambda message: message,
+            limit_sell_discount=1.0,
+            limit_buy_premium=1.0,
+            dry_run_only=True,
+            symbol_suffix=".HK",
+            safe_haven_cash_substitute_threshold_usd=1000.0,
+        )
+
+        joined_logs = "\n".join(result.logs + result.skip_logs + result.note_logs)
+        self.assertTrue(result.action_done)
+        self.assertEqual(submitted_orders, [])
+        self.assertTrue(quoted_symbols)
+        self.assertTrue(estimated_symbols)
+        self.assertTrue(all(symbol.endswith(".HK") for symbol in quoted_symbols))
+        self.assertTrue(all(symbol.endswith(".HK") for symbol in estimated_symbols))
+        self.assertIn("02800.HK", joined_logs)
+        self.assertIn("03033.HK", joined_logs)
+        self.assertNotIn(".US", joined_logs)
 
     def test_run_strategy_prefers_portfolio_port_runtime_path(self):
         sent_messages = []
