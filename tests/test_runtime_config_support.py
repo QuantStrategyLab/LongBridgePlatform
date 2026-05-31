@@ -62,19 +62,19 @@ BASE_LONGBRIDGE_PROFILES = frozenset(
     }
 )
 OPTIONAL_LONGBRIDGE_PROFILES = frozenset({"global_etf_confidence_vol_gate"})
+HK_RUNTIME_ENABLED_PROFILES = frozenset({"hk_listed_global_etf_rotation"})
 HK_DISABLED_PROFILES = frozenset(
     {
         "hk_blue_chip_leader_rotation",
         "hk_index_mean_reversion",
         "hk_etf_regime_rotation",
-        "hk_listed_global_etf_rotation",
     }
 )
 
 
 def expected_longbridge_enabled_profiles(actual_profiles) -> frozenset[str]:
     actual = frozenset(actual_profiles)
-    return BASE_LONGBRIDGE_PROFILES | (OPTIONAL_LONGBRIDGE_PROFILES & actual)
+    return BASE_LONGBRIDGE_PROFILES | HK_RUNTIME_ENABLED_PROFILES | (OPTIONAL_LONGBRIDGE_PROFILES & actual)
 
 
 def expected_longbridge_profiles(actual_profiles) -> frozenset[str]:
@@ -643,7 +643,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "display_name": "HK-listed Global ETF Rotation",
                 "domain": "hk_equity",
                 "eligible": True,
-                "enabled": False,
+                "enabled": True,
                 "platform": "longbridge",
             },
         )
@@ -669,7 +669,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.strategy_config_path, "/workspace/configs/tech.json")
         self.assertEqual(settings.strategy_config_source, "env")
 
-    def test_rejects_hk_profiles_until_runtime_enabled(self):
+    def test_rejects_disabled_hk_profiles(self):
         for profile in sorted(HK_DISABLED_PROFILES):
             with self.subTest(profile=profile):
                 with patch.dict(
@@ -684,6 +684,26 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 ):
                     with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
                         load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+    def test_accepts_runtime_enabled_hk_global_etf_rotation(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json("hk_listed_global_etf_rotation"),
+                "ACCOUNT_REGION": "HK",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertEqual(settings.strategy_profile, "hk_listed_global_etf_rotation")
+        self.assertEqual(settings.strategy_display_name, "HK-listed Global ETF Rotation")
+        self.assertEqual(settings.strategy_domain, "hk_equity")
+        self.assertEqual(settings.market, HK_MARKET)
+        self.assertEqual(settings.market_calendar, HK_MARKET_CALENDAR)
+        self.assertEqual(settings.market_timezone, HK_MARKET_TIMEZONE)
+        self.assertEqual(settings.symbol_suffix, HK_SYMBOL_SUFFIX)
+        self.assertEqual(settings.trading_currency, HK_TRADING_CURRENCY)
 
     def test_derives_feature_snapshot_paths_from_artifact_root(self):
         with TemporaryDirectory() as tmp_dir:
