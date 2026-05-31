@@ -14,7 +14,7 @@ QuantStrategyLab 现有平台仓库里，能做港股股票交易运行时接入
 
 ## 运行时设计
 
-平台运行时已具备港股市场维度，并接入 `HkEquityStrategies` 的港股 profile 元数据：`hk_blue_chip_leader_rotation` 是架构占位，`hk_index_mean_reversion` 和 `hk_etf_regime_rotation` 是 `market_history` 研究候选。三者都只用于框架 wiring、feed/dry-run 兼容性检查和尚未 runtime-enabled。整体仍沿用美股策略的分层方式：
+平台运行时已具备港股市场维度，并接入 `HkEquityStrategies` 的港股 profile 元数据：`hk_blue_chip_leader_rotation` 是架构占位，`hk_index_mean_reversion`、`hk_etf_regime_rotation` 和 `hk_listed_global_etf_rotation` 是 `market_history` 研究候选。这些 profile 都只用于框架 wiring、feed/dry-run 兼容性检查和尚未 runtime-enabled。整体仍沿用美股策略的分层方式：
 
 1. [`HkEquityStrategies`](https://github.com/QuantStrategyLab/HkEquityStrategies) 提供 `hk_equity` 策略定义、运行入口和 LongBridge runtime adapter。
 2. [`HkEquitySnapshotPipelines`](https://github.com/QuantStrategyLab/HkEquitySnapshotPipelines) 产出 snapshot-backed profile 的特征快照、manifest、ranking 和 release summary。
@@ -31,6 +31,7 @@ QuantStrategyLab 现有平台仓库里，能做港股股票交易运行时接入
 | `hk_blue_chip_leader_rotation` | `hk_equity` | `feature_snapshot` | `weight` | required | eligible but disabled |
 | `hk_index_mean_reversion` | `hk_equity` | `market_history` | `weight` | not required | eligible but disabled |
 | `hk_etf_regime_rotation` | `hk_equity` | `market_history` | `weight` | not required | eligible but disabled |
+| `hk_listed_global_etf_rotation` | `hk_equity` | `market_history` | `weight` | not required | eligible but disabled |
 
 未来启用 snapshot-backed profile 后的最小策略配置示例；当前不要写入 Cloud Run：
 
@@ -73,6 +74,6 @@ LONGBRIDGE_TRADING_CURRENCY=HKD
 ## 风险和注意事项
 
 - `XHKG` 是否可用取决于部署环境里的 `pandas_market_calendars` 版本；如不可用，可用 `LONGBRIDGE_MARKET_CALENDAR` 临时覆盖。
-- `hk_blue_chip_leader_rotation`、`hk_index_mean_reversion`、`hk_etf_regime_rotation` 当前均未启用；不要把这些 profile 写入生产 Cloud Run。
-- `market_history` 研究候选后续真正启用前，需要先用 LongBridge HK 行情 feed 对 `02800`、`03033`、`02822`、`02840`、`03110`、`03188` 做 dry-run 校验，不提交真实订单。
+- `hk_blue_chip_leader_rotation`、`hk_index_mean_reversion`、`hk_etf_regime_rotation`、`hk_listed_global_etf_rotation` 当前均未启用；不要把这些 profile 写入生产 Cloud Run。
+- `market_history` 研究候选后续真正启用前，需要先用 LongBridge HK 行情 feed 对 `02800`、`03033`、`02822`、`02840`、`03110`、`03188`、`02834`、`03175` 做 dry-run 校验，不提交真实订单。
 - LongBridge 下单仍保持整数股规则；如果未来港股策略涉及碎股或特殊交易单位，需要在策略层明确 lot-size 约束后再扩展。
