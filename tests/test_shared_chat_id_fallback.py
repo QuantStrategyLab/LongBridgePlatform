@@ -63,6 +63,11 @@ def install_stub_modules():
         strategy_display_name="SOXL/SOXX Semiconductor Trend Income",
         strategy_domain="us_equity",
         account_region="HK",
+        market="HK",
+        market_calendar="XHKG",
+        market_timezone="Asia/Hong_Kong",
+        symbol_suffix=".HK",
+        trading_currency="HKD",
         notify_lang="en",
         tg_token=None,
         tg_chat_id="shared-chat-id",
@@ -138,6 +143,12 @@ def install_stub_modules():
     catalog_module = types.ModuleType("us_equity_strategies.catalog")
     catalog_module.resolve_canonical_profile = lambda profile: profile
 
+    strategy_registry_module = types.ModuleType("strategy_registry")
+    strategy_registry_module.LONGBRIDGE_PLATFORM = "longbridge"
+    strategy_registry_module.resolve_strategy_definition = lambda profile, **_kwargs: types.SimpleNamespace(
+        profile=profile
+    )
+
     modules = {
         "flask": flask_module,
         "requests": requests_module,
@@ -155,6 +166,7 @@ def install_stub_modules():
         "longport.openapi": openapi_module,
         "us_equity_strategies": us_equity_strategies_module,
         "us_equity_strategies.catalog": catalog_module,
+        "strategy_registry": strategy_registry_module,
     }
     original = {name: sys.modules.get(name) for name in modules}
     sys.modules.update(modules)

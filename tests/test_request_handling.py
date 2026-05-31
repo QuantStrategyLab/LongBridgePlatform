@@ -51,7 +51,7 @@ def install_stub_modules():
     requests_module.post = lambda *args, **kwargs: None
 
     cloud_run_module = types.ModuleType("entrypoints.cloud_run")
-    cloud_run_module.is_market_open_now = lambda: True
+    cloud_run_module.is_market_open_now = lambda **_kwargs: True
 
     runtime_config_support_module = types.ModuleType("runtime_config_support")
     runtime_config_support_module.load_platform_runtime_settings = lambda **_kwargs: types.SimpleNamespace(
@@ -62,6 +62,11 @@ def install_stub_modules():
         strategy_display_name="SOXL/SOXX Semiconductor Trend Income",
         strategy_domain="us_equity",
         account_region="HK",
+        market="HK",
+        market_calendar="XHKG",
+        market_timezone="Asia/Hong_Kong",
+        symbol_suffix=".HK",
+        trading_currency="HKD",
         notify_lang="en",
         tg_token=None,
         tg_chat_id="shared-chat-id",
@@ -144,6 +149,12 @@ def install_stub_modules():
     catalog_module = types.ModuleType("us_equity_strategies.catalog")
     catalog_module.resolve_canonical_profile = lambda profile: profile
 
+    strategy_registry_module = types.ModuleType("strategy_registry")
+    strategy_registry_module.LONGBRIDGE_PLATFORM = "longbridge"
+    strategy_registry_module.resolve_strategy_definition = lambda profile, **_kwargs: types.SimpleNamespace(
+        profile=profile
+    )
+
     modules = {
         "flask": flask_module,
         "requests": requests_module,
@@ -161,6 +172,7 @@ def install_stub_modules():
         "longport.openapi": openapi_module,
         "us_equity_strategies": us_equity_strategies_module,
         "us_equity_strategies.catalog": catalog_module,
+        "strategy_registry": strategy_registry_module,
     }
     original = {name: sys.modules.get(name) for name in modules}
     sys.modules.update(modules)
@@ -370,7 +382,7 @@ class RequestHandlingTests(unittest.TestCase):
 
         module.build_run_id = lambda: "run-001"
         module.emit_runtime_log = lambda context, event, **fields: observed.append((context.run_id, event, fields))
-        module.is_market_open_now = lambda: True
+        module.is_market_open_now = lambda **_kwargs: True
         module.run_rebalance_cycle = lambda **_kwargs: None
 
         module.run_strategy()
@@ -420,7 +432,7 @@ class RequestHandlingTests(unittest.TestCase):
                 return types.SimpleNamespace()
 
         module.build_composer = lambda *, dry_run_only_override=None: FakeComposer()
-        module.is_market_open_now = lambda: True
+        module.is_market_open_now = lambda **_kwargs: True
         module.run_rebalance_cycle = lambda **_kwargs: None
 
         observed["alerts"] = []
@@ -444,7 +456,7 @@ class RequestHandlingTests(unittest.TestCase):
 
         module.build_run_id = lambda: "run-001"
         module.emit_runtime_log = lambda context, event, **fields: observed.append((context.run_id, event, fields))
-        module.is_market_open_now = lambda: False
+        module.is_market_open_now = lambda **_kwargs: False
         module.run_rebalance_cycle = lambda **_kwargs: observed.append(("rebalance", "called", {}))
 
         module.run_strategy(force_run=True)
@@ -486,7 +498,7 @@ class RequestHandlingTests(unittest.TestCase):
                 return types.SimpleNamespace()
 
         module.build_composer = lambda *, dry_run_only_override=None: observed.__setitem__("override", dry_run_only_override) or FakeComposer()
-        module.is_market_open_now = lambda: False
+        module.is_market_open_now = lambda **_kwargs: False
         module.run_rebalance_cycle = lambda **_kwargs: None
         module.persist_execution_report = lambda report: types.SimpleNamespace(local_path="/tmp/report.json")
         module.build_run_id = lambda: "run-001"
@@ -502,7 +514,7 @@ class RequestHandlingTests(unittest.TestCase):
 
         module.build_run_id = lambda: "run-001"
         module.emit_runtime_log = lambda *args, **kwargs: None
-        module.is_market_open_now = lambda: True
+        module.is_market_open_now = lambda **_kwargs: True
         module.run_rebalance_cycle = lambda **_kwargs: None
         module.persist_runtime_report = (
             lambda report, **_kwargs: observed_reports.append(dict(report)) or types.SimpleNamespace(

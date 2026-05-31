@@ -40,6 +40,7 @@ def fetch_strategy_account_state(
     t_ctx: Any,
     strategy_assets: Iterable[str],
     *,
+    cash_currency: str = "USD",
     position_log_fn: Callable[[str], None] | None = None,
     warning_log_fn: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
@@ -47,6 +48,7 @@ def fetch_strategy_account_state(
         if warning_log_fn is not None:
             warning_log_fn(message)
 
+    trading_currency = str(cash_currency or "USD").strip().upper()
     available_cash = 0.0
     cash_by_currency: dict[str, float] = {}
     try:
@@ -64,7 +66,7 @@ def fetch_strategy_account_state(
                 continue
             cash_amount = float(getattr(cash_info, "available_cash", 0.0))
             cash_by_currency[currency] = cash_by_currency.get(currency, 0.0) + cash_amount
-            if currency == "USD":
+            if currency == trading_currency:
                 available_cash += cash_amount
 
     assets = [str(symbol).strip().upper() for symbol in strategy_assets if str(symbol).strip()]
@@ -139,4 +141,5 @@ def fetch_strategy_account_state(
         "quantities": quantities,
         "sellable_quantities": sellable_quantities,
         "total_strategy_equity": available_cash + sum(market_values.values()),
+        "trading_currency": trading_currency,
     }

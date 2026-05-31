@@ -9,8 +9,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
 UES_SRC = ROOT.parent / "UsEquityStrategies" / "src"
+HES_SRC = ROOT.parent / "HkEquityStrategies" / "src"
 
-for candidate in (ROOT, QPK_SRC, UES_SRC):
+for candidate in (ROOT, QPK_SRC, UES_SRC, HES_SRC):
     candidate_str = str(candidate)
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
@@ -19,12 +20,12 @@ from quant_platform_kit.common.runtime_target import build_runtime_target  # noq
 from quant_platform_kit.common.strategies import derive_strategy_artifact_paths  # noqa: E402
 from strategy_registry import (  # noqa: E402
     LONGBRIDGE_PLATFORM,
+    STRATEGY_CATALOG,
+    describe_platform_runtime_requirements,
     get_platform_profile_status_matrix,
     resolve_strategy_definition,
     resolve_strategy_metadata,
 )
-from us_equity_strategies import get_strategy_catalog  # noqa: E402
-from us_equity_strategies.runtime_adapters import describe_platform_runtime_requirements  # noqa: E402
 
 
 def build_switch_plan(profile: str, *, account_region: str | None = None) -> dict[str, object]:
@@ -34,7 +35,7 @@ def build_switch_plan(profile: str, *, account_region: str | None = None) -> dic
         row for row in get_platform_profile_status_matrix() if row["canonical_profile"] == definition.profile
     )
     artifact_paths = derive_strategy_artifact_paths(
-        get_strategy_catalog(),
+        STRATEGY_CATALOG,
         definition.profile,
         repo_root=ROOT,
     )
@@ -72,17 +73,23 @@ def build_switch_plan(profile: str, *, account_region: str | None = None) -> dic
     ]
     optional_env = [
         "LONGBRIDGE_DRY_RUN_ONLY",
+        "LONGBRIDGE_MARKET",
+        "LONGBRIDGE_MARKET_CALENDAR",
+        "LONGBRIDGE_MARKET_TIMEZONE",
         "LONGBRIDGE_MIN_RESERVED_CASH_USD",
         "LONGBRIDGE_RESERVED_CASH_RATIO",
         "LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD",
+        "LONGBRIDGE_SYMBOL_SUFFIX",
+        "LONGBRIDGE_TRADING_CURRENCY",
     ]
     remove_if_present: list[str] = []
     notes = [
-        "Keep ACCOUNT_PREFIX and ACCOUNT_REGION aligned to the current paper or SG service identity.",
+        "Keep ACCOUNT_PREFIX and ACCOUNT_REGION aligned to the current paper, HK, or SG service identity.",
+        "For HK-equity deployments set LONGBRIDGE_MARKET=HK, or rely on ACCOUNT_REGION=HK to derive .HK/HKD/XHKG defaults.",
     ]
 
     if not normalized_region:
-        notes.append("Pass --account-region PAPER or --account-region SG if you want ACCOUNT_PREFIX/ACCOUNT_REGION placeholders filled in.")
+        notes.append("Pass --account-region PAPER, HK, or SG if you want ACCOUNT_PREFIX/ACCOUNT_REGION placeholders filled in.")
 
     if requires_feature_snapshot:
         set_env["LONGBRIDGE_FEATURE_SNAPSHOT_PATH"] = "<required>"
@@ -123,6 +130,7 @@ def build_switch_plan(profile: str, *, account_region: str | None = None) -> dic
         "platform": LONGBRIDGE_PLATFORM,
         "canonical_profile": definition.profile,
         "display_name": metadata.display_name,
+        "domain": definition.domain,
         "eligible": status_row["eligible"],
         "enabled": status_row["enabled"],
         **runtime_requirements,

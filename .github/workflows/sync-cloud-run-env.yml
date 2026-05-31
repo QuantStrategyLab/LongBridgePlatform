@@ -38,6 +38,7 @@ jobs:
       GITHUB_ENVIRONMENT_NAME: ${{ matrix.target.environment }}
       ENABLE_GITHUB_CLOUD_RUN_DEPLOY: ${{ vars.ENABLE_GITHUB_CLOUD_RUN_DEPLOY }}
       ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}
+      ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION: ${{ vars.ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION }}
       GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
       # Set CLOUD_RUN_REGION per Environment so paper/HK/SG can target different regions.
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
@@ -53,6 +54,11 @@ jobs:
       LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH: ${{ vars.LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH }}
       LONGBRIDGE_STRATEGY_CONFIG_PATH: ${{ vars.LONGBRIDGE_STRATEGY_CONFIG_PATH }}
       LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON: ${{ vars.LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON }}
+      LONGBRIDGE_MARKET: ${{ vars.LONGBRIDGE_MARKET }}
+      LONGBRIDGE_MARKET_CALENDAR: ${{ vars.LONGBRIDGE_MARKET_CALENDAR }}
+      LONGBRIDGE_MARKET_TIMEZONE: ${{ vars.LONGBRIDGE_MARKET_TIMEZONE }}
+      LONGBRIDGE_SYMBOL_SUFFIX: ${{ vars.LONGBRIDGE_SYMBOL_SUFFIX }}
+      LONGBRIDGE_TRADING_CURRENCY: ${{ vars.LONGBRIDGE_TRADING_CURRENCY }}
       LONGBRIDGE_MIN_RESERVED_CASH_USD: ${{ vars.LONGBRIDGE_MIN_RESERVED_CASH_USD }}
       LONGBRIDGE_RESERVED_CASH_RATIO: ${{ vars.LONGBRIDGE_RESERVED_CASH_RATIO }}
       LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD: ${{ vars.LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD }}
@@ -108,6 +114,14 @@ jobs:
           deploy_enabled=false
           env_sync_enabled=false
 
+          if [ "${GITHUB_EVENT_NAME:-}" = "push" ] && [ "${ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION:-}" != "true" ]; then
+            echo "deploy_enabled=false" >> "$GITHUB_OUTPUT"
+            echo "env_sync_enabled=false" >> "$GITHUB_OUTPUT"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping ${DEPLOYMENT_LABEL} Cloud Run automation on push because ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION is not true." >&2
+            exit 0
+          fi
+
           if [ "${ENABLE_GITHUB_CLOUD_RUN_DEPLOY:-}" = "true" ]; then
             deploy_enabled=true
           fi
@@ -154,7 +168,7 @@ jobs:
           import os
           import subprocess
           import sys
-          from us_equity_strategies import resolve_canonical_profile
+          from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
 
           raw_runtime_target = os.environ.get("RUNTIME_TARGET_JSON", "").strip()
           if not raw_runtime_target:
@@ -163,7 +177,10 @@ jobs:
           profile = str(runtime_target.get("strategy_profile") or "").strip().lower()
           if not profile:
               raise SystemExit("RUNTIME_TARGET_JSON.strategy_profile is required")
-          canonical_profile = resolve_canonical_profile(profile)
+          canonical_profile = resolve_strategy_definition(
+              profile,
+              platform_id=LONGBRIDGE_PLATFORM,
+          ).profile
           runtime_target["strategy_profile"] = canonical_profile
 
           expected_service = os.environ.get("CLOUD_RUN_SERVICE", "").strip()
@@ -514,6 +531,36 @@ jobs:
             env_pairs+=("LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON=${LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON}")
           else
             remove_env_vars+=("LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON")
+          fi
+
+          if [ -n "${LONGBRIDGE_MARKET:-}" ]; then
+            env_pairs+=("LONGBRIDGE_MARKET=${LONGBRIDGE_MARKET}")
+          else
+            remove_env_vars+=("LONGBRIDGE_MARKET")
+          fi
+
+          if [ -n "${LONGBRIDGE_MARKET_CALENDAR:-}" ]; then
+            env_pairs+=("LONGBRIDGE_MARKET_CALENDAR=${LONGBRIDGE_MARKET_CALENDAR}")
+          else
+            remove_env_vars+=("LONGBRIDGE_MARKET_CALENDAR")
+          fi
+
+          if [ -n "${LONGBRIDGE_MARKET_TIMEZONE:-}" ]; then
+            env_pairs+=("LONGBRIDGE_MARKET_TIMEZONE=${LONGBRIDGE_MARKET_TIMEZONE}")
+          else
+            remove_env_vars+=("LONGBRIDGE_MARKET_TIMEZONE")
+          fi
+
+          if [ -n "${LONGBRIDGE_SYMBOL_SUFFIX:-}" ]; then
+            env_pairs+=("LONGBRIDGE_SYMBOL_SUFFIX=${LONGBRIDGE_SYMBOL_SUFFIX}")
+          else
+            remove_env_vars+=("LONGBRIDGE_SYMBOL_SUFFIX")
+          fi
+
+          if [ -n "${LONGBRIDGE_TRADING_CURRENCY:-}" ]; then
+            env_pairs+=("LONGBRIDGE_TRADING_CURRENCY=${LONGBRIDGE_TRADING_CURRENCY}")
+          else
+            remove_env_vars+=("LONGBRIDGE_TRADING_CURRENCY")
           fi
 
           if [ -n "${LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD:-}" ]; then
