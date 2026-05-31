@@ -40,6 +40,9 @@ class LongBridgeRuntimeComposer:
     order_poll_interval_sec: int
     order_poll_max_attempts: int
     safe_haven_cash_substitute_threshold_usd: float
+    market: str = "US"
+    symbol_suffix: str = ".US"
+    trading_currency: str = "USD"
     dry_run_only: bool = False
     broker_adapters: Any = None
     strategy_adapters: Any = None
@@ -121,6 +124,9 @@ class LongBridgeRuntimeComposer:
             extra_context_fields=build_runtime_context_fields(
                 {
                     "account_prefix": self.account_prefix,
+                    "market": self.market,
+                    "symbol_suffix": self.symbol_suffix,
+                    "trading_currency": self.trading_currency,
                     "strategy_display_name": self.strategy_display_name,
                     "strategy_display_name_localized": self.strategy_display_name_localized,
                     **dict(self.extra_reporting_fields),
@@ -175,6 +181,12 @@ class LongBridgeRuntimeComposer:
         )
 
     def build_rebalance_config(self, *, strategy_plugin_signals=()) -> LongBridgeRebalanceConfig:
+        market_scope_line = self.translator(
+            "market_scope_detail",
+            market=self.market,
+            currency=self.trading_currency,
+            symbol_suffix=self.symbol_suffix or "<none>",
+        )
         return LongBridgeRebalanceConfig(
             limit_sell_discount=self.limit_sell_discount,
             limit_buy_premium=self.limit_buy_premium,
@@ -188,7 +200,7 @@ class LongBridgeRuntimeComposer:
             post_sell_refresh_interval_sec=self.order_poll_interval_sec,
             safe_haven_cash_substitute_threshold_usd=self.safe_haven_cash_substitute_threshold_usd,
             sleeper=self.sleeper,
-            extra_notification_lines=(),
+            extra_notification_lines=(market_scope_line,),
             strategy_plugin_signals=tuple(strategy_plugin_signals or ()),
         )
 
@@ -230,7 +242,6 @@ def build_runtime_composer(
     order_poll_max_attempts: int,
     safe_haven_cash_substitute_threshold_usd: float,
     dry_run_only: bool,
-    dry_run_only_override: bool | None = None,
     broker_adapters: Any,
     strategy_adapters: Any,
     estimate_max_purchase_quantity_fn: Callable[..., float],
@@ -246,6 +257,10 @@ def build_runtime_composer(
     runtime_target: RuntimeTarget | None,
     env_reader: Callable[[str, str], str | None],
     sleeper: Callable[[float], None],
+    market: str = "US",
+    symbol_suffix: str = ".US",
+    trading_currency: str = "USD",
+    dry_run_only_override: bool | None = None,
     printer: Callable[..., Any] = print,
     extra_reporting_fields: Mapping[str, Any] | None = None,
 ) -> LongBridgeRuntimeComposer:
@@ -271,6 +286,9 @@ def build_runtime_composer(
         order_poll_interval_sec=int(order_poll_interval_sec),
         order_poll_max_attempts=int(order_poll_max_attempts),
         safe_haven_cash_substitute_threshold_usd=float(safe_haven_cash_substitute_threshold_usd),
+        market=str(market or "US").upper(),
+        symbol_suffix=str(symbol_suffix or ""),
+        trading_currency=str(trading_currency or "USD").upper(),
         dry_run_only=bool(dry_run_only if dry_run_only_override is None else dry_run_only_override),
         broker_adapters=broker_adapters,
         strategy_adapters=strategy_adapters,

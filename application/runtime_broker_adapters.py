@@ -42,13 +42,15 @@ class LongBridgeBrokerAdapters:
     submit_order_fn: Callable[..., Any]
     clock: Callable[[], datetime] = _utcnow
     price_history_lookback: int = DEFAULT_SEMICONDUCTOR_ROTATION_HISTORY_LOOKBACK
+    symbol_suffix: str = ".US"
+    currency: str = "USD"
 
     def normalize_market_symbol(self, symbol: str) -> str:
         value = str(symbol or "").strip().upper()
         if not value:
             raise ValueError("Market data symbol must be non-empty.")
         if "." not in value:
-            return f"{value}.US"
+            return f"{value}{self.symbol_suffix}"
         return value
 
     def fetch_daily_price_history(self, quote_context, symbol: str, *, lookback: int | None = None):
@@ -115,6 +117,7 @@ class LongBridgeBrokerAdapters:
                 symbol=normalized_symbol,
                 as_of=self.clock(),
                 last_price=float(price),
+                currency=self.currency,
             )
             quote_cache[normalized_symbol] = snapshot
             return snapshot
@@ -138,7 +141,7 @@ class LongBridgeBrokerAdapters:
                 )
             series = PriceSeries(
                 symbol=normalized_symbol,
-                currency="USD",
+                currency=self.currency,
                 points=tuple(points),
             )
             price_series_cache[normalized_symbol] = series
@@ -216,6 +219,8 @@ def build_runtime_broker_adapters(
     submit_order_fn: Callable[..., Any],
     clock: Callable[[], datetime] = _utcnow,
     price_history_lookback: int = DEFAULT_SEMICONDUCTOR_ROTATION_HISTORY_LOOKBACK,
+    symbol_suffix: str = ".US",
+    currency: str = "USD",
 ) -> LongBridgeBrokerAdapters:
     return LongBridgeBrokerAdapters(
         strategy_symbols=tuple(strategy_symbols),
@@ -225,4 +230,6 @@ def build_runtime_broker_adapters(
         submit_order_fn=submit_order_fn,
         clock=clock,
         price_history_lookback=int(price_history_lookback),
+        symbol_suffix=str(symbol_suffix or ""),
+        currency=str(currency or "USD").upper(),
     )

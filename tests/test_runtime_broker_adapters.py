@@ -63,6 +63,51 @@ def test_build_market_data_port_normalizes_symbols_and_caches_quotes():
     assert [point.close for point in series.points] == [123.45, 125.67]
 
 
+def test_build_market_data_port_supports_hk_suffix_and_currency():
+    observed = {"quotes": [], "history": []}
+    openapi_module = types.ModuleType("longport.openapi")
+    openapi_module.Period = types.SimpleNamespace(Day="day")
+    openapi_module.AdjustType = types.SimpleNamespace(ForwardAdjust="forward")
+
+    class QuoteContext:
+        def candlesticks(self, symbol, period, lookback, adjust_type):
+            observed["history"].append((symbol, period, lookback, adjust_type))
+            return [types.SimpleNamespace(close=321.0, timestamp="2026-04-21T00:00:00Z")]
+
+    adapters = build_runtime_broker_adapters(
+        strategy_symbols=("00700",),
+        account_hash="HK",
+        fetch_last_price_fn=lambda _quote_context, symbol: (
+            observed["quotes"].append(symbol),
+            321.0,
+        )[-1],
+        fetch_strategy_account_state_fn=lambda *_args, **_kwargs: {},
+        submit_order_fn=lambda *_args, **_kwargs: None,
+        clock=lambda: datetime(2026, 4, 21, tzinfo=timezone.utc),
+        symbol_suffix=".HK",
+        currency="HKD",
+    )
+
+    original_openapi_module = sys.modules.get("longport.openapi")
+    sys.modules["longport.openapi"] = openapi_module
+    try:
+        market_data_port = adapters.build_market_data_port(QuoteContext())
+        quote = market_data_port.get_quote("00700")
+        series = market_data_port.get_price_series("00700")
+    finally:
+        if original_openapi_module is None:
+            sys.modules.pop("longport.openapi", None)
+        else:
+            sys.modules["longport.openapi"] = original_openapi_module
+
+    assert quote.symbol == "00700.HK"
+    assert quote.currency == "HKD"
+    assert series.symbol == "00700.HK"
+    assert series.currency == "HKD"
+    assert observed["quotes"] == ["00700.HK"]
+    assert observed["history"] == [("00700.HK", "day", 420, "forward")]
+
+
 def test_build_portfolio_and_execution_ports_adapt_runtime_calls():
     observed = {"account_reads": [], "orders": []}
     adapters = build_runtime_broker_adapters(

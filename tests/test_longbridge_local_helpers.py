@@ -23,7 +23,7 @@ class FakeQuoteContext:
 
     def quote(self, symbols):
         self.quote_calls.append(tuple(symbols))
-        prices = {"SOXL.US": 50.0, "QQQI.US": 20.0}
+        prices = {"SOXL.US": 50.0, "QQQI.US": 20.0, "00700.HK": 320.0}
         return [
             type("Quote", (), {"symbol": symbol, "last_done": prices[symbol]})()
             for symbol in symbols
@@ -76,6 +76,31 @@ class LongBridgeLocalHelpersTests(unittest.TestCase):
                 "[longbridge_account_balance_failed] error_type=RuntimeError error=boom",
             ],
         )
+
+    def test_fetch_strategy_account_state_uses_configured_cash_currency(self):
+        class TradeContext:
+            def account_balance(self):
+                usd = types.SimpleNamespace(currency="USD", available_cash=100.0)
+                hkd = types.SimpleNamespace(currency="HKD", available_cash=8000.0)
+                return [types.SimpleNamespace(cash_infos=[usd, hkd])]
+
+            def stock_positions(self):
+                return types.SimpleNamespace(
+                    channels=[FakeChannel([FakePosition("00700.HK", 2)])]
+                )
+
+        state = fetch_strategy_account_state(
+            FakeQuoteContext(),
+            TradeContext(),
+            ["00700"],
+            cash_currency="HKD",
+        )
+
+        self.assertEqual(state["available_cash"], 8000.0)
+        self.assertEqual(state["cash_by_currency"], {"USD": 100.0, "HKD": 8000.0})
+        self.assertEqual(state["market_values"]["00700"], 640.0)
+        self.assertEqual(state["trading_currency"], "HKD")
+        self.assertEqual(state["total_strategy_equity"], 8640.0)
 
     def test_submit_order_retries_once_on_internal_server_error(self):
         longport_module = types.ModuleType("longport")

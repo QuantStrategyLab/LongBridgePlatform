@@ -69,6 +69,11 @@ ACCOUNT_PREFIX = RUNTIME_SETTINGS.account_prefix
 STRATEGY_PROFILE = RUNTIME_SETTINGS.strategy_profile
 STRATEGY_DISPLAY_NAME = RUNTIME_SETTINGS.strategy_display_name
 ACCOUNT_REGION = RUNTIME_SETTINGS.account_region
+MARKET = RUNTIME_SETTINGS.market
+MARKET_CALENDAR = RUNTIME_SETTINGS.market_calendar
+MARKET_TIMEZONE = RUNTIME_SETTINGS.market_timezone
+SYMBOL_SUFFIX = RUNTIME_SETTINGS.symbol_suffix
+TRADING_CURRENCY = RUNTIME_SETTINGS.trading_currency
 NOTIFY_LANG = RUNTIME_SETTINGS.notify_lang
 TG_TOKEN = RUNTIME_SETTINGS.tg_token
 TG_CHAT_ID = RUNTIME_SETTINGS.tg_chat_id
@@ -128,6 +133,7 @@ BROKER_ADAPTERS = build_runtime_broker_adapters(
         quote_context,
         trade_context,
         list(MANAGED_SYMBOLS),
+        cash_currency=TRADING_CURRENCY,
         position_log_fn=(
             log_position_snapshot
             if getattr(RUNTIME_SETTINGS, "debug_position_snapshot", False)
@@ -136,6 +142,8 @@ BROKER_ADAPTERS = build_runtime_broker_adapters(
         warning_log_fn=log_runtime_warning,
     ),
     submit_order_fn=submit_order,
+    symbol_suffix=SYMBOL_SUFFIX,
+    currency=TRADING_CURRENCY,
 )
 STRATEGY_ADAPTERS = build_runtime_strategy_adapters(
     strategy_runtime=STRATEGY_RUNTIME,
@@ -192,6 +200,9 @@ def build_composer(*, dry_run_only_override: bool | None = None):
         order_poll_interval_sec=ORDER_POLL_INTERVAL_SEC,
         order_poll_max_attempts=ORDER_POLL_MAX_ATTEMPTS,
         safe_haven_cash_substitute_threshold_usd=_safe_haven_cash_substitute_threshold_usd(),
+        market=MARKET,
+        symbol_suffix=SYMBOL_SUFFIX,
+        trading_currency=TRADING_CURRENCY,
         dry_run_only=RUNTIME_SETTINGS.dry_run_only,
         dry_run_only_override=dry_run_only_override,
         broker_adapters=BROKER_ADAPTERS,
@@ -210,6 +221,13 @@ def build_composer(*, dry_run_only_override: bool | None = None):
         env_reader=os.getenv,
         sleeper=time.sleep,
         printer=print,
+        extra_reporting_fields={
+            "market": MARKET,
+            "market_calendar": MARKET_CALENDAR,
+            "market_timezone": MARKET_TIMEZONE,
+            "symbol_suffix": SYMBOL_SUFFIX,
+            "trading_currency": TRADING_CURRENCY,
+        },
     )
 
 
@@ -269,7 +287,10 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         )
         print(composer.with_prefix(f"[{datetime.now()}] Starting strategy..."), flush=True)
 
-        market_open = is_market_open_now()
+        market_open = is_market_open_now(
+            calendar_name=MARKET_CALENDAR,
+            timezone_name=MARKET_TIMEZONE,
+        )
         if isinstance(market_open, tuple):
             market_open, error = market_open
             reporting_adapters.log_event(
@@ -278,6 +299,9 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 message="Market hours check failed",
                 severity="WARNING",
                 error_message=str(error),
+                market=MARKET,
+                market_calendar=MARKET_CALENDAR,
+                market_timezone=MARKET_TIMEZONE,
             )
             print(composer.with_prefix(f"Market hours check failed: {error}"), flush=True)
         if not market_open and not force_run:
@@ -285,6 +309,9 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 log_context,
                 "outside_market_hours",
                 message="Outside market hours; skip execution",
+                market=MARKET,
+                market_calendar=MARKET_CALENDAR,
+                market_timezone=MARKET_TIMEZONE,
             )
             finalize_runtime_report(
                 report,
@@ -300,6 +327,9 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 log_context,
                 "market_hours_bypassed",
                 message=f"Market hours bypassed for {validation_label} execution",
+                market=MARKET,
+                market_calendar=MARKET_CALENDAR,
+                market_timezone=MARKET_TIMEZONE,
             )
             print(
                 composer.with_prefix(

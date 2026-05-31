@@ -4,8 +4,6 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
-from us_equity_strategies.catalog import resolve_canonical_profile
-
 from quant_platform_kit.strategy_contracts import (
     PositionTarget,
     StrategyDecision,
@@ -17,6 +15,7 @@ from quant_platform_kit.strategy_contracts import (
     resolve_decision_target_mode,
     translate_decision_to_target_mode,
 )
+from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
 
 _SAFE_HAVEN_SYMBOLS = frozenset({"BOXX", "BIL"})
 _INCOME_SYMBOLS = frozenset({"QQQI", "SPYI"})
@@ -80,6 +79,13 @@ def _symbol_role(symbol: str) -> str | None:
     if normalized in _INCOME_SYMBOLS:
         return "income"
     return None
+
+
+def _resolve_canonical_profile(strategy_profile: str) -> str:
+    return resolve_strategy_definition(
+        strategy_profile,
+        platform_id=LONGBRIDGE_PLATFORM,
+    ).profile
 
 
 def _default_threshold_value(total_equity: float) -> float:
@@ -274,7 +280,7 @@ def _normalize_to_value_target_decision(
 
 
 def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[str, ...], dict[str, Any]]:
-    strategy_profile = resolve_canonical_profile(strategy_profile)
+    strategy_profile = _resolve_canonical_profile(strategy_profile)
     if strategy_profile == "tqqq_growth_income":
         return (
             "risk_safe_income",
@@ -407,7 +413,7 @@ def map_strategy_decision_to_plan(
     strategy_profile: str,
     runtime_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    canonical_profile = resolve_canonical_profile(strategy_profile)
+    canonical_profile = _resolve_canonical_profile(strategy_profile)
     portfolio_inputs = _build_portfolio_inputs(account_state=account_state, snapshot=snapshot)
     normalized_decision, normalized_annotations = _normalize_to_value_target_decision(
         decision,

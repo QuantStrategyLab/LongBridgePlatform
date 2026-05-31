@@ -20,15 +20,27 @@ SWITCH_PLAN_SCRIPT_PATH = ROOT / "scripts" / "print_strategy_switch_env_plan.py"
 from runtime_config_support import (
     DEFAULT_ACCOUNT_REGION,
     DEFAULT_LONGPORT_SECRET_NAME,
+    DEFAULT_MARKET,
+    DEFAULT_MARKET_CALENDAR,
+    DEFAULT_MARKET_TIMEZONE,
     DEFAULT_RESERVED_CASH_FLOOR_USD,
     DEFAULT_RESERVED_CASH_RATIO,
     DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
+    DEFAULT_SYMBOL_SUFFIX,
+    DEFAULT_TRADING_CURRENCY,
+    HK_MARKET,
+    HK_MARKET_CALENDAR,
+    HK_MARKET_TIMEZONE,
+    HK_SYMBOL_SUFFIX,
+    HK_TRADING_CURRENCY,
     _resolve_non_negative_float_env,
     _resolve_ratio_env,
     infer_account_region,
+    infer_market,
     load_platform_runtime_settings,
 )
 from strategy_registry import (
+    HK_EQUITY_DOMAIN,
     LONGBRIDGE_PLATFORM,
     US_EQUITY_DOMAIN,
     get_eligible_profiles_for_platform,
@@ -42,6 +54,7 @@ SAMPLE_STRATEGY_PROFILE = "soxl_soxx_trend_income"
 BASE_LONGBRIDGE_PROFILES = frozenset(
     {
         "global_etf_rotation",
+        "hk_blue_chip_leader_rotation",
         "mega_cap_leader_rotation_top50_balanced",
         "russell_1000_multi_factor_defensive",
         "tqqq_growth_income",
@@ -100,6 +113,11 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.strategy_display_name, "SOXL/SOXX Semiconductor Trend Income")
         self.assertEqual(settings.strategy_domain, US_EQUITY_DOMAIN)
         self.assertEqual(settings.account_region, DEFAULT_ACCOUNT_REGION)
+        self.assertEqual(settings.market, DEFAULT_MARKET)
+        self.assertEqual(settings.market_calendar, DEFAULT_MARKET_CALENDAR)
+        self.assertEqual(settings.market_timezone, DEFAULT_MARKET_TIMEZONE)
+        self.assertEqual(settings.symbol_suffix, DEFAULT_SYMBOL_SUFFIX)
+        self.assertEqual(settings.trading_currency, DEFAULT_TRADING_CURRENCY)
         self.assertEqual(settings.notify_lang, "en")
         self.assertIsNone(settings.tg_token)
         self.assertIsNone(settings.tg_chat_id)
@@ -183,6 +201,12 @@ class RuntimeConfigSupportTests(unittest.TestCase):
     def test_platform_supported_profiles_are_filtered_by_registry(self):
         profiles = get_supported_profiles_for_platform(LONGBRIDGE_PLATFORM)
         self.assertEqual(profiles, expected_longbridge_profiles(profiles))
+
+    def test_platform_policy_accepts_future_hk_equity_domain(self):
+        from strategy_registry import PLATFORM_SUPPORTED_DOMAINS
+
+        self.assertIn(HK_EQUITY_DOMAIN, PLATFORM_SUPPORTED_DOMAINS[LONGBRIDGE_PLATFORM])
+        self.assertIn(US_EQUITY_DOMAIN, PLATFORM_SUPPORTED_DOMAINS[LONGBRIDGE_PLATFORM])
 
     def test_platform_eligible_profiles_are_exposed_by_capability_matrix(self):
         profiles = get_eligible_profiles_for_platform(LONGBRIDGE_PLATFORM)
@@ -466,6 +490,48 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         )
         self.assertEqual(region, DEFAULT_ACCOUNT_REGION)
 
+    def test_market_defaults_to_hk_for_hk_account_region(self):
+        market = infer_market(None, account_region="hk")
+        self.assertEqual(market, HK_MARKET)
+
+        with patch.dict(
+            os.environ,
+            {
+                "ACCOUNT_REGION": "hk",
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertEqual(settings.market, HK_MARKET)
+        self.assertEqual(settings.market_calendar, HK_MARKET_CALENDAR)
+        self.assertEqual(settings.market_timezone, HK_MARKET_TIMEZONE)
+        self.assertEqual(settings.symbol_suffix, HK_SYMBOL_SUFFIX)
+        self.assertEqual(settings.trading_currency, HK_TRADING_CURRENCY)
+
+    def test_market_env_overrides_region_defaults(self):
+        with patch.dict(
+            os.environ,
+            {
+                "ACCOUNT_REGION": "hk",
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "LONGBRIDGE_MARKET": "US",
+                "LONGBRIDGE_MARKET_CALENDAR": "XNYS",
+                "LONGBRIDGE_MARKET_TIMEZONE": "Etc/UTC",
+                "LONGBRIDGE_SYMBOL_SUFFIX": "US",
+                "LONGBRIDGE_TRADING_CURRENCY": "usd",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertEqual(settings.market, DEFAULT_MARKET)
+        self.assertEqual(settings.market_calendar, "XNYS")
+        self.assertEqual(settings.market_timezone, "Etc/UTC")
+        self.assertEqual(settings.symbol_suffix, DEFAULT_SYMBOL_SUFFIX)
+        self.assertEqual(settings.trading_currency, DEFAULT_TRADING_CURRENCY)
+
     def test_unsupported_strategy_profile_fails_fast(self):
         with patch.dict(
             os.environ,
@@ -524,6 +590,17 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             by_profile["mega_cap_leader_rotation_top50_balanced"]["display_name"],
             "Mega Cap Leader Rotation Top50 Balanced",
         )
+        self.assertEqual(
+            by_profile["hk_blue_chip_leader_rotation"],
+            {
+                "canonical_profile": "hk_blue_chip_leader_rotation",
+                "display_name": "HK Blue Chip Leader Rotation",
+                "domain": "hk_equity",
+                "eligible": True,
+                "enabled": True,
+                "platform": "longbridge",
+            },
+        )
 
     def test_loads_feature_snapshot_env_for_tech_profile(self):
         with patch.dict(
@@ -545,6 +622,29 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.feature_snapshot_manifest_path, "gs://bucket/tech.csv.manifest.json")
         self.assertEqual(settings.strategy_config_path, "/workspace/configs/tech.json")
         self.assertEqual(settings.strategy_config_source, "env")
+
+    def test_loads_hk_blue_chip_strategy_runtime_settings(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json("hk_blue_chip_leader_rotation"),
+                "ACCOUNT_REGION": "HK",
+                "LONGBRIDGE_FEATURE_SNAPSHOT_PATH": "gs://bucket/hk.csv",
+                "LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH": "gs://bucket/hk.csv.manifest.json",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertEqual(settings.strategy_profile, "hk_blue_chip_leader_rotation")
+        self.assertEqual(settings.strategy_domain, "hk_equity")
+        self.assertEqual(settings.market, HK_MARKET)
+        self.assertEqual(settings.market_calendar, HK_MARKET_CALENDAR)
+        self.assertEqual(settings.market_timezone, HK_MARKET_TIMEZONE)
+        self.assertEqual(settings.symbol_suffix, HK_SYMBOL_SUFFIX)
+        self.assertEqual(settings.trading_currency, HK_TRADING_CURRENCY)
+        self.assertEqual(settings.feature_snapshot_path, "gs://bucket/hk.csv")
+        self.assertEqual(settings.feature_snapshot_manifest_path, "gs://bucket/hk.csv.manifest.json")
 
     def test_derives_feature_snapshot_paths_from_artifact_root(self):
         with TemporaryDirectory() as tmp_dir:
@@ -609,6 +709,11 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(by_profile["mega_cap_leader_rotation_top50_balanced"]["input_mode"], "feature_snapshot")
         self.assertTrue(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_snapshot_artifacts"])
         self.assertFalse(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_strategy_config_path"])
+        self.assertEqual(by_profile["hk_blue_chip_leader_rotation"]["profile_group"], "snapshot_backed")
+        self.assertEqual(by_profile["hk_blue_chip_leader_rotation"]["input_mode"], "feature_snapshot")
+        self.assertTrue(by_profile["hk_blue_chip_leader_rotation"]["requires_snapshot_artifacts"])
+        self.assertTrue(by_profile["hk_blue_chip_leader_rotation"]["requires_snapshot_manifest_path"])
+        self.assertFalse(by_profile["hk_blue_chip_leader_rotation"]["requires_strategy_config_path"])
         self.assertFalse(
             by_profile["russell_1000_multi_factor_defensive"]["requires_strategy_config_path"]
         )
@@ -628,8 +733,10 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("requires_snapshot_artifacts", result.stdout)
         self.assertIn("soxl_soxx_trend_income", result.stdout)
         self.assertIn("global_etf_rotation", result.stdout)
+        self.assertIn("hk_blue_chip_leader_rotation", result.stdout)
         self.assertIn("russell_1000_multi_factor_defensive", result.stdout)
         self.assertIn("Global ETF Rotation", result.stdout)
+        self.assertIn("HK Blue Chip Leader Rotation", result.stdout)
         self.assertIn("Russell 1000 Multi-Factor", result.stdout)
         self.assertIn("Tech/Communication Pullback Enhancement", result.stdout)
 
@@ -667,6 +774,11 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("LONGBRIDGE_MIN_RESERVED_CASH_USD", plan["optional_env"])
         self.assertIn("LONGBRIDGE_RESERVED_CASH_RATIO", plan["optional_env"])
         self.assertIn("LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD", plan["optional_env"])
+        self.assertIn("LONGBRIDGE_MARKET", plan["optional_env"])
+        self.assertIn("LONGBRIDGE_MARKET_CALENDAR", plan["optional_env"])
+        self.assertIn("LONGBRIDGE_MARKET_TIMEZONE", plan["optional_env"])
+        self.assertIn("LONGBRIDGE_SYMBOL_SUFFIX", plan["optional_env"])
+        self.assertIn("LONGBRIDGE_TRADING_CURRENCY", plan["optional_env"])
         self.assertIn("LONGBRIDGE_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
 
     def test_print_strategy_switch_env_plan_for_russell(self):
@@ -750,6 +862,39 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(
             plan["hints"]["feature_snapshot_filename"],
             "mega_cap_leader_rotation_top50_balanced_feature_snapshot_latest.csv",
+        )
+
+    def test_print_strategy_switch_env_plan_for_hk_blue_chip_leader_rotation(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SWITCH_PLAN_SCRIPT_PATH),
+                "--profile",
+                "hk_blue_chip_leader_rotation",
+                "--account-region",
+                "hk",
+                "--json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        plan = json.loads(result.stdout)
+        self.assertEqual(plan["canonical_profile"], "hk_blue_chip_leader_rotation")
+        self.assertEqual(plan["domain"], "hk_equity")
+        self.assertEqual(plan["set_env"]["ACCOUNT_REGION"], "HK")
+        self.assertEqual(plan["set_env"]["ACCOUNT_PREFIX"], "HK")
+        self.assertEqual(plan["profile_group"], "snapshot_backed")
+        self.assertEqual(plan["input_mode"], "feature_snapshot")
+        self.assertTrue(plan["requires_snapshot_artifacts"])
+        self.assertTrue(plan["requires_snapshot_manifest_path"])
+        self.assertFalse(plan["requires_strategy_config_path"])
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_PATH"], "<required>")
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"], "<required>")
+        self.assertEqual(
+            plan["hints"]["feature_snapshot_filename"],
+            "hk_blue_chip_leader_rotation_feature_snapshot_latest.csv",
         )
 
     def test_print_strategy_switch_env_plan_rejects_archived_dynamic_mega_leveraged_pullback_sg(self):

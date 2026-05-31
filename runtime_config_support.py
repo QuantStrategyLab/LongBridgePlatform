@@ -17,13 +17,23 @@ from quant_platform_kit.common.runtime_target import (
 )
 from strategy_registry import (
     LONGBRIDGE_PLATFORM,
+    STRATEGY_CATALOG,
     resolve_strategy_definition,
     resolve_strategy_metadata,
 )
-from us_equity_strategies import get_strategy_catalog
 
 DEFAULT_ACCOUNT_REGION = "DEFAULT"
 DEFAULT_LONGPORT_SECRET_NAME = "longport_token_hk"
+DEFAULT_MARKET = "US"
+DEFAULT_MARKET_CALENDAR = "NYSE"
+DEFAULT_MARKET_TIMEZONE = "America/New_York"
+DEFAULT_SYMBOL_SUFFIX = ".US"
+DEFAULT_TRADING_CURRENCY = "USD"
+HK_MARKET = "HK"
+HK_MARKET_CALENDAR = "XHKG"
+HK_MARKET_TIMEZONE = "Asia/Hong_Kong"
+HK_SYMBOL_SUFFIX = ".HK"
+HK_TRADING_CURRENCY = "HKD"
 DEFAULT_RESERVED_CASH_FLOOR_USD = 0.0
 DEFAULT_RESERVED_CASH_RATIO = 0.0
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
@@ -42,6 +52,11 @@ class PlatformRuntimeSettings:
     tg_token: str | None
     tg_chat_id: str | None
     dry_run_only: bool
+    market: str = DEFAULT_MARKET
+    market_calendar: str = DEFAULT_MARKET_CALENDAR
+    market_timezone: str = DEFAULT_MARKET_TIMEZONE
+    symbol_suffix: str = DEFAULT_SYMBOL_SUFFIX
+    trading_currency: str = DEFAULT_TRADING_CURRENCY
     reserved_cash_floor_usd: float = DEFAULT_RESERVED_CASH_FLOOR_USD
     reserved_cash_ratio: float = DEFAULT_RESERVED_CASH_RATIO
     safe_haven_cash_substitute_threshold_usd: float = DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD
@@ -109,6 +124,41 @@ def infer_account_region(
     return DEFAULT_ACCOUNT_REGION
 
 
+def infer_market(raw_value: str | None, *, account_region: str) -> str:
+    for candidate in (raw_value, account_region):
+        value = str(candidate or "").strip().upper()
+        if not value:
+            continue
+        if value in {HK_MARKET, "HONG_KONG", "HONGKONG"}:
+            return HK_MARKET
+        if value in {DEFAULT_MARKET, "USA", "NYSE", "NASDAQ"}:
+            return DEFAULT_MARKET
+    return DEFAULT_MARKET
+
+
+def _normalize_symbol_suffix(raw_value: str | None, *, default: str) -> str:
+    value = str(raw_value if raw_value is not None else default).strip().upper()
+    if not value:
+        return ""
+    return value if value.startswith(".") else f".{value}"
+
+
+def _market_defaults(market: str) -> dict[str, str]:
+    if market == HK_MARKET:
+        return {
+            "market_calendar": HK_MARKET_CALENDAR,
+            "market_timezone": HK_MARKET_TIMEZONE,
+            "symbol_suffix": HK_SYMBOL_SUFFIX,
+            "trading_currency": HK_TRADING_CURRENCY,
+        }
+    return {
+        "market_calendar": DEFAULT_MARKET_CALENDAR,
+        "market_timezone": DEFAULT_MARKET_TIMEZONE,
+        "symbol_suffix": DEFAULT_SYMBOL_SUFFIX,
+        "trading_currency": DEFAULT_TRADING_CURRENCY,
+    }
+
+
 def load_platform_runtime_settings(
     *,
     project_id_resolver: Callable[[], str | None],
@@ -131,13 +181,19 @@ def load_platform_runtime_settings(
         platform_id=LONGBRIDGE_PLATFORM,
     )
     runtime_paths = resolve_strategy_runtime_path_settings(
-        strategy_catalog=get_strategy_catalog(),
+        strategy_catalog=STRATEGY_CATALOG,
         strategy_definition=strategy_definition,
         strategy_metadata=strategy_metadata,
         platform_env_prefix="LONGBRIDGE",
         env=os.environ,
         repo_root=Path(__file__).resolve().parent,
     )
+    account_region = infer_account_region(
+        os.getenv("ACCOUNT_REGION"),
+        account_prefix=account_prefix,
+    )
+    market = infer_market(os.getenv("LONGBRIDGE_MARKET"), account_region=account_region)
+    market_defaults = _market_defaults(market)
     return PlatformRuntimeSettings(
         project_id=project_id_resolver(),
         secret_name=os.getenv("LONGPORT_SECRET_NAME", DEFAULT_LONGPORT_SECRET_NAME),
@@ -145,10 +201,29 @@ def load_platform_runtime_settings(
         strategy_profile=runtime_paths.strategy_profile,
         strategy_display_name=runtime_paths.strategy_display_name,
         strategy_domain=runtime_paths.strategy_domain,
-        account_region=infer_account_region(
-            os.getenv("ACCOUNT_REGION"),
-            account_prefix=account_prefix,
+        account_region=account_region,
+        market=market,
+        market_calendar=_first_non_empty(
+            os.getenv("LONGBRIDGE_MARKET_CALENDAR"),
+            market_defaults["market_calendar"],
+        )
+        or DEFAULT_MARKET_CALENDAR,
+        market_timezone=_first_non_empty(
+            os.getenv("LONGBRIDGE_MARKET_TIMEZONE"),
+            market_defaults["market_timezone"],
+        )
+        or DEFAULT_MARKET_TIMEZONE,
+        symbol_suffix=_normalize_symbol_suffix(
+            os.getenv("LONGBRIDGE_SYMBOL_SUFFIX"),
+            default=market_defaults["symbol_suffix"],
         ),
+        trading_currency=(
+            _first_non_empty(
+                os.getenv("LONGBRIDGE_TRADING_CURRENCY"),
+                market_defaults["trading_currency"],
+            )
+            or DEFAULT_TRADING_CURRENCY
+        ).upper(),
         notify_lang=os.getenv("NOTIFY_LANG", "en"),
         tg_token=os.getenv("TELEGRAM_TOKEN"),
         tg_chat_id=os.getenv("GLOBAL_TELEGRAM_CHAT_ID"),
