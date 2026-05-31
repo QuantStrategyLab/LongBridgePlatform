@@ -59,6 +59,12 @@ Strategy logic, cadence, asset universes, parameters, and research/backtest note
 
 For the HK-equity runtime scope, platform matrix, and env defaults, see [`docs/hk_equity_runtime.md`](docs/hk_equity_runtime.md).
 
+For HK verify-only rollout planning, print the switch plan first instead of changing Cloud Run directly:
+
+```bash
+python scripts/print_strategy_switch_env_plan.py --profile hk_listed_global_etf_rotation --account-region hk --dry-run-only --deployment-selector hk-verify --account-scope hk-verify --service-name longbridge-quant-hk-verify-service --json
+```
+
 ### Notifications
 
 Telegram notifications include structured execution and heartbeat messages, with English and Chinese variants. Strategy-specific signal/status fields come from the selected strategy package profile; LongBridge-specific fields cover order submission, fill/reject/error reporting, account prefix, region, and market scope.
@@ -246,6 +252,12 @@ python3 scripts/print_strategy_profile_status.py
 策略逻辑、策略频率、标的池、参数和研究/回测说明都放在策略仓库（`UsEquityStrategies` / `HkEquityStrategies`）。这个平台 README 只保留 LongBridge profile 启用状态、环境变量、部署 wiring、券商执行行为和通知通道说明。
 
 港股运行时范围、平台矩阵和环境变量默认值见 [`docs/hk_equity_runtime.md`](docs/hk_equity_runtime.md)。
+
+港股 verify-only 接入先打印切换计划，不直接改 Cloud Run：
+
+```bash
+python scripts/print_strategy_switch_env_plan.py --profile hk_listed_global_etf_rotation --account-region hk --dry-run-only --deployment-selector hk-verify --account-scope hk-verify --service-name longbridge-quant-hk-verify-service --json
+```
 
 ### 通知格式
 

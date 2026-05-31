@@ -65,6 +65,31 @@ LONGBRIDGE_SYMBOL_SUFFIX=.HK
 LONGBRIDGE_TRADING_CURRENCY=HKD
 ```
 
+## Dry-run 切换计划
+
+先只生成 verify-only 环境计划，不部署生产 Cloud Run：
+
+```bash
+python scripts/print_strategy_switch_env_plan.py \
+  --profile hk_listed_global_etf_rotation \
+  --account-region hk \
+  --dry-run-only \
+  --deployment-selector hk-verify \
+  --account-scope hk-verify \
+  --service-name longbridge-quant-hk-verify-service \
+  --json
+```
+
+这个命令只打印计划。输出会显式包含：
+
+- `RUNTIME_TARGET_JSON`：`strategy_profile=hk_listed_global_etf_rotation`、`dry_run_only=true`、`execution_mode=paper`。
+- `ACCOUNT_REGION=HK`、`ACCOUNT_PREFIX=HK`、`LONGBRIDGE_DRY_RUN_ONLY=true`。
+- `LONGBRIDGE_MARKET=HK` / `XHKG` / `Asia/Hong_Kong` / `.HK` / `HKD`。
+- `remove_if_present`：清理 snapshot/config 相关环境变量，因为该 profile 直接使用 `market_history`。
+- `dry_run_plan`：检查 HK 行情权限、`.HK` / HKD 映射、整数股和 lot-size、HKD 现金口径、通知和 runtime report。
+
+合并代码或打印计划不会触发生产部署；只有单独执行 Cloud Run env 更新/部署命令才会改变服务配置。
+
 ## 通知和日志
 
 - Telegram 中英文模板新增市场行：市场、交易币种、标的后缀。
