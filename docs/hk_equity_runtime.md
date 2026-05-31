@@ -14,12 +14,13 @@ QuantStrategyLab 现有平台仓库里，能做港股股票交易运行时接入
 
 ## 运行时设计
 
-平台运行时已具备港股市场维度，并接入 `HkEquityStrategies` 的 `hk_blue_chip_leader_rotation` 架构占位。该 profile 当前是 `architecture_scaffold`，只用于框架 wiring 和兼容性验证，尚未 runtime-enabled。整体仍沿用美股 snapshot 策略的分层方式：
+平台运行时已具备港股市场维度，并接入 `HkEquityStrategies` 的港股 profile 元数据：`hk_blue_chip_leader_rotation` 是架构占位，`hk_index_mean_reversion` 和 `hk_etf_regime_rotation` 是 `market_history` 研究候选。三者都只用于框架 wiring、feed/dry-run 兼容性检查和尚未 runtime-enabled。整体仍沿用美股策略的分层方式：
 
 1. [`HkEquityStrategies`](https://github.com/QuantStrategyLab/HkEquityStrategies) 提供 `hk_equity` 策略定义、运行入口和 LongBridge runtime adapter。
-2. [`HkEquitySnapshotPipelines`](https://github.com/QuantStrategyLab/HkEquitySnapshotPipelines) 产出最新特征快照、manifest、ranking 和 release summary。
-3. LongBridge 只读取 `RUNTIME_TARGET_JSON`、策略 profile、snapshot/config 路径和平台 market scope。
-4. 平台根据 market scope 选择交易币种、行情后缀、市场日历和通知/日志字段。
+2. [`HkEquitySnapshotPipelines`](https://github.com/QuantStrategyLab/HkEquitySnapshotPipelines) 产出 snapshot-backed profile 的特征快照、manifest、ranking 和 release summary。
+3. 非 snapshot profile 使用平台 market-data feed 提供的 `market_history`，不需要 snapshot artifact。
+4. LongBridge 只读取 `RUNTIME_TARGET_JSON`、策略 profile、snapshot/config 路径和平台 market scope。
+5. 平台根据 market scope 选择交易币种、行情后缀、市场日历和通知/日志字段。
 
 这样可以避免在平台仓库里硬编码策略逻辑，也便于同一套港股策略接入 IBKR。
 
@@ -28,8 +29,10 @@ QuantStrategyLab 现有平台仓库里，能做港股股票交易运行时接入
 | Profile | Domain | Inputs | Target mode | Snapshot manifest | Status |
 | --- | --- | --- | --- | --- | --- |
 | `hk_blue_chip_leader_rotation` | `hk_equity` | `feature_snapshot` | `weight` | required | eligible but disabled |
+| `hk_index_mean_reversion` | `hk_equity` | `market_history` | `weight` | not required | eligible but disabled |
+| `hk_etf_regime_rotation` | `hk_equity` | `market_history` | `weight` | not required | eligible but disabled |
 
-未来启用后的最小策略配置示例；当前不要写入 Cloud Run：
+未来启用 snapshot-backed profile 后的最小策略配置示例；当前不要写入 Cloud Run：
 
 ```bash
 STRATEGY_PROFILE=hk_blue_chip_leader_rotation
@@ -70,5 +73,6 @@ LONGBRIDGE_TRADING_CURRENCY=HKD
 ## 风险和注意事项
 
 - `XHKG` 是否可用取决于部署环境里的 `pandas_market_calendars` 版本；如不可用，可用 `LONGBRIDGE_MARKET_CALENDAR` 临时覆盖。
-- `hk_blue_chip_leader_rotation` 当前未启用；不要把该 profile 写入生产 Cloud Run。后续真正启用前，需要用最新 snapshot artifact、dry-run 和小范围账户做连接验证。
+- `hk_blue_chip_leader_rotation`、`hk_index_mean_reversion`、`hk_etf_regime_rotation` 当前均未启用；不要把这些 profile 写入生产 Cloud Run。
+- `market_history` 研究候选后续真正启用前，需要先用 LongBridge HK 行情 feed 对 `02800`、`03033`、`02822`、`02840`、`03110`、`03188` 做 dry-run 校验，不提交真实订单。
 - LongBridge 下单仍保持整数股规则；如果未来港股策略涉及碎股或特殊交易单位，需要在策略层明确 lot-size 约束后再扩展。

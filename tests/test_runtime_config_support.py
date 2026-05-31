@@ -62,7 +62,13 @@ BASE_LONGBRIDGE_PROFILES = frozenset(
     }
 )
 OPTIONAL_LONGBRIDGE_PROFILES = frozenset({"global_etf_confidence_vol_gate"})
-HK_SCAFFOLD_PROFILES = frozenset({"hk_blue_chip_leader_rotation"})
+HK_DISABLED_PROFILES = frozenset(
+    {
+        "hk_blue_chip_leader_rotation",
+        "hk_index_mean_reversion",
+        "hk_etf_regime_rotation",
+    }
+)
 
 
 def expected_longbridge_enabled_profiles(actual_profiles) -> frozenset[str]:
@@ -71,7 +77,7 @@ def expected_longbridge_enabled_profiles(actual_profiles) -> frozenset[str]:
 
 
 def expected_longbridge_profiles(actual_profiles) -> frozenset[str]:
-    return expected_longbridge_enabled_profiles(actual_profiles) | HK_SCAFFOLD_PROFILES
+    return expected_longbridge_enabled_profiles(actual_profiles) | HK_DISABLED_PROFILES
 
 
 def runtime_target_json(
@@ -205,7 +211,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
     def test_platform_supported_profiles_are_filtered_by_registry(self):
         profiles = get_supported_profiles_for_platform(LONGBRIDGE_PLATFORM)
         self.assertEqual(profiles, expected_longbridge_enabled_profiles(profiles))
-        self.assertNotIn("hk_blue_chip_leader_rotation", profiles)
+        for profile in HK_DISABLED_PROFILES:
+            self.assertNotIn(profile, profiles)
 
     def test_platform_policy_accepts_future_hk_equity_domain(self):
         from strategy_registry import PLATFORM_SUPPORTED_DOMAINS
@@ -606,6 +613,28 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "platform": "longbridge",
             },
         )
+        self.assertEqual(
+            by_profile["hk_index_mean_reversion"],
+            {
+                "canonical_profile": "hk_index_mean_reversion",
+                "display_name": "HK Index Mean Reversion",
+                "domain": "hk_equity",
+                "eligible": True,
+                "enabled": False,
+                "platform": "longbridge",
+            },
+        )
+        self.assertEqual(
+            by_profile["hk_etf_regime_rotation"],
+            {
+                "canonical_profile": "hk_etf_regime_rotation",
+                "display_name": "HK ETF Regime Rotation",
+                "domain": "hk_equity",
+                "eligible": True,
+                "enabled": False,
+                "platform": "longbridge",
+            },
+        )
 
     def test_loads_feature_snapshot_env_for_tech_profile(self):
         with patch.dict(
@@ -628,19 +657,21 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.strategy_config_path, "/workspace/configs/tech.json")
         self.assertEqual(settings.strategy_config_source, "env")
 
-    def test_rejects_hk_blue_chip_strategy_until_runtime_enabled(self):
-        with patch.dict(
-            os.environ,
-            {
-                "RUNTIME_TARGET_JSON": runtime_target_json("hk_blue_chip_leader_rotation"),
-                "ACCOUNT_REGION": "HK",
-                "LONGBRIDGE_FEATURE_SNAPSHOT_PATH": "gs://bucket/hk.csv",
-                "LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH": "gs://bucket/hk.csv.manifest.json",
-            },
-            clear=True,
-        ):
-            with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
-                load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+    def test_rejects_hk_profiles_until_runtime_enabled(self):
+        for profile in sorted(HK_DISABLED_PROFILES):
+            with self.subTest(profile=profile):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "RUNTIME_TARGET_JSON": runtime_target_json(profile),
+                        "ACCOUNT_REGION": "HK",
+                        "LONGBRIDGE_FEATURE_SNAPSHOT_PATH": "gs://bucket/hk.csv",
+                        "LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH": "gs://bucket/hk.csv.manifest.json",
+                    },
+                    clear=True,
+                ):
+                    with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
+                        load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
     def test_derives_feature_snapshot_paths_from_artifact_root(self):
         with TemporaryDirectory() as tmp_dir:
@@ -710,6 +741,12 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertTrue(by_profile["hk_blue_chip_leader_rotation"]["requires_snapshot_artifacts"])
         self.assertTrue(by_profile["hk_blue_chip_leader_rotation"]["requires_snapshot_manifest_path"])
         self.assertFalse(by_profile["hk_blue_chip_leader_rotation"]["requires_strategy_config_path"])
+        for profile in ("hk_index_mean_reversion", "hk_etf_regime_rotation"):
+            self.assertEqual(by_profile[profile]["profile_group"], "direct_runtime_inputs")
+            self.assertEqual(by_profile[profile]["input_mode"], "market_history")
+            self.assertFalse(by_profile[profile]["requires_snapshot_artifacts"])
+            self.assertFalse(by_profile[profile]["requires_snapshot_manifest_path"])
+            self.assertFalse(by_profile[profile]["requires_strategy_config_path"])
         self.assertFalse(
             by_profile["russell_1000_multi_factor_defensive"]["requires_strategy_config_path"]
         )
@@ -730,9 +767,13 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("soxl_soxx_trend_income", result.stdout)
         self.assertIn("global_etf_rotation", result.stdout)
         self.assertIn("hk_blue_chip_leader_rotation", result.stdout)
+        self.assertIn("hk_index_mean_reversion", result.stdout)
+        self.assertIn("hk_etf_regime_rotation", result.stdout)
         self.assertIn("russell_1000_multi_factor_defensive", result.stdout)
         self.assertIn("Global ETF Rotation", result.stdout)
         self.assertIn("HK Blue Chip Leader Rotation", result.stdout)
+        self.assertIn("HK Index Mean Reversion", result.stdout)
+        self.assertIn("HK ETF Regime Rotation", result.stdout)
         self.assertIn("Russell 1000 Multi-Factor", result.stdout)
         self.assertIn("Tech/Communication Pullback Enhancement", result.stdout)
 
@@ -860,23 +901,25 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             "mega_cap_leader_rotation_top50_balanced_feature_snapshot_latest.csv",
         )
 
-    def test_print_strategy_switch_env_plan_rejects_hk_scaffold_profile(self):
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(SWITCH_PLAN_SCRIPT_PATH),
-                "--profile",
-                "hk_blue_chip_leader_rotation",
-                "--account-region",
-                "hk",
-                "--json",
-            ],
-            capture_output=True,
-            text=True,
-        )
+    def test_print_strategy_switch_env_plan_rejects_hk_disabled_profiles(self):
+        for profile in sorted(HK_DISABLED_PROFILES):
+            with self.subTest(profile=profile):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SWITCH_PLAN_SCRIPT_PATH),
+                        "--profile",
+                        profile,
+                        "--account-region",
+                        "hk",
+                        "--json",
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Unsupported STRATEGY_PROFILE", result.stderr)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Unsupported STRATEGY_PROFILE", result.stderr)
 
     def test_print_strategy_switch_env_plan_rejects_archived_dynamic_mega_leveraged_pullback_sg(self):
         result = subprocess.run(

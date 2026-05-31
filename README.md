@@ -11,7 +11,7 @@ Quant system on LongPort OpenAPI and Google Cloud Run.
 
 This repository uses `QuantPlatformKit` for LongPort token handling, context bootstrap, account snapshot access, market data, and order submission. Cloud Run deploys this repository directly.
 The runtime now carries a structured `RuntimeTarget` / `RUNTIME_TARGET_JSON` alongside the compatibility `STRATEGY_PROFILE` selector. Strategy-owned defaults come from `UsEquityStrategies` and `HkEquityStrategies`; platform variables are only explicit overrides.
-The LongBridge runtime can execute the current `runtime_enabled` `us_equity` profiles from `UsEquityStrategies`. It also carries an eligible-but-disabled `hk_blue_chip_leader_rotation` scaffold from `HkEquityStrategies`; `LongBridgePlatform` keeps the LongPort runtime, token refresh, execution, and notification flow.
+The LongBridge runtime can execute the current `runtime_enabled` `us_equity` profiles from `UsEquityStrategies`. It also carries eligible-but-disabled HK profiles from `HkEquityStrategies`: `hk_blue_chip_leader_rotation`, `hk_index_mean_reversion`, and `hk_etf_regime_rotation`; `LongBridgePlatform` keeps the LongPort runtime, token refresh, execution, and notification flow.
 `STRATEGY_PROFILE` remains the compatibility selector for strategy routing, while `RuntimeTarget` describes the running service identity.
 
 Strategy documentation lives in [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies) and [`HkEquityStrategies`](https://github.com/QuantStrategyLab/HkEquityStrategies). Snapshot artifact contracts for the HK profile are produced by [`HkEquitySnapshotPipelines`](https://github.com/QuantStrategyLab/HkEquitySnapshotPipelines). The sections below focus on LongBridge runtime behavior, profile enablement, deployment, and credentials.
@@ -41,6 +41,8 @@ Platform execution no longer depends on `strategy/allocation.py` or hard-coded s
 | `tqqq_growth_income` | TQQQ Growth Income | Yes | Yes | `us_equity` | selectable growth line |
 | `tech_communication_pullback_enhancement` | Tech/Communication Pullback Enhancement | Yes | Yes | `us_equity` | current PAPER deployment |
 | `hk_blue_chip_leader_rotation` | HK Blue Chip Leader Rotation | Yes | No | `hk_equity` | architecture scaffold only; not runtime-enabled |
+| `hk_index_mean_reversion` | HK Index Mean Reversion | Yes | No | `hk_equity` | market-history research candidate; not runtime-enabled |
+| `hk_etf_regime_rotation` | HK ETF Regime Rotation | Yes | No | `hk_equity` | market-history research candidate; not runtime-enabled |
 
 Check the current matrix locally:
 
@@ -199,7 +201,7 @@ IAM: the Cloud Run service account needs **Secret Manager Admin** (or Secret Acc
 
 这个仓库通过 `QuantPlatformKit` 复用 LongPort token 处理、上下文初始化、账户快照、行情读取和下单逻辑。Cloud Run 直接部署这个仓库。
 LongBridge 的账户身份按 `paper`、`HK`、`SG` 三个维度建模。
-`LongBridgePlatform` 现在可直接执行 `UsEquityStrategies` 里的 `runtime_enabled` `us_equity` 策略，同时带有 `HkEquityStrategies` 里的 `hk_blue_chip_leader_rotation` 港股架构占位；该港股 profile 当前仅 eligible，未 enabled。较弱或重复的研究 profile 已从 LongBridge 可配置入口移除。仓库本身继续保留 LongPort 运行时、token 刷新、执行和通知流程。
+`LongBridgePlatform` 现在可直接执行 `UsEquityStrategies` 里的 `runtime_enabled` `us_equity` 策略，同时带有 `HkEquityStrategies` 里的港股 eligible-but-disabled profile：`hk_blue_chip_leader_rotation`、`hk_index_mean_reversion` 和 `hk_etf_regime_rotation`。这些港股 profile 当前仅用于框架和 feed/dry-run 兼容性检查，未 enabled。仓库本身继续保留 LongPort 运行时、token 刷新、执行和通知流程。
 
 策略说明放在 [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies) 和 [`HkEquityStrategies`](https://github.com/QuantStrategyLab/HkEquityStrategies)；港股 snapshot artifact 由 [`HkEquitySnapshotPipelines`](https://github.com/QuantStrategyLab/HkEquitySnapshotPipelines) 生成。下面这些章节只保留 LongBridge 运行时、profile 启用状态、部署和凭据说明。
 
@@ -226,6 +228,8 @@ LongBridge 的账户身份按 `paper`、`HK`、`SG` 三个维度建模。
 | `tqqq_growth_income` | TQQQ 增长收益 | Yes | Yes | `us_equity` | 可选增长线路 |
 | `tech_communication_pullback_enhancement` | 科技通信回调增强 | Yes | Yes | `us_equity` | 当前 paper feature-snapshot 线路 |
 | `hk_blue_chip_leader_rotation` | HK Blue Chip Leader Rotation | Yes | No | `hk_equity` | 仅架构占位，暂未 runtime-enabled |
+| `hk_index_mean_reversion` | HK Index Mean Reversion | Yes | No | `hk_equity` | market-history 研究候选，暂未 runtime-enabled |
+| `hk_etf_regime_rotation` | HK ETF Regime Rotation | Yes | No | `hk_equity` | market-history 研究候选，暂未 runtime-enabled |
 
 本地可直接查看当前矩阵：
 
