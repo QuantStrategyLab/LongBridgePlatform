@@ -54,7 +54,6 @@ SAMPLE_STRATEGY_PROFILE = "soxl_soxx_trend_income"
 BASE_LONGBRIDGE_PROFILES = frozenset(
     {
         "global_etf_rotation",
-        "hk_blue_chip_leader_rotation",
         "mega_cap_leader_rotation_top50_balanced",
         "russell_1000_multi_factor_defensive",
         "tqqq_growth_income",
@@ -63,11 +62,16 @@ BASE_LONGBRIDGE_PROFILES = frozenset(
     }
 )
 OPTIONAL_LONGBRIDGE_PROFILES = frozenset({"global_etf_confidence_vol_gate"})
+HK_SCAFFOLD_PROFILES = frozenset({"hk_blue_chip_leader_rotation"})
+
+
+def expected_longbridge_enabled_profiles(actual_profiles) -> frozenset[str]:
+    actual = frozenset(actual_profiles)
+    return BASE_LONGBRIDGE_PROFILES | (OPTIONAL_LONGBRIDGE_PROFILES & actual)
 
 
 def expected_longbridge_profiles(actual_profiles) -> frozenset[str]:
-    actual = frozenset(actual_profiles)
-    return BASE_LONGBRIDGE_PROFILES | (OPTIONAL_LONGBRIDGE_PROFILES & actual)
+    return expected_longbridge_enabled_profiles(actual_profiles) | HK_SCAFFOLD_PROFILES
 
 
 def runtime_target_json(
@@ -200,7 +204,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
     def test_platform_supported_profiles_are_filtered_by_registry(self):
         profiles = get_supported_profiles_for_platform(LONGBRIDGE_PLATFORM)
-        self.assertEqual(profiles, expected_longbridge_profiles(profiles))
+        self.assertEqual(profiles, expected_longbridge_enabled_profiles(profiles))
+        self.assertNotIn("hk_blue_chip_leader_rotation", profiles)
 
     def test_platform_policy_accepts_future_hk_equity_domain(self):
         from strategy_registry import PLATFORM_SUPPORTED_DOMAINS
@@ -597,7 +602,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "display_name": "HK Blue Chip Leader Rotation",
                 "domain": "hk_equity",
                 "eligible": True,
-                "enabled": True,
+                "enabled": False,
                 "platform": "longbridge",
             },
         )
@@ -623,7 +628,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.strategy_config_path, "/workspace/configs/tech.json")
         self.assertEqual(settings.strategy_config_source, "env")
 
-    def test_loads_hk_blue_chip_strategy_runtime_settings(self):
+    def test_rejects_hk_blue_chip_strategy_until_runtime_enabled(self):
         with patch.dict(
             os.environ,
             {
@@ -634,17 +639,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             },
             clear=True,
         ):
-            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
-
-        self.assertEqual(settings.strategy_profile, "hk_blue_chip_leader_rotation")
-        self.assertEqual(settings.strategy_domain, "hk_equity")
-        self.assertEqual(settings.market, HK_MARKET)
-        self.assertEqual(settings.market_calendar, HK_MARKET_CALENDAR)
-        self.assertEqual(settings.market_timezone, HK_MARKET_TIMEZONE)
-        self.assertEqual(settings.symbol_suffix, HK_SYMBOL_SUFFIX)
-        self.assertEqual(settings.trading_currency, HK_TRADING_CURRENCY)
-        self.assertEqual(settings.feature_snapshot_path, "gs://bucket/hk.csv")
-        self.assertEqual(settings.feature_snapshot_manifest_path, "gs://bucket/hk.csv.manifest.json")
+            with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
+                load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
     def test_derives_feature_snapshot_paths_from_artifact_root(self):
         with TemporaryDirectory() as tmp_dir:
@@ -864,7 +860,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             "mega_cap_leader_rotation_top50_balanced_feature_snapshot_latest.csv",
         )
 
-    def test_print_strategy_switch_env_plan_for_hk_blue_chip_leader_rotation(self):
+    def test_print_strategy_switch_env_plan_rejects_hk_scaffold_profile(self):
         result = subprocess.run(
             [
                 sys.executable,
@@ -875,27 +871,12 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "hk",
                 "--json",
             ],
-            check=True,
             capture_output=True,
             text=True,
         )
 
-        plan = json.loads(result.stdout)
-        self.assertEqual(plan["canonical_profile"], "hk_blue_chip_leader_rotation")
-        self.assertEqual(plan["domain"], "hk_equity")
-        self.assertEqual(plan["set_env"]["ACCOUNT_REGION"], "HK")
-        self.assertEqual(plan["set_env"]["ACCOUNT_PREFIX"], "HK")
-        self.assertEqual(plan["profile_group"], "snapshot_backed")
-        self.assertEqual(plan["input_mode"], "feature_snapshot")
-        self.assertTrue(plan["requires_snapshot_artifacts"])
-        self.assertTrue(plan["requires_snapshot_manifest_path"])
-        self.assertFalse(plan["requires_strategy_config_path"])
-        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_PATH"], "<required>")
-        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"], "<required>")
-        self.assertEqual(
-            plan["hints"]["feature_snapshot_filename"],
-            "hk_blue_chip_leader_rotation_feature_snapshot_latest.csv",
-        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unsupported STRATEGY_PROFILE", result.stderr)
 
     def test_print_strategy_switch_env_plan_rejects_archived_dynamic_mega_leveraged_pullback_sg(self):
         result = subprocess.run(
