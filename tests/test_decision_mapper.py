@@ -212,6 +212,41 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["execution"]["reserved_cash"], 1500.0)
         self.assertEqual(plan["execution"]["investable_cash"], 2500.0)
 
+    def test_carries_snapshot_manifest_diagnostics_to_execution(self):
+        decision = StrategyDecision(
+            positions=(),
+            risk_flags=("no_execute",),
+            diagnostics={"signal_description": "monthly cadence"},
+        )
+        snapshot = PortfolioSnapshot(
+            as_of=datetime.now(timezone.utc),
+            total_equity=10000.0,
+            buying_power=10000.0,
+            positions=(),
+            metadata={"account_hash": "longbridge-snapshot"},
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            snapshot=snapshot,
+            strategy_profile="mega_cap_leader_rotation_top50_balanced",
+            runtime_metadata={
+                "snapshot_manifest_price_as_of": "2026-06-01",
+                "snapshot_manifest_universe_as_of": "2026-04-29",
+                "snapshot_manifest_source_input_status": "universe_fallback",
+                "snapshot_manifest_source_input_fallback_used": True,
+                "snapshot_manifest_source_input_fallback_streak": 1,
+                "snapshot_manifest_source_refresh_run_id": "26785047433",
+            },
+        )
+
+        self.assertEqual(plan["execution"]["snapshot_manifest_price_as_of"], "2026-06-01")
+        self.assertEqual(plan["execution"]["snapshot_manifest_universe_as_of"], "2026-04-29")
+        self.assertEqual(plan["execution"]["snapshot_manifest_source_input_status"], "universe_fallback")
+        self.assertIs(plan["execution"]["snapshot_manifest_source_input_fallback_used"], True)
+        self.assertEqual(plan["execution"]["snapshot_manifest_source_input_fallback_streak"], 1)
+        self.assertEqual(plan["execution"]["snapshot_manifest_source_refresh_run_id"], "26785047433")
+
     def test_platform_reserved_cash_policy_does_not_lower_strategy_reserve(self):
         decision = StrategyDecision(
             positions=(PositionTarget(symbol="TQQQ", target_value=5000.0),),
