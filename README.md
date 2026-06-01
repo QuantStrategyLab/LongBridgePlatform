@@ -59,10 +59,11 @@ Strategy logic, cadence, asset universes, parameters, and research/backtest note
 
 For the HK-equity runtime scope, platform matrix, and env defaults, see [`docs/hk_equity_runtime.md`](docs/hk_equity_runtime.md).
 
-For HK verify-only rollout planning, print the switch plan first instead of changing Cloud Run directly:
+For HK verify-only rollout planning, print the switch plan first. To deploy an isolated dry-run service, manually trigger the `Deploy Cloud Run` workflow with `target=hk-verify`:
 
 ```bash
 python scripts/print_strategy_switch_env_plan.py --profile hk_listed_global_etf_rotation --account-region hk --dry-run-only --deployment-selector hk-verify --account-scope hk-verify --service-name longbridge-quant-hk-verify-service --json
+gh workflow run sync-cloud-run-env.yml --repo QuantStrategyLab/LongBridgePlatform -f target=hk-verify -f cloud_run_region=<gcp-region> -f cloud_run_service=longbridge-quant-hk-verify-service -f longport_secret_name=longport_token_hk -f longport_app_key_secret_name=longport-app-key-hk -f longport_app_secret_secret_name=longport-app-secret-hk -f deploy_image=true -f sync_env=true
 ```
 
 ### Notifications
@@ -253,10 +254,11 @@ python3 scripts/print_strategy_profile_status.py
 
 港股运行时范围、平台矩阵和环境变量默认值见 [`docs/hk_equity_runtime.md`](docs/hk_equity_runtime.md)。
 
-港股 verify-only 接入先打印切换计划，不直接改 Cloud Run：
+港股 verify-only 接入先打印切换计划；如需部署独立 dry-run 服务，再手动触发 `Deploy Cloud Run` workflow 的 `target=hk-verify`：
 
 ```bash
 python scripts/print_strategy_switch_env_plan.py --profile hk_listed_global_etf_rotation --account-region hk --dry-run-only --deployment-selector hk-verify --account-scope hk-verify --service-name longbridge-quant-hk-verify-service --json
+gh workflow run sync-cloud-run-env.yml --repo QuantStrategyLab/LongBridgePlatform -f target=hk-verify -f cloud_run_region=<gcp-region> -f cloud_run_service=longbridge-quant-hk-verify-service -f longport_secret_name=longport_token_hk -f longport_app_key_secret_name=longport-app-key-hk -f longport_app_secret_secret_name=longport-app-secret-hk -f deploy_image=true -f sync_env=true
 ```
 
 ### 通知格式

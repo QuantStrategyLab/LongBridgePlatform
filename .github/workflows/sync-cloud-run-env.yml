@@ -4,6 +4,49 @@ on:
   push:
     branches: [ main ]
   workflow_dispatch:
+    inputs:
+      target:
+        description: "Deployment target to run. Use hk-verify for an isolated HK dry-run Cloud Run service."
+        required: true
+        type: choice
+        default: configured
+        options:
+          - configured
+          - hk-verify
+      cloud_run_region:
+        description: "Cloud Run region for hk-verify. Leave blank to use the longbridge-hk Environment value."
+        required: false
+        type: string
+      cloud_run_service:
+        description: "Cloud Run service for hk-verify."
+        required: false
+        type: string
+        default: longbridge-quant-hk-verify-service
+      longport_secret_name:
+        description: "LongPort token Secret Manager secret name for hk-verify."
+        required: false
+        type: string
+        default: longport_token_hk
+      longport_app_key_secret_name:
+        description: "LongPort app-key Secret Manager secret name for hk-verify."
+        required: false
+        type: string
+        default: longport-app-key-hk
+      longport_app_secret_secret_name:
+        description: "LongPort app-secret Secret Manager secret name for hk-verify."
+        required: false
+        type: string
+        default: longport-app-secret-hk
+      deploy_image:
+        description: "Build and deploy the container image for hk-verify."
+        required: true
+        type: boolean
+        default: true
+      sync_env:
+        description: "Sync hk-verify Cloud Run environment variables."
+        required: true
+        type: boolean
+        default: true
 
 env:
   GCP_PROJECT_ID: longbridgequant
@@ -39,10 +82,19 @@ jobs:
       ENABLE_GITHUB_CLOUD_RUN_DEPLOY: ${{ vars.ENABLE_GITHUB_CLOUD_RUN_DEPLOY }}
       ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}
       ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION: ${{ vars.ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION }}
+      WORKFLOW_TARGET: ${{ inputs.target || 'configured' }}
+      INPUT_CLOUD_RUN_REGION: ${{ inputs.cloud_run_region }}
+      INPUT_CLOUD_RUN_SERVICE: ${{ inputs.cloud_run_service }}
+      INPUT_LONGPORT_SECRET_NAME: ${{ inputs.longport_secret_name }}
+      INPUT_LONGPORT_APP_KEY_SECRET_NAME: ${{ inputs.longport_app_key_secret_name }}
+      INPUT_LONGPORT_APP_SECRET_SECRET_NAME: ${{ inputs.longport_app_secret_secret_name }}
+      INPUT_DEPLOY_IMAGE: ${{ inputs.deploy_image }}
+      INPUT_SYNC_ENV: ${{ inputs.sync_env }}
       GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
       # Set CLOUD_RUN_REGION per Environment so paper/HK/SG can target different regions.
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+      CLOUD_RUN_ENV_SYNC_WAIT_FOR_COMMIT: ${{ vars.CLOUD_RUN_ENV_SYNC_WAIT_FOR_COMMIT }}
       ACCOUNT_PREFIX: ${{ vars.ACCOUNT_PREFIX }}
       TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
       LONGPORT_APP_KEY_SECRET_NAME: ${{ vars.LONGPORT_APP_KEY_SECRET_NAME }}
@@ -122,12 +174,31 @@ jobs:
             exit 0
           fi
 
-          if [ "${ENABLE_GITHUB_CLOUD_RUN_DEPLOY:-}" = "true" ]; then
-            deploy_enabled=true
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] \
+            && [ "${WORKFLOW_TARGET:-configured}" = "hk-verify" ] \
+            && [ "${DEPLOYMENT_LABEL:-}" != "HK" ]; then
+            echo "deploy_enabled=false" >> "$GITHUB_OUTPUT"
+            echo "env_sync_enabled=false" >> "$GITHUB_OUTPUT"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping ${DEPLOYMENT_LABEL} Cloud Run automation because hk-verify targets only the HK deployment." >&2
+            exit 0
           fi
 
-          if [ "${ENABLE_GITHUB_ENV_SYNC:-}" = "true" ]; then
-            env_sync_enabled=true
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] && [ "${WORKFLOW_TARGET:-configured}" = "hk-verify" ]; then
+            if [ "${INPUT_DEPLOY_IMAGE:-true}" = "true" ]; then
+              deploy_enabled=true
+            fi
+            if [ "${INPUT_SYNC_ENV:-true}" = "true" ]; then
+              env_sync_enabled=true
+            fi
+          else
+            if [ "${ENABLE_GITHUB_CLOUD_RUN_DEPLOY:-}" = "true" ]; then
+              deploy_enabled=true
+            fi
+
+            if [ "${ENABLE_GITHUB_ENV_SYNC:-}" = "true" ]; then
+              env_sync_enabled=true
+            fi
           fi
 
           echo "deploy_enabled=${deploy_enabled}" >> "$GITHUB_OUTPUT"
@@ -144,6 +215,63 @@ jobs:
       - name: Checkout repository
         if: steps.config.outputs.enabled == 'true'
         uses: actions/checkout@v6
+
+      - name: Apply HK verify-only dispatch defaults
+        if: steps.config.outputs.enabled == 'true' && github.event_name == 'workflow_dispatch' && inputs.target == 'hk-verify'
+        run: |
+          set -euo pipefail
+
+          service="${INPUT_CLOUD_RUN_SERVICE:-longbridge-quant-hk-verify-service}"
+          region="${INPUT_CLOUD_RUN_REGION:-${CLOUD_RUN_REGION:-}}"
+          runtime_target="$(SERVICE="${service}" python3 - <<'PY'
+          import json
+          import os
+
+          print(
+              json.dumps(
+                  {
+                      "platform_id": "longbridge",
+                      "strategy_profile": "hk_listed_global_etf_rotation",
+                      "deployment_selector": "hk-verify",
+                      "account_scope": "hk-verify",
+                      "execution_mode": "paper",
+                      "dry_run_only": True,
+                      "service_name": os.environ["SERVICE"],
+                  },
+                  separators=(",", ":"),
+              )
+          )
+          PY
+          )"
+
+          {
+            echo "CLOUD_RUN_SERVICE=${service}"
+            echo "ACCOUNT_REGION=HK"
+            echo "ACCOUNT_PREFIX=HK"
+            echo "RUNTIME_TARGET_JSON=${runtime_target}"
+            echo "LONGBRIDGE_DRY_RUN_ONLY=true"
+            echo "LONGBRIDGE_MARKET=HK"
+            echo "LONGBRIDGE_MARKET_CALENDAR=XHKG"
+            echo "LONGBRIDGE_MARKET_TIMEZONE=Asia/Hong_Kong"
+            echo "LONGBRIDGE_SYMBOL_SUFFIX=.HK"
+            echo "LONGBRIDGE_TRADING_CURRENCY=HKD"
+          } >> "$GITHUB_ENV"
+
+          if [ -n "${region}" ]; then
+            echo "CLOUD_RUN_REGION=${region}" >> "$GITHUB_ENV"
+          fi
+          if [ -n "${INPUT_LONGPORT_SECRET_NAME:-}" ]; then
+            echo "LONGPORT_SECRET_NAME=${INPUT_LONGPORT_SECRET_NAME}" >> "$GITHUB_ENV"
+          fi
+          if [ -n "${INPUT_LONGPORT_APP_KEY_SECRET_NAME:-}" ]; then
+            echo "LONGPORT_APP_KEY_SECRET_NAME=${INPUT_LONGPORT_APP_KEY_SECRET_NAME}" >> "$GITHUB_ENV"
+          fi
+          if [ -n "${INPUT_LONGPORT_APP_SECRET_SECRET_NAME:-}" ]; then
+            echo "LONGPORT_APP_SECRET_SECRET_NAME=${INPUT_LONGPORT_APP_SECRET_SECRET_NAME}" >> "$GITHUB_ENV"
+          fi
+          if [ "${INPUT_DEPLOY_IMAGE:-true}" != "true" ]; then
+            echo "CLOUD_RUN_ENV_SYNC_WAIT_FOR_COMMIT=false" >> "$GITHUB_ENV"
+          fi
 
       - name: Set up Python for strategy requirement resolution
         if: steps.config.outputs.env_sync_enabled == 'true'
@@ -351,6 +479,13 @@ jobs:
         if: steps.config.outputs.env_sync_enabled == 'true'
         run: |
           set -euo pipefail
+
+          case "${CLOUD_RUN_ENV_SYNC_WAIT_FOR_COMMIT:-true}" in
+            false|False|FALSE|0|no|No|NO|off|Off|OFF)
+              echo "Skipping Cloud Run commit wait because CLOUD_RUN_ENV_SYNC_WAIT_FOR_COMMIT is disabled."
+              exit 0
+              ;;
+          esac
 
           target_sha="${GITHUB_SHA}"
           deadline=$((SECONDS + 1800))
