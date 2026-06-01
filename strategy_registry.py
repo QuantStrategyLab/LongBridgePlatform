@@ -117,7 +117,7 @@ PLATFORM_CAPABILITY_MATRIX = PlatformCapabilityMatrix(
     ),
     supported_capabilities=frozenset(),
 )
-ELIGIBLE_STRATEGY_PROFILES = derive_eligible_profiles_for_platform(
+_STRUCTURALLY_ELIGIBLE_STRATEGY_PROFILES = derive_eligible_profiles_for_platform(
     STRATEGY_CATALOG,
     capability_matrix=PLATFORM_CAPABILITY_MATRIX,
     runtime_adapter_loader=lambda profile: get_platform_runtime_adapter(
@@ -125,6 +125,8 @@ ELIGIBLE_STRATEGY_PROFILES = derive_eligible_profiles_for_platform(
         platform_id=LONGBRIDGE_PLATFORM,
     ),
 ) - frozenset({NASDAQ_SP500_SMART_DCA_PROFILE})
+# Keep research-only and snapshot-scaffold HK profiles out of platform switch/status output.
+ELIGIBLE_STRATEGY_PROFILES = _STRUCTURALLY_ELIGIBLE_STRATEGY_PROFILES & LONGBRIDGE_ROLLOUT_ALLOWLIST
 LONGBRIDGE_ENABLED_PROFILES = derive_enabled_profiles_for_platform(
     STRATEGY_CATALOG,
     capability_matrix=PLATFORM_CAPABILITY_MATRIX,

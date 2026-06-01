@@ -78,7 +78,7 @@ def expected_longbridge_enabled_profiles(actual_profiles) -> frozenset[str]:
 
 
 def expected_longbridge_profiles(actual_profiles) -> frozenset[str]:
-    return expected_longbridge_enabled_profiles(actual_profiles) | HK_DISABLED_PROFILES
+    return expected_longbridge_enabled_profiles(actual_profiles)
 
 
 def runtime_target_json(
@@ -604,39 +604,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             "Mega Cap Leader Rotation Top50 Balanced",
         )
         self.assertEqual(
-            by_profile["hk_blue_chip_leader_rotation"],
-            {
-                "canonical_profile": "hk_blue_chip_leader_rotation",
-                "display_name": "HK Blue Chip Leader Rotation",
-                "domain": "hk_equity",
-                "eligible": True,
-                "enabled": False,
-                "platform": "longbridge",
-            },
-        )
-        self.assertEqual(
-            by_profile["hk_index_mean_reversion"],
-            {
-                "canonical_profile": "hk_index_mean_reversion",
-                "display_name": "HK Index Mean Reversion",
-                "domain": "hk_equity",
-                "eligible": True,
-                "enabled": False,
-                "platform": "longbridge",
-            },
-        )
-        self.assertEqual(
-            by_profile["hk_etf_regime_rotation"],
-            {
-                "canonical_profile": "hk_etf_regime_rotation",
-                "display_name": "HK ETF Regime Rotation",
-                "domain": "hk_equity",
-                "eligible": True,
-                "enabled": False,
-                "platform": "longbridge",
-            },
-        )
-        self.assertEqual(
             by_profile["hk_listed_global_etf_rotation"],
             {
                 "canonical_profile": "hk_listed_global_etf_rotation",
@@ -647,6 +614,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "platform": "longbridge",
             },
         )
+        for profile in HK_DISABLED_PROFILES:
+            self.assertNotIn(profile, by_profile)
 
     def test_loads_feature_snapshot_env_for_tech_profile(self):
         with patch.dict(
@@ -768,12 +737,9 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(by_profile["mega_cap_leader_rotation_top50_balanced"]["input_mode"], "feature_snapshot")
         self.assertTrue(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_snapshot_artifacts"])
         self.assertFalse(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_strategy_config_path"])
-        self.assertEqual(by_profile["hk_blue_chip_leader_rotation"]["profile_group"], "snapshot_backed")
-        self.assertEqual(by_profile["hk_blue_chip_leader_rotation"]["input_mode"], "feature_snapshot")
-        self.assertTrue(by_profile["hk_blue_chip_leader_rotation"]["requires_snapshot_artifacts"])
-        self.assertTrue(by_profile["hk_blue_chip_leader_rotation"]["requires_snapshot_manifest_path"])
-        self.assertFalse(by_profile["hk_blue_chip_leader_rotation"]["requires_strategy_config_path"])
-        for profile in ("hk_index_mean_reversion", "hk_etf_regime_rotation", "hk_listed_global_etf_rotation"):
+        for profile in ("hk_index_mean_reversion", "hk_etf_regime_rotation", "hk_blue_chip_leader_rotation"):
+            self.assertNotIn(profile, by_profile)
+        for profile in ("hk_listed_global_etf_rotation",):
             self.assertEqual(by_profile[profile]["profile_group"], "direct_runtime_inputs")
             self.assertEqual(by_profile[profile]["input_mode"], "market_history")
             self.assertFalse(by_profile[profile]["requires_snapshot_artifacts"])
@@ -798,18 +764,15 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("requires_snapshot_artifacts", result.stdout)
         self.assertIn("soxl_soxx_trend_income", result.stdout)
         self.assertIn("global_etf_rotation", result.stdout)
-        self.assertIn("hk_blue_chip_leader_rotation", result.stdout)
-        self.assertIn("hk_index_mean_reversion", result.stdout)
-        self.assertIn("hk_etf_regime_rotation", result.stdout)
         self.assertIn("hk_listed_global_etf_rotation", result.stdout)
         self.assertIn("russell_1000_multi_factor_defensive", result.stdout)
         self.assertIn("Global ETF Rotation", result.stdout)
-        self.assertIn("HK Blue Chip Leader Rotation", result.stdout)
-        self.assertIn("HK Index Mean Reversion", result.stdout)
-        self.assertIn("HK ETF Regime Rotation", result.stdout)
         self.assertIn("HK-listed Global ETF Rotation", result.stdout)
         self.assertIn("Russell 1000 Multi-Factor", result.stdout)
         self.assertIn("Tech/Communication Pullback Enhancement", result.stdout)
+        self.assertNotIn("hk_blue_chip_leader_rotation", result.stdout)
+        self.assertNotIn("hk_index_mean_reversion", result.stdout)
+        self.assertNotIn("hk_etf_regime_rotation", result.stdout)
 
     def test_print_strategy_switch_env_plan_for_global_etf_rotation(self):
         result = subprocess.run(
