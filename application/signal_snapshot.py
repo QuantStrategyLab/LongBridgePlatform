@@ -4,9 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import date, datetime, timezone
+import re
 from typing import Any
 
 SIGNAL_SNAPSHOT_SCHEMA_VERSION = "signal_snapshot.v1"
+
+_SNAPSHOT_DATE_RE = re.compile(
+    r"(?:snapshot_as_of|snapshot_date|snapshot|快照日期)\s*[:=]\s*(\d{4}-\d{2}-\d{2})",
+    re.IGNORECASE,
+)
 
 _INDICATOR_FIELDS = (
     "benchmark_symbol",
@@ -49,6 +55,16 @@ def _first_value(*values: Any) -> Any:
     for value in values:
         if value is not None and value != "":
             return value
+    return None
+
+
+def _extract_snapshot_date_from_text(*values: Any) -> str | None:
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        match = _SNAPSHOT_DATE_RE.search(value)
+        if match is not None:
+            return match.group(1)
     return None
 
 
@@ -108,6 +124,13 @@ def build_signal_snapshot(
         allocation=allocation,
         explicit_target_weights=target_weights,
     )
+    parsed_snapshot_date = _extract_snapshot_date_from_text(
+        source.get("status_display"),
+        source.get("status_description"),
+        source.get("signal_display"),
+        source.get("signal_description"),
+        source.get("signal_message"),
+    )
     indicators = {
         field: _json_safe(source[field])
         for field in _INDICATOR_FIELDS
@@ -125,6 +148,7 @@ def build_signal_snapshot(
                 source.get("signal_date"),
                 source.get("snapshot_as_of"),
                 source.get("trade_date"),
+                parsed_snapshot_date,
             )
         ),
         "market_date": _json_safe(
@@ -133,6 +157,7 @@ def build_signal_snapshot(
                 source.get("signal_date"),
                 source.get("snapshot_as_of"),
                 source.get("trade_date"),
+                parsed_snapshot_date,
             )
         ),
         "effective_date": _json_safe(source.get("effective_date")),
