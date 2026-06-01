@@ -193,6 +193,57 @@ def _append_signal_snapshot_line(lines, *, execution, translator) -> None:
         lines.append(line)
 
 
+def _is_truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _format_source_input_line(snapshot, *, translator) -> str:
+    if not isinstance(snapshot, Mapping):
+        return ""
+    price_as_of = str(snapshot.get("price_as_of") or "").strip()
+    universe_as_of = str(snapshot.get("universe_as_of") or "").strip()
+    status = str(snapshot.get("source_input_status") or "").strip()
+    fallback_used = _is_truthy(snapshot.get("source_input_fallback_used"))
+    fallback_streak = snapshot.get("source_input_fallback_streak")
+    if not price_as_of and not universe_as_of and not status and not fallback_used:
+        return ""
+    if _translator_uses_zh(translator):
+        parts = []
+        if price_as_of:
+            parts.append(f"价格 {price_as_of}")
+        if universe_as_of:
+            parts.append(f"股票池 {universe_as_of}")
+        if fallback_used:
+            fallback_text = "股票池复用"
+            if fallback_streak not in (None, "", 0, "0"):
+                fallback_text += f" 连续{fallback_streak}次"
+            parts.append(fallback_text)
+        elif status:
+            parts.append(f"状态 {status}")
+        return "🧩 输入状态: " + " | ".join(parts)
+    parts = []
+    if price_as_of:
+        parts.append(f"price {price_as_of}")
+    if universe_as_of:
+        parts.append(f"universe {universe_as_of}")
+    if fallback_used:
+        fallback_text = "universe fallback"
+        if fallback_streak not in (None, "", 0, "0"):
+            fallback_text += f" streak={fallback_streak}"
+        parts.append(fallback_text)
+    elif status:
+        parts.append(f"status {status}")
+    return "🧩 Inputs: " + " | ".join(parts)
+
+
+def _append_source_input_line(lines, *, execution, translator) -> None:
+    line = _format_source_input_line(execution.get("signal_snapshot"), translator=translator)
+    if line:
+        lines.append(line)
+
+
 def _append_status_lines(lines, *, execution, translator, signal_key):
     status_display = _localize_notification_text(execution.get("status_display"), translator=translator)
     if status_display:
@@ -270,6 +321,7 @@ def render_rebalance_notification(
     _append_dashboard_block(detailed_lines, execution=execution, separator=separator)
     _append_timing_lines(detailed_lines, execution=execution, translator=translator)
     _append_signal_snapshot_line(detailed_lines, execution=execution, translator=translator)
+    _append_source_input_line(detailed_lines, execution=execution, translator=translator)
     _append_status_lines(
         detailed_lines,
         execution=execution,
@@ -286,6 +338,7 @@ def render_rebalance_notification(
     _append_dashboard_block(compact_lines, execution=execution, separator=separator)
     _append_timing_lines(compact_lines, execution=execution, translator=translator)
     _append_signal_snapshot_line(compact_lines, execution=execution, translator=translator)
+    _append_source_input_line(compact_lines, execution=execution, translator=translator)
     _append_compact_status_lines(
         compact_lines,
         execution=execution,
@@ -318,6 +371,7 @@ def render_heartbeat_notification(
     _append_dashboard_block(detailed_lines, execution=execution, separator=separator)
     _append_timing_lines(detailed_lines, execution=execution, translator=translator)
     _append_signal_snapshot_line(detailed_lines, execution=execution, translator=translator)
+    _append_source_input_line(detailed_lines, execution=execution, translator=translator)
     detailed_lines.append(separator)
     _append_status_lines(
         detailed_lines,
@@ -353,6 +407,7 @@ def render_heartbeat_notification(
     _append_dashboard_block(compact_lines, execution=execution, separator=separator)
     _append_timing_lines(compact_lines, execution=execution, translator=translator)
     _append_signal_snapshot_line(compact_lines, execution=execution, translator=translator)
+    _append_source_input_line(compact_lines, execution=execution, translator=translator)
     _append_compact_status_lines(
         compact_lines,
         execution=execution,

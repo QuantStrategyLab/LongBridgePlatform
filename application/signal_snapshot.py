@@ -168,6 +168,32 @@ def build_signal_snapshot(
             source.get("signal_source"),
         ),
         "quote_overlay_used": source.get("quote_overlay_used"),
+        "price_as_of": _json_safe(
+            _first_value(source.get("price_as_of"), source.get("snapshot_manifest_price_as_of"))
+        ),
+        "universe_as_of": _json_safe(
+            _first_value(source.get("universe_as_of"), source.get("snapshot_manifest_universe_as_of"))
+        ),
+        "source_input_status": _first_value(
+            source.get("source_input_status"),
+            source.get("snapshot_manifest_source_input_status"),
+        ),
+        "source_input_fallback_used": _first_value(
+            source.get("source_input_fallback_used"),
+            source.get("snapshot_manifest_source_input_fallback_used"),
+        ),
+        "source_input_fallback_reason": _first_value(
+            source.get("source_input_fallback_reason"),
+            source.get("snapshot_manifest_source_input_fallback_reason"),
+        ),
+        "source_input_fallback_streak": _first_value(
+            source.get("source_input_fallback_streak"),
+            source.get("snapshot_manifest_source_input_fallback_streak"),
+        ),
+        "source_refresh_run_id": _first_value(
+            source.get("source_refresh_run_id"),
+            source.get("snapshot_manifest_source_refresh_run_id"),
+        ),
         "data_freshness_warning": _first_value(
             source.get("data_freshness_warning"),
             source.get("snapshot_price_fallback_used"),
