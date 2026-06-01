@@ -875,8 +875,17 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             },
         )
         self.assertTrue(any("lot-size" in check for check in plan["dry_run_plan"]["checks"]))
+        self.assertFalse(
+            any(
+                "Cloud Run" in action and "deploy" in action
+                for action in plan["dry_run_plan"]["blocked_actions"]
+            )
+        )
         self.assertTrue(
-            any("production Cloud Run" in action for action in plan["dry_run_plan"]["blocked_actions"])
+            any(
+                "live" in action and "orders" in action
+                for action in plan["dry_run_plan"]["blocked_actions"]
+            )
         )
 
     def test_print_strategy_switch_env_plan_for_russell(self):

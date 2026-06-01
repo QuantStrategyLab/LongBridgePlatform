@@ -14,7 +14,7 @@ QuantStrategyLab 现有平台仓库里，能做港股股票交易运行时接入
 
 ## 运行时设计
 
-平台运行时已具备港股市场维度，并接入 `HkEquityStrategies` 的港股 profile 元数据。当前平台可选港股 profile 只暴露 `runtime_enabled` 的 `hk_listed_global_etf_rotation`；`hk_blue_chip_leader_rotation` 是 snapshot 架构占位，`hk_index_mean_reversion`、`hk_etf_regime_rotation` 是 `market_history` 研究候选，均留在研究/快照仓库，不进入平台可选列表。生产 Cloud Run 仍保持原策略，除非单独变更 `RUNTIME_TARGET_JSON` / `STRATEGY_PROFILE`。整体仍沿用美股策略的分层方式：
+平台运行时已具备港股市场维度，并接入 `HkEquityStrategies` 的港股 profile 元数据。当前平台可选港股 profile 只暴露 `runtime_enabled` 的 `hk_listed_global_etf_rotation`；`hk_blue_chip_leader_rotation` 是 snapshot 架构占位，`hk_index_mean_reversion`、`hk_etf_regime_rotation` 是 `market_history` 研究候选，均留在研究/快照仓库，不进入平台可选列表。Cloud Run 通过 `RUNTIME_TARGET_JSON` / `STRATEGY_PROFILE` 选择当前运行策略。整体仍沿用美股策略的分层方式：
 
 1. [`HkEquityStrategies`](https://github.com/QuantStrategyLab/HkEquityStrategies) 提供非 snapshot `hk_equity` 策略定义、运行入口和 LongBridge runtime adapter。
 2. [`HkEquitySnapshotPipelines`](https://github.com/QuantStrategyLab/HkEquitySnapshotPipelines) 产出 snapshot-backed profile 的特征快照、manifest、ranking 和 release summary。
@@ -35,7 +35,7 @@ QuantStrategyLab 现有平台仓库里，能做港股股票交易运行时接入
 
 `scripts/print_strategy_profile_status.py` 只显示平台可选 profile，因此只会列出 `hk_listed_global_etf_rotation` 这一条港股 profile。其他港股候选继续保留在研究文档和 snapshot pipeline，不应该出现在 Cloud Run switch plan 里。
 
-未来启用 snapshot-backed profile 后的最小策略配置示例；当前不要写入 Cloud Run：
+未来启用 snapshot-backed profile 后的最小策略配置示例；这些 profile 晋级为 `runtime_enabled` 前不会出现在平台可选列表：
 
 ```bash
 STRATEGY_PROFILE=hk_blue_chip_leader_rotation
@@ -69,7 +69,7 @@ LONGBRIDGE_TRADING_CURRENCY=HKD
 
 ## Dry-run 切换计划
 
-先只生成 verify-only 环境计划，不部署生产 Cloud Run：
+可用以下命令生成 HK dry-run 环境计划，复核当前 Cloud Run 配置或准备重新同步：
 
 ```bash
 python scripts/print_strategy_switch_env_plan.py \
@@ -90,11 +90,11 @@ python scripts/print_strategy_switch_env_plan.py \
 - `remove_if_present`：清理 snapshot/config 相关环境变量，因为该 profile 直接使用 `market_history`。
 - `dry_run_plan`：检查 HK 行情权限、`.HK` / HKD 映射、整数股和 lot-size、HKD 现金口径、dry-run 订单预览、通知和 runtime report。
 
-合并代码或打印计划不会触发生产部署；只有单独执行 Cloud Run env 更新/部署命令才会改变服务配置。
+打印计划不会直接修改服务配置；只有执行 Cloud Run env 更新/部署命令才会改变服务。
 
-## 显式部署 HK verify-only Cloud Run
+## 部署或同步 HK Cloud Run
 
-仓库的 `Deploy Cloud Run` workflow 支持手动 `workflow_dispatch` 目标 `hk-verify`。这个目标只启用 HK matrix deployment，PAPER / SG 会跳过，并覆盖为独立港股 dry-run 服务：
+仓库的 `Deploy Cloud Run` workflow 支持手动 `workflow_dispatch` 目标 `hk-verify`。这个目标只启用 HK matrix deployment，PAPER / SG 会跳过，并设置或更新独立港股 dry-run 服务：
 
 - `CLOUD_RUN_SERVICE=longbridge-quant-hk-verify-service`（可通过输入改名）
 - `STRATEGY_PROFILE=hk_listed_global_etf_rotation`
@@ -122,11 +122,11 @@ gh workflow run sync-cloud-run-env.yml \
 
 执行前确认：
 
-- 目标 Cloud Run service 是独立 HK verify service，不是当前 paper / SG / 生产服务。
+- 目标 Cloud Run service 是独立 HK service；不要和 paper / SG 服务共用同一个 service 名。
 - `longbridge-hk` GitHub Environment 或 workflow 输入里有 `CLOUD_RUN_REGION`。
 - `GLOBAL_TELEGRAM_CHAT_ID`、`NOTIFY_LANG`、`TELEGRAM_TOKEN_SECRET_NAME` 或 `TELEGRAM_TOKEN` 已在 `longbridge-hk` Environment 配好。
 - `longport_token_hk`、`longport-app-key-hk`、`longport-app-secret-hk` 已在 Secret Manager 存在，且 runtime service account 有读取权限。
-- LongBridge HK 账号和行情权限已开通；该阶段仍只做 dry-run 订单预览，不提交真实订单。
+- LongBridge HK 账号和行情权限已开通；如果 `LONGBRIDGE_DRY_RUN_ONLY=true`，服务只做订单预览，不提交真实订单。
 
 ## 通知和日志
 
@@ -137,6 +137,6 @@ gh workflow run sync-cloud-run-env.yml \
 ## 风险和注意事项
 
 - `XHKG` 是否可用取决于部署环境里的 `pandas_market_calendars` 版本；如不可用，可用 `LONGBRIDGE_MARKET_CALENDAR` 临时覆盖。
-- `hk_listed_global_etf_rotation` 已在策略包 runtime-enabled，但生产 Cloud Run 仍保持原配置；`hk_blue_chip_leader_rotation`、`hk_index_mean_reversion`、`hk_etf_regime_rotation` 不进入平台可选列表，不要写入生产 Cloud Run。
-- 港股 `market_history` profile 投入生产前，需要先用 LongBridge HK 行情 feed 对 `02800`、`03033`、`02822`、`02840`、`03110`、`03188`、`02834`、`03175` 做 dry-run 校验，不提交真实订单。
+- `hk_listed_global_etf_rotation` 已在策略包 `runtime_enabled`，可由 LongBridge HK Cloud Run 通过运行时环境选择；`hk_blue_chip_leader_rotation`、`hk_index_mean_reversion`、`hk_etf_regime_rotation` 仍不进入平台可选列表。
+- 港股 `market_history` profile 运行后，需要持续用 LongBridge HK 行情 feed 对 `02800`、`03033`、`02822`、`02840`、`03110`、`03188`、`02834`、`03175` 做行情、价差、lot-size 和订单预览/执行结果复核。
 - LongBridge 下单仍保持整数股规则；如果未来港股策略涉及碎股或特殊交易单位，需要在策略层明确 lot-size 约束后再扩展。
