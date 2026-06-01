@@ -90,6 +90,42 @@ python scripts/print_strategy_switch_env_plan.py \
 
 合并代码或打印计划不会触发生产部署；只有单独执行 Cloud Run env 更新/部署命令才会改变服务配置。
 
+## 显式部署 HK verify-only Cloud Run
+
+仓库的 `Deploy Cloud Run` workflow 支持手动 `workflow_dispatch` 目标 `hk-verify`。这个目标只启用 HK matrix deployment，PAPER / SG 会跳过，并覆盖为独立港股 dry-run 服务：
+
+- `CLOUD_RUN_SERVICE=longbridge-quant-hk-verify-service`（可通过输入改名）
+- `STRATEGY_PROFILE=hk_listed_global_etf_rotation`
+- `ACCOUNT_REGION=HK`、`ACCOUNT_PREFIX=HK`
+- `RUNTIME_TARGET_JSON.execution_mode=paper`、`dry_run_only=true`
+- `LONGBRIDGE_DRY_RUN_ONLY=true`
+- `LONGBRIDGE_MARKET=HK`、`LONGBRIDGE_SYMBOL_SUFFIX=.HK`、`LONGBRIDGE_TRADING_CURRENCY=HKD`
+
+手动部署示例：
+
+```bash
+gh workflow run sync-cloud-run-env.yml \
+  --repo QuantStrategyLab/LongBridgePlatform \
+  -f target=hk-verify \
+  -f cloud_run_region=<gcp-region> \
+  -f cloud_run_service=longbridge-quant-hk-verify-service \
+  -f longport_secret_name=longport_token_hk \
+  -f longport_app_key_secret_name=longport-app-key-hk \
+  -f longport_app_secret_secret_name=longport-app-secret-hk \
+  -f deploy_image=true \
+  -f sync_env=true
+```
+
+如果只想同步环境变量、不重新部署镜像，可以设置 `-f deploy_image=false -f sync_env=true`；workflow 会跳过 commit wait，避免等待一个并未部署的新 revision。
+
+执行前确认：
+
+- 目标 Cloud Run service 是独立 HK verify service，不是当前 paper / SG / 生产服务。
+- `longbridge-hk` GitHub Environment 或 workflow 输入里有 `CLOUD_RUN_REGION`。
+- `GLOBAL_TELEGRAM_CHAT_ID`、`NOTIFY_LANG`、`TELEGRAM_TOKEN_SECRET_NAME` 或 `TELEGRAM_TOKEN` 已在 `longbridge-hk` Environment 配好。
+- `longport_token_hk`、`longport-app-key-hk`、`longport-app-secret-hk` 已在 Secret Manager 存在，且 runtime service account 有读取权限。
+- LongBridge HK 账号和行情权限已开通；该阶段仍只做 dry-run 订单预览，不提交真实订单。
+
 ## 通知和日志
 
 - Telegram 中英文模板新增市场行：市场、交易币种、标的后缀。

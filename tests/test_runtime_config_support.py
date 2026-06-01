@@ -901,6 +901,16 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("LONGBRIDGE_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
         self.assertTrue(plan["dry_run_plan"]["dry_run_only"])
         self.assertTrue(plan["dry_run_plan"]["verify_only"])
+        self.assertEqual(
+            plan["dry_run_plan"]["workflow_dispatch"],
+            {
+                "workflow": "sync-cloud-run-env.yml",
+                "target": "hk-verify",
+                "cloud_run_service": "longbridge-quant-hk-verify-service",
+                "deploy_image": True,
+                "sync_env": True,
+            },
+        )
         self.assertTrue(any("lot-size" in check for check in plan["dry_run_plan"]["checks"]))
         self.assertTrue(
             any("production Cloud Run" in action for action in plan["dry_run_plan"]["blocked_actions"])
