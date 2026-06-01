@@ -110,6 +110,8 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(en_name("global_etf_confidence_vol_gate"), "Global ETF Confidence Vol Gate")
         self.assertEqual(zh_name("hk_listed_global_etf_rotation"), "港股上市全球 ETF 轮动")
         self.assertEqual(en_name("hk_listed_global_etf_rotation"), "HK-listed Global ETF Rotation")
+        self.assertEqual(zh_name("hk_high_dividend_low_vol_trend"), "港股高股息低波趋势")
+        self.assertEqual(en_name("hk_high_dividend_low_vol_trend"), "HK High Dividend Low-Volatility Trend")
 
         for profile in SUPPORTED_STRATEGY_PROFILES:
             self.assertNotEqual(zh_name(profile), profile)
@@ -122,6 +124,11 @@ class NotificationTests(unittest.TestCase):
                     "market_date": "2026-05-28",
                     "latest_price_source": "longbridge_candlesticks",
                     "quote_overlay_used": None,
+                    "price_as_of": "2026-05-28",
+                    "universe_as_of": "2026-04-30",
+                    "source_input_status": "universe_fallback",
+                    "source_input_fallback_used": True,
+                    "source_input_fallback_streak": 1,
                 },
                 "status_display": "🚀 风险开启（SOXX+SOXL）",
                 "signal_display": "SOXX 站上 140 日门槛线，持有 SOXL 70.0% + SOXX 20.0%",
@@ -135,6 +142,7 @@ class NotificationTests(unittest.TestCase):
         )
 
         self.assertIn("数据源 LongBridge 日线K线", rendered.compact_text)
+        self.assertIn("🧩 输入状态: 价格 2026-05-28 | 股票池 2026-04-30 | 股票池复用 连续1次", rendered.compact_text)
         self.assertNotIn("报价覆盖", rendered.compact_text)
         self.assertIn("📊 市场状态: 🚀 风险开启（SOXX+SOXL）", rendered.compact_text)
         self.assertNotIn("longbridge_candlesticks", rendered.compact_text)
