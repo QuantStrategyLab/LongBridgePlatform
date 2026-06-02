@@ -133,6 +133,7 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
     skip_logs = tuple(getattr(cycle_result, "skip_logs", ()) or ())
     note_logs = tuple(getattr(cycle_result, "note_logs", ()) or ())
     dry_run_orders = tuple(getattr(cycle_result, "dry_run_orders", ()) or ())
+    quote_snapshots = tuple(getattr(cycle_result, "quote_snapshots", ()) or ())
     order_events_count = len(logs)
     orders_previewed_count = len(dry_run_orders) if dry_run_orders else (order_events_count if dry_run else 0)
     summary = {
@@ -145,6 +146,10 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
     }
     if dry_run_orders:
         summary["orders_previewed"] = [dict(order) for order in dry_run_orders]
+    if quote_snapshots:
+        summary["quote_snapshot"] = {
+            "quotes": [dict(snapshot) for snapshot in quote_snapshots],
+        }
     return summary
 
 

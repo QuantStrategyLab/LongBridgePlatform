@@ -383,6 +383,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertGreaterEqual(len(result.dry_run_orders), 1)
         self.assertTrue(all(order["status"] == "dry_run" for order in result.dry_run_orders))
         self.assertTrue(all(order["symbol"].endswith(".HK") for order in result.dry_run_orders))
+        self.assertTrue(result.quote_snapshots)
+        self.assertTrue(all(snapshot["symbol"].endswith(".HK") for snapshot in result.quote_snapshots))
 
     def test_run_strategy_prefers_portfolio_port_runtime_path(self):
         sent_messages = []
