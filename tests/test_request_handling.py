@@ -216,6 +216,42 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(body, "OK",)
         self.assertTrue(observed["called"])
 
+    def test_handle_trigger_returns_500_when_strategy_reports_failure(self):
+        module = load_module()
+        module.run_strategy = lambda: False
+
+        with module.app.test_request_context("/", method="POST"):
+            body, status = module.handle_trigger()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(body, "Error")
+
+    def test_handle_trigger_runtime_error_fallback_sends_telegram(self):
+        module = load_module()
+        observed = {"payloads": []}
+
+        class FakeResponse:
+            status_code = 200
+
+        def fake_post(_url, *, json, timeout):
+            observed["payloads"].append((json, timeout))
+            return FakeResponse()
+
+        module.TG_TOKEN = "token-1"
+        module.TG_CHAT_ID = "chat-1"
+        module.requests.post = fake_post
+        module.run_strategy = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+
+        with module.app.test_request_context("/", method="POST"):
+            body, status = module.handle_trigger()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(body, "Error")
+        self.assertEqual(len(observed["payloads"]), 1)
+        self.assertEqual(observed["payloads"][0][0]["chat_id"], "chat-1")
+        self.assertIn("LongBridge strategy run failed", observed["payloads"][0][0]["text"])
+        self.assertIn("RuntimeError: boom", observed["payloads"][0][0]["text"])
+
     def test_handle_trigger_allows_get(self):
         module = load_module()
         observed = {"called": False}

@@ -21,6 +21,17 @@ _SAFE_HAVEN_SYMBOLS = frozenset({"BOXX", "BIL"})
 _INCOME_SYMBOLS = frozenset({"QQQI", "SPYI"})
 _DEFAULT_MIN_TRADE_FLOOR = 100.0
 _DEFAULT_REBALANCE_THRESHOLD_RATIO = 0.01
+_SNAPSHOT_DIAGNOSTIC_FIELDS = (
+    "snapshot_manifest_price_as_of",
+    "snapshot_manifest_universe_as_of",
+    "snapshot_manifest_source_input_status",
+    "snapshot_manifest_source_input_fallback_used",
+    "snapshot_manifest_source_input_fallback_reason",
+    "snapshot_manifest_source_input_fallback_streak",
+    "snapshot_manifest_source_input_manifest_path",
+    "snapshot_manifest_source_refresh_run_id",
+    "snapshot_manifest_source_refresh_generated_at",
+)
 
 
 def _build_portfolio_inputs(
@@ -104,6 +115,22 @@ def _resolve_platform_reserved_cash(
     reserved_cash_ratio = float(raw_policy.get("reserved_cash_ratio", 0.0) or 0.0)
     reserved_cash_ratio = max(0.0, min(1.0, reserved_cash_ratio))
     return max(reserved_cash_floor_usd, max(0.0, float(total_equity)) * reserved_cash_ratio)
+
+
+def _attach_snapshot_diagnostics(
+    plan: dict[str, Any],
+    *,
+    decision: StrategyDecision,
+    runtime_metadata: Mapping[str, Any] | None,
+) -> None:
+    execution = plan.get("execution")
+    if not isinstance(execution, dict):
+        return
+    diagnostics = {**dict(runtime_metadata or {}), **dict(decision.diagnostics)}
+    for field in _SNAPSHOT_DIAGNOSTIC_FIELDS:
+        value = diagnostics.get(field)
+        if value is not None and value != "":
+            execution[field] = value
 
 
 def _apply_reserved_cash_policy(
@@ -498,4 +525,9 @@ def map_strategy_decision_to_plan(
         cash_by_currency = _cash_by_currency_from_snapshot(snapshot)
     if cash_by_currency:
         plan["portfolio"]["cash_by_currency"] = cash_by_currency
+    _attach_snapshot_diagnostics(
+        plan,
+        decision=normalized_decision,
+        runtime_metadata=runtime_metadata,
+    )
     return plan

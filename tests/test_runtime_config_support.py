@@ -620,6 +620,17 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "platform": "longbridge",
             },
         )
+        self.assertEqual(
+            by_profile["hk_high_dividend_low_vol_trend"],
+            {
+                "canonical_profile": "hk_high_dividend_low_vol_trend",
+                "display_name": "HK High Dividend Low-Volatility Trend",
+                "domain": "hk_equity",
+                "eligible": True,
+                "enabled": True,
+                "platform": "longbridge",
+            },
+        )
         for profile in HK_DISABLED_PROFILES:
             self.assertNotIn(profile, by_profile)
 
@@ -660,25 +671,31 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
                         load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
-    def test_accepts_runtime_enabled_hk_global_etf_rotation(self):
-        with patch.dict(
-            os.environ,
-            {
-                "RUNTIME_TARGET_JSON": runtime_target_json("hk_listed_global_etf_rotation"),
-                "ACCOUNT_REGION": "HK",
-            },
-            clear=True,
-        ):
-            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+    def test_accepts_runtime_enabled_hk_profiles(self):
+        expected_names = {
+            "hk_listed_global_etf_rotation": "HK-listed Global ETF Rotation",
+            "hk_high_dividend_low_vol_trend": "HK High Dividend Low-Volatility Trend",
+        }
+        for profile, display_name in expected_names.items():
+            with self.subTest(profile=profile):
+                with patch.dict(
+                    os.environ,
+                    {
+                        "RUNTIME_TARGET_JSON": runtime_target_json(profile),
+                        "ACCOUNT_REGION": "HK",
+                    },
+                    clear=True,
+                ):
+                    settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
-        self.assertEqual(settings.strategy_profile, "hk_listed_global_etf_rotation")
-        self.assertEqual(settings.strategy_display_name, "HK-listed Global ETF Rotation")
-        self.assertEqual(settings.strategy_domain, "hk_equity")
-        self.assertEqual(settings.market, HK_MARKET)
-        self.assertEqual(settings.market_calendar, HK_MARKET_CALENDAR)
-        self.assertEqual(settings.market_timezone, HK_MARKET_TIMEZONE)
-        self.assertEqual(settings.symbol_suffix, HK_SYMBOL_SUFFIX)
-        self.assertEqual(settings.trading_currency, HK_TRADING_CURRENCY)
+                self.assertEqual(settings.strategy_profile, profile)
+                self.assertEqual(settings.strategy_display_name, display_name)
+                self.assertEqual(settings.strategy_domain, "hk_equity")
+                self.assertEqual(settings.market, HK_MARKET)
+                self.assertEqual(settings.market_calendar, HK_MARKET_CALENDAR)
+                self.assertEqual(settings.market_timezone, HK_MARKET_TIMEZONE)
+                self.assertEqual(settings.symbol_suffix, HK_SYMBOL_SUFFIX)
+                self.assertEqual(settings.trading_currency, HK_TRADING_CURRENCY)
 
     def test_derives_feature_snapshot_paths_from_artifact_root(self):
         with TemporaryDirectory() as tmp_dir:
@@ -745,12 +762,17 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertFalse(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_strategy_config_path"])
         for profile in ("hk_index_mean_reversion", "hk_etf_regime_rotation", "hk_blue_chip_leader_rotation"):
             self.assertNotIn(profile, by_profile)
-        for profile in ("hk_listed_global_etf_rotation",):
+        for profile in HK_RUNTIME_ENABLED_PROFILES - {"hk_low_vol_dividend_quality"}:
             self.assertEqual(by_profile[profile]["profile_group"], "direct_runtime_inputs")
             self.assertEqual(by_profile[profile]["input_mode"], "market_history")
             self.assertFalse(by_profile[profile]["requires_snapshot_artifacts"])
             self.assertFalse(by_profile[profile]["requires_snapshot_manifest_path"])
             self.assertFalse(by_profile[profile]["requires_strategy_config_path"])
+        self.assertEqual(by_profile["hk_low_vol_dividend_quality"]["profile_group"], "snapshot_backed")
+        self.assertEqual(by_profile["hk_low_vol_dividend_quality"]["input_mode"], "feature_snapshot")
+        self.assertTrue(by_profile["hk_low_vol_dividend_quality"]["requires_snapshot_artifacts"])
+        self.assertTrue(by_profile["hk_low_vol_dividend_quality"]["requires_snapshot_manifest_path"])
+        self.assertFalse(by_profile["hk_low_vol_dividend_quality"]["requires_strategy_config_path"])
         self.assertFalse(
             by_profile["russell_1000_multi_factor_defensive"]["requires_strategy_config_path"]
         )
@@ -771,9 +793,11 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("soxl_soxx_trend_income", result.stdout)
         self.assertIn("global_etf_rotation", result.stdout)
         self.assertIn("hk_listed_global_etf_rotation", result.stdout)
+        self.assertIn("hk_high_dividend_low_vol_trend", result.stdout)
         self.assertIn("russell_1000_multi_factor_defensive", result.stdout)
         self.assertIn("Global ETF Rotation", result.stdout)
         self.assertIn("HK-listed Global ETF Rotation", result.stdout)
+        self.assertIn("HK High Dividend Low-Volatility Trend", result.stdout)
         self.assertIn("Russell 1000 Multi-Factor", result.stdout)
         self.assertIn("Tech/Communication Pullback Enhancement", result.stdout)
         self.assertNotIn("hk_blue_chip_leader_rotation", result.stdout)
