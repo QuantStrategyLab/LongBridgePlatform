@@ -64,8 +64,9 @@ BASE_LONGBRIDGE_PROFILES = frozenset(
 OPTIONAL_LONGBRIDGE_PROFILES = frozenset({"global_etf_confidence_vol_gate"})
 HK_RUNTIME_ENABLED_PROFILES = frozenset(
     {
-        "hk_listed_global_etf_rotation",
         "hk_high_dividend_low_vol_trend",
+        "hk_listed_global_etf_rotation",
+        "hk_low_vol_dividend_quality",
     }
 )
 HK_DISABLED_PROFILES = frozenset(
@@ -761,12 +762,17 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertFalse(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_strategy_config_path"])
         for profile in ("hk_index_mean_reversion", "hk_etf_regime_rotation", "hk_blue_chip_leader_rotation"):
             self.assertNotIn(profile, by_profile)
-        for profile in HK_RUNTIME_ENABLED_PROFILES:
+        for profile in HK_RUNTIME_ENABLED_PROFILES - {"hk_low_vol_dividend_quality"}:
             self.assertEqual(by_profile[profile]["profile_group"], "direct_runtime_inputs")
             self.assertEqual(by_profile[profile]["input_mode"], "market_history")
             self.assertFalse(by_profile[profile]["requires_snapshot_artifacts"])
             self.assertFalse(by_profile[profile]["requires_snapshot_manifest_path"])
             self.assertFalse(by_profile[profile]["requires_strategy_config_path"])
+        self.assertEqual(by_profile["hk_low_vol_dividend_quality"]["profile_group"], "snapshot_backed")
+        self.assertEqual(by_profile["hk_low_vol_dividend_quality"]["input_mode"], "feature_snapshot")
+        self.assertTrue(by_profile["hk_low_vol_dividend_quality"]["requires_snapshot_artifacts"])
+        self.assertTrue(by_profile["hk_low_vol_dividend_quality"]["requires_snapshot_manifest_path"])
+        self.assertFalse(by_profile["hk_low_vol_dividend_quality"]["requires_strategy_config_path"])
         self.assertFalse(
             by_profile["russell_1000_multi_factor_defensive"]["requires_strategy_config_path"]
         )
@@ -993,6 +999,41 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(
             plan["hints"]["feature_snapshot_filename"],
             "mega_cap_leader_rotation_top50_balanced_feature_snapshot_latest.csv",
+        )
+
+    def test_print_strategy_switch_env_plan_for_hk_low_vol_dividend_quality(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SWITCH_PLAN_SCRIPT_PATH),
+                "--profile",
+                "hk_low_vol_dividend_quality",
+                "--account-region",
+                "hk",
+                "--dry-run-only",
+                "--json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        plan = json.loads(result.stdout)
+        self.assertEqual(plan["canonical_profile"], "hk_low_vol_dividend_quality")
+        self.assertTrue(plan["enabled"])
+        self.assertEqual(plan["profile_group"], "snapshot_backed")
+        self.assertEqual(plan["input_mode"], "feature_snapshot")
+        self.assertEqual(plan["snapshot_contract_version"], "hk_low_vol_dividend_quality.factor_snapshot.v1")
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_DRY_RUN_ONLY"], "true")
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_PATH"], "<required>")
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"], "<required>")
+        self.assertEqual(
+            plan["hints"]["feature_snapshot_filename"],
+            "hk_low_vol_dividend_quality_factor_snapshot_latest.csv",
+        )
+        self.assertEqual(
+            plan["hints"]["feature_snapshot_manifest_filename"],
+            "hk_low_vol_dividend_quality_factor_snapshot_latest.csv.manifest.json",
         )
 
     def test_print_strategy_switch_env_plan_rejects_hk_disabled_profiles(self):
