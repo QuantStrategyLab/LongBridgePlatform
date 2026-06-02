@@ -119,6 +119,31 @@ def _split_env_list(value: str | None) -> tuple[str, ...]:
     )
 
 
+def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
+    if cycle_result is None:
+        return {
+            "action_done": False,
+            "order_events_count": 0,
+            "orders_previewed_count": 0,
+            "orders_skipped_count": 0,
+            "notes_count": 0,
+            "dry_run_order_preview_available": False,
+        }
+    logs = tuple(getattr(cycle_result, "logs", ()) or ())
+    skip_logs = tuple(getattr(cycle_result, "skip_logs", ()) or ())
+    note_logs = tuple(getattr(cycle_result, "note_logs", ()) or ())
+    order_events_count = len(logs)
+    orders_previewed_count = order_events_count if dry_run else 0
+    return {
+        "action_done": bool(getattr(cycle_result, "action_done", False)),
+        "order_events_count": order_events_count,
+        "orders_previewed_count": orders_previewed_count,
+        "orders_skipped_count": len(skip_logs),
+        "notes_count": len(note_logs),
+        "dry_run_order_preview_available": bool(dry_run and orders_previewed_count > 0),
+    }
+
+
 signal_text = build_signal_text(t)
 strategy_display_name = build_strategy_display_name(t)(
     STRATEGY_PROFILE,
@@ -431,6 +456,10 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         if cycle_result is not None:
             execution = dict(getattr(cycle_result, "execution", {}) or {})
             signal_snapshot = dict(execution.get("signal_snapshot") or {})
+        execution_summary = _summarize_cycle_result_for_report(
+            cycle_result,
+            dry_run=bool(report.get("dry_run")),
+        )
         if signal_snapshot:
             reporting_adapters.log_event(
                 log_context,
@@ -441,6 +470,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         finalize_runtime_report(
             report,
             status="ok",
+            summary=execution_summary,
             diagnostics={"signal_snapshot": signal_snapshot} if signal_snapshot else None,
         )
         reporting_adapters.log_event(

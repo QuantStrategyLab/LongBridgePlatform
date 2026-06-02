@@ -575,6 +575,24 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertTrue(report["summary"]["signal_date"])
         self.assertTrue(report["summary"]["effective_date"])
 
+    def test_cycle_result_summary_counts_dry_run_order_previews(self):
+        module = load_module()
+        cycle_result = types.SimpleNamespace(
+            logs=("dry-run sell", "dry-run buy"),
+            skip_logs=("skip",),
+            note_logs=("note",),
+            action_done=True,
+        )
+
+        summary = module._summarize_cycle_result_for_report(cycle_result, dry_run=True)
+
+        self.assertTrue(summary["action_done"])
+        self.assertEqual(summary["order_events_count"], 2)
+        self.assertEqual(summary["orders_previewed_count"], 2)
+        self.assertEqual(summary["orders_skipped_count"], 1)
+        self.assertEqual(summary["notes_count"], 1)
+        self.assertTrue(summary["dry_run_order_preview_available"])
+
 
 if __name__ == "__main__":
     unittest.main()
