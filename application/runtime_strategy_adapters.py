@@ -14,6 +14,34 @@ from quant_platform_kit.common.strategy_plugins import (
 )
 
 
+def _get_direct_market_history_profiles() -> frozenset[str]:
+    try:
+        from hk_equity_strategies import get_direct_market_history_profiles
+    except (ImportError, AttributeError):  # pragma: no cover - compatibility fallback
+        return frozenset()
+    return frozenset(
+        str(profile).strip().lower()
+        for profile in get_direct_market_history_profiles()
+    )
+
+
+def _requires_materialized_market_history(strategy_profile: str) -> bool:
+    return str(strategy_profile or "").strip().lower() in _get_direct_market_history_profiles()
+
+
+def _loaded_history_to_rows(history):
+    if (
+        hasattr(history, "items")
+        and not hasattr(history, "columns")
+        and not isinstance(history, Mapping)
+    ):
+        return [
+            {"date": date_value, "close": close_value}
+            for date_value, close_value in history.items()
+        ]
+    return history
+
+
 @dataclass(frozen=True)
 class LongBridgeRuntimeStrategyAdapters:
     strategy_runtime: Any
@@ -80,8 +108,13 @@ class LongBridgeRuntimeStrategyAdapters:
         if "market_history" in available_inputs or "benchmark_history" in available_inputs or "qqq_history" in available_inputs:
             market_data_port = self.broker_adapters.build_market_data_port(quote_context)
         if "market_history" in available_inputs:
+            market_history = (
+                self._build_materialized_market_history(market_data_port)
+                if _requires_materialized_market_history(self.strategy_profile)
+                else self.broker_adapters.build_market_history_loader(market_data_port)
+            )
             market_inputs = {
-                "market_history": self.broker_adapters.build_market_history_loader(market_data_port),
+                "market_history": market_history,
             }
             if "benchmark_history" in available_inputs:
                 market_inputs["benchmark_history"] = self.broker_adapters.build_price_history(
@@ -98,6 +131,29 @@ class LongBridgeRuntimeStrategyAdapters:
             return self.broker_adapters.build_price_history(market_data_port, self.benchmark_symbol)
         trend_ma_window = int(self.strategy_runtime_config.get("trend_ma_window", 150))
         return self.calculate_rotation_indicators_fn(quote_context, trend_window=trend_ma_window)
+
+    def _market_history_symbols(self) -> tuple[str, ...]:
+        raw_symbols = (
+            self.strategy_runtime_config.get("universe_symbols")
+            or getattr(self.broker_adapters, "strategy_symbols", ())
+            or getattr(self.strategy_runtime, "managed_symbols", ())
+        )
+        if isinstance(raw_symbols, str):
+            raw_symbols = raw_symbols.replace(";", ",").split(",")
+        return tuple(
+            dict.fromkeys(
+                str(symbol).strip()
+                for symbol in raw_symbols
+                if str(symbol).strip()
+            )
+        )
+
+    def _build_materialized_market_history(self, market_data_port):
+        load_market_history = self.broker_adapters.build_market_history_loader(market_data_port)
+        return {
+            symbol: _loaded_history_to_rows(load_market_history(None, symbol))
+            for symbol in self._market_history_symbols()
+        }
 
     def resolve_rebalance_plan(self, *, indicators, snapshot=None, account_state=None):
         available_inputs = set(self.available_inputs)

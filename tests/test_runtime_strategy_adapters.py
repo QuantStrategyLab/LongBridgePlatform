@@ -2,10 +2,15 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
+
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+HK_STRATEGIES_SRC = ROOT.parent / "HkEquityStrategies" / "src"
+if str(HK_STRATEGIES_SRC) not in sys.path:
+    sys.path.insert(0, str(HK_STRATEGIES_SRC))
 
 from application.runtime_strategy_adapters import build_runtime_strategy_adapters
 
@@ -35,7 +40,9 @@ def test_runtime_strategy_adapters_build_market_history_inputs():
         signal_text_fn=lambda icon: f"signal:{icon}",
         translator=lambda key, **_kwargs: key,
         broker_adapters=FakeBrokerAdapters(),
-        calculate_rotation_indicators_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected fallback")),
+        calculate_rotation_indicators_fn=lambda *_args, **_kwargs: (
+            _ for _ in ()
+        ).throw(AssertionError("unexpected fallback")),
         build_strategy_evaluation_inputs_fn=lambda **_kwargs: {},
         map_strategy_decision_to_plan_fn=lambda *_args, **_kwargs: {},
     )
@@ -50,6 +57,58 @@ def test_runtime_strategy_adapters_build_market_history_inputs():
         "benchmark_history": [{"close": 1.0}],
         "qqq_history": [{"close": 1.0}],
     }
+
+
+def test_runtime_strategy_adapters_materialize_hk_direct_market_history():
+    observed = {}
+
+    class FakeBrokerAdapters:
+        strategy_symbols = ("02800", "02834")
+
+        def build_market_data_port(self, quote_context):
+            observed["market_data_port_context"] = quote_context
+            return "market-data-port"
+
+        def build_market_history_loader(self, market_data_port):
+            observed["market_history_loader_port"] = market_data_port
+
+            def load_market_history(_broker_client, symbol):
+                observed.setdefault("history_calls", []).append(symbol)
+                return pd.Series(
+                    [10.0, 11.0],
+                    index=pd.to_datetime(["2026-05-29", "2026-06-01"], utc=True),
+                    dtype=float,
+                )
+
+            return load_market_history
+
+    adapters = build_runtime_strategy_adapters(
+        strategy_runtime=SimpleNamespace(evaluate=lambda **_kwargs: None),
+        strategy_profile="hk_listed_global_etf_rotation",
+        strategy_runtime_config={"universe_symbols": ("02800", "02834")},
+        available_inputs=("market_history",),
+        benchmark_symbol="QQQ",
+        signal_text_fn=lambda icon: f"signal:{icon}",
+        translator=lambda key, **_kwargs: key,
+        broker_adapters=FakeBrokerAdapters(),
+        calculate_rotation_indicators_fn=lambda *_args, **_kwargs: (
+            _ for _ in ()
+        ).throw(AssertionError("unexpected fallback")),
+        build_strategy_evaluation_inputs_fn=lambda **_kwargs: {},
+        map_strategy_decision_to_plan_fn=lambda *_args, **_kwargs: {},
+    )
+
+    result = adapters.calculate_strategy_indicators("quote-context")
+
+    assert observed["market_data_port_context"] == "quote-context"
+    assert observed["market_history_loader_port"] == "market-data-port"
+    assert observed["history_calls"] == ["02800", "02834"]
+    assert sorted(result["market_history"]) == ["02800", "02834"]
+    assert result["market_history"]["02800"][0]["date"] == pd.Timestamp(
+        "2026-05-29",
+        tz="UTC",
+    )
+    assert result["market_history"]["02800"][0]["close"] == 10.0
 
 
 def test_runtime_strategy_adapters_fall_back_to_rotation_indicators():
