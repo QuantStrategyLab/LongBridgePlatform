@@ -215,6 +215,17 @@ The scheduled guard runs every 30 minutes. For a missed-run heartbeat, set
 for that Environment. The default leaves the heartbeat check off to avoid false
 alerts outside active market windows.
 
+`Execution Report Heartbeat` (`.github/workflows/execution-report-heartbeat.yml`)
+is the stricter completion check. It runs once per GitHub Environment on
+weekdays after the expected market windows and verifies that a recent runtime
+report exists under that Environment's `EXECUTION_REPORT_GCS_URI`. It reads the
+latest report JSON and alerts if no recent report exists or the recent reports
+have rejected statuses such as `error`. The deploy service account needs object
+read/list access on the report bucket.
+Each matrix job checks its own Environment service. Override
+`RUNTIME_HEARTBEAT_REQUIRED_SERVICES` only when an Environment intentionally
+monitors a different service list.
+
 ### Deployment unit and naming
 
 - `QuantPlatformKit` is only a shared dependency; Cloud Run still deploys `LongBridgePlatform` itself.
@@ -434,6 +445,14 @@ OIDC/IAM/audience 配错、Cloud Run 返回 4xx/5xx、或容器在 app-level Tel
 默认计划每 30 分钟检查一次。若要做 missed-run 心跳，按 Environment 设置
 `RUNTIME_GUARD_REQUIRE_SUCCESS=true`，并把 `RUNTIME_GUARD_LOOKBACK_MINUTES` 设成覆盖该环境预期
 Scheduler 运行时间的窗口。默认不强制心跳，避免非交易窗口误报。
+
+更严格的完成检查是 `Execution Report Heartbeat`
+（`.github/workflows/execution-report-heartbeat.yml`）。它会按 GitHub Environment 在工作日
+预期市场窗口后分别检查该环境 `EXECUTION_REPORT_GCS_URI` 下最近的 runtime report JSON，
+读取 `status/stage/errors`，如果没有近期 report 或 report 状态为 `error` 等失败状态就发
+Telegram。GitHub deploy service account 需要对 report bucket 有对象读取/列举权限。
+每个 matrix job 默认检查自己的 Environment service。只有当某个 Environment 需要监控不同
+service 列表时，才覆盖 `RUNTIME_HEARTBEAT_REQUIRED_SERVICES`。
 
 ### 部署单元和命名建议
 
