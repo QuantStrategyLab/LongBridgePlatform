@@ -183,6 +183,38 @@ Important:
 - Here "shared" only means **shared inside this repository** between the `paper`, `HK`, and `SG` Cloud Run services. The Telegram token can still be shared, but LongPort app credentials should live in Secret Manager and be referenced by per-environment secret-name variables; they are not meant to be a global secret set reused by unrelated quant repos.
 - If you want one cross-project shared layer across multiple quant repos, keep it small: `GLOBAL_TELEGRAM_CHAT_ID`, `NOTIFY_LANG`, `CRISIS_ALERT_CHANNELS`, and shared crisis alert settings under `CRISIS_ALERT_EMAIL_*`/`CRISIS_ALERT_PUSH_*` are reasonable when the same alert policy applies; account credentials, deployment keys, and alert secrets are not.
 
+### Runtime guard alerting
+
+`.github/workflows/runtime-guard.yml` is a second notification layer for failures
+outside the LongBridge Flask handler. It runs once per GitHub Environment
+(`longbridge-paper`, `longbridge-hk`, and `longbridge-sg`), reads Cloud Logging
+for recent Cloud Scheduler errors and Cloud Run request/runtime failures, then
+sends Telegram directly through `CRISIS_ALERT_TELEGRAM_BOT_TOKEN` +
+`CRISIS_ALERT_TELEGRAM_CHAT_IDS` or the fallback `TELEGRAM_TOKEN` +
+`GLOBAL_TELEGRAM_CHAT_ID`.
+
+The guard does not invoke Cloud Run trading routes. It is meant to catch cases
+where Scheduler cannot reach the service, OIDC/IAM/audience is wrong, Cloud Run
+returns 4xx/5xx, or the container fails before app-level Telegram fallback code
+can run.
+
+Required setup:
+
+- keep each Environment's `CLOUD_RUN_SERVICE` set, or set
+  `RUNTIME_GUARD_CLOUD_RUN_SERVICES`
+- grant the GitHub deploy service account `roles/logging.viewer` on
+  `longbridgequant`
+- keep Telegram chat/token variables or secrets configured in GitHub
+- optionally set `RUNTIME_GUARD_SCHEDULER_JOB_PATTERN` per Environment; by
+  default the workflow filters Scheduler logs by that Environment's
+  `CLOUD_RUN_SERVICE`
+
+The scheduled guard runs every 30 minutes. For a missed-run heartbeat, set
+`RUNTIME_GUARD_REQUIRE_SUCCESS=true` and choose
+`RUNTIME_GUARD_LOOKBACK_MINUTES` so the window covers the expected Scheduler run
+for that Environment. The default leaves the heartbeat check off to avoid false
+alerts outside active market windows.
+
 ### Deployment unit and naming
 
 - `QuantPlatformKit` is only a shared dependency; Cloud Run still deploys `LongBridgePlatform` itself.
@@ -378,6 +410,30 @@ Secret Manager 中需存在 `LONGPORT_SECRET_NAME` 指定的密钥（默认: `lo
 - GitHub 部署路径使用仓库里的 Dockerfile 和 Artifact Registry。部署服务账号需要 Artifact Registry 写入、Cloud Run 管理，以及对 runtime service account 的 service-account user 权限。
 - 这里的“共享”只是指 **同一个仓库里的 paper / HK / SG 服务共享**。Telegram token 可以继续共用，但 LongPort app 凭据建议放到 Secret Manager，并通过各自 Environment 里的 secret-name 变量引用，不建议把它们当成所有 quant 共用的全局 secrets。
 - 如果你真的要在多个 quant 仓库之间保留一层全局共享，建议只保留 `GLOBAL_TELEGRAM_CHAT_ID`、`NOTIFY_LANG`、`CRISIS_ALERT_CHANNELS`，以及同一套危机告警策略下的 `CRISIS_ALERT_EMAIL_*`/`CRISIS_ALERT_PUSH_*` 这种低耦合配置。账户凭据、部署 key 和告警 secret 不要做成全局共享。
+
+### Runtime Guard 告警
+
+`.github/workflows/runtime-guard.yml` 是 LongBridge Flask handler 之外的第二层通知。它按
+GitHub Environment 分别运行一次（`longbridge-paper`、`longbridge-hk`、`longbridge-sg`），
+只读取 Cloud Logging 中最近的 Cloud Scheduler 错误和 Cloud Run 请求/运行失败，然后直接通过
+`CRISIS_ALERT_TELEGRAM_BOT_TOKEN` + `CRISIS_ALERT_TELEGRAM_CHAT_IDS` 或 fallback 的
+`TELEGRAM_TOKEN` + `GLOBAL_TELEGRAM_CHAT_ID` 发 Telegram。
+
+这个 guard 不会调用 Cloud Run 的交易路由，主要覆盖 Scheduler 没打到服务、
+OIDC/IAM/audience 配错、Cloud Run 返回 4xx/5xx、或容器在 app-level Telegram fallback
+执行前就失败的情况。
+
+需要的配置：
+
+- 每个 Environment 保持 `CLOUD_RUN_SERVICE` 正确，或设置 `RUNTIME_GUARD_CLOUD_RUN_SERVICES`
+- GitHub deploy service account 需要 `longbridgequant` 项目级 `roles/logging.viewer`
+- GitHub 中继续配置 Telegram chat/token 变量或 secrets
+- 可选按 Environment 设置 `RUNTIME_GUARD_SCHEDULER_JOB_PATTERN`；默认会按该 Environment 的
+  `CLOUD_RUN_SERVICE` 过滤 Scheduler 日志
+
+默认计划每 30 分钟检查一次。若要做 missed-run 心跳，按 Environment 设置
+`RUNTIME_GUARD_REQUIRE_SUCCESS=true`，并把 `RUNTIME_GUARD_LOOKBACK_MINUTES` 设成覆盖该环境预期
+Scheduler 运行时间的窗口。默认不强制心跳，避免非交易窗口误报。
 
 ### 部署单元和命名建议
 
