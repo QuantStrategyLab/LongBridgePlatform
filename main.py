@@ -132,9 +132,10 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
     logs = tuple(getattr(cycle_result, "logs", ()) or ())
     skip_logs = tuple(getattr(cycle_result, "skip_logs", ()) or ())
     note_logs = tuple(getattr(cycle_result, "note_logs", ()) or ())
+    dry_run_orders = tuple(getattr(cycle_result, "dry_run_orders", ()) or ())
     order_events_count = len(logs)
-    orders_previewed_count = order_events_count if dry_run else 0
-    return {
+    orders_previewed_count = len(dry_run_orders) if dry_run_orders else (order_events_count if dry_run else 0)
+    summary = {
         "action_done": bool(getattr(cycle_result, "action_done", False)),
         "order_events_count": order_events_count,
         "orders_previewed_count": orders_previewed_count,
@@ -142,6 +143,9 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
         "notes_count": len(note_logs),
         "dry_run_order_preview_available": bool(dry_run and orders_previewed_count > 0),
     }
+    if dry_run_orders:
+        summary["orders_previewed"] = [dict(order) for order in dry_run_orders]
+    return summary
 
 
 signal_text = build_signal_text(t)

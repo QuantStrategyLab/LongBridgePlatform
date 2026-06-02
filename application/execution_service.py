@@ -247,6 +247,7 @@ class ExecutionCycleResult:
     skip_logs: tuple[str, ...]
     note_logs: tuple[str, ...]
     action_done: bool
+    dry_run_orders: tuple[dict, ...] = ()
 
 
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
@@ -255,6 +256,13 @@ SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD = 2000.0
 
 def _noop_sleep(_seconds):
     return None
+
+
+def _coerce_order_quantity(value):
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return value
 
 
 def _safe_haven_cash_symbols(*, portfolio: dict, allocation: dict) -> tuple[str, ...]:
@@ -565,6 +573,7 @@ def execute_rebalance_cycle(
     logs: list[str] = []
     skip_logs: list[str] = []
     note_logs: list[str] = []
+    dry_run_orders: list[dict] = []
     small_account_cash_note_keys: set[str] = set()
     action_done = False
     sell_submitted = False
@@ -678,6 +687,18 @@ def execute_rebalance_cycle(
         price_text = f"${price:.2f}" if price is not None else translator("order_type_market")
         side_key = "side_buy" if str(side).lower() == "buy" else "side_sell"
         order_type_key = "order_type_limit" if order_type == "limit" else "order_type_market"
+        order_payload = {
+            "symbol": str(symbol or "").strip().upper(),
+            "side": str(side or "").strip().lower(),
+            "quantity": _coerce_order_quantity(quantity),
+            "order_type": str(order_type or "").strip().lower(),
+            "status": "dry_run",
+        }
+        if price is not None:
+            order_payload["price"] = round(float(price), 4)
+            if order_type == "limit":
+                order_payload["limit_price"] = round(float(price), 4)
+        dry_run_orders.append(order_payload)
         message = translator(
             "dry_run_order",
             side=translator(side_key),
@@ -1110,4 +1131,5 @@ def execute_rebalance_cycle(
         skip_logs=tuple(skip_logs),
         note_logs=tuple(note_logs),
         action_done=action_done,
+        dry_run_orders=tuple(dry_run_orders),
     )

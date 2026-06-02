@@ -582,6 +582,10 @@ class RequestHandlingTests(unittest.TestCase):
             skip_logs=("skip",),
             note_logs=("note",),
             action_done=True,
+            dry_run_orders=(
+                {"symbol": "02800.HK", "side": "buy", "quantity": 100, "status": "dry_run"},
+                {"symbol": "03033.HK", "side": "buy", "quantity": 200, "status": "dry_run"},
+            ),
         )
 
         summary = module._summarize_cycle_result_for_report(cycle_result, dry_run=True)
@@ -592,6 +596,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(summary["orders_skipped_count"], 1)
         self.assertEqual(summary["notes_count"], 1)
         self.assertTrue(summary["dry_run_order_preview_available"])
+        self.assertEqual(summary["orders_previewed"][0]["symbol"], "02800.HK")
 
 
 if __name__ == "__main__":
