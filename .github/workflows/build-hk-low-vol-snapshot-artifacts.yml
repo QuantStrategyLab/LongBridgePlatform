@@ -179,6 +179,20 @@ jobs:
         run: |
           set -euo pipefail
 
+          generated_dir="data/input/generated/${PROFILE}"
+          artifact_dir="${ARTIFACT_DIR_INPUT:-data/output/${PROFILE}}"
+          mkdir -p "${generated_dir}" "${artifact_dir}"
+          snapshot_uri="${GCS_PREFIX%/}/hk_low_vol_dividend_quality_factor_snapshot_latest.csv"
+          manifest_uri="${GCS_PREFIX%/}/hk_low_vol_dividend_quality_factor_snapshot_latest.csv.manifest.json"
+          {
+            echo "artifact_dir=${SNAPSHOT_REPO_DIR}/${artifact_dir}"
+            echo "generated_input_dir=${SNAPSHOT_REPO_DIR}/${generated_dir}"
+            echo "artifact_name=hk-low-vol-dividend-quality-artifacts-${GITHUB_RUN_ID}"
+            echo "generated_input_name=hk-low-vol-dividend-quality-input-${GITHUB_RUN_ID}"
+            echo "snapshot_gcs_uri=${snapshot_uri}"
+            echo "manifest_gcs_uri=${manifest_uri}"
+          } >> "${GITHUB_OUTPUT}"
+
           universe_path="${UNIVERSE_PATH:-examples/low_vol_dividend_quality/longbridge_universe.seed.csv}"
           case "${universe_path}" in
             gs://*|https://*)
@@ -216,8 +230,6 @@ jobs:
           echo "::add-mask::${LONG_BRIDGE_ACCESS_TOKEN}"
           export LONG_BRIDGE_APP_KEY LONG_BRIDGE_APP_SECRET LONG_BRIDGE_ACCESS_TOKEN
 
-          generated_dir="data/input/generated/${PROFILE}"
-          mkdir -p "${generated_dir}"
           generated_path="${generated_dir}/factor_snapshot.longbridge_staging.csv"
           generator_args=(
             --universe "${universe_path}"
@@ -234,11 +246,45 @@ jobs:
           if [ "${ALLOW_RESEARCH_DEFAULTS}" = "true" ]; then
             generator_args+=(--allow-research-defaults)
           fi
+          set +e
           python scripts/build_low_vol_dividend_longbridge_factor_snapshot.py "${generator_args[@]}" > "${generated_dir}/generation_summary.json"
+          generator_status=$?
+          set -e
           unset LONG_BRIDGE_APP_KEY LONG_BRIDGE_APP_SECRET LONG_BRIDGE_ACCESS_TOKEN
+          if [ -s "${generated_dir}/generation_summary.json" ]; then
+            python - <<'PY' "${generated_dir}/generation_summary.json"
+          import json
+          import sys
+          from pathlib import Path
 
-          artifact_dir="${ARTIFACT_DIR_INPUT:-data/output/${PROFILE}}"
-          mkdir -p "${artifact_dir}"
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          print("LongBridge generation summary:")
+          for key in (
+              "profile",
+              "row_count",
+              "symbols_requested",
+              "symbols_failed",
+              "source_quality",
+              "artifact_evidence_role",
+              "live_enablement_evidence_status",
+              "live_order_approval_status",
+          ):
+              if key in payload:
+                  print(f"- {key}: {payload[key]}")
+          failed = payload.get("failed_symbols") or []
+          if failed:
+              print("- failed_symbols_preview:")
+              for item in failed[:10]:
+                  print(f"  - {item}")
+              if len(failed) > 10:
+                  print(f"  - ... {len(failed) - 10} more")
+          PY
+          fi
+          if [ "${generator_status}" -ne 0 ]; then
+            echo "LongBridge factor snapshot generation failed; see generation_summary.json in the generated input artifact." >&2
+            exit "${generator_status}"
+          fi
+
           build_args=(
             --factor-snapshot "${generated_path}"
             --output-dir "${artifact_dir}"
@@ -270,31 +316,23 @@ jobs:
             echo "gcs_prefix is not set; skipping GCS publish." | tee "${artifact_dir}/publish_plan.txt"
           fi
 
-          snapshot_uri="${GCS_PREFIX%/}/hk_low_vol_dividend_quality_factor_snapshot_latest.csv"
-          manifest_uri="${GCS_PREFIX%/}/hk_low_vol_dividend_quality_factor_snapshot_latest.csv.manifest.json"
-          {
-            echo "artifact_dir=${SNAPSHOT_REPO_DIR}/${artifact_dir}"
-            echo "generated_input_dir=${SNAPSHOT_REPO_DIR}/${generated_dir}"
-            echo "artifact_name=hk-low-vol-dividend-quality-artifacts-${GITHUB_RUN_ID}"
-            echo "generated_input_name=hk-low-vol-dividend-quality-input-${GITHUB_RUN_ID}"
-            echo "snapshot_gcs_uri=${snapshot_uri}"
-            echo "manifest_gcs_uri=${manifest_uri}"
-          } >> "${GITHUB_OUTPUT}"
 
       - name: Upload validated artifact pack
+        if: always() && steps.build.outputs.artifact_name != ''
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.build.outputs.artifact_name }}
           path: ${{ steps.build.outputs.artifact_dir }}
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 14
 
       - name: Upload generated LongBridge input snapshot
+        if: always() && steps.build.outputs.generated_input_name != ''
         uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.build.outputs.generated_input_name }}
           path: ${{ steps.build.outputs.generated_input_dir }}
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 14
 
       - name: Append job summary
