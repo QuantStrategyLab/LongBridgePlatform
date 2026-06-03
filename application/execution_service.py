@@ -369,6 +369,23 @@ def record_note_log(note_logs, *, translator, with_prefix, kind, **kwargs):
     print(with_prefix(message), flush=True)
 
 
+def _small_account_cash_substitution_note_key(note) -> str:
+    if not isinstance(note, Mapping):
+        return ""
+    symbol = str(note.get("symbol") or "").strip().upper()
+    if not symbol:
+        return ""
+    cash_symbols = tuple(
+        dict.fromkeys(
+            str(cash_symbol or "").strip().upper()
+            for cash_symbol in tuple(note.get("cash_symbols") or ())
+            if str(cash_symbol or "").strip()
+        )
+    )
+    cash_symbols_key = ",".join(cash_symbols) if cash_symbols else "__cash__"
+    return f"small_account_cash_substitution:{symbol}:{cash_symbols_key}"
+
+
 def record_small_account_cash_substitution_notes(
     note_logs,
     *,
@@ -378,13 +395,19 @@ def record_small_account_cash_substitution_notes(
     seen_keys,
     symbol_suffix=".US",
 ):
-    for message in format_small_account_cash_substitution_notes(
-        allocation.get("small_account_whole_share_cash_notes") or (),
-        translator=translator,
-        symbol_suffix=symbol_suffix,
-    ):
-        if message in seen_keys:
+    for raw_note in tuple(allocation.get("small_account_whole_share_cash_notes") or ()):
+        messages = format_small_account_cash_substitution_notes(
+            (raw_note,),
+            translator=translator,
+            symbol_suffix=symbol_suffix,
+        )
+        if not messages:
             continue
+        message = messages[0]
+        note_key = _small_account_cash_substitution_note_key(raw_note) or message
+        if note_key in seen_keys or message in seen_keys:
+            continue
+        seen_keys.add(note_key)
         seen_keys.add(message)
         note_logs.append(message)
         print(with_prefix(message), flush=True)

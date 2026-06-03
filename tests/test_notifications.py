@@ -147,6 +147,43 @@ class NotificationTests(unittest.TestCase):
         self.assertIn("📊 市场状态: 🚀 风险开启（SOXX+SOXL）", rendered.compact_text)
         self.assertNotIn("longbridge_candlesticks", rendered.compact_text)
 
+    def test_heartbeat_localizes_strategy_diagnostics_and_source_input_status(self):
+        rendered = render_heartbeat_notification(
+            execution={
+                "signal_snapshot": {
+                    "market_date": "",
+                    "latest_price_source": "longbridge_candlesticks",
+                    "price_as_of": "2026-06-01",
+                    "universe_as_of": "2026-05-14",
+                    "source_input_status": "partial_history_refresh",
+                },
+                "status_display": "regime=risk_on",
+                "signal_display": (
+                    "regime=risk_on breadth=68.0% benchmark_trend=up "
+                    "target_stock=100.0% realized_stock=100.0% selected=4 "
+                    "top=MU(4.07), INTC(2.23), AMD(1.96)"
+                ),
+            },
+            skip_logs=(),
+            note_logs=(),
+            translator=build_translator("zh"),
+            separator="━━━━━━━━━━━━━━━━━━",
+            strategy_display_name="Mega Cap Top50 平衡龙头轮动",
+            dry_run_only=False,
+        )
+
+        self.assertIn("🧩 输入状态: 价格 2026-06-01 | 股票池 2026-05-14 | 状态 部分行情刷新", rendered.compact_text)
+        self.assertIn("📊 市场状态: 市场阶段=进攻", rendered.compact_text)
+        self.assertIn(
+            "🎯 信号: 市场阶段=进攻 市场宽度=68.0% 基准趋势=向上 "
+            "目标股票仓位=100.0% 实际股票仓位=100.0% 入选标的数=4 "
+            "前排标的=MU(4.07), INTC(2.23), AMD(1.96)",
+            rendered.compact_text,
+        )
+        self.assertNotIn("regime=risk_on", rendered.compact_text)
+        self.assertNotIn("target_stock=", rendered.compact_text)
+        self.assertNotIn("partial_history_refresh", rendered.compact_text)
+
     def test_build_prefixer_prefers_account_prefix_only(self):
         with_prefix = build_prefixer("HK", "longbridge-quant-semiconductor-rotation-income-hk")
         self.assertEqual(with_prefix("hello"), "[HK] hello")
