@@ -29,6 +29,32 @@ _PRICE_SOURCE_LABELS = {
     "market_data": ("市场数据", "market data"),
 }
 
+_LONG_BRIDGE_ZH_NOTIFICATION_REPLACEMENTS = (
+    ("regime=hard_defense", "市场阶段=强防御"),
+    ("regime=soft_defense", "市场阶段=软防御"),
+    ("regime=risk_on", "市场阶段=进攻"),
+    ("benchmark_trend=down", "基准趋势=向下"),
+    ("benchmark_trend=up", "基准趋势=向上"),
+    ("benchmark=down", "基准趋势=向下"),
+    ("benchmark=up", "基准趋势=向上"),
+    ("breadth=", "市场宽度="),
+    ("target_stock=", "目标股票仓位="),
+    ("realized_stock=", "实际股票仓位="),
+    ("stock_exposure=", "股票目标仓位="),
+    ("safe_haven=", "避险仓位="),
+    ("selected=", "入选标的数="),
+    ("top=", "前排标的="),
+    ("partial_history_refresh", "部分行情刷新"),
+    ("full_history_refresh", "完整行情刷新"),
+    ("universe_fallback", "股票池复用"),
+)
+
+_SOURCE_INPUT_STATUS_LABELS = {
+    "partial_history_refresh": ("部分行情刷新", "partial history refresh"),
+    "full_history_refresh": ("完整行情刷新", "full history refresh"),
+    "universe_fallback": ("股票池复用", "universe fallback"),
+}
+
 try:
     from quant_platform_kit.common.notification_localization import (
         localize_price_source_label as _shared_localize_price_source_label,
@@ -57,7 +83,31 @@ def _translator_uses_zh(translator) -> bool:
 
 
 def _localize_notification_text(text, *, translator):
-    return _base_localize_notification_text(text, translator=translator)
+    try:
+        return _base_localize_notification_text(
+            text,
+            translator=translator,
+            extra_replacements=_LONG_BRIDGE_ZH_NOTIFICATION_REPLACEMENTS,
+        )
+    except TypeError:  # pragma: no cover - compatibility with older shared wheels
+        localized = _base_localize_notification_text(text, translator=translator)
+        if not _translator_uses_zh(translator):
+            return localized
+        for source, target in _LONG_BRIDGE_ZH_NOTIFICATION_REPLACEMENTS:
+            localized = localized.replace(source, target)
+        return localized
+
+
+def _localize_source_input_status(status, *, translator) -> str:
+    value = str(status or "").strip()
+    if not value:
+        return ""
+    label = _SOURCE_INPUT_STATUS_LABELS.get(value)
+    if label is not None:
+        return label[0] if _translator_uses_zh(translator) else label[1]
+    if _translator_uses_zh(translator):
+        return _localize_notification_text(value, translator=translator)
+    return value.replace("_", " ")
 
 
 def _localize_timing_contract(contract: str, *, translator) -> str:
@@ -205,6 +255,7 @@ def _format_source_input_line(snapshot, *, translator) -> str:
     price_as_of = str(snapshot.get("price_as_of") or "").strip()
     universe_as_of = str(snapshot.get("universe_as_of") or "").strip()
     status = str(snapshot.get("source_input_status") or "").strip()
+    localized_status = _localize_source_input_status(status, translator=translator)
     fallback_used = _is_truthy(snapshot.get("source_input_fallback_used"))
     fallback_streak = snapshot.get("source_input_fallback_streak")
     if not price_as_of and not universe_as_of and not status and not fallback_used:
@@ -220,8 +271,8 @@ def _format_source_input_line(snapshot, *, translator) -> str:
             if fallback_streak not in (None, "", 0, "0"):
                 fallback_text += f" 连续{fallback_streak}次"
             parts.append(fallback_text)
-        elif status:
-            parts.append(f"状态 {status}")
+        elif localized_status:
+            parts.append(f"状态 {localized_status}")
         return "🧩 输入状态: " + " | ".join(parts)
     parts = []
     if price_as_of:
@@ -233,8 +284,8 @@ def _format_source_input_line(snapshot, *, translator) -> str:
         if fallback_streak not in (None, "", 0, "0"):
             fallback_text += f" streak={fallback_streak}"
         parts.append(fallback_text)
-    elif status:
-        parts.append(f"status {status}")
+    elif localized_status:
+        parts.append(f"status {localized_status}")
     return "🧩 Inputs: " + " | ".join(parts)
 
 

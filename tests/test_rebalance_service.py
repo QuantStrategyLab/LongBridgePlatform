@@ -814,6 +814,63 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertNotIn("BOXX.US 目标差额 $524.92", sent_messages[0])
         self.assertNotIn("限价买入] SOXX", sent_messages[0])
 
+    def test_small_account_cash_substitution_note_is_not_duplicated_after_sell_refresh(self):
+        plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX", "BOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            safe_haven_symbols=("BOXX",),
+            targets={"SOXL": 0.0, "SOXX": 220.19, "BOXX": 1200.0},
+            market_values={"SOXL": 1046.20, "SOXX": 0.0, "BOXX": 0.0},
+            sellable_quantities={"SOXL": 4, "SOXX": 0, "BOXX": 0},
+            quantities={"SOXL": 4, "SOXX": 0, "BOXX": 0},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=1420.53,
+            market_status="🧯 过热降档（SOXX）",
+            deploy_ratio_text="15.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXX 目标仓位 15.0%",
+            available_cash=1464.46,
+            total_strategy_equity=1464.46,
+            portfolio_rows=(("SOXL", "SOXX"), ("BOXX",)),
+        )
+        refreshed_plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX", "BOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            safe_haven_symbols=("BOXX",),
+            targets={"SOXL": 0.0, "SOXX": 219.67, "BOXX": 1200.0},
+            market_values={"SOXL": 0.0, "SOXX": 0.0, "BOXX": 0.0},
+            sellable_quantities={"SOXL": 0, "SOXX": 0, "BOXX": 0},
+            quantities={"SOXL": 0, "SOXX": 0, "BOXX": 0},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=1420.01,
+            market_status="🧯 过热降档（SOXX）",
+            deploy_ratio_text="15.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXX 目标仓位 15.0%",
+            available_cash=1463.94,
+            total_strategy_equity=1463.94,
+            portfolio_rows=(("SOXL", "SOXX"), ("BOXX",)),
+        )
+
+        sent_messages, _, _ = self._run_strategy(
+            plan,
+            refreshed_plan=refreshed_plan,
+            prices={"SOXL.US": 261.55, "SOXX.US": 601.80, "BOXX.US": 116.59},
+            estimate_max_purchase_quantity_value=10,
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("🔔 【调仓指令】", sent_messages[0])
+        self.assertIn("限价卖出] SOXL: 4股", sent_messages[0])
+        self.assertEqual(sent_messages[0].count("[买入说明] SOXX.US"), 1)
+        self.assertEqual(sent_messages[0].count("小账户本轮保留现金"), 1)
+        self.assertIn("SOXX.US 目标金额 $220.19 低于 1 股价格 $601.80", sent_messages[0])
+        self.assertNotIn("SOXX.US 目标金额 $219.67 低于 1 股价格 $601.80", sent_messages[0])
+
     def test_target_gap_below_one_share_does_not_report_cash_shortage(self):
         plan = _build_plan(
             strategy_symbols=("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"),
