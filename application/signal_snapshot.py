@@ -131,6 +131,7 @@ def build_signal_snapshot(
         source.get("signal_description"),
         source.get("signal_message"),
     )
+    price_as_of = _first_value(source.get("price_as_of"), source.get("snapshot_manifest_price_as_of"))
     indicators = {
         field: _json_safe(source[field])
         for field in _INDICATOR_FIELDS
@@ -149,6 +150,7 @@ def build_signal_snapshot(
                 source.get("snapshot_as_of"),
                 source.get("trade_date"),
                 parsed_snapshot_date,
+                price_as_of,
             )
         ),
         "market_date": _json_safe(
@@ -158,6 +160,7 @@ def build_signal_snapshot(
                 source.get("snapshot_as_of"),
                 source.get("trade_date"),
                 parsed_snapshot_date,
+                price_as_of,
             )
         ),
         "effective_date": _json_safe(source.get("effective_date")),
@@ -168,9 +171,7 @@ def build_signal_snapshot(
             source.get("signal_source"),
         ),
         "quote_overlay_used": source.get("quote_overlay_used"),
-        "price_as_of": _json_safe(
-            _first_value(source.get("price_as_of"), source.get("snapshot_manifest_price_as_of"))
-        ),
+        "price_as_of": _json_safe(price_as_of),
         "universe_as_of": _json_safe(
             _first_value(source.get("universe_as_of"), source.get("snapshot_manifest_universe_as_of"))
         ),
