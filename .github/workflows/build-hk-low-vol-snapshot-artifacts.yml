@@ -15,6 +15,14 @@ on:
         type: choice
         options:
           - hk_low_vol_dividend_quality
+      data_source_mode:
+        description: "Source used to generate the factor snapshot."
+        required: true
+        default: public_yfinance_staging
+        type: choice
+        options:
+          - public_yfinance_staging
+          - longbridge_openapi_staging
       universe_path:
         description: "Local path in HkEquitySnapshotPipelines, gs://, or https:// universe CSV."
         required: false
@@ -25,7 +33,7 @@ on:
         required: false
         type: string
       history_start:
-        description: "Optional LongBridge history start date, for example 2025-01-01."
+        description: "Optional generated-source history start date, for example 2025-01-01."
         required: false
         type: string
       benchmark_symbol:
@@ -93,6 +101,7 @@ env:
   SNAPSHOT_REPOSITORY: QuantStrategyLab/HkEquitySnapshotPipelines
   SNAPSHOT_REPO_DIR: external/HkEquitySnapshotPipelines
   PROFILE: ${{ inputs.profile }}
+  DATA_SOURCE_MODE: ${{ inputs.data_source_mode }}
   UNIVERSE_PATH: ${{ inputs.universe_path }}
   AS_OF_DATE: ${{ inputs.as_of_date }}
   HISTORY_START: ${{ inputs.history_start }}
@@ -110,7 +119,7 @@ env:
 
 jobs:
   build:
-    name: Build LongBridge-backed HK snapshot artifacts
+    name: Build HK snapshot artifacts
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -135,6 +144,13 @@ jobs:
             hk_low_vol_dividend_quality) ;;
             *)
               echo "Unsupported HK snapshot profile: ${PROFILE}" >&2
+              exit 1
+              ;;
+          esac
+          case "${DATA_SOURCE_MODE}" in
+            public_yfinance_staging|longbridge_openapi_staging) ;;
+            *)
+              echo "Unsupported data_source_mode: ${DATA_SOURCE_MODE}" >&2
               exit 1
               ;;
           esac
@@ -171,7 +187,14 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install -e '.[longbridge]'
+          case "${DATA_SOURCE_MODE}" in
+            public_yfinance_staging)
+              python -m pip install -e '.[public-data]'
+              ;;
+            longbridge_openapi_staging)
+              python -m pip install -e '.[longbridge]'
+              ;;
+          esac
 
       - name: Build, validate, and optionally publish artifacts
         id: build
@@ -214,23 +237,30 @@ jobs:
               ;;
           esac
 
-          LONG_BRIDGE_APP_KEY="$(gcloud secrets versions access latest --project="${LONGBRIDGE_SECRET_PROJECT_ID}" --secret="${LONGBRIDGE_APP_KEY_SECRET_NAME}")"
-          LONG_BRIDGE_APP_SECRET="$(gcloud secrets versions access latest --project="${LONGBRIDGE_SECRET_PROJECT_ID}" --secret="${LONGBRIDGE_APP_SECRET_SECRET_NAME}")"
-          LONG_BRIDGE_ACCESS_TOKEN="$(gcloud secrets versions access latest --project="${LONGBRIDGE_SECRET_PROJECT_ID}" --secret="${LONGBRIDGE_ACCESS_TOKEN_SECRET_NAME}")"
-          missing_credentials=()
-          [ -n "${LONG_BRIDGE_APP_KEY}" ] || missing_credentials+=(app_key)
-          [ -n "${LONG_BRIDGE_APP_SECRET}" ] || missing_credentials+=(app_secret)
-          [ -n "${LONG_BRIDGE_ACCESS_TOKEN}" ] || missing_credentials+=(access_token)
-          if [ "${#missing_credentials[@]}" -gt 0 ]; then
-            printf 'LongBridge Secret Manager values are empty: %s\n' "${missing_credentials[*]}" >&2
-            exit 1
+          generator_script="scripts/build_low_vol_dividend_public_factor_snapshot.py"
+          generated_path="${generated_dir}/factor_snapshot.public_yfinance_staging.csv"
+          generation_label="Public yfinance"
+          if [ "${DATA_SOURCE_MODE}" = "longbridge_openapi_staging" ]; then
+            LONG_BRIDGE_APP_KEY="$(gcloud secrets versions access latest --project="${LONGBRIDGE_SECRET_PROJECT_ID}" --secret="${LONGBRIDGE_APP_KEY_SECRET_NAME}")"
+            LONG_BRIDGE_APP_SECRET="$(gcloud secrets versions access latest --project="${LONGBRIDGE_SECRET_PROJECT_ID}" --secret="${LONGBRIDGE_APP_SECRET_SECRET_NAME}")"
+            LONG_BRIDGE_ACCESS_TOKEN="$(gcloud secrets versions access latest --project="${LONGBRIDGE_SECRET_PROJECT_ID}" --secret="${LONGBRIDGE_ACCESS_TOKEN_SECRET_NAME}")"
+            missing_credentials=()
+            [ -n "${LONG_BRIDGE_APP_KEY}" ] || missing_credentials+=(app_key)
+            [ -n "${LONG_BRIDGE_APP_SECRET}" ] || missing_credentials+=(app_secret)
+            [ -n "${LONG_BRIDGE_ACCESS_TOKEN}" ] || missing_credentials+=(access_token)
+            if [ "${#missing_credentials[@]}" -gt 0 ]; then
+              printf 'LongBridge Secret Manager values are empty: %s\n' "${missing_credentials[*]}" >&2
+              exit 1
+            fi
+            echo "::add-mask::${LONG_BRIDGE_APP_KEY}"
+            echo "::add-mask::${LONG_BRIDGE_APP_SECRET}"
+            echo "::add-mask::${LONG_BRIDGE_ACCESS_TOKEN}"
+            export LONG_BRIDGE_APP_KEY LONG_BRIDGE_APP_SECRET LONG_BRIDGE_ACCESS_TOKEN
+            generator_script="scripts/build_low_vol_dividend_longbridge_factor_snapshot.py"
+            generated_path="${generated_dir}/factor_snapshot.longbridge_staging.csv"
+            generation_label="LongBridge"
           fi
-          echo "::add-mask::${LONG_BRIDGE_APP_KEY}"
-          echo "::add-mask::${LONG_BRIDGE_APP_SECRET}"
-          echo "::add-mask::${LONG_BRIDGE_ACCESS_TOKEN}"
-          export LONG_BRIDGE_APP_KEY LONG_BRIDGE_APP_SECRET LONG_BRIDGE_ACCESS_TOKEN
 
-          generated_path="${generated_dir}/factor_snapshot.longbridge_staging.csv"
           generator_args=(
             --universe "${universe_path}"
             --output "${generated_path}"
@@ -247,18 +277,18 @@ jobs:
             generator_args+=(--allow-research-defaults)
           fi
           set +e
-          python scripts/build_low_vol_dividend_longbridge_factor_snapshot.py "${generator_args[@]}" > "${generated_dir}/generation_summary.json"
+          python "${generator_script}" "${generator_args[@]}" > "${generated_dir}/generation_summary.json"
           generator_status=$?
           set -e
           unset LONG_BRIDGE_APP_KEY LONG_BRIDGE_APP_SECRET LONG_BRIDGE_ACCESS_TOKEN
           if [ -s "${generated_dir}/generation_summary.json" ]; then
-            python - <<'PY' "${generated_dir}/generation_summary.json"
+            python - <<'PY' "${generated_dir}/generation_summary.json" "${generation_label}"
           import json
           import sys
           from pathlib import Path
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          print("LongBridge generation summary:")
+          print(f"{sys.argv[2]} generation summary:")
           for key in (
               "profile",
               "row_count",
@@ -281,7 +311,7 @@ jobs:
           PY
           fi
           if [ "${generator_status}" -ne 0 ]; then
-            echo "LongBridge factor snapshot generation failed; see generation_summary.json in the generated input artifact." >&2
+            echo "${generation_label} factor snapshot generation failed; see generation_summary.json in the generated input artifact." >&2
             exit "${generator_status}"
           fi
 
@@ -326,7 +356,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Upload generated LongBridge input snapshot
+      - name: Upload generated input snapshot
         if: always() && steps.build.outputs.generated_input_name != ''
         uses: actions/upload-artifact@v7
         with:
@@ -343,6 +373,7 @@ jobs:
             echo
             echo "- profile: \`${PROFILE}\`"
             echo "- HkEquitySnapshotPipelines ref: \`${{ inputs.snapshot_ref }}\`"
+            echo "- data_source_mode: \`${DATA_SOURCE_MODE}\`"
             echo "- universe_path: \`${UNIVERSE_PATH:-examples/low_vol_dividend_quality/longbridge_universe.seed.csv}\`"
             echo "- allow_research_defaults: \`${ALLOW_RESEARCH_DEFAULTS}\`"
             echo "- gcs_prefix: \`${GCS_PREFIX:-<not set>}\`"
@@ -366,5 +397,5 @@ jobs:
               echo "\`\`\`"
               echo
             fi
-            echo "Evidence boundary: validated LongBridge-generated CSVs can be runtime artifact inputs when allow_research_defaults=false; final live order approval still requires dry-run execution, notification, and operator approval evidence."
+            echo "Evidence boundary: validated generated CSVs can be runtime artifact inputs when allow_research_defaults=false; final live order approval still requires dry-run execution, notification, and operator approval evidence."
           } >> "${GITHUB_STEP_SUMMARY}"

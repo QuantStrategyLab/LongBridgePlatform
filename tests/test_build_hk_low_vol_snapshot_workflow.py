@@ -12,6 +12,10 @@ def test_hk_low_vol_snapshot_artifact_workflow_uses_longbridge_wif_and_snapshot_
     assert "GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main" in workflow
     assert "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com" in workflow
     assert "SNAPSHOT_REPOSITORY: QuantStrategyLab/HkEquitySnapshotPipelines" in workflow
+    assert "data_source_mode" in workflow
+    assert "public_yfinance_staging" in workflow
+    assert "scripts/build_low_vol_dividend_public_factor_snapshot.py" in workflow
+    assert "python -m pip install -e '.[public-data]'" in workflow
     assert "python -m pip install -e '.[longbridge]'" in workflow
     assert 'gcloud secrets versions access latest --project="${LONGBRIDGE_SECRET_PROJECT_ID}" --secret="${LONGBRIDGE_APP_KEY_SECRET_NAME}"' in workflow
     assert "scripts/build_low_vol_dividend_longbridge_factor_snapshot.py" in workflow
@@ -25,14 +29,16 @@ def test_hk_low_vol_snapshot_artifact_workflow_blocks_research_defaults_publish(
 
     assert "allow_research_defaults=true is research smoke only and cannot be published to GCS." in workflow
     assert 'if [ "${ALLOW_RESEARCH_DEFAULTS}" = "true" ] && [ "${EXECUTE_PUBLISH}" = "true" ]; then' in workflow
-    assert "Evidence boundary: validated LongBridge-generated CSVs can be runtime artifact inputs when allow_research_defaults=false" in workflow
+    assert "Evidence boundary: validated generated CSVs can be runtime artifact inputs when allow_research_defaults=false" in workflow
 
 
 def test_hk_low_vol_snapshot_artifact_workflow_keeps_generation_diagnostics():
     workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
-    assert "LongBridge generation summary:" in workflow
+    assert 'generation_label="Public yfinance"' in workflow
+    assert 'generation_label="LongBridge"' in workflow
+    assert 'print(f"{sys.argv[2]} generation summary:")' in workflow
     assert "failed_symbols_preview" in workflow
-    assert "LongBridge factor snapshot generation failed; see generation_summary.json" in workflow
+    assert '${generation_label} factor snapshot generation failed; see generation_summary.json' in workflow
     assert "if: always() && steps.build.outputs.generated_input_name != ''" in workflow
     assert "if-no-files-found: ignore" in workflow

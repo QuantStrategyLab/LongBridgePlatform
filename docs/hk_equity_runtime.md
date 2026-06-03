@@ -94,7 +94,7 @@ python scripts/print_strategy_switch_env_plan.py \
 
 ## 生成 `hk_low_vol_dividend_quality` snapshot artifacts
 
-`hk_low_vol_dividend_quality` 是 snapshot-backed 策略，Cloud Run 切到这个 profile 前必须先有经过校验的 feature snapshot 和 manifest。`HkEquitySnapshotPipelines` 自身还需要单独开通 GCP WIF 或 GitHub Secrets；在这之前，`LongBridgePlatform` 提供一个手动桥接 workflow，使用本仓库已经允许的 `longbridge-hk` WIF 和 Secret Manager 权限生成真实 LongBridge OpenAPI artifact。
+`hk_low_vol_dividend_quality` 是 snapshot-backed 策略，Cloud Run 切到这个 profile 前必须先有经过校验的 feature snapshot 和 manifest。`LongBridgePlatform` 提供一个手动桥接 workflow，使用本仓库已经允许的 `longbridge-hk` WIF 发布 artifact。默认数据源是 `public_yfinance_staging`，不依赖 LongBridge 历史行情权限；如果账号已开通对应 HK market-data entitlement，也可以切到 `longbridge_openapi_staging`。
 
 手动生成并只打印 GCS 发布计划：
 
@@ -103,6 +103,7 @@ gh workflow run build-hk-low-vol-snapshot-artifacts.yml \
   --repo QuantStrategyLab/LongBridgePlatform \
   -f snapshot_ref=main \
   -f profile=hk_low_vol_dividend_quality \
+  -f data_source_mode=public_yfinance_staging \
   -f allow_research_defaults=false \
   -f execute_publish=false
 ```
@@ -114,6 +115,7 @@ gh workflow run build-hk-low-vol-snapshot-artifacts.yml \
   --repo QuantStrategyLab/LongBridgePlatform \
   -f snapshot_ref=main \
   -f profile=hk_low_vol_dividend_quality \
+  -f data_source_mode=public_yfinance_staging \
   -f allow_research_defaults=false \
   -f gcs_prefix=gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality \
   -f execute_publish=true
@@ -128,7 +130,7 @@ LONGBRIDGE_FEATURE_SNAPSHOT_PATH=gs://qsl-runtime-logs-interactivebrokersquant/s
 LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality/hk_low_vol_dividend_quality_factor_snapshot_latest.csv.manifest.json
 ```
 
-注意：`allow_research_defaults=true` 只允许做研究 smoke，不允许发布到 GCS，也不能作为 live-enable 证据。
+注意：`allow_research_defaults=true` 只允许做研究 smoke，不允许发布到 GCS，也不能作为 live-enable 证据。public yfinance 数据源用于让 snapshot artifact 生成和券商执行解耦；它仍需要按策略证据包记录数据源、生成时间和 broker dry-run 结果。
 
 ## 部署或同步 HK Cloud Run
 
