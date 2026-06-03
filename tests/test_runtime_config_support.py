@@ -58,7 +58,6 @@ BASE_LONGBRIDGE_PROFILES = frozenset(
         "russell_1000_multi_factor_defensive",
         "tqqq_growth_income",
         "soxl_soxx_trend_income",
-        "tech_communication_pullback_enhancement",
     }
 )
 OPTIONAL_LONGBRIDGE_PROFILES = frozenset({"global_etf_confidence_vol_gate"})
@@ -451,7 +450,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.income_threshold_usd, 100000.0)
         self.assertEqual(settings.qqqi_income_ratio, 0.5)
 
-    def test_tech_runtime_execution_window_override_is_loaded_from_env(self):
+    def test_tech_runtime_execution_window_override_rejects_research_only_profile(self):
         with patch.dict(
             os.environ,
             {
@@ -462,10 +461,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             },
             clear=True,
         ):
-            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
-
-        self.assertEqual(settings.strategy_profile, "tech_communication_pullback_enhancement")
-        self.assertEqual(settings.runtime_execution_window_trading_days, 31)
+            with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
+                load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
     def test_rejects_invalid_qqqi_income_ratio(self):
         with patch.dict(
@@ -600,9 +597,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             )
             self.assertTrue(by_profile["global_etf_confidence_vol_gate"]["eligible"])
             self.assertTrue(by_profile["global_etf_confidence_vol_gate"]["enabled"])
-        self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["eligible"])
-        self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["enabled"])
-        self.assertEqual(by_profile["tech_communication_pullback_enhancement"]["display_name"], "Tech/Communication Pullback Enhancement")
+        self.assertNotIn("tech_communication_pullback_enhancement", by_profile)
         self.assertTrue(by_profile["mega_cap_leader_rotation_top50_balanced"]["eligible"])
         self.assertTrue(by_profile["mega_cap_leader_rotation_top50_balanced"]["enabled"])
         self.assertEqual(
@@ -634,7 +629,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         for profile in HK_DISABLED_PROFILES:
             self.assertNotIn(profile, by_profile)
 
-    def test_loads_feature_snapshot_env_for_tech_profile(self):
+    def test_loads_feature_snapshot_env_rejects_research_only_tech_profile(self):
         with patch.dict(
             os.environ,
             {
@@ -647,13 +642,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             },
             clear=True,
         ):
-            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
-
-        self.assertEqual(settings.strategy_profile, "tech_communication_pullback_enhancement")
-        self.assertEqual(settings.feature_snapshot_path, "gs://bucket/tech.csv")
-        self.assertEqual(settings.feature_snapshot_manifest_path, "gs://bucket/tech.csv.manifest.json")
-        self.assertEqual(settings.strategy_config_path, "/workspace/configs/tech.json")
-        self.assertEqual(settings.strategy_config_source, "env")
+            with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
+                load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
     def test_rejects_disabled_hk_profiles(self):
         for profile in sorted(HK_DISABLED_PROFILES):
@@ -752,10 +742,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(by_profile["global_etf_rotation"]["input_mode"], "market_history")
         self.assertFalse(by_profile["global_etf_rotation"]["requires_snapshot_artifacts"])
         self.assertFalse(by_profile["global_etf_rotation"]["requires_strategy_config_path"])
-        self.assertEqual(by_profile["tech_communication_pullback_enhancement"]["profile_group"], "snapshot_backed")
-        self.assertEqual(by_profile["tech_communication_pullback_enhancement"]["input_mode"], "feature_snapshot")
-        self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["requires_snapshot_artifacts"])
-        self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["requires_strategy_config_path"])
+        self.assertNotIn("tech_communication_pullback_enhancement", by_profile)
         self.assertEqual(by_profile["mega_cap_leader_rotation_top50_balanced"]["profile_group"], "snapshot_backed")
         self.assertEqual(by_profile["mega_cap_leader_rotation_top50_balanced"]["input_mode"], "feature_snapshot")
         self.assertTrue(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_snapshot_artifacts"])
@@ -799,7 +786,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("HK-listed Global ETF Rotation", result.stdout)
         self.assertIn("HK High Dividend Low-Volatility Trend", result.stdout)
         self.assertIn("Russell 1000 Multi-Factor", result.stdout)
-        self.assertIn("Tech/Communication Pullback Enhancement", result.stdout)
+        self.assertIn("Mega Cap Leader Rotation Top50 Balanced", result.stdout)
+        self.assertNotIn("Tech/Communication Pullback Enhancement", result.stdout)
         self.assertNotIn("hk_blue_chip_leader_rotation", result.stdout)
         self.assertNotIn("hk_index_mean_reversion", result.stdout)
         self.assertNotIn("hk_etf_regime_rotation", result.stdout)
@@ -1074,7 +1062,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Unsupported STRATEGY_PROFILE", result.stderr)
 
-    def test_print_strategy_switch_env_plan_for_tech_uses_bundled_config_by_default(self):
+    def test_print_strategy_switch_env_plan_rejects_research_only_tech_profile(self):
         result = subprocess.run(
             [
                 sys.executable,
@@ -1085,20 +1073,12 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "hk",
                 "--json",
             ],
-            check=True,
             capture_output=True,
             text=True,
         )
 
-        plan = json.loads(result.stdout)
-        self.assertEqual(plan["canonical_profile"], "tech_communication_pullback_enhancement")
-        self.assertEqual(plan["config_source_policy"], "bundled_or_env")
-        self.assertTrue(plan["requires_strategy_config_path"])
-        self.assertEqual(plan["runtime_execution_window_trading_days"], 1)
-        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_PATH"], "<required>")
-        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"], "<required>")
-        self.assertNotIn("LONGBRIDGE_STRATEGY_CONFIG_PATH", plan["set_env"])
-        self.assertIn("LONGBRIDGE_STRATEGY_CONFIG_PATH", plan["remove_if_present"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unsupported STRATEGY_PROFILE", result.stderr)
 
 
 if __name__ == "__main__":

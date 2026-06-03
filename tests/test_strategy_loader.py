@@ -134,17 +134,11 @@ class StrategyLoaderTests(unittest.TestCase):
         )
         self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
 
-    def test_load_strategy_runtime_adapter_declares_tech_snapshot_inputs(self):
+    def test_load_strategy_runtime_adapter_rejects_research_only_tech_snapshot_inputs(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
 
-        adapter = load_strategy_runtime_adapter_for_profile("tech_communication_pullback_enhancement")
-
-        self.assertEqual(
-            adapter.available_inputs,
-            frozenset({"feature_snapshot", "portfolio_snapshot"}),
-        )
-        self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
-        self.assertTrue(adapter.require_snapshot_manifest)
+        with self.assertRaises(ValueError):
+            load_strategy_runtime_adapter_for_profile("tech_communication_pullback_enhancement")
 
 
 if __name__ == "__main__":
