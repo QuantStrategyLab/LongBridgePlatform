@@ -212,6 +212,34 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["execution"]["reserved_cash"], 1500.0)
         self.assertEqual(plan["execution"]["investable_cash"], 2500.0)
 
+    def test_zero_equity_weight_targets_no_execute_instead_of_translation_error(self):
+        decision = StrategyDecision(
+            positions=(
+                PositionTarget(symbol="AAPL", target_weight=0.5),
+                PositionTarget(symbol="MSFT", target_weight=0.5),
+            ),
+            diagnostics={"signal_description": "risk on"},
+        )
+        snapshot = PortfolioSnapshot(
+            as_of=datetime.now(timezone.utc),
+            total_equity=0.0,
+            buying_power=0.0,
+            positions=(),
+            metadata={"account_hash": "longbridge-zero"},
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            snapshot=snapshot,
+            strategy_profile="mega_cap_leader_rotation_top50_balanced",
+        )
+
+        self.assertEqual(plan["allocation"]["target_mode"], "value")
+        self.assertEqual(plan["allocation"]["targets"], {"AAPL": 0.0, "MSFT": 0.0})
+        self.assertEqual(plan["portfolio"]["total_equity"], 0.0)
+        self.assertEqual(plan["execution"]["trade_threshold_value"], 100.0)
+        self.assertEqual(plan["execution"]["investable_cash"], 0.0)
+
     def test_carries_snapshot_manifest_diagnostics_to_execution(self):
         decision = StrategyDecision(
             positions=(),

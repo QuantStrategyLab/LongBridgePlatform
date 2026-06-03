@@ -271,6 +271,28 @@ def _build_hold_current_value_decision(portfolio_inputs) -> StrategyDecision:
     return StrategyDecision(positions=tuple(positions))
 
 
+def _build_zero_equity_value_decision(decision: StrategyDecision) -> StrategyDecision:
+    positions: list[PositionTarget] = []
+    for position in decision.positions:
+        positions.append(
+            PositionTarget(
+                symbol=position.symbol,
+                target_value=0.0,
+                role=position.role or _symbol_role(position.symbol),
+                order_preference=position.order_preference,
+            )
+        )
+    return StrategyDecision(
+        positions=tuple(positions),
+        budgets=decision.budgets,
+        risk_flags=tuple(dict.fromkeys((*decision.risk_flags, "no_execute"))),
+        diagnostics={
+            **dict(decision.diagnostics),
+            "execution_blocked_reason": "non_positive_total_equity",
+        },
+    )
+
+
 def _normalize_to_value_target_decision(
     decision: StrategyDecision,
     *,
@@ -284,14 +306,24 @@ def _normalize_to_value_target_decision(
         return decision, None
 
     if target_mode == "weight" and not no_execute:
+        total_equity = float(portfolio_inputs.total_equity)
+        if total_equity <= 0.0:
+            return _build_zero_equity_value_decision(
+                decision,
+            ), _build_weight_translation_annotations(
+                decision,
+                total_equity=total_equity,
+                liquid_cash=float(portfolio_inputs.liquid_cash),
+                runtime_metadata=runtime_metadata,
+            )
         translated = translate_decision_to_target_mode(
             decision,
             target_mode="value",
-            total_equity=float(portfolio_inputs.total_equity),
+            total_equity=total_equity,
         )
         return translated, _build_weight_translation_annotations(
             decision,
-            total_equity=float(portfolio_inputs.total_equity),
+            total_equity=total_equity,
             liquid_cash=float(portfolio_inputs.liquid_cash),
             runtime_metadata=runtime_metadata,
         )
