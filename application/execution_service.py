@@ -1012,7 +1012,7 @@ def execute_rebalance_cycle(
             continue
         can_buy_value = min(diff, investable_cash)
         if can_buy_value > price:
-            is_limit_order = symbol in limit_order_symbols
+            is_limit_order = symbol in limit_order_symbols or symbol == cash_sweep_symbol
             limit_order_kind = "limit" if is_limit_order else "market"
             limit_ref_price = round(price * limit_buy_premium, 2) if is_limit_order else round(price, 2)
             limit_candidate = _estimate_buy_quantity_candidate(
@@ -1135,7 +1135,22 @@ def execute_rebalance_cycle(
                 float(safe_haven_cash_substitute_threshold_usd or 0.0),
             )
             if substitution_threshold <= 0.0 or investable_cash >= substitution_threshold:
-                quantity = int(investable_cash // cash_sweep_price)
+                ref_price = round(cash_sweep_price * limit_buy_premium, 2)
+                budget_quantity = floor_to_quantity_step(investable_cash / ref_price, 1.0)
+                cash_limit_quantity = estimate_cash_buy_quantity_safe(
+                    trade_context,
+                    market_symbol(cash_sweep_symbol),
+                    "limit",
+                    ref_price,
+                    estimate_max_purchase_quantity=estimate_max_purchase_quantity,
+                    notify_issue=notify_issue,
+                )
+                if cash_limit_quantity is None:
+                    quantity = 0
+                else:
+                    quantity = _normalize_trade_quantity(
+                        min(budget_quantity, float(cash_limit_quantity)),
+                    )
             else:
                 quantity = 0
             if quantity > 0:
@@ -1145,32 +1160,43 @@ def execute_rebalance_cycle(
                         market_symbol(cash_sweep_symbol),
                         "buy",
                         quantity_text,
-                        round(cash_sweep_price, 2),
-                        order_type="market",
+                        ref_price,
+                        order_type="limit",
                     )
                 else:
                     submitted = submit_order_via_port(
                         market_symbol(cash_sweep_symbol),
-                        "market",
+                        "limit",
                         "buy",
                         quantity,
                         translator(
-                            "market_buy",
+                            "limit_buy",
                             symbol=cash_sweep_symbol,
                             qty=quantity_text,
-                            price=round(cash_sweep_price, 2),
+                            price=ref_price,
                         ),
+                        submitted_price=ref_price,
                     )
                 if submitted:
                     rebuy_message = translator(
                         "cash_sweep_rebuy",
                         symbol=market_symbol(cash_sweep_symbol),
                         qty=quantity_text,
-                        price=f"{cash_sweep_price:.2f}",
+                        price=f"{ref_price:.2f}",
                     )
                     note_logs.append(rebuy_message)
                     print(with_prefix(rebuy_message), flush=True)
                     action_done = True
+            elif substitution_threshold <= 0.0 or investable_cash >= substitution_threshold:
+                record_note_log(
+                    note_logs,
+                    translator=translator,
+                    with_prefix=with_prefix,
+                    kind="buy_deferred_cash_sweep_cash_limit",
+                    symbol=market_symbol(cash_sweep_symbol),
+                    investable=f"{investable_cash:.2f}",
+                    budget_qty=format_quantity(budget_quantity),
+                )
 
     return ExecutionCycleResult(
         plan=dict(plan or {}),

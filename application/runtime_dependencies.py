@@ -26,6 +26,9 @@ class LongBridgeRebalanceConfig:
     sleeper: Callable[[float], None] | None = None
     extra_notification_lines: tuple[str, ...] = ()
     strategy_plugin_signals: tuple[Any, ...] = ()
+    execution_dedup_enabled: bool = False
+    execution_state_store: Any = None
+    execution_state_account_scope: str = ""
 
 
 @dataclass(frozen=True)

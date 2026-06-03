@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from application.execution_service import execute_rebalance_cycle
+from application.execution_service import ExecutionCycleResult, execute_rebalance_cycle
+from application.execution_state import build_execution_marker_key
 from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
 from application.signal_snapshot import build_signal_snapshot
 from notifications.events import NotificationPublisher
@@ -160,6 +161,71 @@ _format_dashboard_text = notification_renderers._format_dashboard_text
 _append_status_lines = notification_renderers._append_status_lines
 
 
+def _build_execution_marker_key(*, config: LongBridgeRebalanceConfig, execution: dict) -> str:
+    if not getattr(config, "execution_dedup_enabled", False):
+        return ""
+    execution_mode = "paper" if bool(getattr(config, "dry_run_only", False)) else "live"
+    return build_execution_marker_key(
+        platform="longbridge",
+        strategy_profile=getattr(config, "strategy_profile", "") or "unknown",
+        account_scope=getattr(config, "execution_state_account_scope", "") or "unknown",
+        execution_mode=execution_mode,
+        signal_date=execution.get("signal_date"),
+        effective_date=execution.get("effective_date"),
+        execution_timing_contract=execution.get("execution_timing_contract"),
+    )
+
+
+def _execution_already_recorded_message(*, config: LongBridgeRebalanceConfig, marker_key: str, execution: dict) -> str:
+    message = config.translator(
+        "execution_already_recorded",
+        marker=marker_key,
+        signal_date=str(execution.get("signal_date") or ""),
+        effective_date=str(execution.get("effective_date") or ""),
+    )
+    if not message or message == "execution_already_recorded":
+        message = f"Execution already recorded for signal={execution.get('signal_date')} effective={execution.get('effective_date')}"
+    return message
+
+
+def _should_record_execution_marker(*, result: ExecutionCycleResult, config: LongBridgeRebalanceConfig) -> bool:
+    if not getattr(config, "execution_dedup_enabled", False):
+        return False
+    if bool(getattr(config, "dry_run_only", False)) and tuple(getattr(result, "dry_run_orders", ()) or ()):
+        return True
+    return bool(getattr(result, "action_done", False))
+
+
+def _record_execution_marker(
+    *,
+    config: LongBridgeRebalanceConfig,
+    marker_key: str,
+    result: ExecutionCycleResult,
+    notify_issue,
+) -> None:
+    store = getattr(config, "execution_state_store", None)
+    if not store or not marker_key:
+        return
+    try:
+        store.record_marker(
+            marker_key,
+            metadata={
+                "strategy_profile": getattr(config, "strategy_profile", ""),
+                "account_scope": getattr(config, "execution_state_account_scope", ""),
+                "dry_run_only": bool(getattr(config, "dry_run_only", False)),
+                "action_done": bool(getattr(result, "action_done", False)),
+                "dry_run_orders_count": len(tuple(getattr(result, "dry_run_orders", ()) or ())),
+                "signal_date": str(dict(getattr(result, "execution", {}) or {}).get("signal_date") or ""),
+                "effective_date": str(dict(getattr(result, "execution", {}) or {}).get("effective_date") or ""),
+            },
+        )
+    except Exception as exc:
+        notify_issue(
+            "Execution marker write failed",
+            f"Marker: {marker_key}\n{type(exc).__name__}: {exc}",
+        )
+
+
 
 def run_strategy(
     *,
@@ -200,29 +266,83 @@ def run_strategy(
 
     plan, portfolio, execution, allocation = fetch_replanned_state()
 
-    execution_result = execute_rebalance_cycle(
-        trade_context=trade_context,
-        plan=plan,
-        portfolio=portfolio,
-        execution=execution,
-        allocation=allocation,
-        fetch_replanned_state=fetch_replanned_state,
-        market_data_port=market_data_port,
-        estimate_max_purchase_quantity=runtime.estimate_max_purchase_quantity,
-        execution_port=execution_port,
-        post_submit_order=runtime.post_submit_order,
-        notify_issue=runtime.notify_issue,
-        translator=config.translator,
-        with_prefix=config.with_prefix,
-        limit_sell_discount=config.limit_sell_discount,
-        limit_buy_premium=config.limit_buy_premium,
-        dry_run_only=config.dry_run_only,
-        symbol_suffix=config.symbol_suffix,
-        post_sell_refresh_attempts=config.post_sell_refresh_attempts,
-        post_sell_refresh_interval_sec=config.post_sell_refresh_interval_sec,
-        sleeper=config.sleeper or _noop_sleep,
-        safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
-    )
+    execution_marker_key = _build_execution_marker_key(config=config, execution=execution)
+    execution_state_store = getattr(config, "execution_state_store", None)
+    execution_already_recorded = False
+    if execution_marker_key and execution_state_store:
+        try:
+            execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
+        except Exception as exc:
+            runtime.notify_issue(
+                "Execution marker read failed",
+                f"Marker: {execution_marker_key}\n{type(exc).__name__}: {exc}",
+            )
+        if not execution_already_recorded and hasattr(execution_state_store, "has_prior_execution_report"):
+            try:
+                execution_already_recorded = bool(
+                    execution_state_store.has_prior_execution_report(
+                        platform="longbridge",
+                        strategy_profile=getattr(config, "strategy_profile", "") or "unknown",
+                        account_scope=getattr(config, "execution_state_account_scope", "") or "unknown",
+                        signal_date=execution.get("signal_date"),
+                        effective_date=execution.get("effective_date"),
+                        dry_run_only=bool(getattr(config, "dry_run_only", False)),
+                    )
+                )
+            except Exception as exc:
+                runtime.notify_issue(
+                    "Execution report dedup read failed",
+                    f"Marker: {execution_marker_key}\n{type(exc).__name__}: {exc}",
+                )
+
+    if execution_already_recorded:
+        message = _execution_already_recorded_message(
+            config=config,
+            marker_key=execution_marker_key,
+            execution=execution,
+        )
+        print(config.with_prefix(message), flush=True)
+        execution_result = ExecutionCycleResult(
+            plan=plan,
+            portfolio=portfolio,
+            execution=execution,
+            allocation=allocation,
+            logs=(),
+            skip_logs=(),
+            note_logs=(message,),
+            action_done=False,
+        )
+    else:
+        execution_result = execute_rebalance_cycle(
+            trade_context=trade_context,
+            plan=plan,
+            portfolio=portfolio,
+            execution=execution,
+            allocation=allocation,
+            fetch_replanned_state=fetch_replanned_state,
+            market_data_port=market_data_port,
+            estimate_max_purchase_quantity=runtime.estimate_max_purchase_quantity,
+            execution_port=execution_port,
+            post_submit_order=runtime.post_submit_order,
+            notify_issue=runtime.notify_issue,
+            translator=config.translator,
+            with_prefix=config.with_prefix,
+            limit_sell_discount=config.limit_sell_discount,
+            limit_buy_premium=config.limit_buy_premium,
+            dry_run_only=config.dry_run_only,
+            symbol_suffix=config.symbol_suffix,
+            post_sell_refresh_attempts=config.post_sell_refresh_attempts,
+            post_sell_refresh_interval_sec=config.post_sell_refresh_interval_sec,
+            sleeper=config.sleeper or _noop_sleep,
+            safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
+        )
+        if _should_record_execution_marker(result=execution_result, config=config):
+            _record_execution_marker(
+                config=config,
+                marker_key=execution_marker_key,
+                result=execution_result,
+                notify_issue=runtime.notify_issue,
+            )
     execution = execution_result.execution
     execution["signal_snapshot"] = build_signal_snapshot(
         platform="longbridge",

@@ -193,16 +193,20 @@ def _build_benchmark_lines(execution, *, translator):
     ]
 
 
-def _format_dashboard_text(text) -> str:
-    return "\n".join(
-        line.rstrip()
-        for line in str(text or "").splitlines()
-        if line.strip()
-    )
+def _format_dashboard_text(text, *, translator=None) -> str:
+    lines = []
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            continue
+        if translator is not None and _translator_uses_zh(translator):
+            line = _localize_notification_text(line, translator=translator)
+        lines.append(line)
+    return "\n".join(lines)
 
 
-def _append_dashboard_block(lines, *, execution, separator) -> None:
-    dashboard_text = _format_dashboard_text(execution.get("dashboard_text"))
+def _append_dashboard_block(lines, *, execution, separator, translator) -> None:
+    dashboard_text = _format_dashboard_text(execution.get("dashboard_text"), translator=translator)
     if dashboard_text:
         lines.append(separator)
         lines.extend(dashboard_text.splitlines())
@@ -369,7 +373,7 @@ def render_rebalance_notification(
     if dry_run_only:
         detailed_lines.append(translator("dry_run_banner"))
     _append_extra_notification_lines(detailed_lines, extra_notification_lines)
-    _append_dashboard_block(detailed_lines, execution=execution, separator=separator)
+    _append_dashboard_block(detailed_lines, execution=execution, separator=separator, translator=translator)
     _append_timing_lines(detailed_lines, execution=execution, translator=translator)
     _append_signal_snapshot_line(detailed_lines, execution=execution, translator=translator)
     _append_source_input_line(detailed_lines, execution=execution, translator=translator)
@@ -386,7 +390,7 @@ def render_rebalance_notification(
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
     _append_extra_notification_lines(compact_lines, extra_notification_lines)
-    _append_dashboard_block(compact_lines, execution=execution, separator=separator)
+    _append_dashboard_block(compact_lines, execution=execution, separator=separator, translator=translator)
     _append_timing_lines(compact_lines, execution=execution, translator=translator)
     _append_signal_snapshot_line(compact_lines, execution=execution, translator=translator)
     _append_source_input_line(compact_lines, execution=execution, translator=translator)
@@ -419,7 +423,7 @@ def render_heartbeat_notification(
     if dry_run_only:
         detailed_lines.append(translator("dry_run_banner"))
     _append_extra_notification_lines(detailed_lines, extra_notification_lines)
-    _append_dashboard_block(detailed_lines, execution=execution, separator=separator)
+    _append_dashboard_block(detailed_lines, execution=execution, separator=separator, translator=translator)
     _append_timing_lines(detailed_lines, execution=execution, translator=translator)
     _append_signal_snapshot_line(detailed_lines, execution=execution, translator=translator)
     _append_source_input_line(detailed_lines, execution=execution, translator=translator)
@@ -455,7 +459,7 @@ def render_heartbeat_notification(
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
     _append_extra_notification_lines(compact_lines, extra_notification_lines)
-    _append_dashboard_block(compact_lines, execution=execution, separator=separator)
+    _append_dashboard_block(compact_lines, execution=execution, separator=separator, translator=translator)
     _append_timing_lines(compact_lines, execution=execution, translator=translator)
     _append_signal_snapshot_line(compact_lines, execution=execution, translator=translator)
     _append_source_input_line(compact_lines, execution=execution, translator=translator)

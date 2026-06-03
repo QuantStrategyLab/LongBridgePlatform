@@ -150,6 +150,12 @@ class NotificationTests(unittest.TestCase):
     def test_heartbeat_localizes_strategy_diagnostics_and_source_input_status(self):
         rendered = render_heartbeat_notification(
             execution={
+                "dashboard_text": (
+                    "📌 策略账户概览\n"
+                    "🎯 信号: regime=risk_on breadth=68.0% benchmark_trend=up "
+                    "target_stock=100.0% realized_stock=100.0% selected=4 "
+                    "top=MU(4.07), INTC(2.23), AMD(1.96)"
+                ),
                 "signal_snapshot": {
                     "market_date": "",
                     "latest_price_source": "longbridge_candlesticks",
@@ -173,6 +179,12 @@ class NotificationTests(unittest.TestCase):
         )
 
         self.assertIn("🧩 输入状态: 价格 2026-06-01 | 股票池 2026-05-14 | 状态 部分行情刷新", rendered.compact_text)
+        self.assertIn(
+            "🎯 信号: 市场阶段=进攻 市场宽度=68.0% 基准趋势=向上 "
+            "目标股票仓位=100.0% 实际股票仓位=100.0% 入选标的数=4 "
+            "前排标的=MU(4.07), INTC(2.23), AMD(1.96)",
+            rendered.compact_text,
+        )
         self.assertIn("📊 市场状态: 市场阶段=进攻", rendered.compact_text)
         self.assertIn(
             "🎯 信号: 市场阶段=进攻 市场宽度=68.0% 基准趋势=向上 "
@@ -181,6 +193,7 @@ class NotificationTests(unittest.TestCase):
             rendered.compact_text,
         )
         self.assertNotIn("regime=risk_on", rendered.compact_text)
+        self.assertNotIn("benchmark_trend=up", rendered.compact_text)
         self.assertNotIn("target_stock=", rendered.compact_text)
         self.assertNotIn("partial_history_refresh", rendered.compact_text)
 
