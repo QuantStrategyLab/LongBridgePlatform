@@ -70,6 +70,26 @@ class SignalSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot["source_input_fallback_streak"], 1)
         self.assertEqual(snapshot["source_refresh_run_id"], "12345")
 
+    def test_uses_price_as_of_as_snapshot_date_fallback(self):
+        snapshot = build_signal_snapshot(
+            platform="longbridge",
+            execution={
+                "snapshot_manifest_price_as_of": "2026-06-01",
+                "snapshot_manifest_universe_as_of": "2026-05-14",
+                "snapshot_manifest_source_input_status": "partial_history_refresh",
+                "latest_price_source": "longbridge_candlesticks",
+                "signal_display": (
+                    "regime=risk_on breadth=68.0% benchmark_trend=up "
+                    "target_stock=100.0% realized_stock=100.0% selected=4"
+                ),
+            },
+        )
+
+        self.assertEqual(snapshot["market_date"], "2026-06-01")
+        self.assertEqual(snapshot["signal_as_of"], "2026-06-01")
+        self.assertEqual(snapshot["price_as_of"], "2026-06-01")
+        self.assertEqual(snapshot["universe_as_of"], "2026-05-14")
+
 
 if __name__ == "__main__":
     unittest.main()
