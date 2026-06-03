@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +25,7 @@ class LongBridgeNotificationAdapters:
     notify_issue: Callable[[str, str], None]
     post_submit_order: Callable[[Any, Any, Any], None]
     cycle_publisher: NotificationPublisher
+    delivery_events: list[dict[str, Any]]
 
     def publish_cycle_notification(self, *, detailed_text: str, compact_text: str) -> None:
         self.cycle_publisher.publish(
@@ -44,18 +46,33 @@ def build_runtime_notification_adapters(
     order_poll_max_attempts: int,
     sleeper: Callable[[float], None],
     log_message: Callable[[str], None] | None = None,
+    delivery_events: list[dict[str, Any]] | None = None,
 ) -> LongBridgeNotificationAdapters:
+    recorded_delivery_events = delivery_events if delivery_events is not None else []
+
+    def send_recorded_message(message: str) -> None:
+        send_message(message)
+        compact = str(message or "")
+        recorded_delivery_events.append(
+            {
+                "sink": "telegram",
+                "delivery_status": "sent",
+                "compact_text_sha256": hashlib.sha256(compact.encode("utf-8")).hexdigest(),
+                "compact_text_length": len(compact),
+            }
+        )
+
     cycle_publisher = NotificationPublisher(
         log_message=log_message or (lambda message: print(with_prefix(message), flush=True)),
-        send_message=send_message,
+        send_message=send_recorded_message,
     )
     notify_issue = build_issue_notifier(
         with_prefix_fn=with_prefix,
-        send_tg_message_fn=send_message,
+        send_tg_message_fn=send_recorded_message,
     )
     order_event_publisher = NotificationPublisher(
         log_message=lambda _message: None,
-        send_message=send_message,
+        send_message=send_recorded_message,
     )
 
     def publish_order_event(event: OrderLifecycleEvent) -> None:
@@ -81,8 +98,9 @@ def build_runtime_notification_adapters(
         )
 
     return LongBridgeNotificationAdapters(
-        notification_port=CallableNotificationPort(send_message),
+        notification_port=CallableNotificationPort(send_recorded_message),
         notify_issue=notify_issue,
         post_submit_order=post_submit_order,
         cycle_publisher=cycle_publisher,
+        delivery_events=recorded_delivery_events,
     )

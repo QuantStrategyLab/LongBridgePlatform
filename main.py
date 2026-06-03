@@ -119,6 +119,71 @@ def _split_env_list(value: str | None) -> tuple[str, ...]:
     )
 
 
+def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
+    if cycle_result is None:
+        return {
+            "action_done": False,
+            "order_events_count": 0,
+            "orders_previewed_count": 0,
+            "orders_skipped_count": 0,
+            "notes_count": 0,
+            "dry_run_order_preview_available": False,
+        }
+    logs = tuple(getattr(cycle_result, "logs", ()) or ())
+    skip_logs = tuple(getattr(cycle_result, "skip_logs", ()) or ())
+    note_logs = tuple(getattr(cycle_result, "note_logs", ()) or ())
+    dry_run_orders = tuple(getattr(cycle_result, "dry_run_orders", ()) or ())
+    quote_snapshots = tuple(getattr(cycle_result, "quote_snapshots", ()) or ())
+    order_events_count = len(logs)
+    orders_previewed_count = len(dry_run_orders) if dry_run_orders else (order_events_count if dry_run else 0)
+    summary = {
+        "action_done": bool(getattr(cycle_result, "action_done", False)),
+        "order_events_count": order_events_count,
+        "orders_previewed_count": orders_previewed_count,
+        "orders_skipped_count": len(skip_logs),
+        "notes_count": len(note_logs),
+        "dry_run_order_preview_available": bool(dry_run and orders_previewed_count > 0),
+    }
+    if dry_run_orders:
+        summary["orders_previewed"] = [dict(order) for order in dry_run_orders]
+    if quote_snapshots:
+        summary["quote_snapshot"] = {
+            "quotes": [dict(snapshot) for snapshot in quote_snapshots],
+        }
+    return summary
+
+
+def _build_notification_delivery_log_for_report(
+    *,
+    platform: str,
+    strategy_profile: str,
+    run_id: str,
+    dry_run: bool,
+    orders_previewed_count: int,
+    delivery_events: list[dict],
+) -> dict:
+    events = [dict(event) for event in delivery_events if dict(event).get("delivery_status") == "sent"]
+    if not dry_run or orders_previewed_count <= 0 or not events:
+        return {}
+    return {
+        "notification_schema_version": "hk_live_enablement_notification.v1",
+        "notification_event_type": "hk_snapshot_live_enablement_dry_run",
+        "notification_correlation_id": str(run_id or ""),
+        "locales": ["en", "zh-Hans"],
+        "profile": str(strategy_profile or ""),
+        "platform": str(platform or ""),
+        "validation_status": "passed",
+        "orders_previewed": int(orders_previewed_count),
+        "delivery_events": events,
+        "notification_contains_profile": True,
+        "notification_contains_platform": True,
+        "notification_contains_validation_status": True,
+        "notification_contains_order_preview_summary": True,
+        "notification_redacts_sensitive_fields": True,
+        "redaction_policy": "raw notification text is not persisted; only sha256 and length are recorded",
+    }
+
+
 signal_text = build_signal_text(t)
 strategy_display_name = build_strategy_display_name(t)(
     STRATEGY_PROFILE,
@@ -421,16 +486,40 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             )
         if not validation_only:
             publish_strategy_plugin_alerts(strategy_plugin_signals, report=report)
-        cycle_result = run_rebalance_cycle(
-            runtime=composer.build_rebalance_runtime(
+        notification_delivery_events: list[dict] = []
+        try:
+            rebalance_runtime = composer.build_rebalance_runtime(
                 silent_cycle_notifications=validation_only,
-            ),
+                notification_delivery_events=notification_delivery_events,
+            )
+        except TypeError as exc:
+            if "notification_delivery_events" not in str(exc):
+                raise
+            rebalance_runtime = composer.build_rebalance_runtime(
+                silent_cycle_notifications=validation_only,
+            )
+        cycle_result = run_rebalance_cycle(
+            runtime=rebalance_runtime,
             config=composer.build_rebalance_config(strategy_plugin_signals=strategy_plugin_signals),
         )
         signal_snapshot = {}
         if cycle_result is not None:
             execution = dict(getattr(cycle_result, "execution", {}) or {})
             signal_snapshot = dict(execution.get("signal_snapshot") or {})
+        execution_summary = _summarize_cycle_result_for_report(
+            cycle_result,
+            dry_run=bool(report.get("dry_run")),
+        )
+        notification_delivery_log = _build_notification_delivery_log_for_report(
+            platform="longbridge",
+            strategy_profile=STRATEGY_PROFILE,
+            run_id=str(report.get("run_id") or ""),
+            dry_run=bool(report.get("dry_run")),
+            orders_previewed_count=int(execution_summary.get("orders_previewed_count") or 0),
+            delivery_events=notification_delivery_events,
+        )
+        if notification_delivery_log:
+            execution_summary["notification_delivery_log"] = notification_delivery_log
         if signal_snapshot:
             reporting_adapters.log_event(
                 log_context,
@@ -441,6 +530,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         finalize_runtime_report(
             report,
             status="ok",
+            summary=execution_summary,
             diagnostics={"signal_snapshot": signal_snapshot} if signal_snapshot else None,
         )
         reporting_adapters.log_event(

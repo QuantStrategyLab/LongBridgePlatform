@@ -99,7 +99,7 @@ class LongBridgeRuntimeComposer:
         )
         sender(message)
 
-    def build_notification_adapters(self):
+    def build_notification_adapters(self, *, delivery_events: list[dict[str, Any]] | None = None):
         return self.notification_adapter_builder(
             with_prefix=self.with_prefix,
             send_message=self.send_tg_message,
@@ -109,6 +109,7 @@ class LongBridgeRuntimeComposer:
             order_poll_max_attempts=self.order_poll_max_attempts,
             sleeper=self.sleeper,
             log_message=lambda message: self.printer(self.with_prefix(message), flush=True),
+            delivery_events=delivery_events,
         )
 
     def build_reporting_adapters(self):
@@ -152,8 +153,13 @@ class LongBridgeRuntimeComposer:
             printer=lambda line: self.printer(line, flush=True),
         )
 
-    def build_rebalance_runtime(self, *, silent_cycle_notifications: bool = False) -> LongBridgeRebalanceRuntime:
-        notification_adapters = self.build_notification_adapters()
+    def build_rebalance_runtime(
+        self,
+        *,
+        silent_cycle_notifications: bool = False,
+        notification_delivery_events: list[dict[str, Any]] | None = None,
+    ) -> LongBridgeRebalanceRuntime:
+        notification_adapters = self.build_notification_adapters(delivery_events=notification_delivery_events)
         notifications = (
             CallableNotificationPort(lambda _message: None)
             if silent_cycle_notifications

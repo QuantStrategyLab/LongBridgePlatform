@@ -247,6 +247,8 @@ class ExecutionCycleResult:
     skip_logs: tuple[str, ...]
     note_logs: tuple[str, ...]
     action_done: bool
+    dry_run_orders: tuple[dict, ...] = ()
+    quote_snapshots: tuple[dict, ...] = ()
 
 
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
@@ -255,6 +257,24 @@ SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD = 2000.0
 
 def _noop_sleep(_seconds):
     return None
+
+
+def _coerce_order_quantity(value):
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return value
+
+
+def _serialize_quote_snapshot(snapshot) -> dict:
+    return {
+        "symbol": str(getattr(snapshot, "symbol", "") or "").strip().upper(),
+        "as_of": str(getattr(snapshot, "as_of", "") or ""),
+        "last_price": float(getattr(snapshot, "last_price", 0.0) or 0.0),
+        "bid_price": getattr(snapshot, "bid_price", None),
+        "ask_price": getattr(snapshot, "ask_price", None),
+        "currency": str(getattr(snapshot, "currency", "") or "").strip(),
+    }
 
 
 def _safe_haven_cash_symbols(*, portfolio: dict, allocation: dict) -> tuple[str, ...]:
@@ -414,9 +434,12 @@ def _sell_order_quantity(
     )
 
 
-def safe_quote_last_price(symbol, *, market_data_port, notify_issue):
+def safe_quote_last_price(symbol, *, market_data_port, notify_issue, quote_recorder=None):
     try:
-        return float(market_data_port.get_quote(symbol).last_price)
+        snapshot = market_data_port.get_quote(symbol)
+        if quote_recorder is not None:
+            quote_recorder(snapshot)
+        return float(snapshot.last_price)
     except Exception as exc:
         notify_issue("Quote failed", f"Symbol: {symbol}\n{exc}")
         return None
@@ -565,6 +588,8 @@ def execute_rebalance_cycle(
     logs: list[str] = []
     skip_logs: list[str] = []
     note_logs: list[str] = []
+    dry_run_orders: list[dict] = []
+    quote_snapshots_by_symbol: dict[str, dict] = {}
     small_account_cash_note_keys: set[str] = set()
     action_done = False
     sell_submitted = False
@@ -575,6 +600,12 @@ def execute_rebalance_cycle(
 
     def market_symbol(symbol):
         return _market_symbol(symbol, symbol_suffix=symbol_suffix)
+
+    def record_quote_snapshot(snapshot) -> None:
+        payload = _serialize_quote_snapshot(snapshot)
+        symbol = payload.get("symbol")
+        if symbol:
+            quote_snapshots_by_symbol[symbol] = payload
 
     strategy_assets = tuple(allocation["strategy_symbols"])
     market_values = dict(portfolio["market_values"])
@@ -678,6 +709,18 @@ def execute_rebalance_cycle(
         price_text = f"${price:.2f}" if price is not None else translator("order_type_market")
         side_key = "side_buy" if str(side).lower() == "buy" else "side_sell"
         order_type_key = "order_type_limit" if order_type == "limit" else "order_type_market"
+        order_payload = {
+            "symbol": str(symbol or "").strip().upper(),
+            "side": str(side or "").strip().lower(),
+            "quantity": _coerce_order_quantity(quantity),
+            "order_type": str(order_type or "").strip().lower(),
+            "status": "dry_run",
+        }
+        if price is not None:
+            order_payload["price"] = round(float(price), 4)
+            if order_type == "limit":
+                order_payload["limit_price"] = round(float(price), 4)
+        dry_run_orders.append(order_payload)
         message = translator(
             "dry_run_order",
             side=translator(side_key),
@@ -697,6 +740,7 @@ def execute_rebalance_cycle(
                 market_symbol(symbol),
                 market_data_port=market_data_port,
                 notify_issue=notify_issue,
+                quote_recorder=record_quote_snapshot,
             )
             if price is None:
                 continue
@@ -786,6 +830,7 @@ def execute_rebalance_cycle(
             market_symbol(cash_sweep_symbol),
             market_data_port=market_data_port,
             notify_issue=notify_issue,
+            quote_recorder=record_quote_snapshot,
         )
         if sweep_price is not None and sweep_price > 0.0:
             funding_needs = []
@@ -794,6 +839,7 @@ def execute_rebalance_cycle(
                     market_symbol(buy_symbol),
                     market_data_port=market_data_port,
                     notify_issue=notify_issue,
+                    quote_recorder=record_quote_snapshot,
                 )
                 if buy_price is None:
                     continue
@@ -937,6 +983,7 @@ def execute_rebalance_cycle(
             market_symbol(symbol),
             market_data_port=market_data_port,
             notify_issue=notify_issue,
+            quote_recorder=record_quote_snapshot,
         )
         if price is None:
             continue
@@ -1057,6 +1104,7 @@ def execute_rebalance_cycle(
             market_symbol(cash_sweep_symbol),
             market_data_port=market_data_port,
             notify_issue=notify_issue,
+            quote_recorder=record_quote_snapshot,
         )
         if cash_sweep_price is not None and cash_sweep_price > 0.0 and investable_cash > cash_sweep_price * 2:
             substitution_threshold = max(
@@ -1110,4 +1158,6 @@ def execute_rebalance_cycle(
         skip_logs=tuple(skip_logs),
         note_logs=tuple(note_logs),
         action_done=action_done,
+        dry_run_orders=tuple(dry_run_orders),
+        quote_snapshots=tuple(quote_snapshots_by_symbol.values()),
     )
