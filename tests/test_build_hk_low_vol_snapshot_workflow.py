@@ -26,3 +26,13 @@ def test_hk_low_vol_snapshot_artifact_workflow_blocks_research_defaults_publish(
     assert "allow_research_defaults=true is research smoke only and cannot be published to GCS." in workflow
     assert 'if [ "${ALLOW_RESEARCH_DEFAULTS}" = "true" ] && [ "${EXECUTE_PUBLISH}" = "true" ]; then' in workflow
     assert "Evidence boundary: validated LongBridge-generated CSVs can be runtime artifact inputs when allow_research_defaults=false" in workflow
+
+
+def test_hk_low_vol_snapshot_artifact_workflow_keeps_generation_diagnostics():
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+    assert "LongBridge generation summary:" in workflow
+    assert "failed_symbols_preview" in workflow
+    assert "LongBridge factor snapshot generation failed; see generation_summary.json" in workflow
+    assert "if: always() && steps.build.outputs.generated_input_name != ''" in workflow
+    assert "if-no-files-found: ignore" in workflow
