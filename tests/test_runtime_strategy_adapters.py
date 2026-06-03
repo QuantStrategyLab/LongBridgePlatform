@@ -84,7 +84,7 @@ def test_runtime_strategy_adapters_materialize_hk_direct_market_history():
 
     adapters = build_runtime_strategy_adapters(
         strategy_runtime=SimpleNamespace(evaluate=lambda **_kwargs: None),
-        strategy_profile="hk_listed_global_etf_rotation",
+        strategy_profile="hk_global_etf_tactical_rotation",
         strategy_runtime_config={"universe_symbols": ("02800", "02834")},
         available_inputs=("market_history",),
         benchmark_symbol="QQQ",

@@ -312,7 +312,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         estimated_symbols = []
         prices = {"02800.HK": 30.0, "03033.HK": 20.0}
         plan = _build_plan(
-            strategy_profile="hk_listed_global_etf_rotation",
+            strategy_profile="hk_global_etf_tactical_rotation",
             strategy_symbols=("02800", "03033"),
             risk_symbols=("02800", "03033"),
             targets={"02800": 90000.0, "03033": 70000.0},

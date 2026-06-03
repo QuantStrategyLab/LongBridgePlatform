@@ -608,7 +608,7 @@ class RequestHandlingTests(unittest.TestCase):
 
         payload = module._build_notification_delivery_log_for_report(
             platform="longbridge",
-            strategy_profile="hk_low_vol_dividend_quality",
+            strategy_profile="hk_low_vol_dividend_quality_snapshot",
             run_id="run-001",
             dry_run=True,
             orders_previewed_count=2,
@@ -626,7 +626,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(payload["notification_event_type"], "hk_snapshot_live_enablement_dry_run")
         self.assertEqual(payload["notification_correlation_id"], "run-001")
         self.assertEqual(payload["locales"], ["en", "zh-Hans"])
-        self.assertEqual(payload["profile"], "hk_low_vol_dividend_quality")
+        self.assertEqual(payload["profile"], "hk_low_vol_dividend_quality_snapshot")
         self.assertEqual(payload["platform"], "longbridge")
         self.assertEqual(payload["orders_previewed"], 2)
         self.assertTrue(payload["notification_redacts_sensitive_fields"])
@@ -637,7 +637,7 @@ class RequestHandlingTests(unittest.TestCase):
 
         payload = module._build_notification_delivery_log_for_report(
             platform="longbridge",
-            strategy_profile="hk_low_vol_dividend_quality",
+            strategy_profile="hk_low_vol_dividend_quality_snapshot",
             run_id="run-001",
             dry_run=True,
             orders_previewed_count=2,

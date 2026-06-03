@@ -14,7 +14,7 @@ QuantStrategyLab 现有平台仓库里，能做港股股票交易运行时接入
 
 ## 运行时设计
 
-平台运行时已具备港股市场维度，并接入 `HkEquityStrategies` 的港股 profile 元数据。当前平台可选港股 profile 只暴露 `runtime_enabled` 的 `hk_listed_global_etf_rotation`；`hk_blue_chip_leader_rotation` 是 snapshot 架构占位，`hk_index_mean_reversion`、`hk_etf_regime_rotation` 是 `market_history` 研究候选，均留在研究/快照仓库，不进入平台可选列表。Cloud Run 通过 `RUNTIME_TARGET_JSON` / `STRATEGY_PROFILE` 选择当前运行策略。整体仍沿用美股策略的分层方式：
+平台运行时已具备港股市场维度，并接入 `HkEquityStrategies` 的港股 profile 元数据。当前平台可选港股 profile 只暴露 `runtime_enabled` 的 `hk_global_etf_tactical_rotation`；`hk_blue_chip_leader_rotation` 是 snapshot 架构占位，`hk_index_mean_reversion`、`hk_etf_regime_rotation` 是 `market_history` 研究候选，均留在研究/快照仓库，不进入平台可选列表。Cloud Run 通过 `RUNTIME_TARGET_JSON` / `STRATEGY_PROFILE` 选择当前运行策略。整体仍沿用美股策略的分层方式：
 
 1. [`HkEquityStrategies`](https://github.com/QuantStrategyLab/HkEquityStrategies) 提供非 snapshot `hk_equity` 策略定义、运行入口和 LongBridge runtime adapter。
 2. [`HkEquitySnapshotPipelines`](https://github.com/QuantStrategyLab/HkEquitySnapshotPipelines) 产出 snapshot-backed profile 的特征快照、manifest、ranking 和 release summary。
@@ -28,12 +28,12 @@ QuantStrategyLab 现有平台仓库里，能做港股股票交易运行时接入
 
 | Profile | Domain | Inputs | Target mode | Snapshot manifest | Status |
 | --- | --- | --- | --- | --- | --- |
-| `hk_listed_global_etf_rotation` | `hk_equity` | `market_history` | `weight` | not required | runtime-enabled; platform-selectable |
+| `hk_global_etf_tactical_rotation` | `hk_equity` | `market_history` | `weight` | not required | runtime-enabled; platform-selectable |
 | `hk_blue_chip_leader_rotation` | `hk_equity` | `feature_snapshot` | `weight` | required | snapshot scaffold; not platform-selectable |
 | `hk_index_mean_reversion` | `hk_equity` | `market_history` | `weight` | not required | research/backtest only; not platform-selectable |
 | `hk_etf_regime_rotation` | `hk_equity` | `market_history` | `weight` | not required | research/backtest only; not platform-selectable |
 
-`scripts/print_strategy_profile_status.py` 只显示平台可选 profile，因此只会列出 `hk_listed_global_etf_rotation` 这一条港股 profile。其他港股候选继续保留在研究文档和 snapshot pipeline，不应该出现在 Cloud Run switch plan 里。
+`scripts/print_strategy_profile_status.py` 只显示平台可选 profile，因此只会列出 `hk_global_etf_tactical_rotation` 这一条港股 profile。其他港股候选继续保留在研究文档和 snapshot pipeline，不应该出现在 Cloud Run switch plan 里。
 
 未来启用 snapshot-backed profile 后的最小策略配置示例；这些 profile 晋级为 `runtime_enabled` 前不会出现在平台可选列表：
 
@@ -73,7 +73,7 @@ LONGBRIDGE_TRADING_CURRENCY=HKD
 
 ```bash
 python scripts/print_strategy_switch_env_plan.py \
-  --profile hk_listed_global_etf_rotation \
+  --profile hk_global_etf_tactical_rotation \
   --account-region hk \
   --dry-run-only \
   --deployment-selector hk-verify \
@@ -84,7 +84,7 @@ python scripts/print_strategy_switch_env_plan.py \
 
 这个命令只打印计划。输出会显式包含：
 
-- `RUNTIME_TARGET_JSON`：`strategy_profile=hk_listed_global_etf_rotation`、`dry_run_only=true`、`execution_mode=paper`。
+- `RUNTIME_TARGET_JSON`：`strategy_profile=hk_global_etf_tactical_rotation`、`dry_run_only=true`、`execution_mode=paper`。
 - `ACCOUNT_REGION=HK`、`ACCOUNT_PREFIX=HK`、`LONGBRIDGE_DRY_RUN_ONLY=true`。
 - `LONGBRIDGE_MARKET=HK` / `XHKG` / `Asia/Hong_Kong` / `.HK` / `HKD`。
 - `remove_if_present`：清理 snapshot/config 相关环境变量，因为该 profile 直接使用 `market_history`。
@@ -92,9 +92,9 @@ python scripts/print_strategy_switch_env_plan.py \
 
 打印计划不会直接修改服务配置；只有执行 Cloud Run env 更新/部署命令才会改变服务。
 
-## 生成 `hk_low_vol_dividend_quality` snapshot artifacts
+## 生成 `hk_low_vol_dividend_quality_snapshot` snapshot artifacts
 
-`hk_low_vol_dividend_quality` 是 snapshot-backed 策略，Cloud Run 切到这个 profile 前必须先有经过校验的 feature snapshot 和 manifest。`LongBridgePlatform` 提供一个手动桥接 workflow，使用本仓库已经允许的 `longbridge-hk` WIF 发布 artifact。默认数据源是 `public_yfinance_staging`，不依赖 LongBridge 历史行情权限；如果账号已开通对应 HK market-data entitlement，也可以切到 `longbridge_openapi_staging`。
+`hk_low_vol_dividend_quality_snapshot` 是 snapshot-backed 策略，Cloud Run 切到这个 profile 前必须先有经过校验的 feature snapshot 和 manifest。`LongBridgePlatform` 提供一个手动桥接 workflow，使用本仓库已经允许的 `longbridge-hk` WIF 发布 artifact。默认数据源是 `public_yfinance_staging`，不依赖 LongBridge 历史行情权限；如果账号已开通对应 HK market-data entitlement，也可以切到 `longbridge_openapi_staging`。
 
 手动生成并只打印 GCS 发布计划：
 
@@ -102,7 +102,7 @@ python scripts/print_strategy_switch_env_plan.py \
 gh workflow run build-hk-low-vol-snapshot-artifacts.yml \
   --repo QuantStrategyLab/LongBridgePlatform \
   -f snapshot_ref=main \
-  -f profile=hk_low_vol_dividend_quality \
+  -f profile=hk_low_vol_dividend_quality_snapshot \
   -f data_source_mode=public_yfinance_staging \
   -f allow_research_defaults=false \
   -f execute_publish=false
@@ -114,20 +114,20 @@ gh workflow run build-hk-low-vol-snapshot-artifacts.yml \
 gh workflow run build-hk-low-vol-snapshot-artifacts.yml \
   --repo QuantStrategyLab/LongBridgePlatform \
   -f snapshot_ref=main \
-  -f profile=hk_low_vol_dividend_quality \
+  -f profile=hk_low_vol_dividend_quality_snapshot \
   -f data_source_mode=public_yfinance_staging \
   -f allow_research_defaults=false \
-  -f gcs_prefix=gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality \
+  -f gcs_prefix=gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality_snapshot \
   -f execute_publish=true
 ```
 
 发布后，HK dry-run runtime 需要至少配置：
 
 ```bash
-STRATEGY_PROFILE=hk_low_vol_dividend_quality
+STRATEGY_PROFILE=hk_low_vol_dividend_quality_snapshot
 LONGBRIDGE_DRY_RUN_ONLY=true
-LONGBRIDGE_FEATURE_SNAPSHOT_PATH=gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality/hk_low_vol_dividend_quality_factor_snapshot_latest.csv
-LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality/hk_low_vol_dividend_quality_factor_snapshot_latest.csv.manifest.json
+LONGBRIDGE_FEATURE_SNAPSHOT_PATH=gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality_snapshot/hk_low_vol_dividend_quality_snapshot_factor_snapshot_latest.csv
+LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality_snapshot/hk_low_vol_dividend_quality_snapshot_factor_snapshot_latest.csv.manifest.json
 ```
 
 注意：`allow_research_defaults=true` 只允许做研究 smoke，不允许发布到 GCS，也不能作为 live-enable 证据。public yfinance 数据源用于让 snapshot artifact 生成和券商执行解耦；它仍需要按策略证据包记录数据源、生成时间和 broker dry-run 结果。
@@ -137,7 +137,7 @@ LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=gs://qsl-runtime-logs-interactivebroke
 仓库的 `Deploy Cloud Run` workflow 支持手动 `workflow_dispatch` 目标 `hk-verify`。这个目标只启用 HK matrix deployment，PAPER / SG 会跳过，并设置或更新独立港股 dry-run 服务：
 
 - `CLOUD_RUN_SERVICE=longbridge-quant-hk-verify-service`（可通过输入改名）
-- `STRATEGY_PROFILE=hk_listed_global_etf_rotation`
+- `STRATEGY_PROFILE=hk_global_etf_tactical_rotation`
 - `ACCOUNT_REGION=HK`、`ACCOUNT_PREFIX=HK`
 - `RUNTIME_TARGET_JSON.execution_mode=paper`、`dry_run_only=true`
 - `LONGBRIDGE_DRY_RUN_ONLY=true`
@@ -177,6 +177,6 @@ gh workflow run sync-cloud-run-env.yml \
 ## 风险和注意事项
 
 - `XHKG` 是否可用取决于部署环境里的 `pandas_market_calendars` 版本；如不可用，可用 `LONGBRIDGE_MARKET_CALENDAR` 临时覆盖。
-- `hk_listed_global_etf_rotation` 已在策略包 `runtime_enabled`，可由 LongBridge HK Cloud Run 通过运行时环境选择；`hk_blue_chip_leader_rotation`、`hk_index_mean_reversion`、`hk_etf_regime_rotation` 仍不进入平台可选列表。
+- `hk_global_etf_tactical_rotation` 已在策略包 `runtime_enabled`，可由 LongBridge HK Cloud Run 通过运行时环境选择；`hk_blue_chip_leader_rotation`、`hk_index_mean_reversion`、`hk_etf_regime_rotation` 仍不进入平台可选列表。
 - 港股 `market_history` profile 运行后，需要持续用 LongBridge HK 行情 feed 对 `02800`、`03033`、`02822`、`02840`、`03110`、`03188`、`02834`、`03175` 做行情、价差、lot-size 和订单预览/执行结果复核。
 - LongBridge 下单仍保持整数股规则；如果未来港股策略涉及碎股或特殊交易单位，需要在策略层明确 lot-size 约束后再扩展。

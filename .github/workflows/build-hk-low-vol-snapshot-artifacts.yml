@@ -11,10 +11,10 @@ on:
       profile:
         description: "HK snapshot profile to build."
         required: true
-        default: hk_low_vol_dividend_quality
+        default: hk_low_vol_dividend_quality_snapshot
         type: choice
         options:
-          - hk_low_vol_dividend_quality
+          - hk_low_vol_dividend_quality_snapshot
       data_source_mode:
         description: "Source used to generate the factor snapshot."
         required: true
@@ -49,12 +49,12 @@ on:
       artifact_dir:
         description: "Artifact output directory inside HkEquitySnapshotPipelines."
         required: false
-        default: data/output/hk_low_vol_dividend_quality
+        default: data/output/hk_low_vol_dividend_quality_snapshot
         type: string
       gcs_prefix:
         description: "Optional GCS prefix for validated runtime artifacts."
         required: false
-        default: gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality
+        default: gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality_snapshot
         type: string
       execute_publish:
         description: "Actually upload validated artifacts to GCS. false only prints the publish plan."
@@ -141,7 +141,7 @@ jobs:
           set -euo pipefail
 
           case "${PROFILE}" in
-            hk_low_vol_dividend_quality) ;;
+            hk_low_vol_dividend_quality_snapshot) ;;
             *)
               echo "Unsupported HK snapshot profile: ${PROFILE}" >&2
               exit 1
@@ -205,8 +205,8 @@ jobs:
           generated_dir="data/input/generated/${PROFILE}"
           artifact_dir="${ARTIFACT_DIR_INPUT:-data/output/${PROFILE}}"
           mkdir -p "${generated_dir}" "${artifact_dir}"
-          snapshot_uri="${GCS_PREFIX%/}/hk_low_vol_dividend_quality_factor_snapshot_latest.csv"
-          manifest_uri="${GCS_PREFIX%/}/hk_low_vol_dividend_quality_factor_snapshot_latest.csv.manifest.json"
+          snapshot_uri="${GCS_PREFIX%/}/hk_low_vol_dividend_quality_snapshot_factor_snapshot_latest.csv"
+          manifest_uri="${GCS_PREFIX%/}/hk_low_vol_dividend_quality_snapshot_factor_snapshot_latest.csv.manifest.json"
           {
             echo "artifact_dir=${SNAPSHOT_REPO_DIR}/${artifact_dir}"
             echo "generated_input_dir=${SNAPSHOT_REPO_DIR}/${generated_dir}"
@@ -390,7 +390,7 @@ jobs:
               echo "Suggested longbridge-hk environment values for dry-run runtime:"
               echo
               echo "\`\`\`bash"
-              echo "STRATEGY_PROFILE=hk_low_vol_dividend_quality"
+              echo "STRATEGY_PROFILE=hk_low_vol_dividend_quality_snapshot"
               echo "LONGBRIDGE_DRY_RUN_ONLY=true"
               echo "LONGBRIDGE_FEATURE_SNAPSHOT_PATH=${{ steps.build.outputs.snapshot_gcs_uri }}"
               echo "LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=${{ steps.build.outputs.manifest_gcs_uri }}"
