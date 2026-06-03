@@ -543,6 +543,231 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("【调仓", sent_messages[0])
 
+    def test_run_strategy_skips_when_execution_marker_already_exists(self):
+        sent_messages = []
+        checked_keys = []
+        plan = _build_plan(
+            strategy_symbols=("SOXX",),
+            risk_symbols=("SOXX",),
+            targets={"SOXX": 500.0},
+            market_values={"SOXX": 0.0},
+            sellable_quantities={"SOXX": 0},
+            quantities={"SOXX": 0},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=600.0,
+            market_status="Risk on",
+            deploy_ratio_text="100.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="duplicate signal",
+            available_cash=600.0,
+            total_strategy_equity=600.0,
+            portfolio_rows=(("SOXX",),),
+            signal_date="2026-06-01",
+            effective_date="2026-06-02",
+        )
+
+        class FakeStore:
+            def has_marker(self, marker_key):
+                checked_keys.append(marker_key)
+                return True
+
+            def record_marker(self, *_args, **_kwargs):
+                raise AssertionError("duplicate run must not record a new marker")
+
+        rebalance_service.run_strategy(
+            runtime=LongBridgeRebalanceRuntime(
+                bootstrap=lambda: ("quote-context", "trade-context", {"trend": "ok"}),
+                resolve_rebalance_plan=lambda *, indicators, snapshot=None, account_state=None: plan,
+                market_data_port_factory=lambda _quote_context: CallableMarketDataPort(
+                    quote_loader=lambda _symbol: (_ for _ in ()).throw(AssertionError("quote should not load"))
+                ),
+                estimate_max_purchase_quantity=lambda *args, **kwargs: (_ for _ in ()).throw(
+                    AssertionError("buy estimate should not run")
+                ),
+                notifications=CallableNotificationPort(sent_messages.append),
+                notify_issue=lambda title, detail: sent_messages.append(f"{title}\n{detail}"),
+                portfolio_port_factory=lambda _quote_context, _trade_context: CallablePortfolioPort(
+                    lambda: _build_snapshot(plan)
+                ),
+                execution_port_factory=lambda _trade_context: CallableExecutionPort(
+                    lambda _order_intent: (_ for _ in ()).throw(AssertionError("order should not submit"))
+                ),
+            ),
+            config=LongBridgeRebalanceConfig(
+                limit_sell_discount=0.995,
+                limit_buy_premium=1.005,
+                separator="━━━━━━━━━━━━━━━━━━",
+                translator=build_translator("zh"),
+                with_prefix=lambda message: f"[PAPER/LongBridgeQuant] {message}",
+                strategy_profile="soxl_soxx_trend_income",
+                strategy_display_name="SOXL/SOXX 半导体趋势收益",
+                dry_run_only=True,
+                execution_dedup_enabled=True,
+                execution_state_store=FakeStore(),
+                execution_state_account_scope="PAPER",
+            ),
+        )
+
+        self.assertEqual(len(checked_keys), 1)
+        self.assertIn("paper", checked_keys[0])
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("已跳过重复执行", sent_messages[0])
+        self.assertIn("2026-06-01", sent_messages[0])
+        self.assertNotIn("限价买入", sent_messages[0])
+
+    def test_run_strategy_skips_when_prior_report_matches_execution_signal(self):
+        sent_messages = []
+        report_checks = []
+        plan = _build_plan(
+            strategy_symbols=("SOXX",),
+            risk_symbols=("SOXX",),
+            targets={"SOXX": 500.0},
+            market_values={"SOXX": 0.0},
+            sellable_quantities={"SOXX": 0},
+            quantities={"SOXX": 0},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=600.0,
+            market_status="Risk on",
+            deploy_ratio_text="100.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="duplicate signal",
+            available_cash=600.0,
+            total_strategy_equity=600.0,
+            portfolio_rows=(("SOXX",),),
+            signal_date="2026-06-01",
+            effective_date="2026-06-02",
+        )
+
+        class FakeStore:
+            def has_marker(self, _marker_key):
+                return False
+
+            def has_prior_execution_report(self, **kwargs):
+                report_checks.append(kwargs)
+                return True
+
+            def record_marker(self, *_args, **_kwargs):
+                raise AssertionError("historical report duplicate must not record a new marker")
+
+        rebalance_service.run_strategy(
+            runtime=LongBridgeRebalanceRuntime(
+                bootstrap=lambda: ("quote-context", "trade-context", {"trend": "ok"}),
+                resolve_rebalance_plan=lambda *, indicators, snapshot=None, account_state=None: plan,
+                market_data_port_factory=lambda _quote_context: CallableMarketDataPort(
+                    quote_loader=lambda _symbol: (_ for _ in ()).throw(AssertionError("quote should not load"))
+                ),
+                estimate_max_purchase_quantity=lambda *args, **kwargs: (_ for _ in ()).throw(
+                    AssertionError("buy estimate should not run")
+                ),
+                notifications=CallableNotificationPort(sent_messages.append),
+                notify_issue=lambda title, detail: sent_messages.append(f"{title}\n{detail}"),
+                portfolio_port_factory=lambda _quote_context, _trade_context: CallablePortfolioPort(
+                    lambda: _build_snapshot(plan)
+                ),
+                execution_port_factory=lambda _trade_context: CallableExecutionPort(
+                    lambda _order_intent: (_ for _ in ()).throw(AssertionError("order should not submit"))
+                ),
+            ),
+            config=LongBridgeRebalanceConfig(
+                limit_sell_discount=0.995,
+                limit_buy_premium=1.005,
+                separator="━━━━━━━━━━━━━━━━━━",
+                translator=build_translator("zh"),
+                with_prefix=lambda message: f"[PAPER/LongBridgeQuant] {message}",
+                strategy_profile="soxl_soxx_trend_income",
+                strategy_display_name="SOXL/SOXX 半导体趋势收益",
+                dry_run_only=True,
+                execution_dedup_enabled=True,
+                execution_state_store=FakeStore(),
+                execution_state_account_scope="PAPER",
+            ),
+        )
+
+        self.assertEqual(len(report_checks), 1)
+        self.assertEqual(report_checks[0]["signal_date"], "2026-06-01")
+        self.assertEqual(report_checks[0]["effective_date"], "2026-06-02")
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("已跳过重复执行", sent_messages[0])
+        self.assertNotIn("限价买入", sent_messages[0])
+
+    def test_run_strategy_records_execution_marker_after_dry_run_order_preview(self):
+        sent_messages = []
+        recorded_markers = []
+        plan = _build_plan(
+            strategy_symbols=("BOXX",),
+            safe_haven_symbols=("BOXX",),
+            targets={"BOXX": 1150.0},
+            market_values={"BOXX": 0.0},
+            sellable_quantities={"BOXX": 0},
+            quantities={"BOXX": 0},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=1200.0,
+            market_status="Cash sweep",
+            deploy_ratio_text="0.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="cash sweep",
+            available_cash=1200.0,
+            total_strategy_equity=1200.0,
+            portfolio_rows=(("BOXX",),),
+            signal_date="2026-06-01",
+            effective_date="2026-06-02",
+        )
+
+        class FakeStore:
+            def has_marker(self, _marker_key):
+                return False
+
+            def record_marker(self, marker_key, *, metadata=None):
+                recorded_markers.append((marker_key, dict(metadata or {})))
+
+        rebalance_service.run_strategy(
+            runtime=LongBridgeRebalanceRuntime(
+                bootstrap=lambda: ("quote-context", "trade-context", {"trend": "ok"}),
+                resolve_rebalance_plan=lambda *, indicators, snapshot=None, account_state=None: plan,
+                market_data_port_factory=lambda _quote_context: CallableMarketDataPort(
+                    quote_loader=lambda symbol: QuoteSnapshot(
+                        symbol=symbol,
+                        as_of="2026-06-01",
+                        last_price=100.0,
+                    )
+                ),
+                estimate_max_purchase_quantity=lambda *args, **kwargs: 10,
+                notifications=CallableNotificationPort(sent_messages.append),
+                notify_issue=lambda title, detail: sent_messages.append(f"{title}\n{detail}"),
+                portfolio_port_factory=lambda _quote_context, _trade_context: CallablePortfolioPort(
+                    lambda: _build_snapshot(plan)
+                ),
+                execution_port_factory=lambda _trade_context: CallableExecutionPort(
+                    lambda _order_intent: (_ for _ in ()).throw(AssertionError("dry-run should not submit"))
+                ),
+            ),
+            config=LongBridgeRebalanceConfig(
+                limit_sell_discount=0.995,
+                limit_buy_premium=1.0,
+                separator="━━━━━━━━━━━━━━━━━━",
+                translator=build_translator("zh"),
+                with_prefix=lambda message: f"[PAPER/LongBridgeQuant] {message}",
+                strategy_profile="soxl_soxx_trend_income",
+                strategy_display_name="SOXL/SOXX 半导体趋势收益",
+                dry_run_only=True,
+                execution_dedup_enabled=True,
+                execution_state_store=FakeStore(),
+                execution_state_account_scope="PAPER",
+            ),
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("🧪 模拟限价买入 BOXX.US", sent_messages[0])
+        self.assertEqual(len(recorded_markers), 1)
+        self.assertIn("2026-06-01", recorded_markers[0][0])
+        self.assertTrue(recorded_markers[0][1]["dry_run_only"])
+
     def test_append_status_lines_localizes_snapshot_guard_text_for_zh(self):
         lines = []
         rebalance_service._append_status_lines(
@@ -1054,7 +1279,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("限价卖出] BOXX: 1股", sent_messages[0])
         self.assertNotIn("限价卖出] BOXX: 1.5股", sent_messages[0])
 
-    def test_market_buy_floors_to_whole_shares(self):
+    def test_cash_sweep_buy_uses_marketable_limit_and_floors_to_whole_shares(self):
         plan = _build_plan(
             strategy_symbols=("BOXX",),
             safe_haven_symbols=("BOXX",),
@@ -1082,8 +1307,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("市价买入] BOXX: 10股", sent_messages[0])
-        self.assertNotIn("市价买入] BOXX: 10.5股", sent_messages[0])
+        self.assertIn("限价买入] BOXX: 10股", sent_messages[0])
+        self.assertNotIn("限价买入] BOXX: 10.5股", sent_messages[0])
 
     def test_zero_target_sell_uses_sellable_quantity_not_price_derived_floor(self):
         plan = _build_plan(
@@ -1611,7 +1836,41 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("🧪 模拟运行模式", sent_messages[0])
-        self.assertIn("🧪 模拟市价买入 BOXX.US", sent_messages[0])
+        self.assertIn("🧪 模拟限价买入 BOXX.US", sent_messages[0])
+
+    def test_cash_sweep_rebuy_skips_when_broker_estimate_is_zero(self):
+        initial_plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX", "BOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            safe_haven_symbols=("BOXX",),
+            targets={"SOXL": 0.0, "SOXX": 0.0, "BOXX": 0.0},
+            market_values={"SOXL": 0.0, "SOXX": 0.0, "BOXX": 0.0},
+            sellable_quantities={"SOXL": 0, "SOXX": 0, "BOXX": 0},
+            quantities={"SOXL": 0, "SOXX": 0, "BOXX": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=1200.0,
+            market_status="🧯 过热降档（SOXX）",
+            deploy_ratio_text="0.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="无其他买单，仅保留现金回补",
+            available_cash=1200.0,
+            total_strategy_equity=1200.0,
+            portfolio_rows=(("SOXL", "SOXX"), ("BOXX",)),
+        )
+
+        sent_messages, _, _ = self._run_strategy(
+            initial_plan,
+            prices={"SOXL.US": 100.0, "SOXX.US": 200.0, "BOXX.US": 100.0},
+            estimate_max_purchase_quantity_value=0,
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("💓 【心跳检测】", sent_messages[0])
+        self.assertIn("BOXX.US 剩余可投资现金 $1200.00", sent_messages[0])
+        self.assertIn("券商估算可买数量为 0", sent_messages[0])
+        self.assertNotIn("市价买入] BOXX", sent_messages[0])
 
     def test_retries_account_refresh_after_sell_until_buying_power_updates(self):
         initial_plan = _build_plan(
