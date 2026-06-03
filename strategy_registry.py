@@ -36,6 +36,7 @@ from quant_platform_kit.common.strategies import (
 LONGBRIDGE_PLATFORM = "longbridge"
 HK_EQUITY_DOMAIN = "hk_equity"
 NASDAQ_SP500_SMART_DCA_PROFILE = "nasdaq_sp500_smart_dca"
+TECH_COMMUNICATION_PULLBACK_PROFILE = "tech_communication_pullback_enhancement"
 
 PLATFORM_SUPPORTED_DOMAINS: dict[str, frozenset[str]] = {
     LONGBRIDGE_PLATFORM: frozenset({US_EQUITY_DOMAIN, HK_EQUITY_DOMAIN}),
@@ -96,9 +97,15 @@ HK_STRATEGY_CATALOG = get_hk_strategy_catalog()
 STRATEGY_CATALOG = _merge_strategy_catalogs(US_STRATEGY_CATALOG, HK_STRATEGY_CATALOG)
 US_STRATEGY_PROFILES = frozenset(US_STRATEGY_CATALOG.definitions)
 HK_STRATEGY_PROFILES = frozenset(HK_STRATEGY_CATALOG.definitions)
+LONGBRIDGE_EXCLUDED_LIVE_PROFILES = frozenset(
+    {
+        NASDAQ_SP500_SMART_DCA_PROFILE,
+        TECH_COMMUNICATION_PULLBACK_PROFILE,
+    }
+)
 LONGBRIDGE_ROLLOUT_ALLOWLIST = (
-    get_us_runtime_enabled_profiles() - frozenset({NASDAQ_SP500_SMART_DCA_PROFILE})
-) | get_hk_runtime_enabled_profiles()
+    get_us_runtime_enabled_profiles() | get_hk_runtime_enabled_profiles()
+) - LONGBRIDGE_EXCLUDED_LIVE_PROFILES
 PLATFORM_CAPABILITY_MATRIX = PlatformCapabilityMatrix(
     platform_id=LONGBRIDGE_PLATFORM,
     supported_domains=PLATFORM_SUPPORTED_DOMAINS[LONGBRIDGE_PLATFORM],
@@ -124,7 +131,7 @@ _STRUCTURALLY_ELIGIBLE_STRATEGY_PROFILES = derive_eligible_profiles_for_platform
         profile,
         platform_id=LONGBRIDGE_PLATFORM,
     ),
-) - frozenset({NASDAQ_SP500_SMART_DCA_PROFILE})
+) - LONGBRIDGE_EXCLUDED_LIVE_PROFILES
 # Keep research-only and snapshot-scaffold HK profiles out of platform switch/status output.
 ELIGIBLE_STRATEGY_PROFILES = _STRUCTURALLY_ELIGIBLE_STRATEGY_PROFILES & LONGBRIDGE_ROLLOUT_ALLOWLIST
 LONGBRIDGE_ENABLED_PROFILES = derive_enabled_profiles_for_platform(

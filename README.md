@@ -77,7 +77,6 @@ values instead of attempting order translation.
 | `mega_cap_leader_rotation_top50_balanced` | Mega Cap Leader Rotation Top50 Balanced | Yes | Yes | `us_equity` | selectable balanced Top50 monthly leader rotation |
 | `soxl_soxx_trend_income` | SOXL/SOXX Semiconductor Trend Income | Yes | Yes | `us_equity` | current SG deployment |
 | `tqqq_growth_income` | TQQQ Growth Income | Yes | Yes | `us_equity` | selectable growth line |
-| `tech_communication_pullback_enhancement` | Tech/Communication Pullback Enhancement | Yes | Yes | `us_equity` | current PAPER deployment |
 | `hk_blue_chip_leader_rotation` | HK Blue Chip Leader Rotation | Yes | No | `hk_equity` | architecture scaffold only; not runtime-enabled |
 | `hk_index_mean_reversion` | HK Index Mean Reversion | Yes | No | `hk_equity` | market-history research candidate; not runtime-enabled |
 | `hk_etf_regime_rotation` | HK ETF Regime Rotation | Yes | No | `hk_equity` | market-history research candidate; not runtime-enabled |
@@ -116,7 +115,7 @@ Telegram notifications include structured execution and heartbeat messages, with
 | `LONGPORT_APP_SECRET` | Yes | LongPort OpenAPI app secret (for token refresh); recommended to inject from the region-specific Secret Manager secret for this deployment, such as `longport-app-secret-paper` / `longport-app-secret-hk` / `longport-app-secret-sg` |
 | `LONGPORT_SECRET_NAME` | No | Secret Manager secret name for LongPort token (default: `longport_token_paper`) |
 | `ACCOUNT_PREFIX` | No | Alert/log prefix for account/environment (default: `DEFAULT`) |
-| `STRATEGY_PROFILE` | Yes | Strategy profile selector for compatibility and strategy routing. Set explicitly per deployment; enabled values include `global_etf_confidence_vol_gate`, `global_etf_rotation`, `mega_cap_leader_rotation_top50_balanced`, `russell_1000_multi_factor_defensive`, `soxl_soxx_trend_income`, `tech_communication_pullback_enhancement`, `tqqq_growth_income`, and `hk_listed_global_etf_rotation`. The structured runtime target is carried separately as `RUNTIME_TARGET_JSON`; Cloud Run uses the values configured on the selected service. |
+| `STRATEGY_PROFILE` | Yes | Strategy profile selector for compatibility and strategy routing. Set explicitly per deployment; enabled values include `global_etf_confidence_vol_gate`, `global_etf_rotation`, `mega_cap_leader_rotation_top50_balanced`, `russell_1000_multi_factor_defensive`, `soxl_soxx_trend_income`, `tqqq_growth_income`, and `hk_listed_global_etf_rotation`. Tech/Communication is research-only and is not selectable by the platform status/switch tooling. The structured runtime target is carried separately as `RUNTIME_TARGET_JSON`; Cloud Run uses the values configured on the selected service. |
 | `ACCOUNT_REGION` | No | Account region marker for platform-style deployment (e.g. `PAPER`, `HK`, `SG`; defaults to `ACCOUNT_PREFIX` / `DEFAULT`) |
 | `LONGBRIDGE_MARKET` | No | Market scope. Defaults to `HK` when `ACCOUNT_REGION=HK`, otherwise `US`. |
 | `LONGBRIDGE_MARKET_CALENDAR` | No | Market calendar for market-hours checks. Defaults to `XHKG` for HK and `NYSE` for US. |

@@ -141,7 +141,7 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["execution"]["exit_line"], 470.0)
         self.assertEqual(plan["portfolio"]["market_values"]["TQQQ"], 5000.0)
 
-    def test_translates_weight_decision_for_tech_strategy(self):
+    def test_translates_weight_decision_for_snapshot_strategy(self):
         decision = StrategyDecision(
             positions=(
                 PositionTarget(symbol="AAPL", target_weight=0.35),
@@ -163,13 +163,13 @@ class DecisionMapperTests(unittest.TestCase):
                 Position(symbol="AAPL", quantity=10, market_value=1500.0),
                 Position(symbol="BOXX", quantity=30, market_value=3000.0),
             ),
-            metadata={"account_hash": "longbridge-tech"},
+            metadata={"account_hash": "longbridge-mega"},
         )
 
         plan = map_strategy_decision_to_plan(
             decision,
             snapshot=snapshot,
-            strategy_profile="tech_communication_pullback_enhancement",
+            strategy_profile="mega_cap_leader_rotation_top50_balanced",
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")
@@ -179,7 +179,7 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["execution"]["status_display"], "regime=soft_defense | breadth=55.0%")
         self.assertEqual(plan["execution"]["dashboard_text"], "tech dashboard")
         self.assertEqual(plan["execution"]["benchmark_symbol"], "QQQ")
-        self.assertEqual(plan["portfolio"]["portfolio_rows"], (("AAPL", "MSFT", "BOXX"),))
+        self.assertEqual(plan["portfolio"]["portfolio_rows"], (("AAPL", "MSFT"), ("BOXX",)))
 
     def test_applies_platform_reserved_cash_policy_to_weight_decision(self):
         decision = StrategyDecision(
