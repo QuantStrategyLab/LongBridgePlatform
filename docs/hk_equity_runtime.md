@@ -92,6 +92,44 @@ python scripts/print_strategy_switch_env_plan.py \
 
 打印计划不会直接修改服务配置；只有执行 Cloud Run env 更新/部署命令才会改变服务。
 
+## 生成 `hk_low_vol_dividend_quality` snapshot artifacts
+
+`hk_low_vol_dividend_quality` 是 snapshot-backed 策略，Cloud Run 切到这个 profile 前必须先有经过校验的 feature snapshot 和 manifest。`HkEquitySnapshotPipelines` 自身还需要单独开通 GCP WIF 或 GitHub Secrets；在这之前，`LongBridgePlatform` 提供一个手动桥接 workflow，使用本仓库已经允许的 `longbridge-hk` WIF 和 Secret Manager 权限生成真实 LongBridge OpenAPI artifact。
+
+手动生成并只打印 GCS 发布计划：
+
+```bash
+gh workflow run build-hk-low-vol-snapshot-artifacts.yml \
+  --repo QuantStrategyLab/LongBridgePlatform \
+  -f snapshot_ref=main \
+  -f profile=hk_low_vol_dividend_quality \
+  -f allow_research_defaults=false \
+  -f execute_publish=false
+```
+
+如果生成结果通过校验，并确认目标 bucket 可由 HK Cloud Run runtime service account 读取，可以发布到 GCS：
+
+```bash
+gh workflow run build-hk-low-vol-snapshot-artifacts.yml \
+  --repo QuantStrategyLab/LongBridgePlatform \
+  -f snapshot_ref=main \
+  -f profile=hk_low_vol_dividend_quality \
+  -f allow_research_defaults=false \
+  -f gcs_prefix=gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality \
+  -f execute_publish=true
+```
+
+发布后，HK dry-run runtime 需要至少配置：
+
+```bash
+STRATEGY_PROFILE=hk_low_vol_dividend_quality
+LONGBRIDGE_DRY_RUN_ONLY=true
+LONGBRIDGE_FEATURE_SNAPSHOT_PATH=gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality/hk_low_vol_dividend_quality_factor_snapshot_latest.csv
+LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality/hk_low_vol_dividend_quality_factor_snapshot_latest.csv.manifest.json
+```
+
+注意：`allow_research_defaults=true` 只允许做研究 smoke，不允许发布到 GCS，也不能作为 live-enable 证据。
+
 ## 部署或同步 HK Cloud Run
 
 仓库的 `Deploy Cloud Run` workflow 支持手动 `workflow_dispatch` 目标 `hk-verify`。这个目标只启用 HK matrix deployment，PAPER / SG 会跳过，并设置或更新独立港股 dry-run 服务：
