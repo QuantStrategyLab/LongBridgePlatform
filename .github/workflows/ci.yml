@@ -68,8 +68,8 @@ jobs:
 
           assert CallableNotificationPort
           assert CallablePortfolioPort
-          assert resolve_canonical_profile("tech_communication_pullback_enhancement") == "tech_communication_pullback_enhancement"
-          assert resolve_hk_canonical_profile("hk_listed_global_etf_rotation") == "hk_listed_global_etf_rotation"
+          assert resolve_canonical_profile("mega_cap_leader_rotation_top50_balanced") == "mega_cap_leader_rotation_top50_balanced"
+          assert resolve_hk_canonical_profile("hk_global_etf_tactical_rotation") == "hk_global_etf_tactical_rotation"
           PY
 
       - name: Install editable shared repositories

@@ -231,7 +231,7 @@ jobs:
               json.dumps(
                   {
                       "platform_id": "longbridge",
-                      "strategy_profile": "hk_listed_global_etf_rotation",
+                      "strategy_profile": "hk_global_etf_tactical_rotation",
                       "deployment_selector": "hk-verify",
                       "account_scope": "hk-verify",
                       "execution_mode": "paper",
