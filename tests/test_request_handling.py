@@ -71,12 +71,12 @@ def install_stub_modules():
         tg_token=None,
         tg_chat_id="shared-chat-id",
         dry_run_only=False,
-        crisis_alert_email_recipients=(),
-        crisis_alert_email_sender_email=None,
-        crisis_alert_email_sender_password=None,
-        crisis_alert_sms_recipients=(),
-        crisis_alert_sms_account_id=None,
-        crisis_alert_sms_auth_token=None,
+        strategy_plugin_alert_email_recipients=(),
+        strategy_plugin_alert_email_sender_email=None,
+        strategy_plugin_alert_email_sender_password=None,
+        strategy_plugin_alert_sms_recipients=(),
+        strategy_plugin_alert_sms_account_id=None,
+        strategy_plugin_alert_sms_auth_token=None,
         runtime_target=build_runtime_target(
             platform_id="longbridge",
             strategy_profile="soxl_soxx_trend_income",
@@ -209,8 +209,16 @@ class RequestHandlingTests(unittest.TestCase):
 
         module.run_strategy = fake_run_strategy
 
-        with module.app.test_request_context("/", method="POST"):
-            body, status = module.handle_trigger()
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN": "plugin-token",
+                "STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS": "plugin-chat",
+            },
+            clear=False,
+        ):
+            with module.app.test_request_context("/", method="POST"):
+                body, status = module.handle_trigger()
 
         self.assertEqual(status, 200)
         self.assertEqual(body, "OK",)
