@@ -152,6 +152,7 @@ class ExecutionMarkerStore:
         effective = _first_non_empty(effective_date)
         if not signal and not effective:
             return False
+        month_segment = _month_segment(signal, effective)
         bucket_name, prefix = _parse_gcs_uri(str(self.gcs_prefix_uri or ""))
         object_prefix = "/".join(
             part.strip("/")
@@ -160,6 +161,7 @@ class ExecutionMarkerStore:
                 _runtime_report_segment(platform),
                 _runtime_report_segment(strategy_profile),
                 _runtime_report_segment(account_scope),
+                month_segment,
             )
             if part and part.strip("/")
         )
@@ -247,15 +249,30 @@ def resolve_execution_dedup_enabled(
     *,
     env_reader: Callable[[str, str | None], str | None],
     dry_run_only: bool,
+    account_scope: object = None,
 ) -> bool:
     raw_value = env_reader("LONGBRIDGE_EXECUTION_DEDUP_ENABLED", None)
-    return _env_bool(raw_value, default=bool(dry_run_only))
+    if raw_value is not None and str(raw_value).strip():
+        return _env_bool(raw_value, default=bool(dry_run_only))
+    return bool(dry_run_only) or _is_paper_account_scope(account_scope)
+
+
+def _is_paper_account_scope(value: object) -> bool:
+    return str(value or "").strip().upper() == "PAPER"
 
 
 def _runtime_report_segment(value: object) -> str:
     text = str(value or "").strip()
     safe = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in text)
     return safe or "unknown"
+
+
+def _month_segment(*values: object) -> str:
+    for value in values:
+        text = _optional_str(value)
+        if len(text) >= 7 and text[4] == "-" and text[:4].isdigit() and text[5:7].isdigit():
+            return text[:7]
+    return ""
 
 
 def _optional_str(value: object) -> str:
@@ -282,12 +299,59 @@ def _report_matches_execution(
     if bool(report.get("dry_run")) != bool(dry_run_only):
         return False
     summary = dict(report.get("summary") or {})
-    if signal_date and _optional_str(summary.get("signal_date")) != signal_date:
+    if signal_date and _date_key(signal_date) not in _report_signal_date_keys(report, summary):
         return False
-    if effective_date and _optional_str(summary.get("effective_date")) != effective_date:
+    if effective_date and _date_key(effective_date) not in _report_effective_date_keys(report, summary):
         return False
     return (
         bool(summary.get("action_done"))
         or int(float(summary.get("orders_previewed_count") or 0)) > 0
         or int(float(summary.get("order_events_count") or 0)) > 0
+        or _is_successful_no_action_report(report, summary)
     )
+
+
+def _is_successful_no_action_report(report: Mapping[str, Any], summary: Mapping[str, Any]) -> bool:
+    if _optional_str(report.get("status")).lower() != "ok":
+        return False
+    if int(float(summary.get("orders_skipped_count") or 0)) > 0:
+        return False
+    return bool("action_done" in summary and not summary.get("action_done"))
+
+
+def _report_signal_date_keys(report: Mapping[str, Any], summary: Mapping[str, Any]) -> set[str]:
+    signal_snapshot = _report_signal_snapshot(report)
+    return _date_keys(
+        summary.get("signal_date"),
+        signal_snapshot.get("signal_as_of"),
+        signal_snapshot.get("market_date"),
+        signal_snapshot.get("price_as_of"),
+        signal_snapshot.get("snapshot_as_of"),
+    )
+
+
+def _report_effective_date_keys(report: Mapping[str, Any], summary: Mapping[str, Any]) -> set[str]:
+    signal_snapshot = _report_signal_snapshot(report)
+    return _date_keys(
+        summary.get("effective_date"),
+        signal_snapshot.get("effective_date"),
+    )
+
+
+def _report_signal_snapshot(report: Mapping[str, Any]) -> dict[str, Any]:
+    diagnostics = report.get("diagnostics")
+    if not isinstance(diagnostics, Mapping):
+        return {}
+    signal_snapshot = diagnostics.get("signal_snapshot")
+    return dict(signal_snapshot) if isinstance(signal_snapshot, Mapping) else {}
+
+
+def _date_keys(*values: object) -> set[str]:
+    return {key for value in values if (key := _date_key(value))}
+
+
+def _date_key(value: object) -> str:
+    text = _optional_str(value)
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+        return text[:10]
+    return text

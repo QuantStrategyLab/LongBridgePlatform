@@ -216,6 +216,7 @@ class LongBridgeRuntimeComposer:
             execution_dedup_enabled=resolve_execution_dedup_enabled(
                 env_reader=self.env_reader,
                 dry_run_only=self.dry_run_only,
+                account_scope=self.account_region,
             ),
             execution_state_store=build_execution_marker_store_from_env(
                 env_reader=self.env_reader,
