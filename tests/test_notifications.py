@@ -50,7 +50,7 @@ class NotificationTests(unittest.TestCase):
         )
         self.assertEqual(
             translate("market_status_blend_gate_overlay_capped", asset="SOXX"),
-            "🧯 过热降档（SOXX）",
+            "🧯 风控降档（SOXX）",
         )
         self.assertEqual(
             translate(
@@ -60,7 +60,7 @@ class NotificationTests(unittest.TestCase):
                 reasons="RSI 超阈值 + 突破布林上轨",
                 allocation_text="SOXX 15.0%",
             ),
-            "SOXX 仍在 140 日门槛线上方，但触发过热降档（RSI 超阈值 + 突破布林上轨），目标仓位 SOXX 15.0%",
+            "SOXX 仍在 140 日门槛线上方，但触发风控降档（RSI 超阈值 + 突破布林上轨），目标仓位 SOXX 15.0%",
         )
         self.assertEqual(
             translate(
