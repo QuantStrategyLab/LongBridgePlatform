@@ -90,6 +90,39 @@ class SignalSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot["price_as_of"], "2026-06-01")
         self.assertEqual(snapshot["universe_as_of"], "2026-05-14")
 
+    def test_includes_soxl_dynamic_volatility_fields(self):
+        snapshot = build_signal_snapshot(
+            platform="longbridge",
+            strategy_profile="soxl_soxx_trend_income",
+            execution={
+                "blend_gate_volatility_delever_threshold_mode": "rolling_percentile",
+                "blend_gate_volatility_delever_threshold": 0.60,
+                "blend_gate_volatility_delever_dynamic_threshold": 0.60,
+                "blend_gate_volatility_delever_dynamic_sample_count": 252,
+                "blend_gate_volatility_delever_dynamic_percentile": 0.95,
+                "blend_gate_volatility_delever_metric": 0.61,
+                "blend_gate_volatility_delever_triggered": True,
+            },
+        )
+
+        self.assertEqual(
+            snapshot["indicators"]["blend_gate_volatility_delever_threshold_mode"],
+            "rolling_percentile",
+        )
+        self.assertEqual(
+            snapshot["indicators"]["blend_gate_volatility_delever_dynamic_threshold"],
+            0.60,
+        )
+        self.assertEqual(
+            snapshot["indicators"][
+                "blend_gate_volatility_delever_dynamic_sample_count"
+            ],
+            252,
+        )
+        self.assertIs(
+            snapshot["indicators"]["blend_gate_volatility_delever_triggered"], True
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
