@@ -112,6 +112,21 @@ class DecisionMapperTests(unittest.TestCase):
                     "benchmark_price": 500.0,
                     "long_trend_value": 480.0,
                     "exit_line": 470.0,
+                    "dual_drive_volatility_delever_applied": True,
+                    "dual_drive_volatility_delever_window": 5,
+                    "dual_drive_volatility_delever_metric": 0.312,
+                    "dual_drive_volatility_delever_threshold_mode": "rolling_percentile",
+                    "dual_drive_volatility_delever_threshold": 0.28,
+                    "dual_drive_volatility_delever_exit_threshold": 0.24,
+                    "dual_drive_volatility_delever_dynamic_threshold": 0.28,
+                    "dual_drive_volatility_delever_dynamic_sample_count": 252,
+                    "dual_drive_volatility_delever_dynamic_lookback": 252,
+                    "dual_drive_volatility_delever_dynamic_percentile": 0.90,
+                    "dual_drive_volatility_delever_dynamic_min_periods": 126,
+                    "dual_drive_volatility_delever_dynamic_floor": 0.24,
+                    "dual_drive_volatility_delever_dynamic_cap": 0.36,
+                    "dual_drive_volatility_delever_trigger_reason": "entry_threshold",
+                    "dual_drive_volatility_delever_redirect_symbol": "QQQ",
                 }
             },
         )
@@ -139,6 +154,21 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["execution"]["benchmark_price"], 500.0)
         self.assertEqual(plan["execution"]["long_trend_value"], 480.0)
         self.assertEqual(plan["execution"]["exit_line"], 470.0)
+        self.assertIs(plan["execution"]["dual_drive_volatility_delever_applied"], True)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_window"], 5)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_metric"], 0.312)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_threshold_mode"], "rolling_percentile")
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_threshold"], 0.28)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_exit_threshold"], 0.24)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_dynamic_threshold"], 0.28)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_dynamic_sample_count"], 252)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_dynamic_lookback"], 252)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_dynamic_percentile"], 0.90)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_dynamic_min_periods"], 126)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_dynamic_floor"], 0.24)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_dynamic_cap"], 0.36)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_trigger_reason"], "entry_threshold")
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_redirect_symbol"], "QQQ")
         self.assertEqual(plan["portfolio"]["market_values"]["TQQQ"], 5000.0)
 
     def test_translates_weight_decision_for_snapshot_strategy(self):

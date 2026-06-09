@@ -22,7 +22,7 @@ class _TqqqEntrypoint:
         required_inputs=frozenset({"benchmark_history", "portfolio_snapshot"}),
         default_config={
             "benchmark_symbol": "QQQ",
-            "managed_symbols": ("TQQQ", "QQQ", "BOXX", "SPYI", "QQQI"),
+            "managed_symbols": ("TQQQ", "QQQM", "BOXX", "SPYI", "QQQI"),
             "income_threshold_usd": 1_000_000_000.0,
             "qqqi_income_ratio": 0.5,
         },

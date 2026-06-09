@@ -193,6 +193,41 @@ def _build_benchmark_lines(execution, *, translator):
     ]
 
 
+def _format_percent(value) -> str:
+    try:
+        return f"{float(value) * 100:.1f}%"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _build_risk_control_lines(execution, *, translator):
+    if _is_truthy(execution.get("dual_drive_volatility_delever_applied")):
+        redirect_symbol = str(execution.get("dual_drive_volatility_delever_redirect_symbol") or "QQQ").strip().upper()
+        window = str(execution.get("dual_drive_volatility_delever_window") or "5").strip()
+        if str(execution.get("dual_drive_volatility_delever_trigger_reason") or "").strip() == "hysteresis_hold":
+            return [
+                translator(
+                    "risk_control_tqqq_volatility_delever_hysteresis",
+                    window=window,
+                    volatility=_format_percent(execution.get("dual_drive_volatility_delever_metric")),
+                    exit_threshold=_format_percent(execution.get("dual_drive_volatility_delever_exit_threshold")),
+                    source_symbol="TQQQ",
+                    redirect_symbol=redirect_symbol or "QQQ",
+                )
+            ]
+        return [
+            translator(
+                "risk_control_tqqq_volatility_delever_applied",
+                window=window,
+                volatility=_format_percent(execution.get("dual_drive_volatility_delever_metric")),
+                threshold=_format_percent(execution.get("dual_drive_volatility_delever_threshold")),
+                source_symbol="TQQQ",
+                redirect_symbol=redirect_symbol or "QQQ",
+            )
+        ]
+    return []
+
+
 def _format_dashboard_text(text, *, translator=None) -> str:
     lines = []
     for raw_line in str(text or "").splitlines():
@@ -320,6 +355,7 @@ def _append_status_lines(lines, *, execution, translator, signal_key):
     if signal_display:
         _append_labeled_text(lines, signal_key, signal_display, translator=translator, value_key="msg")
 
+    lines.extend(_build_risk_control_lines(execution, translator=translator))
     lines.extend(_build_benchmark_lines(execution, translator=translator))
 
 
@@ -341,6 +377,7 @@ def _append_compact_status_lines(lines, *, execution, translator, signal_key):
     if signal_summary:
         lines.append(translator(signal_key, msg=signal_summary))
 
+    lines.extend(_build_risk_control_lines(execution, translator=translator))
 
 def _append_strategy_line(lines, *, strategy_display_name, translator):
     name = str(strategy_display_name or "").strip()

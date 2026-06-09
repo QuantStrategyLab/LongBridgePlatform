@@ -1030,8 +1030,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("🔔 【调仓指令】", sent_messages[0])
         self.assertIn("SOXX.US 目标金额 $163.14 低于 1 股价格 $504.60", sent_messages[0])
-        self.assertIn("小账户本轮保留现金", sent_messages[0])
-        self.assertIn("不回补 BOXX.US", sent_messages[0])
+        self.assertIn("本轮保留现金", sent_messages[0])
+        self.assertIn("现金替代：BOXX.US", sent_messages[0])
         self.assertNotIn("可投资现金 $1191.03 不足买入 1 股", sent_messages[0])
         self.assertIn("市价卖出] BOXX: 6股", sent_messages[0])
         self.assertNotIn("市价买入] SOXX", sent_messages[0])
@@ -1092,9 +1092,127 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("🔔 【调仓指令】", sent_messages[0])
         self.assertIn("限价卖出] SOXL: 4股", sent_messages[0])
         self.assertEqual(sent_messages[0].count("[买入说明] SOXX.US"), 1)
-        self.assertEqual(sent_messages[0].count("小账户本轮保留现金"), 1)
+        self.assertEqual(sent_messages[0].count("本轮保留现金"), 1)
         self.assertIn("SOXX.US 目标金额 $220.19 低于 1 股价格 $601.80", sent_messages[0])
         self.assertNotIn("SOXX.US 目标金额 $219.67 低于 1 股价格 $601.80", sent_messages[0])
+
+    def test_tqqq_delevered_qqq_target_below_one_share_reports_cash_reason(self):
+        plan = _build_plan(
+            strategy_profile="tqqq_growth_income",
+            strategy_symbols=("TQQQ", "QQQ", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI"),
+            risk_symbols=("TQQQ", "QQQ"),
+            income_symbols=("SCHD", "DGRO", "SGOV", "SPYI", "QQQI"),
+            safe_haven_symbols=("BOXX",),
+            targets={
+                "TQQQ": 0.0,
+                "QQQ": 507.87,
+                "BOXX": 45.14,
+                "SCHD": 0.0,
+                "DGRO": 0.0,
+                "SGOV": 0.0,
+                "SPYI": 0.0,
+                "QQQI": 0.0,
+            },
+            market_values={symbol: 0.0 for symbol in ("TQQQ", "QQQ", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI")},
+            sellable_quantities={symbol: 0 for symbol in ("TQQQ", "QQQ", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI")},
+            quantities={symbol: 0 for symbol in ("TQQQ", "QQQ", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI")},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=553.01,
+            market_status="",
+            deploy_ratio_text="",
+            income_ratio_text="",
+            income_locked_ratio_text="",
+            signal_message="🚀 入场信号",
+            available_cash=564.30,
+            total_strategy_equity=564.30,
+            portfolio_rows=(("TQQQ", "QQQ", "BOXX"), ("SCHD", "DGRO", "SGOV", "SPYI", "QQQI")),
+            benchmark_symbol="QQQ",
+            benchmark_price=715.86,
+            long_trend_value=621.61,
+            exit_line=621.61,
+        )
+
+        sent_messages, _, _ = self._run_strategy(
+            plan,
+            prices={
+                "TQQQ.US": 80.0,
+                "QQQ.US": 715.86,
+                "BOXX.US": 116.95,
+                "SCHD.US": 80.0,
+                "DGRO.US": 65.0,
+                "SGOV.US": 100.0,
+                "SPYI.US": 52.0,
+                "QQQI.US": 52.0,
+            },
+            estimate_max_purchase_quantity_value=10,
+            strategy_display_name="TQQQ 增长收益",
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("💓 【心跳检测】", sent_messages[0])
+        self.assertIn("⚠️ 本轮没有可执行订单", sent_messages[0])
+        self.assertIn("QQQ.US 目标金额 $507.87 低于 1 股价格 $715.86", sent_messages[0])
+        self.assertIn("现金替代：现金", sent_messages[0])
+        self.assertNotIn("✅ 无需调仓", sent_messages[0])
+
+    def test_tqqq_delevered_qqqm_target_is_executable_for_small_account(self):
+        plan = _build_plan(
+            strategy_profile="tqqq_growth_income",
+            strategy_symbols=("TQQQ", "QQQM", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI"),
+            risk_symbols=("TQQQ", "QQQM"),
+            income_symbols=("SCHD", "DGRO", "SGOV", "SPYI", "QQQI"),
+            safe_haven_symbols=("BOXX",),
+            targets={
+                "TQQQ": 0.0,
+                "QQQM": 507.87,
+                "BOXX": 45.14,
+                "SCHD": 0.0,
+                "DGRO": 0.0,
+                "SGOV": 0.0,
+                "SPYI": 0.0,
+                "QQQI": 0.0,
+            },
+            market_values={symbol: 0.0 for symbol in ("TQQQ", "QQQM", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI")},
+            sellable_quantities={symbol: 0 for symbol in ("TQQQ", "QQQM", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI")},
+            quantities={symbol: 0 for symbol in ("TQQQ", "QQQM", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI")},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=553.01,
+            market_status="",
+            deploy_ratio_text="",
+            income_ratio_text="",
+            income_locked_ratio_text="",
+            signal_message="🚀 入场信号",
+            available_cash=564.30,
+            total_strategy_equity=564.30,
+            portfolio_rows=(("TQQQ", "QQQM", "BOXX"), ("SCHD", "DGRO", "SGOV", "SPYI", "QQQI")),
+            benchmark_symbol="QQQ",
+            benchmark_price=715.86,
+            long_trend_value=621.61,
+            exit_line=621.61,
+        )
+
+        sent_messages, _, _ = self._run_strategy(
+            plan,
+            prices={
+                "TQQQ.US": 80.0,
+                "QQQM.US": 320.0,
+                "BOXX.US": 116.95,
+                "SCHD.US": 80.0,
+                "DGRO.US": 65.0,
+                "SGOV.US": 100.0,
+                "SPYI.US": 52.0,
+                "QQQI.US": 52.0,
+            },
+            estimate_max_purchase_quantity_value=10,
+            strategy_display_name="TQQQ 增长收益",
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("🔔 【调仓指令】", sent_messages[0])
+        self.assertIn("限价买入] QQQM: 1股", sent_messages[0])
+        self.assertNotIn("QQQM.US 目标金额 $507.87 低于 1 股价格", sent_messages[0])
 
     def test_target_gap_below_one_share_does_not_report_cash_shortage(self):
         plan = _build_plan(
