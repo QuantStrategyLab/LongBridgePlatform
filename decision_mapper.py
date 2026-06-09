@@ -54,6 +54,25 @@ _TQQQ_RISK_CONTROL_EXECUTION_FIELDS = (
     "dual_drive_volatility_delever_vetoed",
     "dual_drive_volatility_delever_redirect_symbol",
 )
+_SOXL_RISK_CONTROL_EXECUTION_FIELDS = (
+    "blend_gate_volatility_delever_enabled",
+    "blend_gate_volatility_delever_symbol",
+    "blend_gate_volatility_delever_window",
+    "blend_gate_volatility_delever_threshold_mode",
+    "blend_gate_volatility_delever_threshold",
+    "blend_gate_volatility_delever_dynamic_threshold",
+    "blend_gate_volatility_delever_dynamic_sample_count",
+    "blend_gate_volatility_delever_dynamic_lookback",
+    "blend_gate_volatility_delever_dynamic_percentile",
+    "blend_gate_volatility_delever_dynamic_min_periods",
+    "blend_gate_volatility_delever_dynamic_floor",
+    "blend_gate_volatility_delever_dynamic_cap",
+    "blend_gate_volatility_delever_metric",
+    "blend_gate_volatility_delever_triggered",
+    "blend_gate_volatility_delever_retention_ratio",
+    "blend_gate_volatility_delever_redirect_symbol",
+    "blend_gate_volatility_delever_removed_ratio",
+)
 
 
 def _build_portfolio_inputs(
@@ -171,6 +190,27 @@ def _attach_tqqq_risk_control_execution_fields(
     if isinstance(annotations, Mapping):
         diagnostics = {**diagnostics, **dict(annotations)}
     for field in _TQQQ_RISK_CONTROL_EXECUTION_FIELDS:
+        value = diagnostics.get(field)
+        if value not in (None, ""):
+            execution[field] = value
+
+
+def _attach_soxl_risk_control_execution_fields(
+    plan: dict[str, Any],
+    *,
+    decision: StrategyDecision,
+    runtime_metadata: Mapping[str, Any] | None,
+) -> None:
+    if _resolve_canonical_profile(str(plan.get("strategy_profile") or "")) != "soxl_soxx_trend_income":
+        return
+    execution = plan.get("execution")
+    if not isinstance(execution, dict):
+        return
+    diagnostics = {**dict(runtime_metadata or {}), **dict(decision.diagnostics)}
+    annotations = diagnostics.get("execution_annotations")
+    if isinstance(annotations, Mapping):
+        diagnostics = {**diagnostics, **dict(annotations)}
+    for field in _SOXL_RISK_CONTROL_EXECUTION_FIELDS:
         value = diagnostics.get(field)
         if value not in (None, ""):
             execution[field] = value
@@ -606,6 +646,11 @@ def map_strategy_decision_to_plan(
         runtime_metadata=runtime_metadata,
     )
     _attach_tqqq_risk_control_execution_fields(
+        plan,
+        decision=normalized_decision,
+        runtime_metadata=runtime_metadata,
+    )
+    _attach_soxl_risk_control_execution_fields(
         plan,
         decision=normalized_decision,
         runtime_metadata=runtime_metadata,

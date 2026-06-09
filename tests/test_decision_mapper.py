@@ -72,6 +72,17 @@ class DecisionMapperTests(unittest.TestCase):
                     "active_risk_asset": "SOXL",
                     "investable_cash": 9000.0,
                     "current_min_trade": 100.0,
+                    "blend_gate_volatility_delever_threshold_mode": "rolling_percentile",
+                    "blend_gate_volatility_delever_threshold": 0.60,
+                    "blend_gate_volatility_delever_dynamic_threshold": 0.60,
+                    "blend_gate_volatility_delever_dynamic_sample_count": 252,
+                    "blend_gate_volatility_delever_dynamic_lookback": 252,
+                    "blend_gate_volatility_delever_dynamic_percentile": 0.95,
+                    "blend_gate_volatility_delever_dynamic_min_periods": 126,
+                    "blend_gate_volatility_delever_dynamic_floor": 0.50,
+                    "blend_gate_volatility_delever_dynamic_cap": 0.75,
+                    "blend_gate_volatility_delever_metric": 0.61,
+                    "blend_gate_volatility_delever_triggered": True,
                 }
             },
         )
@@ -94,6 +105,13 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["execution"]["signal_display"], "signal")
         self.assertEqual(plan["execution"]["dashboard_text"], "strategy dashboard")
         self.assertEqual(plan["execution"]["investable_cash"], 9000.0)
+        self.assertEqual(plan["execution"]["blend_gate_volatility_delever_threshold_mode"], "rolling_percentile")
+        self.assertEqual(plan["execution"]["blend_gate_volatility_delever_threshold"], 0.60)
+        self.assertEqual(plan["execution"]["blend_gate_volatility_delever_dynamic_threshold"], 0.60)
+        self.assertEqual(plan["execution"]["blend_gate_volatility_delever_dynamic_sample_count"], 252)
+        self.assertEqual(plan["execution"]["blend_gate_volatility_delever_dynamic_percentile"], 0.95)
+        self.assertEqual(plan["execution"]["blend_gate_volatility_delever_metric"], 0.61)
+        self.assertIs(plan["execution"]["blend_gate_volatility_delever_triggered"], True)
 
     def test_maps_hybrid_decision_from_snapshot_source(self):
         decision = StrategyDecision(
