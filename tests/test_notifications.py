@@ -75,6 +75,25 @@ class NotificationTests(unittest.TestCase):
         )
         self.assertEqual(
             translate(
+                "blend_gate_reason_volatility_delever_dynamic",
+                symbol="SOXX",
+                window=10,
+                volatility="61.0%",
+                threshold="60.0%",
+                threshold_detail=translate(
+                    "blend_gate_volatility_threshold_detail_dynamic",
+                    percentile="p95",
+                    lookback="252",
+                    floor="50.0%",
+                    cap="75.0%",
+                    sample_count="252",
+                ),
+                redirect_symbol="SOXX",
+            ),
+            "SOXX 10 日年化波动率 61.0% 高于实际阈值 60.0%（动态 p95，252日窗口，范围 50.0%-75.0%，样本 252），SOXL 转向 SOXX",
+        )
+        self.assertEqual(
+            translate(
                 "strategy_plugin_line",
                 plugin=translate("strategy_plugin_name_crisis_response_shadow"),
                 mode=translate("strategy_plugin_mode_shadow"),
@@ -155,6 +174,14 @@ class NotificationTests(unittest.TestCase):
                 "dual_drive_volatility_delever_window": 5,
                 "dual_drive_volatility_delever_metric": 0.312,
                 "dual_drive_volatility_delever_threshold": 0.28,
+                "dual_drive_volatility_delever_threshold_mode": "rolling_percentile",
+                "dual_drive_volatility_delever_dynamic_threshold": 0.30,
+                "dual_drive_volatility_delever_dynamic_sample_count": 252,
+                "dual_drive_volatility_delever_dynamic_lookback": 252,
+                "dual_drive_volatility_delever_dynamic_percentile": 0.90,
+                "dual_drive_volatility_delever_dynamic_min_periods": 126,
+                "dual_drive_volatility_delever_dynamic_floor": 0.24,
+                "dual_drive_volatility_delever_dynamic_cap": 0.36,
                 "dual_drive_volatility_delever_redirect_symbol": "QQQ",
             },
             skip_logs=(),
@@ -171,6 +198,14 @@ class NotificationTests(unittest.TestCase):
                 "dual_drive_volatility_delever_window": 5,
                 "dual_drive_volatility_delever_metric": 0.312,
                 "dual_drive_volatility_delever_threshold": 0.28,
+                "dual_drive_volatility_delever_threshold_mode": "rolling_percentile",
+                "dual_drive_volatility_delever_dynamic_threshold": 0.30,
+                "dual_drive_volatility_delever_dynamic_sample_count": 252,
+                "dual_drive_volatility_delever_dynamic_lookback": 252,
+                "dual_drive_volatility_delever_dynamic_percentile": 0.90,
+                "dual_drive_volatility_delever_dynamic_min_periods": 126,
+                "dual_drive_volatility_delever_dynamic_floor": 0.24,
+                "dual_drive_volatility_delever_dynamic_cap": 0.36,
                 "dual_drive_volatility_delever_redirect_symbol": "QQQ",
             },
             skip_logs=(),
@@ -181,9 +216,12 @@ class NotificationTests(unittest.TestCase):
             dry_run_only=False,
         )
 
-        self.assertIn("🛡️ 风控: QQQ 5 日年化波动率 31.2% 高于 28.0%，TQQQ 转向 QQQ", zh_rendered.compact_text)
         self.assertIn(
-            "🛡️ Risk control: QQQ 5d annualized volatility 31.2% is above 28.0%; TQQQ redirects to QQQ",
+            "🛡️ 风控: QQQ 5 日年化波动率 31.2% 高于实际阈值 30.0%（动态 p90，252日窗口，范围 24.0%-36.0%，样本 252），TQQQ 转向 QQQ",
+            zh_rendered.compact_text,
+        )
+        self.assertIn(
+            "🛡️ Risk control: QQQ 5d annualized volatility 31.2% is above effective threshold 30.0% (dynamic p90, 252d lookback, bounded 24.0%-36.0%, samples 252); TQQQ redirects to QQQ",
             en_rendered.compact_text,
         )
 
@@ -196,6 +234,14 @@ class NotificationTests(unittest.TestCase):
                 "dual_drive_volatility_delever_metric": 0.262,
                 "dual_drive_volatility_delever_threshold": 0.28,
                 "dual_drive_volatility_delever_exit_threshold": 0.24,
+                "dual_drive_volatility_delever_threshold_mode": "rolling_percentile",
+                "dual_drive_volatility_delever_dynamic_threshold": 0.30,
+                "dual_drive_volatility_delever_dynamic_sample_count": 252,
+                "dual_drive_volatility_delever_dynamic_lookback": 252,
+                "dual_drive_volatility_delever_dynamic_percentile": 0.90,
+                "dual_drive_volatility_delever_dynamic_min_periods": 126,
+                "dual_drive_volatility_delever_dynamic_floor": 0.24,
+                "dual_drive_volatility_delever_dynamic_cap": 0.36,
                 "dual_drive_volatility_delever_trigger_reason": "hysteresis_hold",
                 "dual_drive_volatility_delever_redirect_symbol": "QQQM",
             },
@@ -214,6 +260,14 @@ class NotificationTests(unittest.TestCase):
                 "dual_drive_volatility_delever_metric": 0.262,
                 "dual_drive_volatility_delever_threshold": 0.28,
                 "dual_drive_volatility_delever_exit_threshold": 0.24,
+                "dual_drive_volatility_delever_threshold_mode": "rolling_percentile",
+                "dual_drive_volatility_delever_dynamic_threshold": 0.30,
+                "dual_drive_volatility_delever_dynamic_sample_count": 252,
+                "dual_drive_volatility_delever_dynamic_lookback": 252,
+                "dual_drive_volatility_delever_dynamic_percentile": 0.90,
+                "dual_drive_volatility_delever_dynamic_min_periods": 126,
+                "dual_drive_volatility_delever_dynamic_floor": 0.24,
+                "dual_drive_volatility_delever_dynamic_cap": 0.36,
                 "dual_drive_volatility_delever_trigger_reason": "hysteresis_hold",
                 "dual_drive_volatility_delever_redirect_symbol": "QQQM",
             },
@@ -226,11 +280,11 @@ class NotificationTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "🛡️ 风控: QQQ 5 日年化波动率 26.2% 仍高于退出阈值 24.0%，维持 TQQQ 转向 QQQM",
+            "🛡️ 风控: QQQ 5 日年化波动率 26.2% 仍高于退出阈值 24.0%；入场实际阈值 30.0%（动态 p90，252日窗口，范围 24.0%-36.0%，样本 252），维持 TQQQ 转向 QQQM",
             zh_rendered.compact_text,
         )
         self.assertIn(
-            "🛡️ Risk control: QQQ 5d annualized volatility 26.2% remains above the exit threshold 24.0%; keep TQQQ redirected to QQQM",
+            "🛡️ Risk control: QQQ 5d annualized volatility 26.2% remains above exit threshold 24.0%; entry effective threshold 30.0% (dynamic p90, 252d lookback, bounded 24.0%-36.0%, samples 252); keep TQQQ redirected to QQQM",
             en_rendered.compact_text,
         )
 

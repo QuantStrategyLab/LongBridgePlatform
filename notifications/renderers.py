@@ -200,27 +200,94 @@ def _format_percent(value) -> str:
         return "n/a"
 
 
+def _format_percentile(value) -> str:
+    try:
+        percentile = float(value) * 100
+    except (TypeError, ValueError):
+        return "p?"
+    if float(percentile).is_integer():
+        return f"p{int(percentile)}"
+    return f"p{percentile:.1f}"
+
+
+def _format_sample_count(value) -> str:
+    try:
+        count = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    if float(count).is_integer():
+        return str(int(count))
+    return f"{count:.1f}"
+
+
+def _present(value) -> bool:
+    return value not in (None, "")
+
+
+def _effective_volatility_delever_threshold(execution, *, prefix: str):
+    mode = str(execution.get(f"{prefix}_threshold_mode") or "").strip().lower()
+    dynamic_threshold = execution.get(f"{prefix}_dynamic_threshold")
+    if mode == "rolling_percentile" and _present(dynamic_threshold):
+        return dynamic_threshold
+    return execution.get(f"{prefix}_threshold")
+
+
+def _format_volatility_delever_threshold_detail(execution, *, prefix: str, translator) -> str:
+    mode = str(execution.get(f"{prefix}_threshold_mode") or "").strip().lower()
+    fixed_threshold = execution.get(f"{prefix}_threshold")
+    dynamic_threshold = execution.get(f"{prefix}_dynamic_threshold")
+    if mode == "rolling_percentile":
+        kwargs = {
+            "percentile": _format_percentile(execution.get(f"{prefix}_dynamic_percentile")),
+            "lookback": _format_sample_count(execution.get(f"{prefix}_dynamic_lookback")),
+            "min_periods": _format_sample_count(execution.get(f"{prefix}_dynamic_min_periods")),
+            "sample_count": _format_sample_count(execution.get(f"{prefix}_dynamic_sample_count")),
+            "floor": _format_percent(execution.get(f"{prefix}_dynamic_floor")),
+            "cap": _format_percent(execution.get(f"{prefix}_dynamic_cap")),
+            "fixed_threshold": _format_percent(fixed_threshold),
+        }
+        if _present(dynamic_threshold):
+            return translator("blend_gate_volatility_threshold_detail_dynamic", **kwargs)
+        return translator("blend_gate_volatility_threshold_detail_dynamic_fallback", **kwargs)
+    return translator(
+        "blend_gate_volatility_threshold_detail_fixed",
+        threshold=_format_percent(fixed_threshold),
+    )
+
+
 def _build_risk_control_lines(execution, *, translator):
     if _is_truthy(execution.get("dual_drive_volatility_delever_applied")):
         redirect_symbol = str(execution.get("dual_drive_volatility_delever_redirect_symbol") or "QQQ").strip().upper()
         window = str(execution.get("dual_drive_volatility_delever_window") or "5").strip()
+        threshold = _effective_volatility_delever_threshold(
+            execution,
+            prefix="dual_drive_volatility_delever",
+        )
+        threshold_detail = _format_volatility_delever_threshold_detail(
+            execution,
+            prefix="dual_drive_volatility_delever",
+            translator=translator,
+        )
         if str(execution.get("dual_drive_volatility_delever_trigger_reason") or "").strip() == "hysteresis_hold":
             return [
                 translator(
-                    "risk_control_tqqq_volatility_delever_hysteresis",
+                    "risk_control_tqqq_volatility_delever_hysteresis_dynamic",
                     window=window,
                     volatility=_format_percent(execution.get("dual_drive_volatility_delever_metric")),
                     exit_threshold=_format_percent(execution.get("dual_drive_volatility_delever_exit_threshold")),
+                    threshold=_format_percent(threshold),
+                    threshold_detail=threshold_detail,
                     source_symbol="TQQQ",
                     redirect_symbol=redirect_symbol or "QQQ",
                 )
             ]
         return [
             translator(
-                "risk_control_tqqq_volatility_delever_applied",
+                "risk_control_tqqq_volatility_delever_applied_dynamic",
                 window=window,
                 volatility=_format_percent(execution.get("dual_drive_volatility_delever_metric")),
-                threshold=_format_percent(execution.get("dual_drive_volatility_delever_threshold")),
+                threshold=_format_percent(threshold),
+                threshold_detail=threshold_detail,
                 source_symbol="TQQQ",
                 redirect_symbol=redirect_symbol or "QQQ",
             )
