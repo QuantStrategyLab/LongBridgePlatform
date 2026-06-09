@@ -147,6 +147,93 @@ class NotificationTests(unittest.TestCase):
         self.assertIn("📊 市场状态: 🚀 风险开启（SOXX+SOXL）", rendered.compact_text)
         self.assertNotIn("longbridge_candlesticks", rendered.compact_text)
 
+    def test_heartbeat_renders_tqqq_volatility_delever_risk_control(self):
+        zh_rendered = render_heartbeat_notification(
+            execution={
+                "signal_display": "🚀 入场信号",
+                "dual_drive_volatility_delever_applied": True,
+                "dual_drive_volatility_delever_window": 5,
+                "dual_drive_volatility_delever_metric": 0.312,
+                "dual_drive_volatility_delever_threshold": 0.28,
+                "dual_drive_volatility_delever_redirect_symbol": "QQQ",
+            },
+            skip_logs=(),
+            note_logs=(),
+            translator=build_translator("zh"),
+            separator="━━━━━━━━━━━━━━━━━━",
+            strategy_display_name="TQQQ 增长收益",
+            dry_run_only=False,
+        )
+        en_rendered = render_heartbeat_notification(
+            execution={
+                "signal_display": "Entry signal",
+                "dual_drive_volatility_delever_applied": True,
+                "dual_drive_volatility_delever_window": 5,
+                "dual_drive_volatility_delever_metric": 0.312,
+                "dual_drive_volatility_delever_threshold": 0.28,
+                "dual_drive_volatility_delever_redirect_symbol": "QQQ",
+            },
+            skip_logs=(),
+            note_logs=(),
+            translator=build_translator("en"),
+            separator="━━━━━━━━━━━━━━━━━━",
+            strategy_display_name="TQQQ Growth Income",
+            dry_run_only=False,
+        )
+
+        self.assertIn("🛡️ 风控: QQQ 5 日年化波动率 31.2% 高于 28.0%，TQQQ 转向 QQQ", zh_rendered.compact_text)
+        self.assertIn(
+            "🛡️ Risk control: QQQ 5d annualized volatility 31.2% is above 28.0%; TQQQ redirects to QQQ",
+            en_rendered.compact_text,
+        )
+
+    def test_heartbeat_renders_tqqq_volatility_delever_hysteresis_risk_control(self):
+        zh_rendered = render_heartbeat_notification(
+            execution={
+                "signal_display": "🚀 入场信号",
+                "dual_drive_volatility_delever_applied": True,
+                "dual_drive_volatility_delever_window": 5,
+                "dual_drive_volatility_delever_metric": 0.262,
+                "dual_drive_volatility_delever_threshold": 0.28,
+                "dual_drive_volatility_delever_exit_threshold": 0.24,
+                "dual_drive_volatility_delever_trigger_reason": "hysteresis_hold",
+                "dual_drive_volatility_delever_redirect_symbol": "QQQM",
+            },
+            skip_logs=(),
+            note_logs=(),
+            translator=build_translator("zh"),
+            separator="━━━━━━━━━━━━━━━━━━",
+            strategy_display_name="TQQQ 增长收益",
+            dry_run_only=False,
+        )
+        en_rendered = render_heartbeat_notification(
+            execution={
+                "signal_display": "Entry signal",
+                "dual_drive_volatility_delever_applied": True,
+                "dual_drive_volatility_delever_window": 5,
+                "dual_drive_volatility_delever_metric": 0.262,
+                "dual_drive_volatility_delever_threshold": 0.28,
+                "dual_drive_volatility_delever_exit_threshold": 0.24,
+                "dual_drive_volatility_delever_trigger_reason": "hysteresis_hold",
+                "dual_drive_volatility_delever_redirect_symbol": "QQQM",
+            },
+            skip_logs=(),
+            note_logs=(),
+            translator=build_translator("en"),
+            separator="━━━━━━━━━━━━━━━━━━",
+            strategy_display_name="TQQQ Growth Income",
+            dry_run_only=False,
+        )
+
+        self.assertIn(
+            "🛡️ 风控: QQQ 5 日年化波动率 26.2% 仍高于退出阈值 24.0%，维持 TQQQ 转向 QQQM",
+            zh_rendered.compact_text,
+        )
+        self.assertIn(
+            "🛡️ Risk control: QQQ 5d annualized volatility 26.2% remains above the exit threshold 24.0%; keep TQQQ redirected to QQQM",
+            en_rendered.compact_text,
+        )
+
     def test_heartbeat_localizes_strategy_diagnostics_and_source_input_status(self):
         rendered = render_heartbeat_notification(
             execution={

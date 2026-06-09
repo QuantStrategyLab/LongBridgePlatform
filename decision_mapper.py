@@ -32,6 +32,28 @@ _SNAPSHOT_DIAGNOSTIC_FIELDS = (
     "snapshot_manifest_source_refresh_run_id",
     "snapshot_manifest_source_refresh_generated_at",
 )
+_TQQQ_RISK_CONTROL_EXECUTION_FIELDS = (
+    "dual_drive_volatility_delever_enabled",
+    "dual_drive_volatility_delever_window",
+    "dual_drive_volatility_delever_threshold_mode",
+    "dual_drive_volatility_delever_threshold",
+    "dual_drive_volatility_delever_exit_threshold",
+    "dual_drive_volatility_delever_dynamic_threshold",
+    "dual_drive_volatility_delever_dynamic_sample_count",
+    "dual_drive_volatility_delever_dynamic_lookback",
+    "dual_drive_volatility_delever_dynamic_percentile",
+    "dual_drive_volatility_delever_dynamic_min_periods",
+    "dual_drive_volatility_delever_dynamic_floor",
+    "dual_drive_volatility_delever_dynamic_cap",
+    "dual_drive_volatility_delever_metric",
+    "dual_drive_volatility_delever_triggered",
+    "dual_drive_volatility_delever_entry_triggered",
+    "dual_drive_volatility_delever_hysteresis_triggered",
+    "dual_drive_volatility_delever_trigger_reason",
+    "dual_drive_volatility_delever_applied",
+    "dual_drive_volatility_delever_vetoed",
+    "dual_drive_volatility_delever_redirect_symbol",
+)
 
 
 def _build_portfolio_inputs(
@@ -130,6 +152,27 @@ def _attach_snapshot_diagnostics(
     for field in _SNAPSHOT_DIAGNOSTIC_FIELDS:
         value = diagnostics.get(field)
         if value is not None and value != "":
+            execution[field] = value
+
+
+def _attach_tqqq_risk_control_execution_fields(
+    plan: dict[str, Any],
+    *,
+    decision: StrategyDecision,
+    runtime_metadata: Mapping[str, Any] | None,
+) -> None:
+    if _resolve_canonical_profile(str(plan.get("strategy_profile") or "")) != "tqqq_growth_income":
+        return
+    execution = plan.get("execution")
+    if not isinstance(execution, dict):
+        return
+    diagnostics = {**dict(runtime_metadata or {}), **dict(decision.diagnostics)}
+    annotations = diagnostics.get("execution_annotations")
+    if isinstance(annotations, Mapping):
+        diagnostics = {**diagnostics, **dict(annotations)}
+    for field in _TQQQ_RISK_CONTROL_EXECUTION_FIELDS:
+        value = diagnostics.get(field)
+        if value not in (None, ""):
             execution[field] = value
 
 
@@ -558,6 +601,11 @@ def map_strategy_decision_to_plan(
     if cash_by_currency:
         plan["portfolio"]["cash_by_currency"] = cash_by_currency
     _attach_snapshot_diagnostics(
+        plan,
+        decision=normalized_decision,
+        runtime_metadata=runtime_metadata,
+    )
+    _attach_tqqq_risk_control_execution_fields(
         plan,
         decision=normalized_decision,
         runtime_metadata=runtime_metadata,

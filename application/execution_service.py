@@ -164,7 +164,7 @@ except ImportError:  # pragma: no cover - compatibility with older pinned shared
             for symbol, price in dict(prices or {}).items()
         }
         notes = []
-        if safe_haven_substituted:
+        if substituted:
             for symbol in substituted:
                 target_value = max(0.0, float(normalized_targets.get(symbol, 0.0) or 0.0))
                 price = max(0.0, float(normalized_prices.get(symbol, 0.0) or 0.0))
@@ -518,14 +518,27 @@ def _apply_small_account_whole_share_compatibility(
     adjusted_targets = compatibility.targets
     substituted = compatibility.whole_share_substituted_symbols
     safe_haven_substituted = compatibility.safe_haven_cash_substituted_symbols
+    cash_substitution_notes = tuple(compatibility.cash_substitution_notes or ())
+    if substituted and not cash_substitution_notes:
+        cash_substitution_notes = tuple(
+            {
+                "symbol": symbol,
+                "target_value": max(0.0, float(target_values.get(symbol, 0.0) or 0.0)),
+                "price": max(0.0, float(quote_prices.get(symbol, 0.0) or 0.0)),
+                "cash_symbols": tuple(safe_haven_substituted),
+            }
+            for symbol in substituted
+            if max(0.0, float(target_values.get(symbol, 0.0) or 0.0)) > 0.0
+            and max(0.0, float(quote_prices.get(symbol, 0.0) or 0.0)) > 0.0
+        )
     adjusted_allocation = {**dict(allocation or {}), "targets": adjusted_targets}
     adjusted_allocation.pop("small_account_whole_share_cash_notes", None)
     if substituted:
         adjusted_allocation["small_account_whole_share_substituted_symbols"] = substituted
     if safe_haven_substituted:
         adjusted_allocation["small_account_safe_haven_cash_substituted_symbols"] = tuple(safe_haven_substituted)
-    if compatibility.cash_substitution_notes:
-        adjusted_allocation["small_account_whole_share_cash_notes"] = tuple(compatibility.cash_substitution_notes)
+    if cash_substitution_notes:
+        adjusted_allocation["small_account_whole_share_cash_notes"] = cash_substitution_notes
     adjusted_plan = dict(plan or {})
     if substituted or safe_haven_substituted:
         adjusted_plan["allocation"] = adjusted_allocation
