@@ -117,7 +117,7 @@ gh workflow run build-hk-low-vol-snapshot-artifacts.yml \
   -f profile=hk_low_vol_dividend_quality_snapshot \
   -f data_source_mode=public_yfinance_staging \
   -f allow_research_defaults=false \
-  -f gcs_prefix=gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality_snapshot \
+  -f gcs_prefix=gs://qsl-runtime-logs-shared/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality_snapshot \
   -f execute_publish=true
 ```
 
@@ -126,8 +126,8 @@ gh workflow run build-hk-low-vol-snapshot-artifacts.yml \
 ```bash
 STRATEGY_PROFILE=hk_low_vol_dividend_quality_snapshot
 LONGBRIDGE_DRY_RUN_ONLY=true
-LONGBRIDGE_FEATURE_SNAPSHOT_PATH=gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality_snapshot/hk_low_vol_dividend_quality_snapshot_factor_snapshot_latest.csv
-LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality_snapshot/hk_low_vol_dividend_quality_snapshot_factor_snapshot_latest.csv.manifest.json
+LONGBRIDGE_FEATURE_SNAPSHOT_PATH=gs://qsl-runtime-logs-shared/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality_snapshot/hk_low_vol_dividend_quality_snapshot_factor_snapshot_latest.csv
+LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=gs://qsl-runtime-logs-shared/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality_snapshot/hk_low_vol_dividend_quality_snapshot_factor_snapshot_latest.csv.manifest.json
 ```
 
 注意：`allow_research_defaults=true` 只允许做研究 smoke，不允许发布到 GCS，也不能作为 live-enable 证据。public yfinance 数据源用于让 snapshot artifact 生成和券商执行解耦；它仍需要按策略证据包记录数据源、生成时间和 broker dry-run 结果。
