@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 import os
 import sys
 from pathlib import Path
@@ -26,6 +27,150 @@ def _clear_runtime_env(monkeypatch):
             "GOOGLE_CLOUD_PROJECT",
         }:
             monkeypatch.delenv(name, raising=False)
+
+
+def test_explicit_required_services_override_target_derived_services(monkeypatch):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_REQUIRED_SERVICES", "svc-daily-a,svc-daily-b")
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {"service": "svc-daily-a"},
+                    {"service": "svc-monthly"},
+                ]
+            }
+        ),
+    )
+
+    assert heartbeat._load_required_services() == ["svc-daily-a", "svc-daily-b"]
+
+
+def test_required_services_fall_back_to_cloud_run_targets(monkeypatch):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {"service": "svc-a"},
+                    {"runtime_target": {"service_name": "svc-b"}},
+                    {"service": "svc-a"},
+                ]
+            }
+        ),
+    )
+
+    assert heartbeat._load_required_services() == ["svc-a", "svc-b"]
+
+
+def test_scheduler_aware_required_services_only_include_due_main_schedulers(monkeypatch):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {"service": "svc-daily"},
+                    {"service": "svc-monthly"},
+                ]
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        heartbeat,
+        "_list_scheduler_jobs",
+        lambda **_kwargs: [
+            {
+                "state": "ENABLED",
+                "schedule": "45 15 * * 1-5",
+                "timeZone": "America/New_York",
+                "httpTarget": {"uri": "https://svc-daily.example.run.app/"},
+            },
+            {
+                "state": "ENABLED",
+                "schedule": "45 15 26 * *",
+                "timeZone": "America/New_York",
+                "httpTarget": {"uri": "https://svc-monthly.example.run.app/"},
+            },
+            {
+                "state": "ENABLED",
+                "schedule": "35 9,15 25-30 * *",
+                "timeZone": "America/New_York",
+                "httpTarget": {"uri": "https://svc-monthly.example.run.app/probe"},
+            },
+        ],
+    )
+
+    required = heartbeat._load_required_services(
+        project="project-1",
+        since=dt.datetime(2026, 6, 5, 0, 0, tzinfo=dt.timezone.utc),
+        now=dt.datetime(2026, 6, 6, 2, 0, tzinfo=dt.timezone.utc),
+    )
+
+    assert required == ["svc-daily"]
+
+
+def test_scheduler_aware_required_services_include_monthly_service_when_due(monkeypatch):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps({"targets": [{"service": "svc-monthly"}]}),
+    )
+    monkeypatch.setattr(
+        heartbeat,
+        "_list_scheduler_jobs",
+        lambda **_kwargs: [
+            {
+                "state": "ENABLED",
+                "schedule": "45 15 26 * *",
+                "timeZone": "America/New_York",
+                "httpTarget": {"uri": "https://svc-monthly.example.run.app/"},
+            },
+        ],
+    )
+
+    required = heartbeat._load_required_services(
+        project="project-1",
+        since=dt.datetime(2026, 6, 26, 19, 0, tzinfo=dt.timezone.utc),
+        now=dt.datetime(2026, 6, 26, 20, 0, tzinfo=dt.timezone.utc),
+    )
+
+    assert required == ["svc-monthly"]
+
+
+def test_main_skips_when_no_scheduler_main_job_is_due(monkeypatch, capsys):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("GCP_PROJECT_ID", "longbridgequant")
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_NAME", "Monthly runtime")
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_REPORT_PLATFORM", "longbridge")
+    monkeypatch.setenv("CLOUD_RUN_SERVICE", "longbridge-monthly-service")
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_GCS_URIS", "gs://bucket/execution-reports")
+    monkeypatch.setattr(
+        heartbeat,
+        "_list_scheduler_jobs",
+        lambda **_kwargs: [
+            {
+                "state": "ENABLED",
+                "schedule": "45 15 1-7 * *",
+                "timeZone": "America/New_York",
+                "httpTarget": {"uri": "https://longbridge-monthly-service.example.run.app/"},
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        heartbeat,
+        "_list_gcs_objects",
+        lambda *_args, **_kwargs: pytest.fail("GCS should not be queried when no scheduler job is due"),
+    )
+
+    result = heartbeat.main(now=dt.datetime(2026, 6, 10, 1, 35, tzinfo=dt.timezone.utc))
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "Execution report heartbeat skipped for Monthly runtime" in output
+    assert "no configured Cloud Scheduler main job was due" in output
 
 
 def test_main_skips_outside_expected_day_of_month_window(monkeypatch, capsys):

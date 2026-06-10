@@ -95,6 +95,7 @@ jobs:
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       CLOUD_RUN_ENV_SYNC_WAIT_FOR_COMMIT: ${{ vars.CLOUD_RUN_ENV_SYNC_WAIT_FOR_COMMIT }}
+      CLOUD_SCHEDULER_LOCATION: ${{ vars.CLOUD_SCHEDULER_LOCATION }}
       ACCOUNT_PREFIX: ${{ vars.ACCOUNT_PREFIX }}
       TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
       LONGPORT_APP_KEY_SECRET_NAME: ${{ vars.LONGPORT_APP_KEY_SECRET_NAME }}
@@ -940,6 +941,45 @@ jobs:
           fi
 
           gcloud "${gcloud_args[@]}"
+
+      - name: Sync Cloud Scheduler timezone
+        if: steps.config.outputs.env_sync_enabled == 'true'
+        run: |
+          set -euo pipefail
+
+          scheduler_location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}"
+          if [ -z "${scheduler_location}" ]; then
+            echo "Cloud Scheduler timezone sync requires CLOUD_RUN_REGION or CLOUD_SCHEDULER_LOCATION." >&2
+            exit 1
+          fi
+
+          market_timezone="$(python - <<'PY'
+          import os
+
+          timezone = os.environ.get("LONGBRIDGE_MARKET_TIMEZONE", "").strip()
+          market = os.environ.get("LONGBRIDGE_MARKET", "").strip().upper()
+          if not timezone:
+              timezone = "Asia/Hong_Kong" if market == "HK" else "America/New_York"
+          print(timezone)
+          PY
+          )"
+
+          for suffix in scheduler probe-scheduler precheck-scheduler; do
+            job_name="${CLOUD_RUN_SERVICE}-${suffix}"
+            if ! gcloud scheduler jobs describe "${job_name}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" >/dev/null 2>&1; then
+              echo "Cloud Scheduler job ${job_name} was not found in ${scheduler_location}; skipping timezone sync."
+              continue
+            fi
+
+            echo "Updating Cloud Scheduler job ${job_name} timezone to ${market_timezone}."
+            gcloud scheduler jobs update http "${job_name}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" \
+              --time-zone="${market_timezone}" \
+              --quiet
+          done
 
       - name: Prune old Cloud Run revisions
         if: steps.config.outputs.enabled == 'true'
