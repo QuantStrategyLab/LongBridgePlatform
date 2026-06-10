@@ -12,6 +12,7 @@ import sys
 import urllib.parse
 import urllib.request
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 DEFAULT_ACCEPT_STATUSES = {"ok", "skipped", "success", "completed", "no_action"}
@@ -40,6 +41,60 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if not value:
         return default
     return value in {"1", "true", "yes", "y", "on"}
+
+
+def _parse_day_of_month_selector(raw: str) -> set[int]:
+    days: set[int] = set()
+    for part in _split_values(raw):
+        if part == "*":
+            return set(range(1, 32))
+        match = re.fullmatch(r"(\d{1,2})(?:-(\d{1,2}))?", part)
+        if not match:
+            raise ValueError(f"Invalid RUNTIME_HEARTBEAT_EXPECTED_DAY_OF_MONTH value: {part!r}")
+        start = int(match.group(1))
+        end = int(match.group(2) or start)
+        if start < 1 or end > 31 or start > end:
+            raise ValueError(f"Invalid day-of-month range: {part!r}")
+        days.update(range(start, end + 1))
+    return days
+
+
+def _expected_report_window_status(now: dt.datetime) -> tuple[bool, str] | None:
+    raw_days = (
+        os.environ.get("RUNTIME_HEARTBEAT_EXPECTED_DAY_OF_MONTH")
+        or os.environ.get("RUNTIME_HEARTBEAT_EXPECTED_MONTH_DAYS")
+        or ""
+    ).strip()
+    if not raw_days:
+        return None
+
+    timezone_name = (
+        os.environ.get("RUNTIME_HEARTBEAT_EXPECTED_TIMEZONE")
+        or os.environ.get("RUNTIME_HEARTBEAT_TIMEZONE")
+        or "UTC"
+    ).strip()
+    try:
+        timezone = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"Invalid RUNTIME_HEARTBEAT_EXPECTED_TIMEZONE value: {timezone_name!r}") from exc
+
+    days = _parse_day_of_month_selector(raw_days)
+    if not days:
+        return None
+
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=dt.timezone.utc)
+    local_now = now.astimezone(timezone)
+    local_date = local_now.date().isoformat()
+    if local_now.day not in days:
+        return (
+            False,
+            f"outside expected day-of-month window {raw_days} in {timezone_name}; local_date={local_date}",
+        )
+    return (
+        True,
+        f"inside expected day-of-month window {raw_days} in {timezone_name}; local_date={local_date}",
+    )
 
 
 def _parse_timestamp(value: Any) -> dt.datetime | None:
@@ -315,7 +370,7 @@ def _send_telegram(message: str) -> bool:
     return ok
 
 
-def main() -> int:
+def main(now: dt.datetime | None = None) -> int:
     project = (
         os.environ.get("RUNTIME_HEARTBEAT_GCP_PROJECT_ID")
         or os.environ.get("GCP_PROJECT_ID")
@@ -327,7 +382,18 @@ def main() -> int:
     fail_workflow = _env_bool("RUNTIME_HEARTBEAT_FAIL_WORKFLOW_ON_ALERT", True)
     required_services = _load_required_services()
 
-    now = dt.datetime.now(dt.timezone.utc)
+    now = now or dt.datetime.now(dt.timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=dt.timezone.utc)
+    now = now.astimezone(dt.timezone.utc)
+    try:
+        expected_window = _expected_report_window_status(now)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if expected_window and not expected_window[0]:
+        print(f"Execution report heartbeat skipped for {name}: {expected_window[1]}")
+        return 0
+
     since = now - dt.timedelta(hours=lookback_hours)
     globs = _report_globs(since, now)
     if not globs:
