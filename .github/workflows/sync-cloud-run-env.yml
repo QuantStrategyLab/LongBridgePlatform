@@ -55,10 +55,15 @@ env:
   GCP_RUNTIME_SERVICE_ACCOUNT: longbridge-platform-runtime@longbridgequant.iam.gserviceaccount.com
   GCP_ARTIFACT_REGISTRY_REPOSITORY: cloud-run-source-deploy
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   sync:
     name: Deploy / Sync ${{ matrix.target.label }} Cloud Run
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
