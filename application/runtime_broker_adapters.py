@@ -182,10 +182,15 @@ class LongBridgeBrokerAdapters:
         )
 
     def build_account_state_from_snapshot(self, snapshot):
-        return build_account_state_from_portfolio_snapshot(
+        account_state = build_account_state_from_portfolio_snapshot(
             snapshot,
             strategy_symbols=self.strategy_symbols,
         )
+        if self.strategy_symbols:
+            account_state["total_strategy_equity"] = float(account_state["available_cash"]) + sum(
+                float(value) for value in dict(account_state["market_values"]).values()
+            )
+        return account_state
 
     def build_managed_portfolio_snapshot(self, quote_context, trade_context):
         return self.build_portfolio_snapshot_from_account_state(
