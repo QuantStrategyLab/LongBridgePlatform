@@ -54,7 +54,7 @@ on:
       gcs_prefix:
         description: "Optional GCS prefix for validated runtime artifacts."
         required: false
-        default: gs://qsl-runtime-logs-interactivebrokersquant/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality_snapshot
+        default: gs://qsl-runtime-logs-shared/strategy-artifacts/hk_equity/hk_low_vol_dividend_quality_snapshot
         type: string
       execute_publish:
         description: "Actually upload validated artifacts to GCS. false only prints the publish plan."
