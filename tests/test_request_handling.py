@@ -200,6 +200,23 @@ def load_module():
 
 
 class RequestHandlingTests(unittest.TestCase):
+    def test_cloud_run_route_contracts_are_registered(self):
+        module = load_module()
+
+        self.assertIs(module.app._routes[("/", ("POST", "GET"))], module.handle_trigger)
+        self.assertIs(
+            module.app._routes[("/backfill", ("POST", "GET"))],
+            module.handle_backfill,
+        )
+        self.assertIs(
+            module.app._routes[("/precheck", ("POST", "GET"))],
+            module.handle_precheck,
+        )
+        self.assertIs(
+            module.app._routes[("/probe", ("POST", "GET"))],
+            module.handle_probe,
+        )
+
     def test_handle_trigger_runs_strategy(self):
         module = load_module()
         observed = {"called": False}
