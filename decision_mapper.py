@@ -52,7 +52,26 @@ _TQQQ_RISK_CONTROL_EXECUTION_FIELDS = (
     "dual_drive_volatility_delever_trigger_reason",
     "dual_drive_volatility_delever_applied",
     "dual_drive_volatility_delever_vetoed",
+    "dual_drive_volatility_delever_veto_reason",
+    "dual_drive_volatility_delever_taco_veto_enabled",
+    "dual_drive_volatility_delever_taco_rebound_context_active",
+    "dual_drive_volatility_delever_true_crisis_active",
     "dual_drive_volatility_delever_redirect_symbol",
+    "dual_drive_volatility_delever_removed_value",
+    "dual_drive_macro_risk_governor_enabled",
+    "dual_drive_macro_risk_governor_found",
+    "dual_drive_macro_risk_governor_route",
+    "dual_drive_macro_risk_governor_active",
+    "dual_drive_macro_risk_governor_applied",
+    "dual_drive_macro_risk_governor_leverage_scalar",
+    "dual_drive_macro_risk_governor_risk_asset_scalar",
+    "dual_drive_macro_risk_governor_removed_value",
+    "dual_drive_macro_risk_governor_redirected_to_unlevered",
+    "dual_drive_crisis_defense_enabled",
+    "dual_drive_crisis_defense_triggered",
+    "dual_drive_crisis_defense_applied",
+    "dual_drive_crisis_defense_destination",
+    "dual_drive_crisis_defense_removed_value",
 )
 _SOXL_RISK_CONTROL_EXECUTION_FIELDS = (
     "blend_gate_volatility_delever_enabled",
@@ -72,6 +91,32 @@ _SOXL_RISK_CONTROL_EXECUTION_FIELDS = (
     "blend_gate_volatility_delever_retention_ratio",
     "blend_gate_volatility_delever_redirect_symbol",
     "blend_gate_volatility_delever_removed_ratio",
+)
+_MARKET_REGIME_CONTROL_EXECUTION_FIELDS = (
+    "market_regime_control_enabled",
+    "market_regime_control_found",
+    "market_regime_control_source",
+    "market_regime_control_schema_version",
+    "market_regime_control_route",
+    "market_regime_control_route_source",
+    "market_regime_control_active",
+    "market_regime_control_applied",
+    "market_regime_control_route_allowed",
+    "market_regime_control_risk_scalar",
+    "market_regime_control_risk_budget_scalar",
+    "market_regime_control_leverage_scalar",
+    "market_regime_control_risk_asset_scalar",
+    "market_regime_control_taco_allowed",
+    "market_regime_control_local_delever_veto_allowed",
+    "market_regime_control_crisis_defense_required",
+    "market_regime_control_blocked_actions",
+    "market_regime_control_vetoes",
+    "market_regime_control_reason_codes",
+    "market_regime_control_removed_weight",
+    "market_regime_control_removed_ratio",
+    "market_regime_control_redirected_to_unlevered_ratio",
+    "market_regime_control_safe_haven",
+    "market_regime_control_risk_symbols",
 )
 
 
@@ -190,6 +235,25 @@ def _attach_tqqq_risk_control_execution_fields(
     if isinstance(annotations, Mapping):
         diagnostics = {**diagnostics, **dict(annotations)}
     for field in _TQQQ_RISK_CONTROL_EXECUTION_FIELDS:
+        value = diagnostics.get(field)
+        if value not in (None, ""):
+            execution[field] = value
+
+
+def _attach_market_regime_control_execution_fields(
+    plan: dict[str, Any],
+    *,
+    decision: StrategyDecision,
+    runtime_metadata: Mapping[str, Any] | None,
+) -> None:
+    execution = plan.get("execution")
+    if not isinstance(execution, dict):
+        return
+    diagnostics = {**dict(runtime_metadata or {}), **dict(decision.diagnostics)}
+    annotations = diagnostics.get("execution_annotations")
+    if isinstance(annotations, Mapping):
+        diagnostics = {**diagnostics, **dict(annotations)}
+    for field in _MARKET_REGIME_CONTROL_EXECUTION_FIELDS:
         value = diagnostics.get(field)
         if value not in (None, ""):
             execution[field] = value
@@ -641,6 +705,11 @@ def map_strategy_decision_to_plan(
     if cash_by_currency:
         plan["portfolio"]["cash_by_currency"] = cash_by_currency
     _attach_snapshot_diagnostics(
+        plan,
+        decision=normalized_decision,
+        runtime_metadata=runtime_metadata,
+    )
+    _attach_market_regime_control_execution_fields(
         plan,
         decision=normalized_decision,
         runtime_metadata=runtime_metadata,

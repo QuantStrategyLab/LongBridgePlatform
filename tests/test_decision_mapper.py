@@ -144,7 +144,32 @@ class DecisionMapperTests(unittest.TestCase):
                     "dual_drive_volatility_delever_dynamic_floor": 0.24,
                     "dual_drive_volatility_delever_dynamic_cap": 0.36,
                     "dual_drive_volatility_delever_trigger_reason": "entry_threshold",
+                    "dual_drive_volatility_delever_veto_reason": "taco_rebound_context",
+                    "dual_drive_volatility_delever_taco_veto_enabled": True,
+                    "dual_drive_volatility_delever_taco_rebound_context_active": False,
+                    "dual_drive_volatility_delever_true_crisis_active": False,
                     "dual_drive_volatility_delever_redirect_symbol": "QQQ",
+                    "dual_drive_volatility_delever_removed_value": 4500.0,
+                    "dual_drive_macro_risk_governor_enabled": True,
+                    "dual_drive_macro_risk_governor_found": True,
+                    "dual_drive_macro_risk_governor_route": "risk_reduced",
+                    "dual_drive_macro_risk_governor_active": True,
+                    "dual_drive_macro_risk_governor_applied": True,
+                    "dual_drive_macro_risk_governor_leverage_scalar": 0.5,
+                    "dual_drive_macro_risk_governor_risk_asset_scalar": 0.75,
+                    "dual_drive_macro_risk_governor_removed_value": 2500.0,
+                    "dual_drive_macro_risk_governor_redirected_to_unlevered": 1500.0,
+                    "dual_drive_crisis_defense_enabled": True,
+                    "dual_drive_crisis_defense_triggered": True,
+                    "dual_drive_crisis_defense_applied": False,
+                    "dual_drive_crisis_defense_destination": "BOXX",
+                    "dual_drive_crisis_defense_removed_value": 0.0,
+                    "market_regime_control_enabled": True,
+                    "market_regime_control_found": True,
+                    "market_regime_control_route": "risk_reduced",
+                    "market_regime_control_active": True,
+                    "market_regime_control_risk_budget_scalar": 0.5,
+                    "market_regime_control_reason_codes": ("macro:vix_crisis_level",),
                 }
             },
         )
@@ -186,7 +211,32 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["execution"]["dual_drive_volatility_delever_dynamic_floor"], 0.24)
         self.assertEqual(plan["execution"]["dual_drive_volatility_delever_dynamic_cap"], 0.36)
         self.assertEqual(plan["execution"]["dual_drive_volatility_delever_trigger_reason"], "entry_threshold")
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_veto_reason"], "taco_rebound_context")
+        self.assertIs(plan["execution"]["dual_drive_volatility_delever_taco_veto_enabled"], True)
+        self.assertIs(plan["execution"]["dual_drive_volatility_delever_taco_rebound_context_active"], False)
+        self.assertIs(plan["execution"]["dual_drive_volatility_delever_true_crisis_active"], False)
         self.assertEqual(plan["execution"]["dual_drive_volatility_delever_redirect_symbol"], "QQQ")
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_removed_value"], 4500.0)
+        self.assertIs(plan["execution"]["dual_drive_macro_risk_governor_enabled"], True)
+        self.assertIs(plan["execution"]["dual_drive_macro_risk_governor_found"], True)
+        self.assertEqual(plan["execution"]["dual_drive_macro_risk_governor_route"], "risk_reduced")
+        self.assertIs(plan["execution"]["dual_drive_macro_risk_governor_active"], True)
+        self.assertIs(plan["execution"]["dual_drive_macro_risk_governor_applied"], True)
+        self.assertEqual(plan["execution"]["dual_drive_macro_risk_governor_leverage_scalar"], 0.5)
+        self.assertEqual(plan["execution"]["dual_drive_macro_risk_governor_risk_asset_scalar"], 0.75)
+        self.assertEqual(plan["execution"]["dual_drive_macro_risk_governor_removed_value"], 2500.0)
+        self.assertEqual(plan["execution"]["dual_drive_macro_risk_governor_redirected_to_unlevered"], 1500.0)
+        self.assertIs(plan["execution"]["dual_drive_crisis_defense_enabled"], True)
+        self.assertIs(plan["execution"]["dual_drive_crisis_defense_triggered"], True)
+        self.assertIs(plan["execution"]["dual_drive_crisis_defense_applied"], False)
+        self.assertEqual(plan["execution"]["dual_drive_crisis_defense_destination"], "BOXX")
+        self.assertEqual(plan["execution"]["dual_drive_crisis_defense_removed_value"], 0.0)
+        self.assertIs(plan["execution"]["market_regime_control_enabled"], True)
+        self.assertIs(plan["execution"]["market_regime_control_found"], True)
+        self.assertEqual(plan["execution"]["market_regime_control_route"], "risk_reduced")
+        self.assertIs(plan["execution"]["market_regime_control_active"], True)
+        self.assertEqual(plan["execution"]["market_regime_control_risk_budget_scalar"], 0.5)
+        self.assertEqual(plan["execution"]["market_regime_control_reason_codes"], ("macro:vix_crisis_level",))
         self.assertEqual(plan["portfolio"]["market_values"]["TQQQ"], 5000.0)
 
     def test_translates_weight_decision_for_snapshot_strategy(self):
