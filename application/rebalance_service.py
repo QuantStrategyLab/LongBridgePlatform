@@ -334,6 +334,7 @@ def run_strategy(
             post_sell_refresh_attempts=config.post_sell_refresh_attempts,
             post_sell_refresh_interval_sec=config.post_sell_refresh_interval_sec,
             sleeper=config.sleeper or _noop_sleep,
+            min_order_notional_usd=config.min_order_notional_usd,
             safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
         )
         if _should_record_execution_marker(result=execution_result, config=config):

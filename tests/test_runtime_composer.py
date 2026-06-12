@@ -52,6 +52,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
         order_poll_interval_sec=1,
         order_poll_max_attempts=8,
         safe_haven_cash_substitute_threshold_usd=1000.0,
+        min_order_notional_usd=100.0,
         dry_run_only=True,
         runtime_target=build_runtime_target(
             platform_id="longbridge",
@@ -131,6 +132,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     assert config.strategy_display_name == "SOXL/SOXX 半导体趋势收益"
     assert config.dry_run_only is True
     assert config.safe_haven_cash_substitute_threshold_usd == 1000.0
+    assert config.min_order_notional_usd == 100.0
     assert config.execution_dedup_enabled is True
     assert config.execution_state_account_scope == "HK"
     assert config.execution_state_store.gcs_prefix_uri == "gs://bucket/runtime-reports"

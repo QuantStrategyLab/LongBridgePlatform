@@ -142,6 +142,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings.safe_haven_cash_substitute_threshold_usd,
             DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
         )
+        self.assertEqual(settings.min_order_notional_usd, 100.0)
         self.assertEqual(settings.reserved_cash_floor_usd, DEFAULT_RESERVED_CASH_FLOOR_USD)
         self.assertEqual(settings.reserved_cash_ratio, DEFAULT_RESERVED_CASH_RATIO)
         self.assertFalse(settings.debug_position_snapshot)
@@ -271,6 +272,19 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
         self.assertEqual(settings.safe_haven_cash_substitute_threshold_usd, 750.0)
+
+    def test_min_order_notional_is_loaded_from_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "LONGBRIDGE_MIN_ORDER_NOTIONAL_USD": "150",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertEqual(settings.min_order_notional_usd, 150.0)
 
     def test_reserved_cash_policy_is_loaded_from_env(self):
         with patch.dict(

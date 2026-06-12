@@ -457,6 +457,23 @@ def _sell_order_quantity(
     )
 
 
+def _sell_delta_exceeds_floor(
+    *,
+    current_value,
+    target_value,
+    threshold_value,
+    min_trade_value,
+) -> bool:
+    current = max(0.0, float(current_value or 0.0))
+    target = max(0.0, float(target_value or 0.0))
+    diff = current - target
+    if diff <= max(0.0, float(threshold_value or 0.0)):
+        return False
+    if target <= 0.0:
+        return True
+    return diff > max(0.0, float(min_trade_value or 0.0))
+
+
 def safe_quote_last_price(symbol, *, market_data_port, notify_issue, quote_recorder=None):
     try:
         snapshot = market_data_port.get_quote(symbol)
@@ -619,6 +636,7 @@ def execute_rebalance_cycle(
     post_sell_refresh_attempts=1,
     post_sell_refresh_interval_sec=0.0,
     sleeper=_noop_sleep,
+    min_order_notional_usd=0.0,
     safe_haven_cash_substitute_threshold_usd=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
 ) -> ExecutionCycleResult:
     logs: list[str] = []
@@ -674,7 +692,8 @@ def execute_rebalance_cycle(
     available_cash = float(portfolio["liquid_cash"])
     cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
     investable_cash = float(execution["investable_cash"])
-    current_min_trade = float(execution["current_min_trade"])
+    min_order_notional = max(0.0, float(min_order_notional_usd or 0.0))
+    current_min_trade = max(float(execution["current_min_trade"]), min_order_notional)
     dry_run_sale_proceeds = 0.0
     cash_sweep_sold_this_cycle = False
 
@@ -770,8 +789,12 @@ def execute_rebalance_cycle(
         return True
 
     for symbol in strategy_assets:
-        diff = target_values[symbol] - market_values[symbol]
-        if diff < -threshold_value and abs(diff) > current_min_trade:
+        if _sell_delta_exceeds_floor(
+            current_value=market_values[symbol],
+            target_value=target_values[symbol],
+            threshold_value=threshold_value,
+            min_trade_value=current_min_trade,
+        ):
             price = safe_quote_last_price(
                 market_symbol(symbol),
                 market_data_port=market_data_port,
@@ -839,7 +862,7 @@ def execute_rebalance_cycle(
                         with_prefix=with_prefix,
                         kind="sell_skipped",
                         detail=(
-                            f"Symbol: {market_symbol(symbol)} Diff: ${abs(diff):.2f} "
+                            f"Symbol: {market_symbol(symbol)} Diff: ${abs(market_values[symbol] - target_values[symbol]):.2f} "
                             f"Held: {quantities[symbol]} Sellable: {sellable_quantities[symbol]} "
                             f"(no sellable)"
                         ),
@@ -987,7 +1010,7 @@ def execute_rebalance_cycle(
             available_cash = float(portfolio["liquid_cash"])
             cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
             investable_cash = float(execution["investable_cash"])
-            current_min_trade = float(execution["current_min_trade"])
+            current_min_trade = max(float(execution["current_min_trade"]), min_order_notional)
 
     if (
         available_cash <= 0.0
