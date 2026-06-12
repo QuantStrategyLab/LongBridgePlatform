@@ -44,6 +44,7 @@ class LongBridgeRuntimeComposer:
     order_poll_interval_sec: int
     order_poll_max_attempts: int
     safe_haven_cash_substitute_threshold_usd: float
+    min_order_notional_usd: float
     market: str = "US"
     symbol_suffix: str = ".US"
     trading_currency: str = "USD"
@@ -209,6 +210,7 @@ class LongBridgeRuntimeComposer:
             symbol_suffix=self.symbol_suffix or ".US",
             post_sell_refresh_attempts=self.order_poll_max_attempts,
             post_sell_refresh_interval_sec=self.order_poll_interval_sec,
+            min_order_notional_usd=self.min_order_notional_usd,
             safe_haven_cash_substitute_threshold_usd=self.safe_haven_cash_substitute_threshold_usd,
             sleeper=self.sleeper,
             extra_notification_lines=(market_scope_line,),
@@ -262,6 +264,7 @@ def build_runtime_composer(
     order_poll_interval_sec: int,
     order_poll_max_attempts: int,
     safe_haven_cash_substitute_threshold_usd: float,
+    min_order_notional_usd: float,
     dry_run_only: bool,
     broker_adapters: Any,
     strategy_adapters: Any,
@@ -306,6 +309,7 @@ def build_runtime_composer(
         limit_buy_premium=float(limit_buy_premium),
         order_poll_interval_sec=int(order_poll_interval_sec),
         order_poll_max_attempts=int(order_poll_max_attempts),
+        min_order_notional_usd=float(min_order_notional_usd),
         safe_haven_cash_substitute_threshold_usd=float(safe_haven_cash_substitute_threshold_usd),
         market=str(market or "US").upper(),
         symbol_suffix=str(symbol_suffix or ""),

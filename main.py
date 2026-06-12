@@ -104,6 +104,7 @@ ORDER_POLL_MAX_ATTEMPTS = 8
 # Token refresh: days before expiry to trigger refresh
 TOKEN_REFRESH_THRESHOLD_DAYS = 30
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
+DEFAULT_MIN_ORDER_NOTIONAL_USD = 100.0
 
 SEPARATOR = "━━━━━━━━━━━━━━━━━━"
 
@@ -251,6 +252,10 @@ def _safe_haven_cash_substitute_threshold_usd() -> float:
     )
 
 
+def _min_order_notional_usd() -> float:
+    return float(getattr(RUNTIME_SETTINGS, "min_order_notional_usd", DEFAULT_MIN_ORDER_NOTIONAL_USD))
+
+
 def build_composer(*, dry_run_only_override: bool | None = None):
     return build_runtime_composer(
         project_id=PROJECT_ID,
@@ -274,6 +279,7 @@ def build_composer(*, dry_run_only_override: bool | None = None):
         order_poll_interval_sec=ORDER_POLL_INTERVAL_SEC,
         order_poll_max_attempts=ORDER_POLL_MAX_ATTEMPTS,
         safe_haven_cash_substitute_threshold_usd=_safe_haven_cash_substitute_threshold_usd(),
+        min_order_notional_usd=_min_order_notional_usd(),
         market=MARKET,
         symbol_suffix=SYMBOL_SUFFIX,
         trading_currency=TRADING_CURRENCY,

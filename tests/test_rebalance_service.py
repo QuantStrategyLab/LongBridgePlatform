@@ -211,6 +211,147 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(submitted_orders, [])
         self.assertEqual(result.allocation["targets"]["BOXX"], 0.0)
 
+    def test_min_order_notional_skips_small_buy(self):
+        submitted_orders = []
+        plan = _build_plan(
+            strategy_symbols=("SOXL",),
+            risk_symbols=("SOXL",),
+            targets={"SOXL": 90.0},
+            market_values={"SOXL": 0.0},
+            sellable_quantities={"SOXL": 0},
+            quantities={"SOXL": 0},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=90.0,
+            market_status="Risk on",
+            deploy_ratio_text="90.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="Small buy",
+            available_cash=90.0,
+            total_strategy_equity=100.0,
+            portfolio_rows=(("SOXL",),),
+        )
+
+        result = execute_rebalance_cycle(
+            trade_context=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_replanned_state=lambda: (
+                plan,
+                plan["portfolio"],
+                plan["execution"],
+                plan["allocation"],
+            ),
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-06-12",
+                    last_price=10.0,
+                )
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 20,
+            execution_port=CallableExecutionPort(lambda order_intent: submitted_orders.append(order_intent)),
+            notify_issue=lambda _title, _detail: None,
+            translator=build_translator("zh"),
+            with_prefix=lambda message: message,
+            limit_sell_discount=1.0,
+            limit_buy_premium=1.0,
+            min_order_notional_usd=100.0,
+        )
+
+        self.assertFalse(result.action_done)
+        self.assertEqual(submitted_orders, [])
+
+    def test_min_order_notional_does_not_block_zero_target_risk_sell(self):
+        submitted_orders = []
+        plan = _build_plan(
+            strategy_symbols=("SOXL",),
+            risk_symbols=("SOXL",),
+            targets={"SOXL": 0.0},
+            market_values={"SOXL": 80.0},
+            sellable_quantities={"SOXL": 1},
+            quantities={"SOXL": 1},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=0.0,
+            market_status="Risk off",
+            deploy_ratio_text="0.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="Risk exit",
+            available_cash=0.0,
+            total_strategy_equity=80.0,
+            portfolio_rows=(("SOXL",),),
+        )
+        refreshed_plan = _build_plan(
+            strategy_symbols=("SOXL",),
+            risk_symbols=("SOXL",),
+            targets={"SOXL": 0.0},
+            market_values={"SOXL": 0.0},
+            sellable_quantities={"SOXL": 0},
+            quantities={"SOXL": 0},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=80.0,
+            market_status="Risk off",
+            deploy_ratio_text="0.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="Risk exit",
+            available_cash=80.0,
+            total_strategy_equity=80.0,
+            portfolio_rows=(("SOXL",),),
+        )
+
+        result = execute_rebalance_cycle(
+            trade_context=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_replanned_state=lambda: (
+                refreshed_plan,
+                refreshed_plan["portfolio"],
+                refreshed_plan["execution"],
+                refreshed_plan["allocation"],
+            ),
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-06-12",
+                    last_price=80.0,
+                )
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 0,
+            execution_port=CallableExecutionPort(
+                lambda order_intent: (
+                    submitted_orders.append(order_intent),
+                    ExecutionReport(
+                        symbol=order_intent.symbol,
+                        side=order_intent.side,
+                        quantity=order_intent.quantity,
+                        status="accepted",
+                        broker_order_id=f"order-{len(submitted_orders)}",
+                    ),
+                )[-1]
+            ),
+            notify_issue=lambda _title, _detail: None,
+            translator=build_translator("zh"),
+            with_prefix=lambda message: message,
+            limit_sell_discount=1.0,
+            limit_buy_premium=1.0,
+            min_order_notional_usd=100.0,
+        )
+
+        self.assertTrue(result.action_done)
+        self.assertEqual(
+            [(order.symbol, order.side, order.quantity) for order in submitted_orders],
+            [("SOXL.US", "sell", 1)],
+        )
+
     def test_small_account_whole_share_layer_sells_unbuyable_soxx_sleeve(self):
         submitted_orders = []
         prices = {"SOXL": 191.15, "SOXX": 536.88, "BOXX": 100.0}

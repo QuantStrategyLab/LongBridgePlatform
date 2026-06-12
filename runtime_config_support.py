@@ -15,6 +15,31 @@ from quant_platform_kit.common.runtime_target import (
     RuntimeTarget,
     resolve_runtime_target_from_env,
 )
+try:
+    from quant_platform_kit.common.broker_costs import (
+        BrokerCostProfile,
+        minimum_economic_order_notional_usd,
+    )
+except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
+    @dataclass(frozen=True)
+    class BrokerCostProfile:
+        fixed_order_fee_usd: float = 0.0
+        minimum_order_fee_usd: float = 0.0
+        max_fixed_fee_bps: float = 100.0
+        explicit_min_order_notional_usd: float = 0.0
+
+    def minimum_economic_order_notional_usd(profile: BrokerCostProfile | None) -> float:
+        if profile is None:
+            return 0.0
+        explicit_floor = max(0.0, float(profile.explicit_min_order_notional_usd or 0.0))
+        fee_floor = max(
+            max(0.0, float(profile.fixed_order_fee_usd or 0.0)),
+            max(0.0, float(profile.minimum_order_fee_usd or 0.0)),
+        )
+        max_fee_bps = max(0.0, float(profile.max_fixed_fee_bps or 0.0))
+        if fee_floor <= 0.0 or max_fee_bps <= 0.0:
+            return explicit_floor
+        return max(explicit_floor, fee_floor / (max_fee_bps / 10_000.0))
 from strategy_registry import (
     LONGBRIDGE_PLATFORM,
     STRATEGY_CATALOG,
@@ -37,6 +62,15 @@ HK_TRADING_CURRENCY = "HKD"
 DEFAULT_RESERVED_CASH_FLOOR_USD = 0.0
 DEFAULT_RESERVED_CASH_RATIO = 0.0
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
+DEFAULT_LONGBRIDGE_FIXED_ORDER_FEE_USD = 0.99
+DEFAULT_LONGBRIDGE_MAX_FIXED_FEE_BPS = 100.0
+DEFAULT_LONGBRIDGE_MIN_ORDER_NOTIONAL_USD = minimum_economic_order_notional_usd(
+    BrokerCostProfile(
+        fixed_order_fee_usd=DEFAULT_LONGBRIDGE_FIXED_ORDER_FEE_USD,
+        max_fixed_fee_bps=DEFAULT_LONGBRIDGE_MAX_FIXED_FEE_BPS,
+        explicit_min_order_notional_usd=100.0,
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -59,6 +93,7 @@ class PlatformRuntimeSettings:
     trading_currency: str = DEFAULT_TRADING_CURRENCY
     reserved_cash_floor_usd: float = DEFAULT_RESERVED_CASH_FLOOR_USD
     reserved_cash_ratio: float = DEFAULT_RESERVED_CASH_RATIO
+    min_order_notional_usd: float = DEFAULT_LONGBRIDGE_MIN_ORDER_NOTIONAL_USD
     safe_haven_cash_substitute_threshold_usd: float = DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD
     debug_position_snapshot: bool = False
     income_threshold_usd: float | None = None
@@ -235,6 +270,10 @@ def load_platform_runtime_settings(
         reserved_cash_ratio=_resolve_ratio_env(
             "LONGBRIDGE_RESERVED_CASH_RATIO",
             default=DEFAULT_RESERVED_CASH_RATIO,
+        ),
+        min_order_notional_usd=_resolve_non_negative_float_env(
+            "LONGBRIDGE_MIN_ORDER_NOTIONAL_USD",
+            default=DEFAULT_LONGBRIDGE_MIN_ORDER_NOTIONAL_USD,
         ),
         safe_haven_cash_substitute_threshold_usd=(
             max(0.0, safe_haven_cash_substitute_threshold_usd)
