@@ -123,6 +123,45 @@ class SignalSnapshotTests(unittest.TestCase):
             snapshot["indicators"]["blend_gate_volatility_delever_triggered"], True
         )
 
+    def test_includes_tqqq_extended_risk_control_fields(self):
+        snapshot = build_signal_snapshot(
+            platform="longbridge",
+            strategy_profile="tqqq_growth_income",
+            execution={
+                "dual_drive_volatility_delever_threshold_mode": "rolling_percentile",
+                "dual_drive_volatility_delever_threshold": 0.28,
+                "dual_drive_volatility_delever_exit_threshold": 0.24,
+                "dual_drive_volatility_delever_dynamic_threshold": 0.30,
+                "dual_drive_volatility_delever_dynamic_sample_count": 252,
+                "dual_drive_volatility_delever_dynamic_percentile": 0.90,
+                "dual_drive_volatility_delever_metric": 0.312,
+                "dual_drive_volatility_delever_applied": True,
+                "dual_drive_volatility_delever_veto_reason": "taco_rebound_context",
+                "dual_drive_volatility_delever_taco_veto_enabled": True,
+                "dual_drive_volatility_delever_removed_value": 4500.0,
+                "dual_drive_macro_risk_governor_applied": True,
+                "dual_drive_macro_risk_governor_route": "risk_reduced",
+                "dual_drive_crisis_defense_destination": "BOXX",
+                "market_regime_control_route": "risk_reduced",
+                "market_regime_control_reason_codes": ("macro:vix_crisis_level",),
+                "dual_drive_volatility_delever_redirect_symbol": "QQQM",
+            },
+        )
+
+        indicators = snapshot["indicators"]
+        self.assertEqual(indicators["dual_drive_volatility_delever_threshold_mode"], "rolling_percentile")
+        self.assertEqual(indicators["dual_drive_volatility_delever_dynamic_threshold"], 0.30)
+        self.assertIs(indicators["dual_drive_volatility_delever_applied"], True)
+        self.assertEqual(indicators["dual_drive_volatility_delever_veto_reason"], "taco_rebound_context")
+        self.assertIs(indicators["dual_drive_volatility_delever_taco_veto_enabled"], True)
+        self.assertEqual(indicators["dual_drive_volatility_delever_removed_value"], 4500.0)
+        self.assertIs(indicators["dual_drive_macro_risk_governor_applied"], True)
+        self.assertEqual(indicators["dual_drive_macro_risk_governor_route"], "risk_reduced")
+        self.assertEqual(indicators["dual_drive_crisis_defense_destination"], "BOXX")
+        self.assertEqual(indicators["market_regime_control_route"], "risk_reduced")
+        self.assertEqual(indicators["market_regime_control_reason_codes"], ["macro:vix_crisis_level"])
+        self.assertEqual(indicators["dual_drive_volatility_delever_redirect_symbol"], "QQQM")
+
 
 if __name__ == "__main__":
     unittest.main()
