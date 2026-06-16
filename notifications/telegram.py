@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from notifications.events import NotificationPublisher, RenderedNotification
 
+try:
+    from quant_platform_kit.common.notification_localization import (
+        merge_strategy_plugin_i18n as _merge_strategy_plugin_i18n,
+    )
+except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
+    _merge_strategy_plugin_i18n = None
+
 
 SIGNAL_ICONS = {
     "hold": "💎",
@@ -131,7 +138,7 @@ I18N = {
         "strategy_plugin_name_macro_risk_governor": "宏观风险控制通知",
         "strategy_plugin_name_market_regime_control": "市场状态控制通知",
         "strategy_plugin_name_panic_reversal_shadow": "恐慌反转观察通知",
-        "strategy_plugin_name_taco_rebound_shadow": "TACO 抄底观察通知",
+        "strategy_plugin_name_taco_rebound_shadow": "TACO 反弹观察通知",
         "strategy_plugin_mode_shadow": "影子观察",
         "strategy_plugin_route_blocked": "已阻断",
         "strategy_plugin_route_crisis": "危机",
@@ -313,6 +320,9 @@ I18N = {
     },
 }
 
+if _merge_strategy_plugin_i18n is not None:
+    I18N = _merge_strategy_plugin_i18n(I18N)
+
 
 def build_translator(lang):
     def translate(key, **kwargs):
@@ -370,7 +380,7 @@ def build_sender(token, chat_id, *, with_prefix_fn, requests_module=None):
             prefixed = with_prefix_fn(message)
             requests_module.post(url, json={"chat_id": chat_id, "text": prefixed}, timeout=10)
         except Exception as exc:
-            print(f"Telegram send failed: {exc}", flush=True)
+            print(f"Telegram send failed: {type(exc).__name__}", flush=True)
 
     return send_tg_message
 
