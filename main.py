@@ -334,6 +334,18 @@ def _runtime_error_notification_message(exc: Exception, *, route_label: str) -> 
     error_text = f"{type(exc).__name__}: {exc}"
     if len(error_text) > 1200:
         error_text = error_text[:1197] + "..."
+    if str(NOTIFY_LANG or "").strip().lower().startswith("zh"):
+        return "\n".join(
+            (
+                "LongBridge 策略运行失败",
+                f"服务: {os.getenv('K_SERVICE') or SECRET_NAME or 'longbridge-platform'}",
+                f"版本: {os.getenv('K_REVISION') or '<unknown>'}",
+                f"路由: {route_label}",
+                f"策略: {STRATEGY_PROFILE}",
+                f"账户范围: {ACCOUNT_REGION}",
+                f"错误: {error_text}",
+            )
+        )
     return "\n".join(
         (
             "LongBridge strategy run failed",

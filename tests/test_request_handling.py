@@ -18,7 +18,7 @@ from quant_platform_kit.common.runtime_target import build_runtime_target
 
 
 @contextmanager
-def install_stub_modules():
+def install_stub_modules(*, notify_lang="en"):
     flask_module = types.ModuleType("flask")
 
     class Flask:
@@ -67,7 +67,7 @@ def install_stub_modules():
         market_timezone="Asia/Hong_Kong",
         symbol_suffix=".HK",
         trading_currency="HKD",
-        notify_lang="en",
+        notify_lang=notify_lang,
         tg_token=None,
         tg_chat_id="shared-chat-id",
         dry_run_only=False,
@@ -186,8 +186,8 @@ def install_stub_modules():
                 sys.modules[name] = previous
 
 
-def load_module():
-    with install_stub_modules():
+def load_module(*, notify_lang="en"):
+    with install_stub_modules(notify_lang=notify_lang):
         with patch.dict(
             os.environ,
             {
@@ -276,6 +276,32 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(observed["payloads"][0][0]["chat_id"], "chat-1")
         self.assertIn("LongBridge strategy run failed", observed["payloads"][0][0]["text"])
         self.assertIn("RuntimeError: boom", observed["payloads"][0][0]["text"])
+
+    def test_handle_trigger_runtime_error_fallback_uses_chinese_copy(self):
+        module = load_module(notify_lang="zh")
+        observed = {"payloads": []}
+
+        class FakeResponse:
+            status_code = 200
+
+        def fake_post(_url, *, json, timeout):
+            observed["payloads"].append((json, timeout))
+            return FakeResponse()
+
+        module.TG_TOKEN = "token-1"
+        module.TG_CHAT_ID = "chat-1"
+        module.requests.post = fake_post
+        module.run_strategy = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+
+        with module.app.test_request_context("/", method="POST"):
+            body, status = module.handle_trigger()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(body, "Error")
+        text = observed["payloads"][0][0]["text"]
+        self.assertIn("LongBridge 策略运行失败", text)
+        self.assertIn("服务:", text)
+        self.assertIn("错误: RuntimeError: boom", text)
 
     def test_handle_trigger_allows_get(self):
         module = load_module()
