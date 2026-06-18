@@ -1355,6 +1355,75 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("限价买入] QQQM: 1股", sent_messages[0])
         self.assertNotIn("QQQM.US 目标金额 $507.87 低于 1 股价格", sent_messages[0])
 
+    def test_existing_tqqq_retention_below_one_share_keeps_min_whole_share(self):
+        plan = _build_plan(
+            strategy_profile="tqqq_growth_income",
+            strategy_symbols=("TQQQ", "QQQM", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI"),
+            risk_symbols=("TQQQ", "QQQM"),
+            income_symbols=("SCHD", "DGRO", "SGOV", "SPYI", "QQQI"),
+            safe_haven_symbols=("BOXX",),
+            targets={
+                "TQQQ": 60.94,
+                "QQQM": 320.00,
+                "BOXX": 0.0,
+                "SCHD": 0.0,
+                "DGRO": 0.0,
+                "SGOV": 0.0,
+                "SPYI": 0.0,
+                "QQQI": 0.0,
+            },
+            market_values={
+                "TQQQ": 541.31,
+                "QQQM": 0.0,
+                "BOXX": 0.0,
+                "SCHD": 0.0,
+                "DGRO": 0.0,
+                "SGOV": 0.0,
+                "SPYI": 0.0,
+                "QQQI": 0.0,
+            },
+            sellable_quantities={"TQQQ": 7, "QQQM": 0, "BOXX": 0, "SCHD": 0, "DGRO": 0, "SGOV": 0, "SPYI": 0, "QQQI": 0},
+            quantities={"TQQQ": 7, "QQQM": 0, "BOXX": 0, "SCHD": 0, "DGRO": 0, "SGOV": 0, "SPYI": 0, "QQQI": 0},
+            current_min_trade=100.0,
+            trade_threshold_value=100.0,
+            investable_cash=528.91,
+            market_status="",
+            deploy_ratio_text="",
+            income_ratio_text="",
+            income_locked_ratio_text="",
+            signal_message="🚀 入场信号",
+            available_cash=539.70,
+            total_strategy_equity=539.70,
+            portfolio_rows=(("TQQQ", "QQQM", "BOXX"), ("SCHD", "DGRO", "SGOV", "SPYI", "QQQI")),
+            benchmark_symbol="QQQ",
+            benchmark_price=722.05,
+            long_trend_value=626.87,
+            exit_line=626.87,
+        )
+
+        sent_messages, _, _ = self._run_strategy(
+            plan,
+            prices={
+                "TQQQ.US": 77.33,
+                "QQQM.US": 297.19,
+                "BOXX.US": 116.95,
+                "SCHD.US": 80.0,
+                "DGRO.US": 65.0,
+                "SGOV.US": 100.0,
+                "SPYI.US": 52.0,
+                "QQQI.US": 52.0,
+            },
+            estimate_max_purchase_quantity_value=10,
+            strategy_display_name="TQQQ 增长收益",
+        )
+
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("🔔 【调仓指令】", sent_messages[0])
+        self.assertIn("限价卖出] TQQQ: 6股 @ $76.94", sent_messages[0])
+        self.assertNotIn("限价卖出] TQQQ: 7股", sent_messages[0])
+        self.assertIn("限价买入] QQQM: 1股 @ $298.68", sent_messages[0])
+        self.assertNotIn("TQQQ.US 目标金额 $60.94 低于 1 股价格", sent_messages[0])
+
     def test_target_gap_below_one_share_does_not_report_cash_shortage(self):
         plan = _build_plan(
             strategy_symbols=("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"),
