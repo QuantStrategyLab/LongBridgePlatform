@@ -482,6 +482,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "INCOME_THRESHOLD_USD": "100000",
                 "QQQI_INCOME_RATIO": "0.5",
                 "INCOME_LAYER_ENABLED": "false",
+                "INCOME_LAYER_START_USD": "250000",
                 "INCOME_LAYER_MAX_RATIO": "0.25",
             },
             clear=True,
@@ -492,6 +493,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.income_threshold_usd, 100000.0)
         self.assertEqual(settings.qqqi_income_ratio, 0.5)
         self.assertFalse(settings.income_layer_enabled)
+        self.assertEqual(settings.income_layer_start_usd, 250000.0)
         self.assertEqual(settings.income_layer_max_ratio, 0.25)
 
     def test_tech_runtime_execution_window_override_rejects_research_only_profile(self):
@@ -530,6 +532,18 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             clear=True,
         ):
             with self.assertRaisesRegex(ValueError, "INCOME_LAYER_MAX_RATIO"):
+                load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+    def test_rejects_invalid_income_layer_start_usd(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json("tqqq_growth_income"),
+                "INCOME_LAYER_START_USD": "-1",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "INCOME_LAYER_START_USD"):
                 load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
     def test_rejects_human_readable_alias(self):
