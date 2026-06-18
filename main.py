@@ -601,14 +601,6 @@ def run_probe(*, response_body: str = "Probe OK"):
         composer = build_composer(dry_run_only_override=True)
         reporting_adapters = composer.build_reporting_adapters()
         log_context, report = reporting_adapters.start_run()
-        strategy_plugin_signals, strategy_plugin_error = composer.load_strategy_plugin_signals(
-            getattr(RUNTIME_SETTINGS, "strategy_plugin_mounts_json", None)
-        )
-        composer.attach_strategy_plugin_report(
-            report,
-            signals=strategy_plugin_signals,
-            error=strategy_plugin_error,
-        )
         reporting_adapters.log_event(
             log_context,
             "health_probe_received",
@@ -681,6 +673,7 @@ def run_probe(*, response_body: str = "Probe OK"):
 
 
 @app.route("/", methods=["POST", "GET"])
+@app.route("/run", methods=["POST", "GET"])
 def handle_trigger():
     """Entrypoint for Cloud Run / scheduler: run strategy and return 200."""
     return _route_with_runtime_error_fallback(
@@ -715,6 +708,19 @@ def handle_precheck():
     )
 
 
+@app.route("/dry-run", methods=["POST", "GET"])
+def handle_dry_run():
+    """Strategy dry-run entrypoint; alias of precheck with clearer operator wording."""
+    return _route_with_runtime_error_fallback(
+        run_strategy,
+        force_run=True,
+        validation_only=True,
+        validation_label="precheck",
+        success_body="Dry Run OK",
+        route_label="POST /dry-run",
+    )
+
+
 @app.route("/probe", methods=["POST", "GET"])
 def handle_probe():
     """Post-open broker/account health probe; notify only on failure."""
@@ -723,6 +729,11 @@ def handle_probe():
         success_body="Probe OK",
         route_label="POST /probe",
     )
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return "OK", 200
 
 
 if __name__ == "__main__":
