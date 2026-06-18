@@ -15,10 +15,10 @@ on:
       path:
         description: "HTTP path to call"
         required: false
-        default: "/precheck"
+        default: "/dry-run"
         type: string
       allow_live_execution:
-        description: "Allow calling / live execution entrypoint"
+        description: "Allow calling /run live execution entrypoint"
         required: false
         default: false
         type: boolean
@@ -82,12 +82,12 @@ jobs:
 
           raw_path="${{ inputs.path }}"
           if [ -z "${raw_path}" ]; then
-            raw_path="/"
+            raw_path="/dry-run"
           fi
           if [[ "${raw_path}" != /* ]]; then
             raw_path="/${raw_path}"
           fi
-          if { [ "${raw_path}" = "/" ] || [ "${raw_path}" = "/run" ]; } && [ "${{ inputs.allow_live_execution }}" != "true" ]; then
+          if [ "${raw_path}" = "/run" ] && [ "${{ inputs.allow_live_execution }}" != "true" ]; then
             echo "Calling ${raw_path} can trigger the live execution entrypoint. Re-run with allow_live_execution=true if this is intentional." >&2
             exit 1
           fi
@@ -144,21 +144,21 @@ jobs:
           if [ "${service_ingress}" = "internal" ]; then
             scheduler_location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}"
             case "${raw_path}" in
-              /|/run)
+              /run)
                 scheduler_job="${CLOUD_RUN_SERVICE}-scheduler"
-                scheduler_expected_path="/"
+                scheduler_expected_path="/run"
                 ;;
               /probe)
                 scheduler_job="${CLOUD_RUN_SERVICE}-probe-scheduler"
                 scheduler_expected_path="/probe"
                 ;;
-              /precheck|/dry-run)
+              /dry-run)
                 scheduler_job="${CLOUD_RUN_SERVICE}-precheck-scheduler"
-                scheduler_expected_path="/precheck"
+                scheduler_expected_path="/dry-run"
                 ;;
               *)
                 echo "Cloud Run service ${CLOUD_RUN_SERVICE} has internal ingress, so GitHub-hosted runners cannot curl ${raw_path} directly." >&2
-                echo "Use one of the scheduler-backed paths: /, /run, /probe, /precheck, /dry-run." >&2
+                echo "Use one of the scheduler-backed paths: /run, /probe, /dry-run." >&2
                 exit 1
                 ;;
             esac

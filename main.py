@@ -518,8 +518,8 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 strategy_plugin_signals=strategy_plugin_signals,
                 strategy_plugin_error=strategy_plugin_error,
                 notification_title_key=(
-                    "precheck_title"
-                    if validation_only and validation_label == "precheck"
+                    "dry_run_title"
+                    if validation_only and validation_label == "dry_run"
                     else ""
                 ),
             ),
@@ -672,7 +672,6 @@ def run_probe(*, response_body: str = "Probe OK"):
             print(f"failed to persist execution report: {persist_exc}", flush=True)
 
 
-@app.route("/", methods=["POST", "GET"])
 @app.route("/run", methods=["POST", "GET"])
 def handle_trigger():
     """Entrypoint for Cloud Run / scheduler: run strategy and return 200."""
@@ -695,27 +694,14 @@ def handle_backfill():
     )
 
 
-@app.route("/precheck", methods=["POST", "GET"])
-def handle_precheck():
-    """Pre-market / post-open verification entrypoint for dry-run only execution."""
-    return _route_with_runtime_error_fallback(
-        run_strategy,
-        force_run=True,
-        validation_only=True,
-        validation_label="precheck",
-        success_body="Precheck OK",
-        route_label="POST /precheck",
-    )
-
-
 @app.route("/dry-run", methods=["POST", "GET"])
 def handle_dry_run():
-    """Strategy dry-run entrypoint; alias of precheck with clearer operator wording."""
+    """Strategy dry-run entrypoint."""
     return _route_with_runtime_error_fallback(
         run_strategy,
         force_run=True,
         validation_only=True,
-        validation_label="precheck",
+        validation_label="dry_run",
         success_body="Dry Run OK",
         route_label="POST /dry-run",
     )

@@ -177,7 +177,7 @@ class NotificationTests(unittest.TestCase):
         self.assertIn("📊 市场状态: 🚀 风险开启（SOXX+SOXL）", rendered.compact_text)
         self.assertNotIn("longbridge_candlesticks", rendered.compact_text)
 
-    def test_precheck_heartbeat_uses_precheck_title(self):
+    def test_dry_run_heartbeat_uses_dry_run_title(self):
         rendered = render_heartbeat_notification(
             execution={
                 "signal_display": "🚀 入场信号 | 原因：QQQ 高于 MA200",
@@ -188,7 +188,7 @@ class NotificationTests(unittest.TestCase):
             separator="━━━━━━━━━━━━━━━━━━",
             strategy_display_name="TQQQ 增长收益",
             dry_run_only=True,
-            title_key="precheck_title",
+            title_key="dry_run_title",
         )
         en_rendered = render_heartbeat_notification(
             execution={
@@ -200,12 +200,12 @@ class NotificationTests(unittest.TestCase):
             separator="━━━━━━━━━━━━━━━━━━",
             strategy_display_name="TQQQ Growth Income",
             dry_run_only=True,
-            title_key="precheck_title",
+            title_key="dry_run_title",
         )
 
-        self.assertIn("🧪 【策略预检】", rendered.compact_text)
+        self.assertIn("🧪 【策略演练】", rendered.compact_text)
         self.assertNotIn("💓 【心跳检测】", rendered.compact_text)
-        self.assertIn("🧪 【Strategy Precheck】", en_rendered.compact_text)
+        self.assertIn("🧪 【Strategy Dry Run】", en_rendered.compact_text)
         self.assertNotIn("💓 【Heartbeat】", en_rendered.compact_text)
 
     def test_heartbeat_renders_tqqq_volatility_delever_risk_control(self):

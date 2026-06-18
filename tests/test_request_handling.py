@@ -203,15 +203,10 @@ class RequestHandlingTests(unittest.TestCase):
     def test_cloud_run_route_contracts_are_registered(self):
         module = load_module()
 
-        self.assertIs(module.app._routes[("/", ("POST", "GET"))], module.handle_trigger)
         self.assertIs(module.app._routes[("/run", ("POST", "GET"))], module.handle_trigger)
         self.assertIs(
             module.app._routes[("/backfill", ("POST", "GET"))],
             module.handle_backfill,
-        )
-        self.assertIs(
-            module.app._routes[("/precheck", ("POST", "GET"))],
-            module.handle_precheck,
         )
         self.assertIs(
             module.app._routes[("/dry-run", ("POST", "GET"))],
@@ -249,7 +244,7 @@ class RequestHandlingTests(unittest.TestCase):
             },
             clear=False,
         ):
-            with module.app.test_request_context("/", method="POST"):
+            with module.app.test_request_context("/run", method="POST"):
                 body, status = module.handle_trigger()
 
         self.assertEqual(status, 200)
@@ -260,7 +255,7 @@ class RequestHandlingTests(unittest.TestCase):
         module = load_module()
         module.run_strategy = lambda: False
 
-        with module.app.test_request_context("/", method="POST"):
+        with module.app.test_request_context("/run", method="POST"):
             body, status = module.handle_trigger()
 
         self.assertEqual(status, 500)
@@ -282,7 +277,7 @@ class RequestHandlingTests(unittest.TestCase):
         module.requests.post = fake_post
         module.run_strategy = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
 
-        with module.app.test_request_context("/", method="POST"):
+        with module.app.test_request_context("/run", method="POST"):
             body, status = module.handle_trigger()
 
         self.assertEqual(status, 500)
@@ -308,7 +303,7 @@ class RequestHandlingTests(unittest.TestCase):
         module.requests.post = fake_post
         module.run_strategy = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
 
-        with module.app.test_request_context("/", method="POST"):
+        with module.app.test_request_context("/run", method="POST"):
             body, status = module.handle_trigger()
 
         self.assertEqual(status, 500)
@@ -327,7 +322,7 @@ class RequestHandlingTests(unittest.TestCase):
 
         module.run_strategy = fake_run_strategy
 
-        with module.app.test_request_context("/", method="GET"):
+        with module.app.test_request_context("/run", method="GET"):
             body, status = module.handle_trigger()
 
         self.assertEqual(status, 200)
@@ -351,27 +346,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(body, "OK")
         self.assertTrue(observed["force_run"])
         self.assertTrue(observed["validation_only"])
-    def test_handle_precheck_forces_strategy_run(self):
-        module = load_module()
-        observed = {"force_run": None, "validation_only": None}
-
-        def fake_run_strategy(*, force_run=False, validation_only=False, validation_label="backfill"):
-            observed["force_run"] = force_run
-            observed["validation_only"] = validation_only
-            observed["validation_label"] = validation_label
-
-        module.run_strategy = fake_run_strategy
-
-        with module.app.test_request_context("/precheck", method="POST"):
-            body, status = module.handle_precheck()
-
-        self.assertEqual(status, 200)
-        self.assertEqual(body, "Precheck OK")
-        self.assertTrue(observed["force_run"])
-        self.assertTrue(observed["validation_only"])
-        self.assertEqual(observed["validation_label"], "precheck")
-
-    def test_handle_dry_run_alias_forces_strategy_dry_run(self):
+    def test_handle_dry_run_forces_strategy_dry_run(self):
         module = load_module()
         observed = {"force_run": None, "validation_only": None}
 
@@ -389,7 +364,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(body, "Dry Run OK")
         self.assertTrue(observed["force_run"])
         self.assertTrue(observed["validation_only"])
-        self.assertEqual(observed["validation_label"], "precheck")
+        self.assertEqual(observed["validation_label"], "dry_run")
 
     def test_handle_probe_checks_account_snapshot_without_success_notification(self):
         module = load_module()
@@ -644,7 +619,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertTrue(observed["silent_cycle_notifications"])
         self.assertEqual(observed["notification_title_key"], "")
 
-    def test_run_strategy_precheck_sets_precheck_notification_title(self):
+    def test_run_strategy_dry_run_sets_dry_run_notification_title(self):
         module = load_module()
         observed = {"notification_title_key": None}
 
@@ -685,9 +660,9 @@ class RequestHandlingTests(unittest.TestCase):
         module.is_market_open_now = lambda **_kwargs: False
         module.run_rebalance_cycle = lambda **_kwargs: None
 
-        module.run_strategy(force_run=True, validation_only=True, validation_label="precheck")
+        module.run_strategy(force_run=True, validation_only=True, validation_label="dry_run")
 
-        self.assertEqual(observed["notification_title_key"], "precheck_title")
+        self.assertEqual(observed["notification_title_key"], "dry_run_title")
 
     def test_run_strategy_persists_machine_readable_report(self):
         module = load_module()
