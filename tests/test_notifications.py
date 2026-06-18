@@ -326,7 +326,7 @@ class NotificationTests(unittest.TestCase):
             note_logs=(),
             translator=build_translator("zh"),
             separator="━━━━━━━━━━━━━━━━━━",
-            strategy_display_name="Mega Cap Top50 平衡龙头轮动",
+            strategy_display_name="美股超大盘50强平衡龙头轮动",
             dry_run_only=False,
         )
 
