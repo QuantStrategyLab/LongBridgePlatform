@@ -988,6 +988,8 @@ jobs:
 
       - name: Sync Cloud Scheduler schedule
         if: steps.config.outputs.env_sync_enabled == 'true'
+        env:
+          RUNTIME_TARGET_JSON: ${{ steps.strategy_requirements.outputs.runtime_target_json }}
         run: |
           set -euo pipefail
 
@@ -998,20 +1000,32 @@ jobs:
           fi
 
           mapfile -t scheduler_market_config < <(python - <<'PY'
+          import json
           import os
 
+          raw_runtime_target = os.environ.get("RUNTIME_TARGET_JSON", "").strip()
+          runtime_scheduler = {}
+          if raw_runtime_target:
+              try:
+                  runtime_target = json.loads(raw_runtime_target)
+              except json.JSONDecodeError:
+                  runtime_target = {}
+              scheduler = runtime_target.get("scheduler") if isinstance(runtime_target, dict) else {}
+              if isinstance(scheduler, dict):
+                  runtime_scheduler = scheduler
+
           market = os.environ.get("LONGBRIDGE_MARKET", "").strip().upper()
-          timezone = os.environ.get("LONGBRIDGE_MARKET_TIMEZONE", "").strip()
+          timezone = str(runtime_scheduler.get("timezone") or os.environ.get("LONGBRIDGE_MARKET_TIMEZONE", "")).strip()
           if not timezone:
               timezone = "Asia/Hong_Kong" if market == "HK" else "America/New_York"
 
-          def configured_time(name: str, default: str) -> str:
-              return os.environ.get(name, "").strip() or default
+          def configured_time(key: str, name: str, default: str) -> str:
+              return str(runtime_scheduler.get(key) or os.environ.get(name, "").strip() or default)
 
           print(timezone)
-          print(configured_time("CLOUD_SCHEDULER_MAIN_TIME", "45 15"))
-          print(configured_time("CLOUD_SCHEDULER_PROBE_TIME", "35 9,15"))
-          print(configured_time("CLOUD_SCHEDULER_PRECHECK_TIME", "45 9"))
+          print(configured_time("main_time", "CLOUD_SCHEDULER_MAIN_TIME", "45 15"))
+          print(configured_time("probe_time", "CLOUD_SCHEDULER_PROBE_TIME", "35 9,15"))
+          print(configured_time("precheck_time", "CLOUD_SCHEDULER_PRECHECK_TIME", "45 9"))
           PY
           )
           market_timezone="${scheduler_market_config[0]}"
@@ -1061,9 +1075,14 @@ jobs:
           time_fields = os.environ["SCHEDULE_TIME"].split()
           if len(current_fields) != 5:
               raise SystemExit(f"Cloud Scheduler schedule must have 5 fields: {os.environ['CURRENT_SCHEDULE']!r}")
-          if len(time_fields) != 2:
-              raise SystemExit(f"Cloud Scheduler time override must have 2 cron fields: {os.environ['SCHEDULE_TIME']!r}")
-          print(" ".join([*time_fields, *current_fields[2:]]))
+          if len(time_fields) == 5:
+              print(" ".join(time_fields))
+          elif len(time_fields) == 2:
+              print(" ".join([*time_fields, *current_fields[2:]]))
+          else:
+              raise SystemExit(
+                  f"Cloud Scheduler override must have 2 time fields or 5 cron fields: {os.environ['SCHEDULE_TIME']!r}"
+              )
           PY
             )"
 
