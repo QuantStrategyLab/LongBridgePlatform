@@ -371,6 +371,7 @@ def run_strategy(
                 strategy_display_name=config.strategy_display_name,
                 dry_run_only=config.dry_run_only,
                 extra_notification_lines=config.extra_notification_lines,
+                title_key=config.notification_title_key or "rebalance_title",
             )
         )
     else:
@@ -384,6 +385,7 @@ def run_strategy(
                 strategy_display_name=config.strategy_display_name,
                 dry_run_only=config.dry_run_only,
                 extra_notification_lines=config.extra_notification_lines,
+                title_key=config.notification_title_key or "heartbeat_title",
             )
         )
     return execution_result
