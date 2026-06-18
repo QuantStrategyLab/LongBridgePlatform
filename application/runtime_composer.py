@@ -198,6 +198,12 @@ class LongBridgeRuntimeComposer:
             currency=self.trading_currency,
             symbol_suffix=self.symbol_suffix or "<none>",
         )
+        build_plugin_lines = getattr(
+            self.strategy_adapters,
+            "build_strategy_plugin_notification_lines",
+            lambda _signals: (),
+        )
+        plugin_lines = tuple(build_plugin_lines(tuple(strategy_plugin_signals or ())))
         return LongBridgeRebalanceConfig(
             limit_sell_discount=self.limit_sell_discount,
             limit_buy_premium=self.limit_buy_premium,
@@ -213,7 +219,7 @@ class LongBridgeRuntimeComposer:
             min_order_notional_usd=self.min_order_notional_usd,
             safe_haven_cash_substitute_threshold_usd=self.safe_haven_cash_substitute_threshold_usd,
             sleeper=self.sleeper,
-            extra_notification_lines=(market_scope_line,),
+            extra_notification_lines=(market_scope_line, *plugin_lines),
             strategy_plugin_signals=tuple(strategy_plugin_signals or ()),
             execution_dedup_enabled=resolve_execution_dedup_enabled(
                 env_reader=self.env_reader,
