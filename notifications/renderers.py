@@ -200,6 +200,13 @@ def _format_percent(value) -> str:
         return "n/a"
 
 
+def _as_float_or_none(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _format_percentile(value) -> str:
     try:
         percentile = float(value) * 100
@@ -255,6 +262,27 @@ def _format_volatility_delever_threshold_detail(execution, *, prefix: str, trans
     )
 
 
+def _format_tqqq_volatility_delever_allocation_detail(
+    execution,
+    *,
+    prefix: str,
+    redirect_symbol: str,
+    translator,
+) -> str:
+    retained_ratio = _as_float_or_none(execution.get(f"{prefix}_retained_ratio"))
+    redirected_ratio = _as_float_or_none(execution.get(f"{prefix}_redirected_ratio"))
+    if retained_ratio is None:
+        retained_ratio = _as_float_or_none(execution.get(f"{prefix}_retention_ratio"))
+    if redirected_ratio is None and retained_ratio is not None:
+        redirected_ratio = max(0.0, min(1.0, 1.0 - retained_ratio))
+    return translator(
+        "tqqq_volatility_delever_allocation_detail",
+        retained_ratio=_format_percent(retained_ratio),
+        redirected_ratio=_format_percent(redirected_ratio),
+        redirect_symbol=redirect_symbol or "QQQ",
+    )
+
+
 def _build_risk_control_lines(execution, *, translator):
     if _is_truthy(execution.get("dual_drive_volatility_delever_applied")):
         redirect_symbol = str(execution.get("dual_drive_volatility_delever_redirect_symbol") or "QQQ").strip().upper()
@@ -268,6 +296,12 @@ def _build_risk_control_lines(execution, *, translator):
             prefix="dual_drive_volatility_delever",
             translator=translator,
         )
+        allocation_detail = _format_tqqq_volatility_delever_allocation_detail(
+            execution,
+            prefix="dual_drive_volatility_delever",
+            redirect_symbol=redirect_symbol or "QQQ",
+            translator=translator,
+        )
         if str(execution.get("dual_drive_volatility_delever_trigger_reason") or "").strip() == "hysteresis_hold":
             return [
                 translator(
@@ -279,6 +313,7 @@ def _build_risk_control_lines(execution, *, translator):
                     threshold_detail=threshold_detail,
                     source_symbol="TQQQ",
                     redirect_symbol=redirect_symbol or "QQQ",
+                    allocation_detail=allocation_detail,
                 )
             ]
         return [
@@ -290,6 +325,7 @@ def _build_risk_control_lines(execution, *, translator):
                 threshold_detail=threshold_detail,
                 source_symbol="TQQQ",
                 redirect_symbol=redirect_symbol or "QQQ",
+                allocation_detail=allocation_detail,
             )
         ]
     return []
