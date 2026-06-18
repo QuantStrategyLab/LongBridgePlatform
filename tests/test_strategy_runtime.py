@@ -126,6 +126,8 @@ def _build_runtime_settings(
     dca_mode: str | None = None,
     dca_base_investment_usd: float | None = None,
     runtime_execution_window_trading_days: int | None = None,
+    reserved_cash_floor_usd: float = 0.0,
+    reserved_cash_ratio: float = 0.0,
 ) -> PlatformRuntimeSettings:
     return PlatformRuntimeSettings(
         project_id=None,
@@ -141,6 +143,8 @@ def _build_runtime_settings(
         tg_token=None,
         tg_chat_id=None,
         dry_run_only=False,
+        reserved_cash_floor_usd=reserved_cash_floor_usd,
+        reserved_cash_ratio=reserved_cash_ratio,
         income_threshold_usd=income_threshold_usd,
         qqqi_income_ratio=qqqi_income_ratio,
         income_layer_enabled=income_layer_enabled,
@@ -328,6 +332,29 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.merged_runtime_config["investment_amount_mode"], "fixed")
         self.assertTrue(runtime.merged_runtime_config["smart_multiplier_enabled"])
         self.assertEqual(runtime.merged_runtime_config["base_investment_usd"], 500.0)
+
+    def test_load_strategy_runtime_applies_reserved_cash_policy_overrides_from_settings(self):
+        entrypoint = _SemiconductorEntrypoint()
+
+        with patch.object(strategy_runtime_module, "load_strategy_entrypoint_for_profile", return_value=entrypoint):
+            with patch.object(
+                strategy_runtime_module,
+                "load_strategy_runtime_adapter_for_profile",
+                return_value=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            ):
+                runtime = strategy_runtime_module.load_strategy_runtime(
+                    "soxl_soxx_trend_income",
+                    runtime_settings=_build_runtime_settings(
+                        "soxl_soxx_trend_income",
+                        reserved_cash_floor_usd=150.0,
+                        reserved_cash_ratio=0.03,
+                    ),
+                )
+
+        self.assertEqual(runtime.runtime_overrides["reserved_cash_floor_usd"], 150.0)
+        self.assertEqual(runtime.runtime_overrides["reserved_cash_ratio"], 0.03)
+        self.assertEqual(runtime.merged_runtime_config["reserved_cash_floor_usd"], 150.0)
+        self.assertEqual(runtime.merged_runtime_config["reserved_cash_ratio"], 0.03)
 
     def test_load_strategy_runtime_applies_tech_execution_window_overrides_from_settings(self):
         entrypoint = _TechEntrypoint()
