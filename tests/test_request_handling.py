@@ -489,7 +489,13 @@ class RequestHandlingTests(unittest.TestCase):
             def build_rebalance_runtime(self, *, silent_cycle_notifications=False):
                 return types.SimpleNamespace()
 
-            def build_rebalance_config(self, *, strategy_plugin_signals=(), strategy_plugin_error=None):
+            def build_rebalance_config(
+                self,
+                *,
+                strategy_plugin_signals=(),
+                strategy_plugin_error=None,
+                notification_title_key="",
+            ):
                 return types.SimpleNamespace()
 
         module.build_composer = lambda *, dry_run_only_override=None: FakeComposer()
@@ -529,7 +535,7 @@ class RequestHandlingTests(unittest.TestCase):
 
     def test_run_strategy_validation_only_uses_dry_run_composer(self):
         module = load_module()
-        observed = {"override": None}
+        observed = {"override": None, "notification_title_key": None}
 
         class FakeComposer:
             def build_reporting_adapters(self):
@@ -555,7 +561,14 @@ class RequestHandlingTests(unittest.TestCase):
                 observed["silent_cycle_notifications"] = silent_cycle_notifications
                 return types.SimpleNamespace()
 
-            def build_rebalance_config(self, *, strategy_plugin_signals=(), strategy_plugin_error=None):
+            def build_rebalance_config(
+                self,
+                *,
+                strategy_plugin_signals=(),
+                strategy_plugin_error=None,
+                notification_title_key="",
+            ):
+                observed["notification_title_key"] = notification_title_key
                 return types.SimpleNamespace()
 
         module.build_composer = lambda *, dry_run_only_override=None: observed.__setitem__("override", dry_run_only_override) or FakeComposer()
@@ -568,6 +581,52 @@ class RequestHandlingTests(unittest.TestCase):
 
         self.assertTrue(observed["override"])
         self.assertTrue(observed["silent_cycle_notifications"])
+        self.assertEqual(observed["notification_title_key"], "")
+
+    def test_run_strategy_precheck_sets_precheck_notification_title(self):
+        module = load_module()
+        observed = {"notification_title_key": None}
+
+        class FakeComposer:
+            def build_reporting_adapters(self):
+                return types.SimpleNamespace(
+                    start_run=lambda: (types.SimpleNamespace(run_id="run-001"), {"status": "pending"}),
+                    log_event=lambda *args, **kwargs: None,
+                    persist_execution_report=lambda report: types.SimpleNamespace(local_path="/tmp/report.json"),
+                )
+
+            def build_notification_adapters(self):
+                return types.SimpleNamespace(publish_cycle_notification=lambda **_kwargs: None)
+
+            def load_strategy_plugin_signals(self, *_args, **_kwargs):
+                return (), None
+
+            def attach_strategy_plugin_report(self, *_args, **_kwargs):
+                return None
+
+            def with_prefix(self, message):
+                return message
+
+            def build_rebalance_runtime(self, *, silent_cycle_notifications=False):
+                return types.SimpleNamespace()
+
+            def build_rebalance_config(
+                self,
+                *,
+                strategy_plugin_signals=(),
+                strategy_plugin_error=None,
+                notification_title_key="",
+            ):
+                observed["notification_title_key"] = notification_title_key
+                return types.SimpleNamespace()
+
+        module.build_composer = lambda *, dry_run_only_override=None: FakeComposer()
+        module.is_market_open_now = lambda **_kwargs: False
+        module.run_rebalance_cycle = lambda **_kwargs: None
+
+        module.run_strategy(force_run=True, validation_only=True, validation_label="precheck")
+
+        self.assertEqual(observed["notification_title_key"], "precheck_title")
 
     def test_run_strategy_persists_machine_readable_report(self):
         module = load_module()

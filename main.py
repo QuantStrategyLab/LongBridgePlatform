@@ -505,6 +505,11 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             config=composer.build_rebalance_config(
                 strategy_plugin_signals=strategy_plugin_signals,
                 strategy_plugin_error=strategy_plugin_error,
+                notification_title_key=(
+                    "precheck_title"
+                    if validation_only and validation_label == "precheck"
+                    else ""
+                ),
             ),
         )
         signal_snapshot = {}

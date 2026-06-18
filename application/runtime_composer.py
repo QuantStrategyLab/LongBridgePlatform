@@ -196,6 +196,7 @@ class LongBridgeRuntimeComposer:
         *,
         strategy_plugin_signals=(),
         strategy_plugin_error: str | None = None,
+        notification_title_key: str = "",
     ) -> LongBridgeRebalanceConfig:
         market_scope_line = self.translator(
             "market_scope_detail",
@@ -231,6 +232,7 @@ class LongBridgeRuntimeComposer:
             safe_haven_cash_substitute_threshold_usd=self.safe_haven_cash_substitute_threshold_usd,
             sleeper=self.sleeper,
             extra_notification_lines=(market_scope_line, *plugin_lines, *plugin_error_lines),
+            notification_title_key=notification_title_key,
             strategy_plugin_signals=tuple(strategy_plugin_signals or ()),
             execution_dedup_enabled=resolve_execution_dedup_enabled(
                 env_reader=self.env_reader,

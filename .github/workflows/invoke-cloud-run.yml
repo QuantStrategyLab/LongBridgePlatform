@@ -39,6 +39,7 @@ jobs:
     env:
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+      CLOUD_SCHEDULER_LOCATION: ${{ vars.CLOUD_SCHEDULER_LOCATION }}
     steps:
       - name: Validate inputs
         run: |
@@ -82,20 +83,127 @@ jobs:
             raw_path="/${raw_path}"
           fi
 
-          service_url="$(
+          service_json="$(
             gcloud run services describe "${CLOUD_RUN_SERVICE}" \
               --region "${CLOUD_RUN_REGION}" \
-              --format='value(status.url)'
+              --format=json
+          )"
+          service_url="$(SERVICE_JSON="${service_json}" python3 - <<'PY'
+          import json
+          import os
+
+          service = json.loads(os.environ["SERVICE_JSON"])
+          print((service.get("status") or {}).get("url") or "")
+          PY
           )"
           if [ -z "${service_url}" ]; then
             echo "Unable to resolve Cloud Run service URL." >&2
             exit 1
           fi
 
+          service_ingress="$(SERVICE_JSON="${service_json}" python3 - <<'PY'
+          import json
+          import os
+
+          service = json.loads(os.environ["SERVICE_JSON"])
+          annotations = (service.get("metadata") or {}).get("annotations") or {}
+          print(annotations.get("run.googleapis.com/ingress-status") or annotations.get("run.googleapis.com/ingress") or "")
+          PY
+          )"
+          latest_ready_revision="$(SERVICE_JSON="${service_json}" python3 - <<'PY'
+          import json
+          import os
+
+          service = json.loads(os.environ["SERVICE_JSON"])
+          print((service.get("status") or {}).get("latestReadyRevisionName") or "")
+          PY
+          )"
+          deployed_commit="$(SERVICE_JSON="${service_json}" python3 - <<'PY'
+          import json
+          import os
+
+          service = json.loads(os.environ["SERVICE_JSON"])
+          template = ((service.get("spec") or {}).get("template") or {}).get("metadata") or {}
+          print((template.get("labels") or {}).get("commit-sha") or "")
+          PY
+          )"
+
+          invoke_method="direct"
+          scheduler_job=""
+          scheduler_location=""
+          if [ "${service_ingress}" = "internal" ]; then
+            scheduler_location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}"
+            case "${raw_path}" in
+              /)
+                scheduler_job="${CLOUD_RUN_SERVICE}-scheduler"
+                ;;
+              /probe)
+                scheduler_job="${CLOUD_RUN_SERVICE}-probe-scheduler"
+                ;;
+              /precheck)
+                scheduler_job="${CLOUD_RUN_SERVICE}-precheck-scheduler"
+                ;;
+              *)
+                echo "Cloud Run service ${CLOUD_RUN_SERVICE} has internal ingress, so GitHub-hosted runners cannot curl ${raw_path} directly." >&2
+                echo "Use one of the scheduler-backed paths: /, /probe, /precheck." >&2
+                exit 1
+                ;;
+            esac
+
+            scheduler_uri="$(
+              gcloud scheduler jobs describe "${scheduler_job}" \
+                --location="${scheduler_location}" \
+                --format='value(httpTarget.uri)' 2>/dev/null || true
+            )"
+            if [ -z "${scheduler_uri}" ]; then
+              echo "Cloud Scheduler job ${scheduler_job} was not found in ${scheduler_location}." >&2
+              exit 1
+            fi
+            scheduler_path="$(SCHEDULER_URI="${scheduler_uri}" python3 - <<'PY'
+          import os
+          from urllib.parse import urlparse
+
+          def normalize(path: str) -> str:
+              clean = (path or "/").rstrip("/")
+              return clean or "/"
+
+          print(normalize(urlparse(os.environ["SCHEDULER_URI"]).path))
+          PY
+            )"
+            requested_path="$(RAW_PATH="${raw_path}" python3 - <<'PY'
+          import os
+
+          clean = (os.environ["RAW_PATH"] or "/").rstrip("/")
+          print(clean or "/")
+          PY
+            )"
+            if [ "${scheduler_path}" != "${requested_path}" ]; then
+              echo "Cloud Scheduler job ${scheduler_job} targets ${scheduler_uri}, not ${raw_path}." >&2
+              exit 1
+            fi
+            invoke_method="scheduler"
+          fi
+
+          echo "Cloud Run service: ${CLOUD_RUN_SERVICE}"
+          echo "Cloud Run region: ${CLOUD_RUN_REGION}"
+          echo "Cloud Run URL: ${service_url}"
+          echo "Cloud Run ingress: ${service_ingress:-<empty>}"
+          echo "Latest ready revision: ${latest_ready_revision:-<empty>}"
+          echo "Deployed commit: ${deployed_commit:-<empty>}"
+          echo "Invoke method: ${invoke_method}"
+          if [ -n "${scheduler_job}" ]; then
+            echo "Cloud Scheduler job: ${scheduler_job}"
+            echo "Cloud Scheduler location: ${scheduler_location}"
+          fi
+
           echo "url=${service_url}" >> "$GITHUB_OUTPUT"
           echo "path=${raw_path}" >> "$GITHUB_OUTPUT"
+          echo "invoke_method=${invoke_method}" >> "$GITHUB_OUTPUT"
+          echo "scheduler_job=${scheduler_job}" >> "$GITHUB_OUTPUT"
+          echo "scheduler_location=${scheduler_location}" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate for service invocation
+        if: steps.service.outputs.invoke_method == 'direct'
         id: invoke-auth
         uses: google-github-actions/auth@v3
         with:
@@ -106,6 +214,7 @@ jobs:
           id_token_include_email: true
 
       - name: Invoke service
+        if: steps.service.outputs.invoke_method == 'direct'
         run: |
           set -euo pipefail
 
@@ -113,3 +222,83 @@ jobs:
             --request POST \
             --header "Authorization: Bearer ${{ steps.invoke-auth.outputs.id_token }}" \
             "${{ steps.service.outputs.url }}${{ steps.service.outputs.path }}"
+
+      - name: Invoke internal service through Cloud Scheduler
+        if: steps.service.outputs.invoke_method == 'scheduler'
+        run: |
+          set -euo pipefail
+
+          started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          scheduler_job="${{ steps.service.outputs.scheduler_job }}"
+          scheduler_location="${{ steps.service.outputs.scheduler_location }}"
+
+          echo "Triggering ${scheduler_job} at ${started_at}."
+          gcloud scheduler jobs run "${scheduler_job}" \
+            --location="${scheduler_location}" \
+            --quiet
+
+          deadline=$((SECONDS + 180))
+          while true; do
+            job_json="$(
+              gcloud scheduler jobs describe "${scheduler_job}" \
+                --location="${scheduler_location}" \
+                --format=json
+            )"
+            attempt_seen="$(JOB_JSON="${job_json}" STARTED_AT="${started_at}" python3 - <<'PY'
+          import datetime as dt
+          import json
+          import os
+
+          def parse_timestamp(value: str) -> dt.datetime | None:
+              if not value:
+                  return None
+              text = value.replace("Z", "+00:00")
+              return dt.datetime.fromisoformat(text)
+
+          job = json.loads(os.environ["JOB_JSON"])
+          last_attempt = parse_timestamp(job.get("lastAttemptTime") or "")
+          started_at = parse_timestamp(os.environ["STARTED_AT"])
+          print("true" if last_attempt and started_at and last_attempt >= started_at else "false")
+          PY
+            )"
+            status_code="$(JOB_JSON="${job_json}" python3 - <<'PY'
+          import json
+          import os
+
+          status = (json.loads(os.environ["JOB_JSON"]).get("status") or {})
+          print(status.get("code") or "")
+          PY
+            )"
+            status_message="$(JOB_JSON="${job_json}" python3 - <<'PY'
+          import json
+          import os
+
+          status = (json.loads(os.environ["JOB_JSON"]).get("status") or {})
+          print(status.get("message") or "")
+          PY
+            )"
+            last_attempt_time="$(JOB_JSON="${job_json}" python3 - <<'PY'
+          import json
+          import os
+
+          print(json.loads(os.environ["JOB_JSON"]).get("lastAttemptTime") or "")
+          PY
+            )"
+
+            if [ "${attempt_seen}" = "true" ]; then
+              if [ -n "${status_code}" ] && [ "${status_code}" != "0" ]; then
+                echo "Cloud Scheduler job ${scheduler_job} failed with status ${status_code}: ${status_message}" >&2
+                exit 1
+              fi
+              echo "Cloud Scheduler job ${scheduler_job} ran at ${last_attempt_time}."
+              break
+            fi
+
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+              echo "Timed out waiting for Cloud Scheduler job ${scheduler_job} to record a new attempt." >&2
+              exit 1
+            fi
+
+            echo "Waiting for Cloud Scheduler job ${scheduler_job} attempt..."
+            sleep 10
+          done

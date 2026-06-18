@@ -506,9 +506,10 @@ def render_rebalance_notification(
     strategy_display_name,
     dry_run_only,
     extra_notification_lines=(),
+    title_key="rebalance_title",
 ) -> RenderedNotification:
     formatted_logs = "\n".join(f"  - {log}" for log in [*logs, *skip_logs, *note_logs])
-    detailed_lines = [translator("rebalance_title")]
+    detailed_lines = [translator(title_key or "rebalance_title")]
     _append_strategy_line(detailed_lines, strategy_display_name=strategy_display_name, translator=translator)
     if dry_run_only:
         detailed_lines.append(translator("dry_run_banner"))
@@ -525,7 +526,7 @@ def render_rebalance_notification(
     )
     detailed_lines.extend([separator, translator("order_logs_title"), formatted_logs])
 
-    compact_lines = [translator("rebalance_title")]
+    compact_lines = [translator(title_key or "rebalance_title")]
     _append_strategy_line(compact_lines, strategy_display_name=strategy_display_name, translator=translator)
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
@@ -557,8 +558,9 @@ def render_heartbeat_notification(
     strategy_display_name,
     dry_run_only,
     extra_notification_lines=(),
+    title_key="heartbeat_title",
 ) -> RenderedNotification:
-    detailed_lines = [translator("heartbeat_title")]
+    detailed_lines = [translator(title_key or "heartbeat_title")]
     _append_strategy_line(detailed_lines, strategy_display_name=strategy_display_name, translator=translator)
     if dry_run_only:
         detailed_lines.append(translator("dry_run_banner"))
@@ -594,7 +596,7 @@ def render_heartbeat_notification(
             + "\n".join(f"  - {log}" for log in note_logs)
         )
 
-    compact_lines = [translator("heartbeat_title")]
+    compact_lines = [translator(title_key or "heartbeat_title")]
     _append_strategy_line(compact_lines, strategy_display_name=strategy_display_name, translator=translator)
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
