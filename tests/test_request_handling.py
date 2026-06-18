@@ -204,6 +204,7 @@ class RequestHandlingTests(unittest.TestCase):
         module = load_module()
 
         self.assertIs(module.app._routes[("/", ("POST", "GET"))], module.handle_trigger)
+        self.assertIs(module.app._routes[("/run", ("POST", "GET"))], module.handle_trigger)
         self.assertIs(
             module.app._routes[("/backfill", ("POST", "GET"))],
             module.handle_backfill,
@@ -213,9 +214,23 @@ class RequestHandlingTests(unittest.TestCase):
             module.handle_precheck,
         )
         self.assertIs(
+            module.app._routes[("/dry-run", ("POST", "GET"))],
+            module.handle_dry_run,
+        )
+        self.assertIs(
             module.app._routes[("/probe", ("POST", "GET"))],
             module.handle_probe,
         )
+        self.assertIs(module.app._routes[("/health", ("GET",))], module.health)
+
+    def test_health_route_returns_ok(self):
+        module = load_module()
+
+        with module.app.test_request_context("/health", method="GET"):
+            body, status = module.health()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, "OK")
 
     def test_handle_trigger_runs_strategy(self):
         module = load_module()
@@ -356,6 +371,26 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertTrue(observed["validation_only"])
         self.assertEqual(observed["validation_label"], "precheck")
 
+    def test_handle_dry_run_alias_forces_strategy_dry_run(self):
+        module = load_module()
+        observed = {"force_run": None, "validation_only": None}
+
+        def fake_run_strategy(*, force_run=False, validation_only=False, validation_label="backfill"):
+            observed["force_run"] = force_run
+            observed["validation_only"] = validation_only
+            observed["validation_label"] = validation_label
+
+        module.run_strategy = fake_run_strategy
+
+        with module.app.test_request_context("/dry-run", method="POST"):
+            body, status = module.handle_dry_run()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, "Dry Run OK")
+        self.assertTrue(observed["force_run"])
+        self.assertTrue(observed["validation_only"])
+        self.assertEqual(observed["validation_label"], "precheck")
+
     def test_handle_probe_checks_account_snapshot_without_success_notification(self):
         module = load_module()
         observed = {"override": None, "events": [], "notifications": []}
@@ -391,10 +426,10 @@ class RequestHandlingTests(unittest.TestCase):
                 raise AssertionError("probe success should stay silent")
 
             def load_strategy_plugin_signals(self, *_args, **_kwargs):
-                return (), None
+                raise AssertionError("health probe should not load strategy plugins")
 
             def attach_strategy_plugin_report(self, *_args, **_kwargs):
-                return None
+                raise AssertionError("health probe should not attach strategy plugin reports")
 
         module.build_composer = lambda *, dry_run_only_override=None: observed.__setitem__("override", dry_run_only_override) or FakeComposer()
 
@@ -442,10 +477,10 @@ class RequestHandlingTests(unittest.TestCase):
                 return FakeNotifications()
 
             def load_strategy_plugin_signals(self, *_args, **_kwargs):
-                return (), None
+                raise AssertionError("health probe should not load strategy plugins")
 
             def attach_strategy_plugin_report(self, *_args, **_kwargs):
-                return None
+                raise AssertionError("health probe should not attach strategy plugin reports")
 
         module.build_composer = lambda *, dry_run_only_override=None: FakeComposer()
 

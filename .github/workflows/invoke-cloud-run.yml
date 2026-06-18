@@ -87,8 +87,8 @@ jobs:
           if [[ "${raw_path}" != /* ]]; then
             raw_path="/${raw_path}"
           fi
-          if [ "${raw_path}" = "/" ] && [ "${{ inputs.allow_live_execution }}" != "true" ]; then
-            echo "Calling / can trigger the live execution entrypoint. Re-run with allow_live_execution=true if this is intentional." >&2
+          if { [ "${raw_path}" = "/" ] || [ "${raw_path}" = "/run" ]; } && [ "${{ inputs.allow_live_execution }}" != "true" ]; then
+            echo "Calling ${raw_path} can trigger the live execution entrypoint. Re-run with allow_live_execution=true if this is intentional." >&2
             exit 1
           fi
 
@@ -140,21 +140,25 @@ jobs:
           invoke_method="direct"
           scheduler_job=""
           scheduler_location=""
+          scheduler_expected_path=""
           if [ "${service_ingress}" = "internal" ]; then
             scheduler_location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}"
             case "${raw_path}" in
-              /)
+              /|/run)
                 scheduler_job="${CLOUD_RUN_SERVICE}-scheduler"
+                scheduler_expected_path="/"
                 ;;
               /probe)
                 scheduler_job="${CLOUD_RUN_SERVICE}-probe-scheduler"
+                scheduler_expected_path="/probe"
                 ;;
-              /precheck)
+              /precheck|/dry-run)
                 scheduler_job="${CLOUD_RUN_SERVICE}-precheck-scheduler"
+                scheduler_expected_path="/precheck"
                 ;;
               *)
                 echo "Cloud Run service ${CLOUD_RUN_SERVICE} has internal ingress, so GitHub-hosted runners cannot curl ${raw_path} directly." >&2
-                echo "Use one of the scheduler-backed paths: /, /probe, /precheck." >&2
+                echo "Use one of the scheduler-backed paths: /, /run, /probe, /precheck, /dry-run." >&2
                 exit 1
                 ;;
             esac
@@ -179,7 +183,7 @@ jobs:
           print(normalize(urlparse(os.environ["SCHEDULER_URI"]).path))
           PY
             )"
-            requested_path="$(RAW_PATH="${raw_path}" python3 - <<'PY'
+            requested_path="$(RAW_PATH="${scheduler_expected_path}" python3 - <<'PY'
           import os
 
           clean = (os.environ["RAW_PATH"] or "/").rstrip("/")
@@ -187,7 +191,7 @@ jobs:
           PY
             )"
             if [ "${scheduler_path}" != "${requested_path}" ]; then
-              echo "Cloud Scheduler job ${scheduler_job} targets ${scheduler_uri}, not ${raw_path}." >&2
+              echo "Cloud Scheduler job ${scheduler_job} targets ${scheduler_uri}, not ${scheduler_expected_path}." >&2
               exit 1
             fi
             invoke_method="scheduler"
