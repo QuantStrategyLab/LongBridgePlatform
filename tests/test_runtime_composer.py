@@ -70,6 +70,8 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
         strategy_adapters=SimpleNamespace(
             calculate_strategy_indicators="strategy-indicators",
             resolve_rebalance_plan="resolve-plan",
+            build_strategy_plugin_notification_lines=lambda signals: tuple(signals),
+            build_strategy_plugin_error_notification_lines=lambda error: (f"plugin-error:{error}",) if error else (),
         ),
         estimate_max_purchase_quantity_fn="estimate-max-purchase",
         fetch_order_status_fn="fetch-order-status",
@@ -106,7 +108,10 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     reporting_adapters = composer.build_reporting_adapters()
     runtime = composer.build_rebalance_runtime()
     silent_runtime = composer.build_rebalance_runtime(silent_cycle_notifications=True)
-    config = composer.build_rebalance_config()
+    config = composer.build_rebalance_config(
+        strategy_plugin_signals=("plugin-line",),
+        strategy_plugin_error="bad config",
+    )
 
     assert notification_adapters.notification_port == "notification-port"
     assert reporting_adapters == "reporting-adapters"
@@ -118,6 +123,8 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     assert observed["reporting_builder"]["runtime_assembly"].runtime_target.platform_id == "longbridge"
     assert observed["reporting_builder"]["runtime_assembly"].runtime_target.strategy_profile == "soxl_soxx_trend_income"
     assert observed["reporting_builder"]["runtime_assembly"].runtime_target.execution_mode == "paper"
+    assert "plugin-line" in config.extra_notification_lines
+    assert "plugin-error:bad config" in config.extra_notification_lines
     assert observed["bootstrap_builder"]["secret_name"] == "secret-1"
     assert observed["bootstrap_builder"]["calculate_strategy_indicators_fn"] == "strategy-indicators"
     assert runtime.bootstrap == "bootstrap"

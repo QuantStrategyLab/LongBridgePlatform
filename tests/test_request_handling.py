@@ -489,7 +489,7 @@ class RequestHandlingTests(unittest.TestCase):
             def build_rebalance_runtime(self, *, silent_cycle_notifications=False):
                 return types.SimpleNamespace()
 
-            def build_rebalance_config(self, *, strategy_plugin_signals=()):
+            def build_rebalance_config(self, *, strategy_plugin_signals=(), strategy_plugin_error=None):
                 return types.SimpleNamespace()
 
         module.build_composer = lambda *, dry_run_only_override=None: FakeComposer()
@@ -555,7 +555,7 @@ class RequestHandlingTests(unittest.TestCase):
                 observed["silent_cycle_notifications"] = silent_cycle_notifications
                 return types.SimpleNamespace()
 
-            def build_rebalance_config(self, *, strategy_plugin_signals=()):
+            def build_rebalance_config(self, *, strategy_plugin_signals=(), strategy_plugin_error=None):
                 return types.SimpleNamespace()
 
         module.build_composer = lambda *, dry_run_only_override=None: observed.__setitem__("override", dry_run_only_override) or FakeComposer()

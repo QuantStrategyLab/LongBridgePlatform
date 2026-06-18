@@ -191,7 +191,12 @@ class LongBridgeRuntimeComposer:
             post_submit_order=notification_adapters.post_submit_order,
         )
 
-    def build_rebalance_config(self, *, strategy_plugin_signals=()) -> LongBridgeRebalanceConfig:
+    def build_rebalance_config(
+        self,
+        *,
+        strategy_plugin_signals=(),
+        strategy_plugin_error: str | None = None,
+    ) -> LongBridgeRebalanceConfig:
         market_scope_line = self.translator(
             "market_scope_detail",
             market=self.market,
@@ -204,6 +209,12 @@ class LongBridgeRuntimeComposer:
             lambda _signals: (),
         )
         plugin_lines = tuple(build_plugin_lines(tuple(strategy_plugin_signals or ())))
+        build_plugin_error_lines = getattr(
+            self.strategy_adapters,
+            "build_strategy_plugin_error_notification_lines",
+            lambda _error: (),
+        )
+        plugin_error_lines = tuple(build_plugin_error_lines(strategy_plugin_error))
         return LongBridgeRebalanceConfig(
             limit_sell_discount=self.limit_sell_discount,
             limit_buy_premium=self.limit_buy_premium,
@@ -219,7 +230,7 @@ class LongBridgeRuntimeComposer:
             min_order_notional_usd=self.min_order_notional_usd,
             safe_haven_cash_substitute_threshold_usd=self.safe_haven_cash_substitute_threshold_usd,
             sleeper=self.sleeper,
-            extra_notification_lines=(market_scope_line, *plugin_lines),
+            extra_notification_lines=(market_scope_line, *plugin_lines, *plugin_error_lines),
             strategy_plugin_signals=tuple(strategy_plugin_signals or ()),
             execution_dedup_enabled=resolve_execution_dedup_enabled(
                 env_reader=self.env_reader,

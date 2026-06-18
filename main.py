@@ -502,7 +502,10 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             )
         cycle_result = run_rebalance_cycle(
             runtime=rebalance_runtime,
-            config=composer.build_rebalance_config(strategy_plugin_signals=strategy_plugin_signals),
+            config=composer.build_rebalance_config(
+                strategy_plugin_signals=strategy_plugin_signals,
+                strategy_plugin_error=strategy_plugin_error,
+            ),
         )
         signal_snapshot = {}
         if cycle_result is not None:
