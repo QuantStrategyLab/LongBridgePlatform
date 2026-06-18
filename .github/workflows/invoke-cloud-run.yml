@@ -15,8 +15,13 @@ on:
       path:
         description: "HTTP path to call"
         required: false
-        default: "/"
+        default: "/precheck"
         type: string
+      allow_live_execution:
+        description: "Allow calling / live execution entrypoint"
+        required: false
+        default: false
+        type: boolean
 
 env:
   GCP_PROJECT_ID: longbridgequant
@@ -81,6 +86,10 @@ jobs:
           fi
           if [[ "${raw_path}" != /* ]]; then
             raw_path="/${raw_path}"
+          fi
+          if [ "${raw_path}" = "/" ] && [ "${{ inputs.allow_live_execution }}" != "true" ]; then
+            echo "Calling / can trigger the live execution entrypoint. Re-run with allow_live_execution=true if this is intentional." >&2
+            exit 1
           fi
 
           service_json="$(
