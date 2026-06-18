@@ -100,6 +100,8 @@ def _build_runtime_settings(
     feature_snapshot_path: str | None = None,
     income_threshold_usd: float | None = None,
     qqqi_income_ratio: float | None = None,
+    income_layer_enabled: bool | None = None,
+    income_layer_max_ratio: float | None = None,
     runtime_execution_window_trading_days: int | None = None,
 ) -> PlatformRuntimeSettings:
     return PlatformRuntimeSettings(
@@ -118,6 +120,8 @@ def _build_runtime_settings(
         dry_run_only=False,
         income_threshold_usd=income_threshold_usd,
         qqqi_income_ratio=qqqi_income_ratio,
+        income_layer_enabled=income_layer_enabled,
+        income_layer_max_ratio=income_layer_max_ratio,
         runtime_execution_window_trading_days=runtime_execution_window_trading_days,
         feature_snapshot_path=feature_snapshot_path,
         feature_snapshot_manifest_path=None,
@@ -257,13 +261,19 @@ class StrategyRuntimeTests(unittest.TestCase):
                         "tqqq_growth_income",
                         income_threshold_usd=100000.0,
                         qqqi_income_ratio=0.5,
+                        income_layer_enabled=False,
+                        income_layer_max_ratio=0.25,
                     ),
                 )
 
         self.assertEqual(runtime.runtime_overrides["income_threshold_usd"], 100000.0)
         self.assertEqual(runtime.runtime_overrides["qqqi_income_ratio"], 0.5)
+        self.assertFalse(runtime.runtime_overrides["income_layer_enabled"])
+        self.assertEqual(runtime.runtime_overrides["income_layer_max_ratio"], 0.25)
         self.assertEqual(runtime.merged_runtime_config["income_threshold_usd"], 100000.0)
         self.assertEqual(runtime.merged_runtime_config["qqqi_income_ratio"], 0.5)
+        self.assertFalse(runtime.merged_runtime_config["income_layer_enabled"])
+        self.assertEqual(runtime.merged_runtime_config["income_layer_max_ratio"], 0.25)
 
     def test_load_strategy_runtime_applies_tech_execution_window_overrides_from_settings(self):
         entrypoint = _TechEntrypoint()

@@ -149,6 +149,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNotNone(settings.runtime_target)
         self.assertEqual(settings.runtime_target.platform_id, "longbridge")
         self.assertEqual(settings.runtime_target.execution_mode, "live")
+        self.assertTrue(settings.runtime_target_enabled)
         self.assertIsNone(settings.income_threshold_usd)
         self.assertIsNone(settings.qqqi_income_ratio)
         self.assertIsNone(settings.feature_snapshot_path)
@@ -246,6 +247,31 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
         self.assertTrue(settings.dry_run_only)
+
+    def test_runtime_target_enabled_is_loaded_from_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "RUNTIME_TARGET_ENABLED": "false",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertFalse(settings.runtime_target_enabled)
+
+    def test_invalid_runtime_target_enabled_is_rejected(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "RUNTIME_TARGET_ENABLED": "maybe",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "RUNTIME_TARGET_ENABLED"):
+                load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
     def test_debug_position_snapshot_is_loaded_from_env(self):
         with patch.dict(
@@ -455,6 +481,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "RUNTIME_TARGET_JSON": runtime_target_json("tqqq_growth_income"),
                 "INCOME_THRESHOLD_USD": "100000",
                 "QQQI_INCOME_RATIO": "0.5",
+                "INCOME_LAYER_ENABLED": "false",
+                "INCOME_LAYER_MAX_RATIO": "0.25",
             },
             clear=True,
         ):
@@ -463,6 +491,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.strategy_profile, "tqqq_growth_income")
         self.assertEqual(settings.income_threshold_usd, 100000.0)
         self.assertEqual(settings.qqqi_income_ratio, 0.5)
+        self.assertFalse(settings.income_layer_enabled)
+        self.assertEqual(settings.income_layer_max_ratio, 0.25)
 
     def test_tech_runtime_execution_window_override_rejects_research_only_profile(self):
         with patch.dict(
@@ -488,6 +518,18 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             clear=True,
         ):
             with self.assertRaisesRegex(ValueError, "QQQI_INCOME_RATIO"):
+                load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+    def test_rejects_invalid_income_layer_max_ratio(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json("tqqq_growth_income"),
+                "INCOME_LAYER_MAX_RATIO": "1.5",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "INCOME_LAYER_MAX_RATIO"):
                 load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
     def test_rejects_human_readable_alias(self):
