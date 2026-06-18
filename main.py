@@ -428,7 +428,7 @@ def publish_strategy_plugin_alerts(signals, *, report=None):
 
 
 def run_strategy(*, force_run: bool = False, validation_only: bool = False, validation_label: str = "backfill"):
-    if not validation_only and not force_run and not RUNTIME_SETTINGS.runtime_target_enabled:
+    if not validation_only and not force_run and not getattr(RUNTIME_SETTINGS, "runtime_target_enabled", True):
         print(f"[{datetime.now()}] Runtime target disabled; skip strategy execution.", flush=True)
         return True
     composer = build_composer(dry_run_only_override=True if validation_only else None)
