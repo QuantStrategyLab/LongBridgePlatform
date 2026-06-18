@@ -33,6 +33,26 @@ class _TqqqEntrypoint:
         return StrategyDecision(diagnostics={"signal_description": "tqqq"})
 
 
+class _NasdaqSp500DcaEntrypoint:
+    manifest = StrategyManifest(
+        profile="nasdaq_sp500_smart_dca",
+        domain="us_equity",
+        display_name="Nasdaq 100 / S&P 500 DCA",
+        description="test entrypoint",
+        required_inputs=frozenset({"market_history", "portfolio_snapshot"}),
+        default_config={
+            "managed_symbols": ("QQQM", "SPLG"),
+            "investment_amount_mode": "fixed",
+            "smart_multiplier_enabled": False,
+            "base_investment_usd": 1000.0,
+        },
+    )
+
+    def evaluate(self, ctx):
+        self.ctx = ctx
+        return StrategyDecision(diagnostics={"signal_description": "dca"})
+
+
 class _SemiconductorEntrypoint:
     def __init__(self):
         self.manifest = StrategyManifest(
@@ -103,6 +123,8 @@ def _build_runtime_settings(
     income_layer_enabled: bool | None = None,
     income_layer_start_usd: float | None = None,
     income_layer_max_ratio: float | None = None,
+    dca_mode: str | None = None,
+    dca_base_investment_usd: float | None = None,
     runtime_execution_window_trading_days: int | None = None,
 ) -> PlatformRuntimeSettings:
     return PlatformRuntimeSettings(
@@ -124,6 +146,8 @@ def _build_runtime_settings(
         income_layer_enabled=income_layer_enabled,
         income_layer_start_usd=income_layer_start_usd,
         income_layer_max_ratio=income_layer_max_ratio,
+        dca_mode=dca_mode,
+        dca_base_investment_usd=dca_base_investment_usd,
         runtime_execution_window_trading_days=runtime_execution_window_trading_days,
         feature_snapshot_path=feature_snapshot_path,
         feature_snapshot_manifest_path=None,
@@ -279,6 +303,31 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertFalse(runtime.merged_runtime_config["income_layer_enabled"])
         self.assertEqual(runtime.merged_runtime_config["income_layer_start_usd"], 250000.0)
         self.assertEqual(runtime.merged_runtime_config["income_layer_max_ratio"], 0.25)
+
+    def test_load_strategy_runtime_applies_dca_overrides_from_settings(self):
+        entrypoint = _NasdaqSp500DcaEntrypoint()
+
+        with patch.object(strategy_runtime_module, "load_strategy_entrypoint_for_profile", return_value=entrypoint):
+            with patch.object(
+                strategy_runtime_module,
+                "load_strategy_runtime_adapter_for_profile",
+                return_value=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            ):
+                runtime = strategy_runtime_module.load_strategy_runtime(
+                    "nasdaq_sp500_smart_dca",
+                    runtime_settings=_build_runtime_settings(
+                        "nasdaq_sp500_smart_dca",
+                        dca_mode="smart",
+                        dca_base_investment_usd=500.0,
+                    ),
+                )
+
+        self.assertEqual(runtime.runtime_overrides["investment_amount_mode"], "fixed")
+        self.assertTrue(runtime.runtime_overrides["smart_multiplier_enabled"])
+        self.assertEqual(runtime.runtime_overrides["base_investment_usd"], 500.0)
+        self.assertEqual(runtime.merged_runtime_config["investment_amount_mode"], "fixed")
+        self.assertTrue(runtime.merged_runtime_config["smart_multiplier_enabled"])
+        self.assertEqual(runtime.merged_runtime_config["base_investment_usd"], 500.0)
 
     def test_load_strategy_runtime_applies_tech_execution_window_overrides_from_settings(self):
         entrypoint = _TechEntrypoint()
