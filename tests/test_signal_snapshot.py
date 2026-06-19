@@ -14,7 +14,7 @@ class SignalSnapshotTests(unittest.TestCase):
     def test_derives_snapshot_date_from_zh_status_display(self):
         snapshot = build_signal_snapshot(
             platform="longbridge",
-            strategy_profile="russell_top50_leader_rotation_aggressive",
+            strategy_profile="russell_top50_leader_rotation",
             execution={
                 "status_display": "不执行 | 原因=当前不在月度执行窗口 | 快照日期=2026-06-01 | 允许日期=2026-06-02",
                 "signal_display": "月度快照节奏 | 等待进入执行窗口",

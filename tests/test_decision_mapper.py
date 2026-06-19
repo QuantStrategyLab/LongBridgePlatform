@@ -267,7 +267,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             snapshot=snapshot,
-            strategy_profile="russell_top50_leader_rotation_aggressive",
+            strategy_profile="russell_top50_leader_rotation",
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")
@@ -298,7 +298,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             snapshot=snapshot,
-            strategy_profile="russell_top50_leader_rotation_aggressive",
+            strategy_profile="russell_top50_leader_rotation",
             runtime_metadata={
                 "longbridge_execution_policy": {
                     "reserved_cash_floor_usd": 1500.0,
@@ -329,7 +329,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             snapshot=snapshot,
-            strategy_profile="russell_top50_leader_rotation_aggressive",
+            strategy_profile="russell_top50_leader_rotation",
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")
@@ -355,7 +355,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             snapshot=snapshot,
-            strategy_profile="russell_top50_leader_rotation_aggressive",
+            strategy_profile="russell_top50_leader_rotation",
             runtime_metadata={
                 "snapshot_manifest_price_as_of": "2026-06-01",
                 "snapshot_manifest_universe_as_of": "2026-04-29",
@@ -499,7 +499,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             snapshot=snapshot,
-            strategy_profile="russell_top50_leader_rotation_aggressive",
+            strategy_profile="russell_top50_leader_rotation",
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")

@@ -224,7 +224,7 @@ def test_runtime_strategy_adapters_add_execution_policy_to_runtime_metadata():
 
     adapters = build_runtime_strategy_adapters(
         strategy_runtime=SimpleNamespace(evaluate=fake_evaluate),
-        strategy_profile="russell_top50_leader_rotation_aggressive",
+        strategy_profile="russell_top50_leader_rotation",
         strategy_runtime_config={},
         available_inputs=("portfolio_snapshot",),
         benchmark_symbol="QQQ",

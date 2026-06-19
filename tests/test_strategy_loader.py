@@ -19,13 +19,13 @@ class StrategyLoaderTests(unittest.TestCase):
         try:
             from strategy_loader import load_strategy_entrypoint_for_profile
 
-            entrypoint = load_strategy_entrypoint_for_profile("russell_top50_leader_rotation_aggressive")
+            entrypoint = load_strategy_entrypoint_for_profile("russell_top50_leader_rotation")
         except ModuleNotFoundError as exc:
             if exc.name in {"numpy", "pandas"}:
                 self.skipTest(f"{exc.name} is not installed")
             raise
 
-        self.assertEqual(entrypoint.manifest.profile, "russell_top50_leader_rotation_aggressive")
+        self.assertEqual(entrypoint.manifest.profile, "russell_top50_leader_rotation")
         self.assertEqual(entrypoint.manifest.required_inputs, frozenset({"feature_snapshot"}))
 
     def test_load_strategy_entrypoint_resolves_soxl_soxx_trend_income(self):
@@ -102,7 +102,7 @@ class StrategyLoaderTests(unittest.TestCase):
     def test_load_strategy_runtime_adapter_declares_russell_top50_inputs(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
 
-        adapter = load_strategy_runtime_adapter_for_profile("russell_top50_leader_rotation_aggressive")
+        adapter = load_strategy_runtime_adapter_for_profile("russell_top50_leader_rotation")
 
         self.assertEqual(
             adapter.available_inputs,
