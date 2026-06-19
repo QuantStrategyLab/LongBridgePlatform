@@ -365,7 +365,7 @@ class NotificationTests(unittest.TestCase):
             note_logs=(),
             translator=build_translator("zh"),
             separator="━━━━━━━━━━━━━━━━━━",
-            strategy_display_name="美股超大盘50强平衡龙头轮动",
+            strategy_display_name="罗素 Top50 领涨轮动（激进）",
             dry_run_only=False,
         )
 
