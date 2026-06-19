@@ -792,9 +792,9 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             get_platform_profile_status_matrix(),
         )
         by_profile = {row["canonical_profile"]: row for row in rows}
-        self.assertEqual(by_profile["global_etf_rotation"]["profile_group"], "direct_runtime_inputs")
-        self.assertEqual(by_profile["global_etf_rotation"]["input_mode"], "market_history")
-        self.assertFalse(by_profile["global_etf_rotation"]["requires_snapshot_artifacts"])
+        self.assertEqual(by_profile["global_etf_rotation"]["profile_group"], "snapshot_backed")
+        self.assertEqual(by_profile["global_etf_rotation"]["input_mode"], "feature_snapshot")
+        self.assertTrue(by_profile["global_etf_rotation"]["requires_snapshot_artifacts"])
         self.assertFalse(by_profile["global_etf_rotation"]["requires_strategy_config_path"])
         self.assertNotIn("tech_communication_pullback_enhancement", by_profile)
         self.assertEqual(by_profile["russell_top50_leader_rotation"]["profile_group"], "snapshot_backed")
@@ -879,10 +879,16 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(plan["runtime_target"]["account_scope"], "SG")
         self.assertEqual(plan["runtime_target"]["service_name"], "longbridge-quant-sg-service")
         self.assertEqual(plan["runtime_target"]["execution_mode"], "live")
-        self.assertEqual(plan["profile_group"], "direct_runtime_inputs")
-        self.assertEqual(plan["input_mode"], "market_history")
-        self.assertFalse(plan["requires_snapshot_artifacts"])
+        self.assertEqual(plan["profile_group"], "snapshot_backed")
+        self.assertEqual(plan["input_mode"], "feature_snapshot")
+        self.assertTrue(plan["requires_snapshot_artifacts"])
         self.assertFalse(plan["requires_strategy_config_path"])
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_PATH"], "<required>")
+        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"], "<required>")
+        self.assertEqual(
+            plan["hints"]["feature_snapshot_filename"],
+            "global_etf_rotation_feature_snapshot_latest.csv",
+        )
         self.assertIn("LONGBRIDGE_MIN_RESERVED_CASH_USD", plan["optional_env"])
         self.assertIn("LONGBRIDGE_RESERVED_CASH_RATIO", plan["optional_env"])
         self.assertIn("LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD", plan["optional_env"])
@@ -901,7 +907,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("LONGBRIDGE_MARKET_TIMEZONE", plan["optional_env"])
         self.assertIn("LONGBRIDGE_SYMBOL_SUFFIX", plan["optional_env"])
         self.assertIn("LONGBRIDGE_TRADING_CURRENCY", plan["optional_env"])
-        self.assertIn("LONGBRIDGE_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
+        self.assertNotIn("LONGBRIDGE_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
 
     def test_print_strategy_switch_env_plan_for_hk_global_etf_dry_run(self):
         result = subprocess.run(
