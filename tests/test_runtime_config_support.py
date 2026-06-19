@@ -818,6 +818,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(by_profile["global_etf_rotation"]["profile_group"], "snapshot_backed")
         self.assertEqual(by_profile["global_etf_rotation"]["input_mode"], "feature_snapshot")
         self.assertTrue(by_profile["global_etf_rotation"]["requires_snapshot_artifacts"])
+        self.assertTrue(by_profile["global_etf_rotation"]["requires_snapshot_manifest_path"])
         self.assertFalse(by_profile["global_etf_rotation"]["requires_strategy_config_path"])
         self.assertNotIn("tech_communication_pullback_enhancement", by_profile)
         self.assertEqual(by_profile["russell_top50_leader_rotation"]["profile_group"], "snapshot_backed")
@@ -905,6 +906,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(plan["profile_group"], "snapshot_backed")
         self.assertEqual(plan["input_mode"], "feature_snapshot")
         self.assertTrue(plan["requires_snapshot_artifacts"])
+        self.assertTrue(plan["requires_snapshot_manifest_path"])
         self.assertFalse(plan["requires_strategy_config_path"])
         self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_PATH"], "<required>")
         self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"], "<required>")
@@ -912,6 +914,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             plan["hints"]["feature_snapshot_filename"],
             "global_etf_rotation_feature_snapshot_latest.csv",
         )
+        self.assertIn("LONGBRIDGE_STRATEGY_CONFIG_PATH", plan["remove_if_present"])
         self.assertIn("LONGBRIDGE_MIN_RESERVED_CASH_USD", plan["optional_env"])
         self.assertIn("LONGBRIDGE_RESERVED_CASH_RATIO", plan["optional_env"])
         self.assertIn("LONGBRIDGE_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD", plan["optional_env"])
