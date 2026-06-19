@@ -365,7 +365,7 @@ class NotificationTests(unittest.TestCase):
             note_logs=(),
             translator=build_translator("zh"),
             separator="━━━━━━━━━━━━━━━━━━",
-            strategy_display_name="罗素 Top50 领涨轮动（激进）",
+            strategy_display_name="罗素 Top50 领涨轮动",
             dry_run_only=False,
         )
 

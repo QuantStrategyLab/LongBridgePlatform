@@ -86,9 +86,9 @@ class _TechEntrypoint:
 
 class _RussellEntrypoint:
     manifest = StrategyManifest(
-        profile="russell_top50_leader_rotation_aggressive",
+        profile="russell_top50_leader_rotation",
         domain="us_equity",
-        display_name="Russell Top50 Leader Rotation Aggressive",
+        display_name="Russell Top50 Leader Rotation",
         description="test entrypoint",
         required_inputs=frozenset({"feature_snapshot"}),
         default_config={"safe_haven": "BOXX", "benchmark_symbol": "SPY"},
@@ -101,9 +101,9 @@ class _RussellEntrypoint:
 
 class _MegaCapTop50Entrypoint:
     manifest = StrategyManifest(
-        profile="russell_top50_leader_rotation_aggressive",
+        profile="russell_top50_leader_rotation",
         domain="us_equity",
-        display_name="Russell Top50 Leader Rotation Aggressive",
+        display_name="Russell Top50 Leader Rotation",
         description="test entrypoint",
         required_inputs=frozenset({"feature_snapshot"}),
         default_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},
@@ -443,7 +443,7 @@ class StrategyRuntimeTests(unittest.TestCase):
                 portfolio_input_name="portfolio_snapshot",
             ),
             runtime_settings=_build_runtime_settings(
-                "russell_top50_leader_rotation_aggressive",
+                "russell_top50_leader_rotation",
                 feature_snapshot_path="gs://bucket/russell-top50.csv",
             ),
             merged_runtime_config={"safe_haven": "BOXX", "benchmark_symbol": "SPY"},
@@ -491,7 +491,7 @@ class StrategyRuntimeTests(unittest.TestCase):
                 portfolio_input_name="portfolio_snapshot",
             ),
             runtime_settings=_build_runtime_settings(
-                "russell_top50_leader_rotation_aggressive",
+                "russell_top50_leader_rotation",
                 feature_snapshot_path="gs://bucket/top50.csv",
             ),
             merged_runtime_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},

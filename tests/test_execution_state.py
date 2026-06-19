@@ -58,7 +58,7 @@ def test_execution_dedup_env_override_wins_for_paper_scope():
 def test_prior_report_match_treats_successful_no_action_as_completed():
     payload = {
         "platform": "longbridge",
-        "strategy_profile": "russell_top50_leader_rotation_aggressive",
+        "strategy_profile": "russell_top50_leader_rotation",
         "account_scope": "PAPER",
         "dry_run": False,
         "status": "ok",
@@ -81,7 +81,7 @@ def test_prior_report_match_treats_successful_no_action_as_completed():
         _report_matches_execution(
             payload,
             platform="longbridge",
-            strategy_profile="russell_top50_leader_rotation_aggressive",
+            strategy_profile="russell_top50_leader_rotation",
             account_scope="PAPER",
             signal_date="2026-06-01",
             effective_date="",
@@ -94,7 +94,7 @@ def test_prior_report_match_treats_successful_no_action_as_completed():
 def test_prior_report_match_does_not_treat_blocked_no_action_as_completed():
     payload = {
         "platform": "longbridge",
-        "strategy_profile": "russell_top50_leader_rotation_aggressive",
+        "strategy_profile": "russell_top50_leader_rotation",
         "account_scope": "PAPER",
         "dry_run": False,
         "status": "ok",
@@ -109,7 +109,7 @@ def test_prior_report_match_does_not_treat_blocked_no_action_as_completed():
         _report_matches_execution(
             payload,
             platform="longbridge",
-            strategy_profile="russell_top50_leader_rotation_aggressive",
+            strategy_profile="russell_top50_leader_rotation",
             account_scope="PAPER",
             signal_date="2026-06-04",
             effective_date="",
@@ -137,7 +137,7 @@ def test_prior_report_scan_is_scoped_to_signal_month():
     assert (
         store.has_prior_execution_report(
             platform="longbridge",
-            strategy_profile="russell_top50_leader_rotation_aggressive",
+            strategy_profile="russell_top50_leader_rotation",
             account_scope="PAPER",
             signal_date="2026-06-04",
             effective_date="",
@@ -149,6 +149,6 @@ def test_prior_report_scan_is_scoped_to_signal_month():
         "bucket_name": "bucket",
         "prefix": (
             "execution-reports/longbridge/"
-            "russell_top50_leader_rotation_aggressive/PAPER/2026-06"
+            "russell_top50_leader_rotation/PAPER/2026-06"
         ),
     }
