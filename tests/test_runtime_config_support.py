@@ -63,7 +63,6 @@ BASE_LONGBRIDGE_PROFILES = frozenset(
 OPTIONAL_LONGBRIDGE_PROFILES = frozenset({"global_etf_confidence_vol_gate"})
 HK_RUNTIME_ENABLED_PROFILES = frozenset(
     {
-        "hk_dividend_gold_defensive_rotation",
         "hk_global_etf_tactical_rotation",
         "hk_low_vol_dividend_quality_snapshot",
     }
@@ -679,17 +678,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                 "platform": "longbridge",
             },
         )
-        self.assertEqual(
-            by_profile["hk_dividend_gold_defensive_rotation"],
-            {
-                "canonical_profile": "hk_dividend_gold_defensive_rotation",
-                "display_name": "HK Dividend-Gold Defensive Rotation",
-                "domain": "hk_equity",
-                "eligible": True,
-                "enabled": True,
-                "platform": "longbridge",
-            },
-        )
         for profile in HK_DISABLED_PROFILES:
             self.assertNotIn(profile, by_profile)
 
@@ -728,7 +716,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
     def test_accepts_runtime_enabled_hk_profiles(self):
         expected_names = {
             "hk_global_etf_tactical_rotation": "HK Global ETF Tactical Rotation",
-            "hk_dividend_gold_defensive_rotation": "HK Dividend-Gold Defensive Rotation",
         }
         for profile, display_name in expected_names.items():
             with self.subTest(profile=profile):
@@ -817,7 +804,12 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(by_profile["russell_top50_leader_rotation"]["input_mode"], "feature_snapshot")
         self.assertTrue(by_profile["russell_top50_leader_rotation"]["requires_snapshot_artifacts"])
         self.assertFalse(by_profile["russell_top50_leader_rotation"]["requires_strategy_config_path"])
-        for profile in ("hk_index_mean_reversion", "hk_etf_regime_rotation", "hk_blue_chip_leader_rotation"):
+        for profile in (
+            "hk_index_mean_reversion",
+            "hk_etf_regime_rotation",
+            "hk_blue_chip_leader_rotation",
+            "hk_dividend_gold_defensive_rotation",
+        ):
             self.assertNotIn(profile, by_profile)
         for profile in HK_RUNTIME_ENABLED_PROFILES - {"hk_low_vol_dividend_quality_snapshot"}:
             self.assertEqual(by_profile[profile]["profile_group"], "direct_runtime_inputs")
@@ -848,10 +840,10 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("soxl_soxx_trend_income", result.stdout)
         self.assertIn("global_etf_rotation", result.stdout)
         self.assertIn("hk_global_etf_tactical_rotation", result.stdout)
-        self.assertIn("hk_dividend_gold_defensive_rotation", result.stdout)
+        self.assertNotIn("hk_dividend_gold_defensive_rotation", result.stdout)
         self.assertIn("Global ETF Rotation", result.stdout)
         self.assertIn("HK Global ETF Tactical Rotation", result.stdout)
-        self.assertIn("HK Dividend-Gold Defensive Rotation", result.stdout)
+        self.assertNotIn("HK Dividend-Gold Defensive Rotation", result.stdout)
         self.assertIn("Russell Top50 Leader Rotation", result.stdout)
         self.assertIn("罗素 Top50 领涨轮动", result.stdout)
         self.assertNotIn("Tech/Communication Pullback Enhancement", result.stdout)

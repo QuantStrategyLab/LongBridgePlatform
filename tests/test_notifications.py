@@ -140,8 +140,6 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(en_name("global_etf_confidence_vol_gate"), "Global ETF Confidence Vol Gate")
         self.assertEqual(zh_name("hk_global_etf_tactical_rotation"), "港股全球 ETF 战术轮动")
         self.assertEqual(en_name("hk_global_etf_tactical_rotation"), "HK Global ETF Tactical Rotation")
-        self.assertEqual(zh_name("hk_dividend_gold_defensive_rotation"), "港股股息黄金防守轮动")
-        self.assertEqual(en_name("hk_dividend_gold_defensive_rotation"), "HK Dividend-Gold Defensive Rotation")
 
         for profile in SUPPORTED_STRATEGY_PROFILES:
             self.assertNotEqual(zh_name(profile), profile)
