@@ -104,12 +104,21 @@ def install_stub_modules(*, notify_lang="en"):
 
     google_auth_module = types.ModuleType("google.auth")
     google_auth_module.default = lambda *args, **kwargs: (None, None)
+    google_auth_transport_module = types.ModuleType("google.auth.transport")
+    google_auth_transport_requests_module = types.ModuleType("google.auth.transport.requests")
+    google_auth_transport_requests_module.Request = type("Request", (), {})
+    google_oauth2_module = types.ModuleType("google.oauth2")
+    google_oauth2_id_token_module = types.ModuleType("google.oauth2.id_token")
+    google_oauth2_id_token_module.fetch_id_token = lambda *_args, **_kwargs: "id-token"
 
     google_cloud_module = types.ModuleType("google.cloud")
     google_cloud_module.__path__ = []
     google_secretmanager_module = types.ModuleType("google.cloud.secretmanager_v1")
 
     google_module.auth = google_auth_module
+    google_auth_module.transport = google_auth_transport_module
+    google_auth_transport_module.requests = google_auth_transport_requests_module
+    google_oauth2_module.id_token = google_oauth2_id_token_module
     google_cloud_module.secretmanager_v1 = google_secretmanager_module
 
     pandas_module = types.ModuleType("pandas")
@@ -163,6 +172,10 @@ def install_stub_modules(*, notify_lang="en"):
         "quant_platform_kit.longbridge": qpk_longbridge_module,
         "google": google_module,
         "google.auth": google_auth_module,
+        "google.auth.transport": google_auth_transport_module,
+        "google.auth.transport.requests": google_auth_transport_requests_module,
+        "google.oauth2": google_oauth2_module,
+        "google.oauth2.id_token": google_oauth2_id_token_module,
         "google.cloud": google_cloud_module,
         "google.cloud.secretmanager_v1": google_secretmanager_module,
         "pandas": pandas_module,
@@ -216,7 +229,30 @@ class RequestHandlingTests(unittest.TestCase):
             module.app._routes[("/probe", ("POST", "GET"))],
             module.handle_probe,
         )
+        self.assertIs(
+            module.app._routes[("/monitor-dispatch", ("POST", "GET"))],
+            module.handle_monitor_dispatch,
+        )
         self.assertIs(module.app._routes[("/health", ("GET",))], module.health)
+
+    def test_handle_monitor_dispatch_post_dispatches_due_targets(self):
+        module = load_module()
+        observed = {}
+        monkeypatch = unittest.mock.patch.object
+
+        def fake_dispatch(targets):
+            observed["targets"] = targets
+            return {"ok": True, "dispatches_due": 0}
+
+        with monkeypatch(module, "request_method", lambda: "POST"), \
+            monkeypatch(module, "load_monitor_targets", lambda: [{"service_name": "longbridge-quant-sg-service"}]), \
+            monkeypatch(module, "dispatch_due_monitors", fake_dispatch):
+            body, status, headers = module.handle_monitor_dispatch()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/json")
+        self.assertIn('"dispatches_due": 0', body)
+        self.assertEqual(observed["targets"][0]["service_name"], "longbridge-quant-sg-service")
 
     def test_health_route_returns_ok(self):
         module = load_module()
