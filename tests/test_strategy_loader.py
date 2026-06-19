@@ -15,17 +15,17 @@ class StrategyLoaderTests(unittest.TestCase):
         self.assertEqual(entrypoint.manifest.profile, "global_etf_rotation")
         self.assertEqual(entrypoint.manifest.required_inputs, frozenset({"market_history"}))
 
-    def test_load_strategy_entrypoint_resolves_russell_strategy(self):
+    def test_load_strategy_entrypoint_resolves_russell_top50_strategy(self):
         try:
             from strategy_loader import load_strategy_entrypoint_for_profile
 
-            entrypoint = load_strategy_entrypoint_for_profile("russell_1000_multi_factor_defensive")
+            entrypoint = load_strategy_entrypoint_for_profile("russell_top50_leader_rotation")
         except ModuleNotFoundError as exc:
             if exc.name in {"numpy", "pandas"}:
                 self.skipTest(f"{exc.name} is not installed")
             raise
 
-        self.assertEqual(entrypoint.manifest.profile, "russell_1000_multi_factor_defensive")
+        self.assertEqual(entrypoint.manifest.profile, "russell_top50_leader_rotation")
         self.assertEqual(entrypoint.manifest.required_inputs, frozenset({"feature_snapshot"}))
 
     def test_load_strategy_entrypoint_resolves_soxl_soxx_trend_income(self):
@@ -99,17 +99,17 @@ class StrategyLoaderTests(unittest.TestCase):
         )
         self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
 
-    def test_load_strategy_runtime_adapter_declares_russell_inputs(self):
+    def test_load_strategy_runtime_adapter_declares_russell_top50_inputs(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
 
-        adapter = load_strategy_runtime_adapter_for_profile("russell_1000_multi_factor_defensive")
+        adapter = load_strategy_runtime_adapter_for_profile("russell_top50_leader_rotation")
 
         self.assertEqual(
             adapter.available_inputs,
             frozenset({"feature_snapshot", "portfolio_snapshot"}),
         )
         self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
-        self.assertEqual(adapter.status_icon, "📏")
+        self.assertEqual(adapter.status_icon, "👑")
 
     def test_load_strategy_runtime_adapter_rejects_archived_mega_cap_inputs(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
