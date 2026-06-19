@@ -69,6 +69,7 @@ HK_RUNTIME_ENABLED_PROFILES = frozenset(
 )
 HK_DISABLED_PROFILES = frozenset(
     {
+        "hk_dividend_gold_defensive_rotation",
         "hk_blue_chip_leader_rotation",
         "hk_index_mean_reversion",
         "hk_etf_regime_rotation",
@@ -890,6 +891,11 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("LONGBRIDGE_MARKET_SIGNAL_CONSUMPTION_AUDIT_URI", plan["optional_env"])
         self.assertIn("LONGBRIDGE_MARKET_SIGNAL_CACHE_DIR", plan["optional_env"])
         self.assertIn("LONGBRIDGE_MARKET_SIGNAL_REQUIRED", plan["optional_env"])
+        self.assertIn("LONGBRIDGE_MARKET_SIGNAL_FALLBACK_MODE", plan["optional_env"])
+        self.assertIn("LONGBRIDGE_MARKET_SIGNAL_MAX_STALE_DAYS", plan["optional_env"])
+        self.assertIn("LONGBRIDGE_FEATURE_SNAPSHOT_FALLBACK_MODE", plan["optional_env"])
+        self.assertIn("LONGBRIDGE_FEATURE_SNAPSHOT_FALLBACK_CACHE_DIR", plan["optional_env"])
+        self.assertIn("LONGBRIDGE_FEATURE_SNAPSHOT_MAX_STALE_DAYS", plan["optional_env"])
         self.assertIn("LONGBRIDGE_MARKET", plan["optional_env"])
         self.assertIn("LONGBRIDGE_MARKET_CALENDAR", plan["optional_env"])
         self.assertIn("LONGBRIDGE_MARKET_TIMEZONE", plan["optional_env"])
