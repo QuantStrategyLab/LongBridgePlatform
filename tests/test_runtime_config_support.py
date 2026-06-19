@@ -496,6 +496,29 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.income_layer_start_usd, 250000.0)
         self.assertEqual(settings.income_layer_max_ratio, 0.25)
 
+    def test_ibit_zscore_exit_overrides_are_loaded_from_env(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json("ibit_smart_dca"),
+                "IBIT_ZSCORE_EXIT_ENABLED": "true",
+                "IBIT_ZSCORE_EXIT_MODE": "enabled",
+                "IBIT_ZSCORE_EXIT_PARKING_SYMBOL": "boxx",
+                "IBIT_ZSCORE_EXIT_RISK_REDUCED_EXPOSURE": "0.5",
+                "IBIT_ZSCORE_EXIT_RISK_OFF_EXPOSURE": "0.25",
+                "IBIT_ZSCORE_EXIT_ALLOW_OUTSIDE_EXECUTION_WINDOW": "true",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertTrue(settings.ibit_zscore_exit_enabled)
+        self.assertEqual(settings.ibit_zscore_exit_mode, "live")
+        self.assertEqual(settings.ibit_zscore_exit_parking_symbol, "BOXX")
+        self.assertEqual(settings.ibit_zscore_exit_risk_reduced_exposure, 0.5)
+        self.assertEqual(settings.ibit_zscore_exit_risk_off_exposure, 0.25)
+        self.assertTrue(settings.ibit_zscore_exit_allow_outside_execution_window)
+
     def test_tech_runtime_execution_window_override_rejects_research_only_profile(self):
         with patch.dict(
             os.environ,
