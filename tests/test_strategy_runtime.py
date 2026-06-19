@@ -125,6 +125,12 @@ def _build_runtime_settings(
     income_layer_max_ratio: float | None = None,
     dca_mode: str | None = None,
     dca_base_investment_usd: float | None = None,
+    ibit_zscore_exit_enabled: bool | None = None,
+    ibit_zscore_exit_mode: str | None = None,
+    ibit_zscore_exit_parking_symbol: str | None = None,
+    ibit_zscore_exit_risk_reduced_exposure: float | None = None,
+    ibit_zscore_exit_risk_off_exposure: float | None = None,
+    ibit_zscore_exit_allow_outside_execution_window: bool | None = None,
     runtime_execution_window_trading_days: int | None = None,
     reserved_cash_floor_usd: float = 0.0,
     reserved_cash_ratio: float = 0.0,
@@ -152,6 +158,14 @@ def _build_runtime_settings(
         income_layer_max_ratio=income_layer_max_ratio,
         dca_mode=dca_mode,
         dca_base_investment_usd=dca_base_investment_usd,
+        ibit_zscore_exit_enabled=ibit_zscore_exit_enabled,
+        ibit_zscore_exit_mode=ibit_zscore_exit_mode,
+        ibit_zscore_exit_parking_symbol=ibit_zscore_exit_parking_symbol,
+        ibit_zscore_exit_risk_reduced_exposure=ibit_zscore_exit_risk_reduced_exposure,
+        ibit_zscore_exit_risk_off_exposure=ibit_zscore_exit_risk_off_exposure,
+        ibit_zscore_exit_allow_outside_execution_window=(
+            ibit_zscore_exit_allow_outside_execution_window
+        ),
         runtime_execution_window_trading_days=runtime_execution_window_trading_days,
         feature_snapshot_path=feature_snapshot_path,
         feature_snapshot_manifest_path=None,
@@ -332,6 +346,29 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.merged_runtime_config["investment_amount_mode"], "fixed")
         self.assertTrue(runtime.merged_runtime_config["smart_multiplier_enabled"])
         self.assertEqual(runtime.merged_runtime_config["base_investment_usd"], 500.0)
+
+    def test_ibit_zscore_exit_overrides_apply_to_runtime_config(self):
+        settings = _build_runtime_settings(
+            "ibit_smart_dca",
+            ibit_zscore_exit_enabled=True,
+            ibit_zscore_exit_mode="live",
+            ibit_zscore_exit_parking_symbol="BOXX",
+            ibit_zscore_exit_risk_reduced_exposure=0.5,
+            ibit_zscore_exit_risk_off_exposure=0.25,
+            ibit_zscore_exit_allow_outside_execution_window=True,
+        )
+
+        self.assertEqual(
+            strategy_runtime_module._build_runtime_overrides("ibit_smart_dca", settings),
+            {
+                "ibit_zscore_exit_enabled": True,
+                "ibit_zscore_exit_mode": "live",
+                "ibit_zscore_exit_parking_symbol": "BOXX",
+                "ibit_zscore_exit_risk_reduced_exposure": 0.5,
+                "ibit_zscore_exit_risk_off_exposure": 0.25,
+                "ibit_zscore_exit_allow_outside_execution_window": True,
+            },
+        )
 
     def test_load_strategy_runtime_applies_reserved_cash_policy_overrides_from_settings(self):
         entrypoint = _SemiconductorEntrypoint()
