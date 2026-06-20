@@ -767,7 +767,7 @@ def main(now: dt.datetime | None = None) -> int:
         now = now.replace(tzinfo=dt.timezone.utc)
     now = now.astimezone(dt.timezone.utc)
     since = now - dt.timedelta(hours=lookback_hours)
-    required_services, scheduler_skip_reason, scheduler_checked = _resolve_required_services(
+    required_services, scheduler_skip_reason, _scheduler_checked = _resolve_required_services(
         project=project,
         since=since,
         now=now,
@@ -775,14 +775,13 @@ def main(now: dt.datetime | None = None) -> int:
     if scheduler_skip_reason:
         print(f"Execution report heartbeat skipped for {name}: {scheduler_skip_reason}")
         return 0
-    if not scheduler_checked:
-        try:
-            expected_window = _expected_report_window_status(now)
-        except ValueError as exc:
-            raise SystemExit(str(exc)) from exc
-        if expected_window and not expected_window[0]:
-            print(f"Execution report heartbeat skipped for {name}: {expected_window[1]}")
-            return 0
+    try:
+        expected_window = _expected_report_window_status(now)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if expected_window and not expected_window[0]:
+        print(f"Execution report heartbeat skipped for {name}: {expected_window[1]}")
+        return 0
 
     globs = _report_globs(since, now)
     if not globs:

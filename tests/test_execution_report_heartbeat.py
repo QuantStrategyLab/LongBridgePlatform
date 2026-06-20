@@ -392,6 +392,42 @@ def test_main_skips_outside_expected_day_of_month_window(monkeypatch, capsys):
     assert "local_date=2026-06-09" in output
 
 
+def test_main_skips_outside_expected_window_even_when_scheduler_is_due(monkeypatch, capsys):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("GCP_PROJECT_ID", "longbridgequant")
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_NAME", "Monthly runtime")
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_REPORT_PLATFORM", "longbridge")
+    monkeypatch.setenv("CLOUD_RUN_SERVICE", "longbridge-monthly-service")
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_GCS_URIS", "gs://bucket/execution-reports")
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_EXPECTED_DAY_OF_MONTH", "1-7")
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_EXPECTED_TIMEZONE", "America/New_York")
+    monkeypatch.setattr(
+        heartbeat,
+        "_list_scheduler_jobs",
+        lambda **_kwargs: [
+            {
+                "state": "ENABLED",
+                "schedule": "* * * * *",
+                "timeZone": "America/New_York",
+                "httpTarget": {"uri": "https://longbridge-monthly-service.example.run.app/"},
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        heartbeat,
+        "_list_gcs_objects",
+        lambda *_args, **_kwargs: pytest.fail("GCS should not be queried outside the expected window"),
+    )
+
+    result = heartbeat.main(now=dt.datetime(2026, 6, 20, 1, 35, tzinfo=dt.timezone.utc))
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "Execution report heartbeat skipped for Monthly runtime" in output
+    assert "outside expected day-of-month window 1-7 in America/New_York" in output
+    assert "local_date=2026-06-19" in output
+
+
 def test_main_checks_reports_inside_expected_day_of_month_window(monkeypatch, capsys):
     _clear_runtime_env(monkeypatch)
     monkeypatch.setenv("GCP_PROJECT_ID", "longbridgequant")
