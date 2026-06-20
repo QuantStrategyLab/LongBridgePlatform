@@ -25,6 +25,7 @@ def _clear_runtime_env(monkeypatch):
             "FIRSTRADE_STATE_PREFIX",
             "GCP_PROJECT_ID",
             "GOOGLE_CLOUD_PROJECT",
+            "RUNTIME_TARGET_ENABLED",
         }:
             monkeypatch.delenv(name, raising=False)
 
@@ -63,6 +64,115 @@ def test_required_services_fall_back_to_cloud_run_targets(monkeypatch):
     )
 
     assert heartbeat._load_required_services() == ["svc-a", "svc-b"]
+
+
+def test_target_derived_required_services_respect_scope_and_enabled_flag(monkeypatch):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE", "SG")
+    monkeypatch.setenv("CLOUD_RUN_SERVICE", "longbridge-quant-sg-service")
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {
+                        "service": "longbridge-quant-sg-service",
+                        "account_scope": "SG",
+                        "runtime_target_enabled": "true",
+                    },
+                    {
+                        "service": "longbridge-quant-hk-service",
+                        "account_scope": "HK",
+                        "runtime_target_enabled": "false",
+                    },
+                    {
+                        "service": "longbridge-quant-paper-service",
+                        "account_scope": "PAPER",
+                        "runtime_target_enabled": "true",
+                    },
+                ]
+            }
+        ),
+    )
+
+    assert heartbeat._load_required_services() == ["longbridge-quant-sg-service"]
+
+
+def test_disabled_target_removes_matching_cloud_run_service_candidate(monkeypatch):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE", "HK")
+    monkeypatch.setenv("CLOUD_RUN_SERVICE", "longbridge-quant-hk-service")
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {
+                        "service": "longbridge-quant-hk-service",
+                        "account_scope": "HK",
+                        "runtime_target_enabled": "false",
+                    }
+                ]
+            }
+        ),
+    )
+
+    assert heartbeat._load_required_services() == []
+
+
+def test_explicit_required_services_skip_disabled_targets(monkeypatch):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv(
+        "RUNTIME_HEARTBEAT_REQUIRED_SERVICES",
+        "longbridge-enabled-service,longbridge-disabled-service",
+    )
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {
+                        "service": "longbridge-enabled-service",
+                        "runtime_target_enabled": "true",
+                    },
+                    {
+                        "service": "longbridge-disabled-service",
+                        "runtime_target_enabled": "false",
+                    },
+                ]
+            }
+        ),
+    )
+
+    assert heartbeat._load_required_services() == ["longbridge-enabled-service"]
+
+
+def test_all_explicit_required_services_disabled_skips(monkeypatch):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_REQUIRED_SERVICES", "longbridge-disabled-service")
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {
+                        "service": "longbridge-disabled-service",
+                        "runtime_target_enabled": "false",
+                    }
+                ]
+            }
+        ),
+    )
+
+    required, skip_reason, scheduler_checked = heartbeat._resolve_required_services(
+        project="project-1",
+        since=dt.datetime(2026, 6, 20, 0, 0, tzinfo=dt.timezone.utc),
+        now=dt.datetime(2026, 6, 20, 1, 0, tzinfo=dt.timezone.utc),
+    )
+
+    assert required == []
+    assert skip_reason == "all explicitly required heartbeat services are disabled"
+    assert scheduler_checked is False
 
 
 def test_scheduler_aware_required_services_only_include_due_main_schedulers(monkeypatch):
@@ -241,6 +351,24 @@ def test_main_skips_when_no_scheduler_main_job_is_due(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "Execution report heartbeat skipped for Monthly runtime" in output
     assert "no configured Cloud Scheduler main job was due" in output
+
+
+def test_main_skips_when_runtime_target_is_disabled(monkeypatch, capsys):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_NAME", "Disabled runtime")
+    monkeypatch.setenv("RUNTIME_TARGET_ENABLED", "false")
+    monkeypatch.setattr(
+        heartbeat,
+        "_list_gcs_objects",
+        lambda *_args, **_kwargs: pytest.fail("GCS should not be queried for disabled targets"),
+    )
+
+    result = heartbeat.main(now=dt.datetime(2026, 6, 20, 1, 35, tzinfo=dt.timezone.utc))
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "Execution report heartbeat skipped for Disabled runtime" in output
+    assert "runtime target is disabled" in output
 
 
 def test_main_skips_outside_expected_day_of_month_window(monkeypatch, capsys):
