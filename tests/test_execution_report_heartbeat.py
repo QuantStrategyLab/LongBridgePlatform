@@ -1,3 +1,4 @@
+import subprocess
 import datetime as dt
 import json
 import os
@@ -474,3 +475,30 @@ def test_main_checks_reports_inside_expected_day_of_month_window(monkeypatch, ca
     output = capsys.readouterr().out
     assert "Execution report heartbeat OK for Monthly runtime" in output
     assert "longbridge-monthly-service@2026-06-04T23:20:00+00:00" in output
+
+def test_telegram_token_falls_back_to_secret_manager(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
+    monkeypatch.delenv("TG_TOKEN", raising=False)
+    monkeypatch.setenv("TELEGRAM_TOKEN_SECRET_NAME", "platform-telegram-token")
+    monkeypatch.setenv("GCP_PROJECT_ID", "longbridgequant")
+    observed = {}
+
+    def fake_run_gcloud(command):
+        observed["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="secret-token\n", stderr="")
+
+    monkeypatch.setattr(heartbeat, "_run_gcloud", fake_run_gcloud)
+
+    assert heartbeat._telegram_token() == "secret-token"
+    assert observed["command"] == [
+        "gcloud",
+        "secrets",
+        "versions",
+        "access",
+        "latest",
+        "--secret",
+        "platform-telegram-token",
+        "--project",
+        "longbridgequant",
+    ]
+
