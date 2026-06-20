@@ -27,6 +27,7 @@ def _clear_runtime_env(monkeypatch):
             "GCP_PROJECT_ID",
             "GOOGLE_CLOUD_PROJECT",
             "RUNTIME_TARGET_ENABLED",
+            "RUNTIME_TARGET_JSON",
         }:
             monkeypatch.delenv(name, raising=False)
 
@@ -372,6 +373,148 @@ def test_main_skips_when_runtime_target_is_disabled(monkeypatch, capsys):
     assert "runtime target is disabled" in output
 
 
+def test_main_skips_when_runtime_target_json_is_disabled(monkeypatch, capsys):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_NAME", "Disabled runtime")
+    monkeypatch.setenv(
+        "RUNTIME_TARGET_JSON",
+        json.dumps({"runtime_target_enabled": False}),
+    )
+    monkeypatch.setattr(
+        heartbeat,
+        "_list_gcs_objects",
+        lambda *_args, **_kwargs: pytest.fail("GCS should not be queried for disabled targets"),
+    )
+
+    result = heartbeat.main(now=dt.datetime(2026, 6, 20, 23, 10, tzinfo=dt.timezone.utc))
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "Execution report heartbeat skipped for Disabled runtime" in output
+    assert "runtime target is disabled" in output
+
+
+def test_main_skips_outside_runtime_target_scheduler_day_for_scoped_target(
+    monkeypatch,
+    capsys,
+):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_NAME", "LongBridge PAPER runtime")
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE", "PAPER")
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {
+                        "service": "longbridge-quant-sg-service",
+                        "account_scope": "SG",
+                        "runtime_target_enabled": "true",
+                        "runtime_target": {
+                            "scheduler": {
+                                "timezone": "America/New_York",
+                                "main_time": "45 15 * * *",
+                            }
+                        },
+                    },
+                    {
+                        "service": "longbridge-quant-paper-service",
+                        "account_scope": "PAPER",
+                        "runtime_target_enabled": "true",
+                        "runtime_target": {
+                            "scheduler": {
+                                "timezone": "America/New_York",
+                                "main_time": "45 15 1-7 * *",
+                            }
+                        },
+                    },
+                ]
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        heartbeat,
+        "_list_gcs_objects",
+        lambda *_args, **_kwargs: pytest.fail("GCS should not be queried outside scheduler window"),
+    )
+
+    result = heartbeat.main(now=dt.datetime(2026, 6, 20, 23, 10, tzinfo=dt.timezone.utc))
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert "Execution report heartbeat skipped for LongBridge PAPER runtime" in output
+    assert "longbridge-quant-paper-service" in output
+    assert "expected day(s)=1,2,3,4,5,6,7" in output
+
+
+def test_runtime_target_scheduler_does_not_skip_when_any_active_target_runs_daily(
+    monkeypatch,
+):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {
+                        "service": "longbridge-quant-sg-service",
+                        "runtime_target_enabled": "true",
+                        "runtime_target": {
+                            "scheduler": {
+                                "timezone": "America/New_York",
+                                "main_time": "45 15 * * *",
+                            }
+                        },
+                    },
+                    {
+                        "service": "longbridge-quant-paper-service",
+                        "runtime_target_enabled": "true",
+                        "runtime_target": {
+                            "scheduler": {
+                                "timezone": "America/New_York",
+                                "main_time": "45 15 1-7 * *",
+                            }
+                        },
+                    },
+                ]
+            }
+        ),
+    )
+
+    now = dt.datetime(2026, 6, 20, 23, 10, tzinfo=dt.timezone.utc)
+    reason = heartbeat._runtime_target_scheduler_skip_reason(
+        now - dt.timedelta(hours=36),
+        now,
+    )
+
+    assert reason is None
+
+
+def test_runtime_target_scheduler_does_not_skip_when_lookback_includes_scheduler_day(
+    monkeypatch,
+):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv(
+        "RUNTIME_TARGET_JSON",
+        json.dumps(
+            {
+                "service_name": "longbridge-quant-paper-service",
+                "scheduler": {
+                    "timezone": "America/New_York",
+                    "main_time": "45 15 1-7 * *",
+                },
+            }
+        ),
+    )
+
+    reason = heartbeat._runtime_target_scheduler_skip_reason(
+        dt.datetime(2026, 6, 7, 20, 0, tzinfo=dt.timezone.utc),
+        dt.datetime(2026, 6, 8, 20, 0, tzinfo=dt.timezone.utc),
+    )
+
+    assert reason is None
+
+
 def test_main_skips_outside_expected_day_of_month_window(monkeypatch, capsys):
     _clear_runtime_env(monkeypatch)
     monkeypatch.setenv("RUNTIME_HEARTBEAT_NAME", "Monthly runtime")
@@ -501,4 +644,3 @@ def test_telegram_token_falls_back_to_secret_manager(monkeypatch):
         "--project",
         "longbridgequant",
     ]
-
