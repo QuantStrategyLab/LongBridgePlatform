@@ -16,6 +16,7 @@ class LongBridgeRebalanceConfig:
     separator: str
     translator: Callable[..., str]
     with_prefix: Callable[[str], str]
+    limit_buy_premium_by_symbol: dict[str, float] | None = None
     strategy_profile: str = ""
     strategy_display_name: str = ""
     dry_run_only: bool = False

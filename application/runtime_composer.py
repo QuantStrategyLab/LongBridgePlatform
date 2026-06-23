@@ -70,6 +70,7 @@ class LongBridgeRuntimeComposer:
     notification_adapter_builder: Callable[..., Any] = build_runtime_notification_adapters
     reporting_adapter_builder: Callable[..., Any] = build_runtime_reporting_adapters
     bootstrap_builder: Callable[..., Any] = build_runtime_bootstrap
+    limit_buy_premium_by_symbol: dict[str, float] | None = None
     extra_reporting_fields: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -219,6 +220,7 @@ class LongBridgeRuntimeComposer:
         return LongBridgeRebalanceConfig(
             limit_sell_discount=self.limit_sell_discount,
             limit_buy_premium=self.limit_buy_premium,
+            limit_buy_premium_by_symbol=self.limit_buy_premium_by_symbol,
             separator=self.separator,
             translator=self.translator,
             with_prefix=self.with_prefix,
@@ -306,6 +308,7 @@ def build_runtime_composer(
     dry_run_only_override: bool | None = None,
     printer: Callable[..., Any] = print,
     extra_reporting_fields: Mapping[str, Any] | None = None,
+    limit_buy_premium_by_symbol: dict[str, float] | None = None,
 ) -> LongBridgeRuntimeComposer:
     return LongBridgeRuntimeComposer(
         project_id=project_id,
@@ -326,6 +329,7 @@ def build_runtime_composer(
         separator=str(separator),
         limit_sell_discount=float(limit_sell_discount),
         limit_buy_premium=float(limit_buy_premium),
+        limit_buy_premium_by_symbol=dict(limit_buy_premium_by_symbol or {}),
         order_poll_interval_sec=int(order_poll_interval_sec),
         order_poll_max_attempts=int(order_poll_max_attempts),
         min_order_notional_usd=float(min_order_notional_usd),
