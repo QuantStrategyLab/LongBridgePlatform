@@ -72,3 +72,42 @@ def test_monitor_submitted_order_status_emits_lifecycle_events_via_callback():
     assert events[0].symbol == "SOXL.US"
     assert events[0].status == "PartialFilled"
     assert events[0].executed_qty == "4"
+
+
+def test_monitor_submitted_order_status_emits_unconfirmed_event_after_poll_window():
+    events = []
+
+    monitor_submitted_order_status(
+        trade_context=object(),
+        symbol="SOXL.US",
+        side_text="Buy",
+        quantity=1,
+        order_id="order-1",
+        fetch_order_status=lambda *_args, **_kwargs: None,
+        order_poll_interval_sec=0,
+        order_poll_max_attempts=1,
+        publish_order_event=events.append,
+        notify_issue=lambda *_args, **_kwargs: None,
+        sleeper=lambda _seconds: None,
+    )
+
+    assert len(events) == 1
+    assert events[0].symbol == "SOXL.US"
+    assert events[0].status == "StatusCheckTimeout"
+    assert events[0].reason == "poll_timeout"
+
+
+def test_render_order_lifecycle_message_localizes_unconfirmed_status_for_zh():
+    message = render_order_lifecycle_message(
+        build_order_lifecycle_event(
+            "SOXL.US",
+            "Buy",
+            1,
+            "order-1",
+            "StatusCheckTimeout",
+        ),
+        translator=build_translator("zh"),
+    )
+
+    assert "订单待确认 | SOXL 买入 1股" in message
+    assert "可能继续挂单或收盘取消" in message

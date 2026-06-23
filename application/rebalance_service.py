@@ -329,6 +329,7 @@ def run_strategy(
             with_prefix=config.with_prefix,
             limit_sell_discount=config.limit_sell_discount,
             limit_buy_premium=config.limit_buy_premium,
+            limit_buy_premium_by_symbol=config.limit_buy_premium_by_symbol,
             dry_run_only=config.dry_run_only,
             symbol_suffix=config.symbol_suffix,
             post_sell_refresh_attempts=config.post_sell_refresh_attempts,

@@ -277,6 +277,7 @@ def test_runtime_strategy_adapters_loads_and_reports_plugin_signals():
             "strategy_plugin_line": "plugin={plugin}|mode={mode}|route={route}|action={action}",
             "strategy_plugin_error_line": "plugin-error={reason}|fallback=built-in",
             "strategy_plugin_error_reason_ValueError": "config validation failed",
+            "strategy_plugin_consumption_unavailable": "consumption=none",
             "strategy_plugin_name_crisis_response_shadow": "Crisis",
             "strategy_plugin_mode_shadow": "shadow",
             "strategy_plugin_route_no_action": "no action",
@@ -305,6 +306,7 @@ def test_runtime_strategy_adapters_loads_and_reports_plugin_signals():
     )
     assert adapters.build_strategy_plugin_error_notification_lines("ValueError: bad config") == (
         "plugin-error=config validation failed|fallback=built-in",
+        "consumption=none",
     )
     assert adapters.build_strategy_plugin_alert_messages(signals) == ()
 
