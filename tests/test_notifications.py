@@ -404,12 +404,12 @@ class NotificationTests(unittest.TestCase):
             with_prefix_fn=build_prefixer("HK", "longbridge-quant-semiconductor-rotation-income-hk"),
             requests_module=fake_requests,
         )
-        sender("hello")
+        sender("SOXL.US and 00700.HK")
         self.assertEqual(len(fake_requests.calls), 1)
         url, payload, timeout = fake_requests.calls[0]
         self.assertIn("token-1", url)
         self.assertEqual(payload["chat_id"], "chat-1")
-        self.assertEqual(payload["text"], "[HK] hello")
+        self.assertEqual(payload["text"], "[HK] SOXL.\u2060US and 00700.\u2060HK")
         self.assertEqual(timeout, 10)
 
     def test_build_issue_notifier_logs_and_sends(self):
