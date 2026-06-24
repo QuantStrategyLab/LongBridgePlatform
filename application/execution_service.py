@@ -71,6 +71,8 @@ except ImportError:  # pragma: no cover - compatibility with older pinned shared
 try:
     from quant_platform_kit.common.small_account_compatibility import (
         apply_small_account_cash_compatibility,
+        build_small_account_allocation_drift_notes,
+        format_small_account_allocation_drift_notes,
         format_small_account_cash_substitution_notes,
     )
 except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
@@ -229,6 +231,12 @@ except ImportError:  # pragma: no cover - compatibility with older pinned shared
             )
             messages.append(translator(wrapper_key, detail=detail))
         return tuple(messages)
+
+    def build_small_account_allocation_drift_notes(**_kwargs):
+        return ()
+
+    def format_small_account_allocation_drift_notes(_notes, *, translator, **_kwargs):
+        return ()
 from quant_platform_kit.common.quantity import (
     floor_to_quantity_step,
     format_quantity,
@@ -321,6 +329,26 @@ def _safe_haven_cash_symbols(*, portfolio: dict, allocation: dict) -> tuple[str,
     if cash_sweep_symbol:
         symbols.append(cash_sweep_symbol)
     return tuple(dict.fromkeys(symbols))
+
+
+def _small_account_drift_reference_targets(allocation: Mapping, *, portfolio: Mapping | None = None) -> dict:
+    allocation = dict(allocation or {})
+    targets = {
+        str(symbol or "").strip().upper(): float(value or 0.0)
+        for symbol, value in dict(allocation.get("targets") or {}).items()
+    }
+    candidate_symbols = tuple(
+        dict.fromkeys(
+            str(symbol or "").strip().upper()
+            for symbol in tuple(allocation.get("risk_symbols", ()))
+            + tuple(allocation.get("income_symbols", ()))
+            if str(symbol or "").strip()
+        )
+    )
+    if not candidate_symbols:
+        safe_haven_symbols = set(_safe_haven_cash_symbols(portfolio=dict(portfolio or {}), allocation=allocation))
+        candidate_symbols = tuple(symbol for symbol in targets if symbol not in safe_haven_symbols)
+    return {symbol: targets.get(symbol, 0.0) for symbol in candidate_symbols if symbol in targets}
 
 
 def _positive_target_total(targets: dict) -> float:
@@ -818,6 +846,7 @@ def execute_rebalance_cycle(
     logs: list[str] = []
     skip_logs: list[str] = []
     note_logs: list[str] = []
+    submitted_orders: list[dict] = []
     dry_run_orders: list[dict] = []
     quote_snapshots_by_symbol: dict[str, dict] = {}
     small_account_cash_note_keys: set[str] = set()
@@ -842,11 +871,18 @@ def execute_rebalance_cycle(
     market_values = dict(portfolio["market_values"])
     quantities = dict(portfolio["quantities"])
     sellable_quantities = dict(portfolio["sellable_quantities"])
+    allocation_drift_base_market_values = dict(market_values)
+    allocation_drift_base_quantities = dict(quantities)
+    allocation_drift_base_cash = float(portfolio.get("liquid_cash", 0.0) or 0.0)
     plan, allocation = _apply_safe_haven_cash_substitution(
         plan=plan,
         portfolio=portfolio,
         allocation=allocation,
         threshold_usd=safe_haven_cash_substitute_threshold_usd,
+    )
+    small_account_reference_target_values = _small_account_drift_reference_targets(
+        allocation,
+        portfolio=portfolio,
     )
     cash_sweep_symbol = str(portfolio.get("cash_sweep_symbol") or "").strip().upper()
     plan, allocation = _apply_small_account_whole_share_compatibility(
@@ -937,6 +973,20 @@ def execute_rebalance_cycle(
         log_with_order_id = append_order_id_suffix(log_message, report.broker_order_id)
         print(with_prefix(f"OK {log_with_order_id}"), flush=True)
         logs.append(log_with_order_id)
+        order_payload = {
+            "symbol": str(symbol or "").strip().upper(),
+            "side": str(side or "").strip().lower(),
+            "quantity": float(order_intent.quantity or 0.0),
+            "order_type": str(order_type or "").strip().lower(),
+            "status": report.status,
+        }
+        if submitted_price is not None:
+            order_payload["price"] = round(float(submitted_price), 4)
+            if order_type == "limit":
+                order_payload["limit_price"] = round(float(submitted_price), 4)
+        if report.broker_order_id:
+            order_payload["broker_order_id"] = report.broker_order_id
+        submitted_orders.append(order_payload)
         if post_submit_order is not None:
             try:
                 post_submit_order(trade_context, order_intent, report)
@@ -1168,6 +1218,10 @@ def execute_rebalance_cycle(
                 portfolio=portfolio,
                 allocation=allocation,
                 threshold_usd=safe_haven_cash_substitute_threshold_usd,
+            )
+            small_account_reference_target_values = _small_account_drift_reference_targets(
+                allocation,
+                portfolio=portfolio,
             )
             plan, allocation = _apply_small_account_whole_share_compatibility(
                 plan=plan,
@@ -1439,6 +1493,30 @@ def execute_rebalance_cycle(
                     investable=f"{investable_cash:.2f}",
                     budget_qty=format_quantity(budget_quantity),
                 )
+
+    reference_prices = {
+        str(payload.get("symbol") or "").strip().upper(): float(payload.get("last_price") or 0.0)
+        for payload in quote_snapshots_by_symbol.values()
+        if str(payload.get("symbol") or "").strip()
+    }
+    total_value = float(portfolio.get("total_strategy_equity") or portfolio.get("total_equity") or 0.0)
+    drift_notes = build_small_account_allocation_drift_notes(
+        target_values=small_account_reference_target_values,
+        current_values=allocation_drift_base_market_values,
+        current_quantities=allocation_drift_base_quantities,
+        prices=reference_prices,
+        submitted_orders=tuple(submitted_orders) + tuple(dry_run_orders),
+        total_value=total_value,
+        cash_value=allocation_drift_base_cash,
+        symbol_suffix=symbol_suffix,
+    )
+    note_logs.extend(
+        format_small_account_allocation_drift_notes(
+            drift_notes,
+            translator=translator,
+            symbol_suffix=symbol_suffix,
+        )
+    )
 
     return ExecutionCycleResult(
         plan=dict(plan or {}),

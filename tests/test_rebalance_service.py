@@ -572,6 +572,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(result.allocation["small_account_whole_share_bootstrap_symbols"], ("SOXL",))
         self.assertEqual(result.allocation["small_account_whole_share_substituted_symbols"], ("SOXX",))
         self.assertTrue(any("SOXL.US 目标金额接近 1 股" in log for log in result.note_logs))
+        self.assertTrue(any("整数股偏离" in log and "SOXX.US 预计 0.0%" in log for log in result.note_logs))
         self.assertIn(
             {
                 "symbol": "SOXL.US",
