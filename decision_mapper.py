@@ -6,7 +6,6 @@ from typing import Any
 
 from us_equity_strategies.cash_only_equity import (
     build_portfolio_inputs_from_snapshot,
-    normalize_account_state_from_snapshot,
 )
 from quant_platform_kit.strategy_contracts import (
     PositionTarget,

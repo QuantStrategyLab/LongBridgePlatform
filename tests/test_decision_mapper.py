@@ -271,8 +271,8 @@ class DecisionMapperTests(unittest.TestCase):
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")
-        self.assertEqual(plan["allocation"]["targets"]["AAPL"], 7000.0)
-        self.assertEqual(plan["allocation"]["targets"]["BOXX"], 6000.0)
+        self.assertEqual(plan["allocation"]["targets"]["AAPL"], 2975.0)
+        self.assertEqual(plan["allocation"]["targets"]["BOXX"], 2550.0)
         self.assertEqual(plan["execution"]["signal_display"], "risk on")
         self.assertEqual(plan["execution"]["status_display"], "regime=soft_defense | breadth=55.0%")
         self.assertEqual(plan["execution"]["dashboard_text"], "tech dashboard")
@@ -465,9 +465,9 @@ class DecisionMapperTests(unittest.TestCase):
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")
-        self.assertEqual(plan["allocation"]["targets"]["VGK"], 10000.0)
-        self.assertEqual(plan["allocation"]["targets"]["EWJ"], 6000.0)
-        self.assertEqual(plan["allocation"]["targets"]["BIL"], 4000.0)
+        self.assertEqual(plan["allocation"]["targets"]["VGK"], 4250.0)
+        self.assertEqual(plan["allocation"]["targets"]["EWJ"], 2550.0)
+        self.assertEqual(plan["allocation"]["targets"]["BIL"], 1700.0)
         self.assertEqual(plan["execution"]["signal_display"], "quarterly")
         self.assertEqual(plan["execution"]["status_display"], "SPY:✅, EFA:✅")
 
@@ -503,8 +503,8 @@ class DecisionMapperTests(unittest.TestCase):
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")
-        self.assertEqual(plan["allocation"]["targets"]["AAPL"], 6000.0)
-        self.assertEqual(plan["allocation"]["targets"]["BOXX"], 4000.0)
+        self.assertEqual(plan["allocation"]["targets"]["AAPL"], 2550.0)
+        self.assertEqual(plan["allocation"]["targets"]["BOXX"], 1700.0)
         self.assertEqual(plan["execution"]["signal_display"], "risk on")
         self.assertEqual(
             plan["execution"]["status_display"],
