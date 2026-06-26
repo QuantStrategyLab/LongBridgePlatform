@@ -567,6 +567,7 @@ class RequestHandlingTests(unittest.TestCase):
                 strategy_plugin_signals=(),
                 strategy_plugin_error=None,
                 notification_title_key="",
+                cash_only_execution=True,
             ):
                 return types.SimpleNamespace()
 
@@ -639,6 +640,7 @@ class RequestHandlingTests(unittest.TestCase):
                 strategy_plugin_signals=(),
                 strategy_plugin_error=None,
                 notification_title_key="",
+                cash_only_execution=True,
             ):
                 observed["notification_title_key"] = notification_title_key
                 return types.SimpleNamespace()
@@ -688,6 +690,7 @@ class RequestHandlingTests(unittest.TestCase):
                 strategy_plugin_signals=(),
                 strategy_plugin_error=None,
                 notification_title_key="",
+                cash_only_execution=True,
             ):
                 observed["notification_title_key"] = notification_title_key
                 return types.SimpleNamespace()
