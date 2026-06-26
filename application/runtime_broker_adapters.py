@@ -20,6 +20,10 @@ from quant_platform_kit.strategy_contracts import (
     build_account_state_from_portfolio_snapshot,
     build_portfolio_snapshot_from_account_state,
 )
+from us_equity_strategies.cash_only_equity import (
+    apply_cash_only_account_state,
+    resolve_raw_cash_from_snapshot,
+)
 
 try:
     from quant_platform_kit.common.runtime_inputs import (
@@ -187,8 +191,9 @@ class LongBridgeBrokerAdapters:
             strategy_symbols=self.strategy_symbols,
         )
         if self.strategy_symbols:
-            account_state["total_strategy_equity"] = float(account_state["available_cash"]) + sum(
-                float(value) for value in dict(account_state["market_values"]).values()
+            return apply_cash_only_account_state(
+                account_state,
+                raw_cash=resolve_raw_cash_from_snapshot(snapshot),
             )
         return account_state
 

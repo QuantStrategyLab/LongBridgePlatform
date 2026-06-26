@@ -853,6 +853,7 @@ def execute_rebalance_cycle(
     small_account_bootstrap_note_keys: set[str] = set()
     action_done = False
     sell_submitted = False
+    pending_sell_release_symbols: list[str] = []
     threshold_value = float(execution["trade_threshold_value"])
     limit_order_symbols = set(
         allocation.get("risk_symbols", ()) + allocation.get("income_symbols", ())
@@ -1098,10 +1099,25 @@ def execute_rebalance_cycle(
                         translator=translator,
                         with_prefix=with_prefix,
                         kind="sell_skipped",
-                        detail=(
-                            f"Symbol: {market_symbol(symbol)} Diff: ${abs(market_values[symbol] - target_values[symbol]):.2f} "
-                            f"Held: {quantities[symbol]} Sellable: {sellable_quantities[symbol]} "
-                            f"(no sellable)"
+                        detail=translator(
+                            "sell_skip_no_sellable_detail",
+                            symbol=market_symbol(symbol),
+                            diff=f"{abs(market_values[symbol] - target_values[symbol]):.2f}",
+                            held=format_quantity(quantities[symbol]),
+                            sellable=format_quantity(sellable_quantities[symbol]),
+                        ),
+                    )
+                elif sellable_quantities[symbol] > 0:
+                    pending_sell_release_symbols.append(symbol)
+                    record_skip_log(
+                        skip_logs,
+                        translator=translator,
+                        with_prefix=with_prefix,
+                        kind="sell_skipped",
+                        detail=translator(
+                            "sell_skip_whole_share_detail",
+                            symbol=market_symbol(symbol),
+                            diff=f"{max(0.0, market_values[symbol] - target_values[symbol]):.2f}",
                         ),
                     )
 
@@ -1284,7 +1300,45 @@ def execute_rebalance_cycle(
         if (target_values[symbol] - market_values[symbol]) > threshold_value
         and abs(target_values[symbol] - market_values[symbol]) > current_min_trade
     ]
-    if buy_candidates and investable_cash <= 0:
+    buys_blocked_reason: str | None = None
+    if buy_candidates and pending_sell_release_symbols:
+        estimated_buy_cost = 0.0
+        for symbol in buy_candidates:
+            diff = target_values[symbol] - market_values[symbol]
+            can_buy_value = min(diff, investable_cash)
+            price = safe_quote_last_price(
+                market_symbol(symbol),
+                market_data_port=market_data_port,
+                notify_issue=notify_issue,
+                quote_recorder=record_quote_snapshot,
+            )
+            if price is None or can_buy_value <= price:
+                continue
+            limit_price = _limit_buy_price(
+                symbol, price, limit_buy_premium, limit_buy_premium_by_symbol
+            )
+            quantity = int(can_buy_value // limit_price) if limit_price > 0 else 0
+            if quantity > 0:
+                estimated_buy_cost += quantity * limit_price
+        if estimated_buy_cost > investable_cash:
+            buys_blocked_reason = "pending_sell_release"
+            message = translator(
+                "buy_deferred_pending_sell_release",
+                symbols=", ".join(pending_sell_release_symbols),
+            )
+            note_logs.append(message)
+            print(with_prefix(message), flush=True)
+            buy_candidates = []
+    if buy_candidates and available_cash < 0 and buys_blocked_reason is None:
+        buys_blocked_reason = "negative_cash"
+        message = translator(
+            "buy_deferred_negative_cash",
+            cash=f"{available_cash:.2f}",
+        )
+        note_logs.append(message)
+        print(with_prefix(message), flush=True)
+        buy_candidates = []
+    elif buy_candidates and investable_cash <= 0:
         buy_candidates = []
 
     for symbol in buy_candidates:
