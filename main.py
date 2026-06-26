@@ -80,7 +80,7 @@ TRADING_CURRENCY = RUNTIME_SETTINGS.trading_currency
 NOTIFY_LANG = RUNTIME_SETTINGS.notify_lang
 TG_TOKEN = RUNTIME_SETTINGS.tg_token
 TG_CHAT_ID = RUNTIME_SETTINGS.tg_chat_id
-CASH_ONLY_EXECUTION = RUNTIME_SETTINGS.cash_only_execution
+CASH_ONLY_EXECUTION = getattr(RUNTIME_SETTINGS, "cash_only_execution", True)
 STRATEGY_RUNTIME = load_strategy_runtime(
     STRATEGY_PROFILE,
     runtime_settings=RUNTIME_SETTINGS,
