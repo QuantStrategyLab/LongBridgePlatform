@@ -4,13 +4,15 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
+from us_equity_strategies.cash_only_equity import (
+    build_cash_only_portfolio_inputs_from_snapshot,
+)
 from quant_platform_kit.strategy_contracts import (
     PositionTarget,
     StrategyDecision,
     ValueTargetExecutionAnnotations,
     build_value_target_execution_annotations,
     build_value_target_portfolio_inputs_from_account_state,
-    build_value_target_portfolio_inputs_from_snapshot,
     build_value_target_runtime_plan,
     resolve_decision_target_mode,
     translate_decision_to_target_mode,
@@ -144,10 +146,9 @@ def _build_portfolio_inputs(
     if account_state is not None:
         return build_value_target_portfolio_inputs_from_account_state(account_state)
     if snapshot is not None:
-        return build_value_target_portfolio_inputs_from_snapshot(
+        return build_cash_only_portfolio_inputs_from_snapshot(
             snapshot,
             include_sellable_quantities=True,
-            liquid_cash=float(snapshot.buying_power or snapshot.cash_balance or 0.0),
         )
     raise ValueError("LongBridge plan mapping requires account_state or snapshot")
 
