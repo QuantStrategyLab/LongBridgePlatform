@@ -25,6 +25,7 @@ class LongBridgeRebalanceConfig:
     post_sell_refresh_interval_sec: float = 0.0
     min_order_notional_usd: float = 100.0
     safe_haven_cash_substitute_threshold_usd: float = 1000.0
+    cash_only_execution: bool = True
     sleeper: Callable[[float], None] | None = None
     extra_notification_lines: tuple[str, ...] = ()
     notification_title_key: str = ""

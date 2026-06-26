@@ -842,6 +842,7 @@ def execute_rebalance_cycle(
     sleeper=_noop_sleep,
     min_order_notional_usd=0.0,
     safe_haven_cash_substitute_threshold_usd=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
+    cash_only_execution=True,
 ) -> ExecutionCycleResult:
     logs: list[str] = []
     skip_logs: list[str] = []
@@ -1301,7 +1302,7 @@ def execute_rebalance_cycle(
         and abs(target_values[symbol] - market_values[symbol]) > current_min_trade
     ]
     buys_blocked_reason: str | None = None
-    if buy_candidates and pending_sell_release_symbols:
+    if cash_only_execution and buy_candidates and pending_sell_release_symbols:
         estimated_buy_cost = 0.0
         for symbol in buy_candidates:
             diff = target_values[symbol] - market_values[symbol]
@@ -1329,7 +1330,7 @@ def execute_rebalance_cycle(
             note_logs.append(message)
             print(with_prefix(message), flush=True)
             buy_candidates = []
-    if buy_candidates and available_cash < 0 and buys_blocked_reason is None:
+    if cash_only_execution and buy_candidates and available_cash < 0 and buys_blocked_reason is None:
         buys_blocked_reason = "negative_cash"
         message = translator(
             "buy_deferred_negative_cash",
