@@ -80,6 +80,7 @@ TRADING_CURRENCY = RUNTIME_SETTINGS.trading_currency
 NOTIFY_LANG = RUNTIME_SETTINGS.notify_lang
 TG_TOKEN = RUNTIME_SETTINGS.tg_token
 TG_CHAT_ID = RUNTIME_SETTINGS.tg_chat_id
+CASH_ONLY_EXECUTION = RUNTIME_SETTINGS.cash_only_execution
 STRATEGY_RUNTIME = load_strategy_runtime(
     STRATEGY_PROFILE,
     runtime_settings=RUNTIME_SETTINGS,
@@ -256,6 +257,7 @@ BROKER_ADAPTERS = build_runtime_broker_adapters(
     submit_order_fn=submit_order,
     symbol_suffix=SYMBOL_SUFFIX,
     currency=TRADING_CURRENCY,
+    cash_only_execution=CASH_ONLY_EXECUTION,
 )
 STRATEGY_ADAPTERS = build_runtime_strategy_adapters(
     strategy_runtime=STRATEGY_RUNTIME,
@@ -272,6 +274,7 @@ STRATEGY_ADAPTERS = build_runtime_strategy_adapters(
     execution_policy={
         "reserved_cash_floor_usd": getattr(RUNTIME_SETTINGS, "reserved_cash_floor_usd", 0.0),
         "reserved_cash_ratio": getattr(RUNTIME_SETTINGS, "reserved_cash_ratio", 0.0),
+        "cash_only_execution": CASH_ONLY_EXECUTION,
     },
     build_strategy_plugin_report_payload_fn=build_strategy_plugin_report_payload,
     load_configured_strategy_plugin_signals_fn=load_configured_strategy_plugin_signals,
@@ -563,6 +566,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                     if validation_only and validation_label == "dry_run"
                     else ""
                 ),
+                cash_only_execution=CASH_ONLY_EXECUTION,
             ),
         )
         signal_snapshot = {}

@@ -5,7 +5,8 @@ from dataclasses import replace
 from typing import Any
 
 from us_equity_strategies.cash_only_equity import (
-    build_cash_only_portfolio_inputs_from_snapshot,
+    build_portfolio_inputs_from_snapshot,
+    normalize_account_state_from_snapshot,
 )
 from quant_platform_kit.strategy_contracts import (
     PositionTarget,
@@ -142,12 +143,14 @@ def _build_portfolio_inputs(
     *,
     account_state: Mapping[str, Any] | None,
     snapshot: Any | None,
+    cash_only_execution: bool = True,
 ):
     if account_state is not None:
         return build_value_target_portfolio_inputs_from_account_state(account_state)
     if snapshot is not None:
-        return build_cash_only_portfolio_inputs_from_snapshot(
+        return build_portfolio_inputs_from_snapshot(
             snapshot,
+            cash_only_execution=cash_only_execution,
             include_sellable_quantities=True,
         )
     raise ValueError("LongBridge plan mapping requires account_state or snapshot")
@@ -637,7 +640,15 @@ def map_strategy_decision_to_plan(
     runtime_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     canonical_profile = _resolve_canonical_profile(strategy_profile)
-    portfolio_inputs = _build_portfolio_inputs(account_state=account_state, snapshot=snapshot)
+    raw_policy = (runtime_metadata or {}).get("longbridge_execution_policy")
+    cash_only_execution = True
+    if isinstance(raw_policy, Mapping):
+        cash_only_execution = bool(raw_policy.get("cash_only_execution", True))
+    portfolio_inputs = _build_portfolio_inputs(
+        account_state=account_state,
+        snapshot=snapshot,
+        cash_only_execution=cash_only_execution,
+    )
     normalized_decision, normalized_annotations = _normalize_to_value_target_decision(
         decision,
         portfolio_inputs=portfolio_inputs,

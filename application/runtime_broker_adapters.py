@@ -21,8 +21,7 @@ from quant_platform_kit.strategy_contracts import (
     build_portfolio_snapshot_from_account_state,
 )
 from us_equity_strategies.cash_only_equity import (
-    apply_cash_only_account_state,
-    resolve_raw_cash_from_snapshot,
+    normalize_account_state_from_snapshot,
 )
 
 try:
@@ -48,6 +47,7 @@ class LongBridgeBrokerAdapters:
     price_history_lookback: int = DEFAULT_SEMICONDUCTOR_ROTATION_HISTORY_LOOKBACK
     symbol_suffix: str = ".US"
     currency: str = "USD"
+    cash_only_execution: bool = True
 
     def normalize_market_symbol(self, symbol: str) -> str:
         value = str(symbol or "").strip().upper()
@@ -191,9 +191,10 @@ class LongBridgeBrokerAdapters:
             strategy_symbols=self.strategy_symbols,
         )
         if self.strategy_symbols:
-            return apply_cash_only_account_state(
+            return normalize_account_state_from_snapshot(
                 account_state,
-                raw_cash=resolve_raw_cash_from_snapshot(snapshot),
+                snapshot,
+                cash_only_execution=self.cash_only_execution,
             )
         return account_state
 
@@ -231,6 +232,7 @@ def build_runtime_broker_adapters(
     price_history_lookback: int = DEFAULT_SEMICONDUCTOR_ROTATION_HISTORY_LOOKBACK,
     symbol_suffix: str = ".US",
     currency: str = "USD",
+    cash_only_execution: bool = True,
 ) -> LongBridgeBrokerAdapters:
     return LongBridgeBrokerAdapters(
         strategy_symbols=tuple(strategy_symbols),
@@ -242,4 +244,5 @@ def build_runtime_broker_adapters(
         price_history_lookback=int(price_history_lookback),
         symbol_suffix=str(symbol_suffix or ""),
         currency=str(currency or "USD").upper(),
+        cash_only_execution=bool(cash_only_execution),
     )

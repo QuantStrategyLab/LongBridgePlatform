@@ -337,6 +337,7 @@ def run_strategy(
             sleeper=config.sleeper or _noop_sleep,
             min_order_notional_usd=config.min_order_notional_usd,
             safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
+            cash_only_execution=config.cash_only_execution,
         )
         if _should_record_execution_marker(result=execution_result, config=config):
             _record_execution_marker(
@@ -346,6 +347,7 @@ def run_strategy(
                 notify_issue=runtime.notify_issue,
             )
     execution = execution_result.execution
+    execution["cash_only_execution"] = bool(getattr(config, "cash_only_execution", True))
     execution["signal_snapshot"] = build_signal_snapshot(
         platform="longbridge",
         strategy_profile=config.strategy_profile,
