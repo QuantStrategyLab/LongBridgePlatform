@@ -62,6 +62,7 @@ I18N = {
         "order_filled": "✅ 订单成交 | {symbol} {side} {qty}股 均价 ${price}（订单号: {order_id}）",
         "order_partial": "⚠️ 订单部分成交 | {symbol} {side} 已成交 {executed}/{qty}股 均价 ${price}（订单号: {order_id}）",
         "order_error": "❌ 订单异常 | {symbol} {side} {qty}股 已{status}（订单号: {order_id}）原因: {reason}",
+        "order_status_unconfirmed": "⏳ 订单待确认 | {symbol} {side} {qty}股 轮询后仍未确认成交（订单号: {order_id}）；限价单可能继续挂单或收盘取消",
         "small_account_warning_note": "小账户提示：净值 {portfolio_equity} 低于建议 {min_recommended_equity}；{reason}",
         "small_account_warning_reason_integer_shares_min_position_value_may_prevent_backtest_replication": "整数股和最小仓位限制可能导致实盘无法完全复现回测",
         "order_id_suffix": "（订单号: {order_id}）",
@@ -73,6 +74,9 @@ I18N = {
         "buy_deferred_non_usd_cash": "检测到非 USD 现金（{currencies}），但美股策略可用 USD 现金为 ${available}、可投资现金为 ${investable}；请先换汇或入金 USD 后再买入",
         "buy_deferred_small_target_gap": "{symbol} 目标差额 ${diff} 未超过 1 股价格 ${price}；为避免超过目标仓位，本轮不买入",
         "buy_deferred_small_account_cash_substitution": "{symbol} 目标金额 ${diff} 低于 1 股价格 ${price}；为避免超过目标仓位，本轮保留现金（现金替代：{cash_symbols}）",
+        "small_account_allocation_drift": "📏 整数股偏离：若本轮订单全部成交，{details}",
+        "small_account_allocation_drift_detail": "{symbol} 预计 {projected_weight} vs 目标 {target_weight}（{drift_weight}）",
+        "buy_lifted_small_account_whole_share": "ℹ️ [买入说明] {symbols} 目标金额接近 1 股；小账户整数股兼容，本轮允许按 1 股下单",
         "risk_control_tqqq_volatility_delever_applied": "🛡️ 风控: QQQ {window} 日年化波动率 {volatility} 高于 {threshold}，{source_symbol} 转向 {redirect_symbol}（{allocation_detail}）",
         "risk_control_tqqq_volatility_delever_applied_dynamic": "🛡️ 风控: QQQ {window} 日年化波动率 {volatility} 高于实际阈值 {threshold}（{threshold_detail}），{source_symbol} 转向 {redirect_symbol}（{allocation_detail}）",
         "risk_control_tqqq_volatility_delever_hysteresis": "🛡️ 风控: QQQ {window} 日年化波动率 {volatility} 仍高于退出阈值 {exit_threshold}，维持 {source_symbol} 转向 {redirect_symbol}（{allocation_detail}）",
@@ -91,9 +95,9 @@ I18N = {
         "buy_deferred_cash_sweep_cash_limit": "{symbol} 剩余可投资现金 ${investable}，预算可回补 {budget_qty} 股，但券商估算可买数量为 0；可能有未完成挂单、结算或购买力占用",
         "execution_already_recorded": "已跳过重复执行：信号日 {signal_date} / 执行日 {effective_date} 已记录，本轮不再生成订单",
         "cash_sweep_rebuy": "🏦 [尾部回补] 剩余可投资现金回补 {symbol}: {qty}股 @ ${price}",
-        "limit_buy": "📈 [限价买入] {symbol}: {qty}股 @ ${price}",
+        "limit_buy": "📈 [限价买入] {symbol}: {qty}股 @ ${price}（已提交，等待成交确认）",
         "market_buy": "📈 [市价买入] {symbol}: {qty}股 @ ${price}",
-        "limit_sell": "📉 [限价卖出] {symbol}: {qty}股 @ ${price}",
+        "limit_sell": "📉 [限价卖出] {symbol}: {qty}股 @ ${price}（已提交，等待成交确认）",
         "market_sell": "📉 [市价卖出] {symbol}: {qty}股 @ ${price}",
         "dry_run_order": "🧪 模拟{order_type}{side} {symbol}: {qty}股 @ {price}",
         "order_type_market": "市价",
@@ -131,7 +135,15 @@ I18N = {
         "strategy_name_ibit_smart_dca": "IBIT 比特币 ETF 智能定投",
         "strategy_name_hk_global_etf_tactical_rotation": "港股全球 ETF 战术轮动",
         "strategy_name_hk_low_vol_dividend_quality_snapshot": "港股低波股息质量快照",
-        "strategy_plugin_line": "🧩 插件：{plugin} | 状态：{route} | 提醒：{action}",
+        "strategy_plugin_line": "🧩 插件：{plugin} | 启用：{enabled} | 状态：{route} | 提醒：{action}",
+        "strategy_plugin_enabled_true": "是",
+        "strategy_plugin_enabled_false": "否",
+        "strategy_plugin_consumption_auto": "🧩 插件消费：已按策略规则参与本轮仓位计算",
+        "strategy_plugin_consumption_auto_defend": "🧩 插件消费：已按策略规则参与本轮仓位计算；风险仓位按防守规则处理",
+        "strategy_plugin_consumption_auto_delever": "🧩 插件消费：已按策略规则参与本轮仓位计算；杠杆仓位按降档规则缩放",
+        "strategy_plugin_consumption_loaded_not_applied": "🧩 插件消费：已加载但未改写仓位；当前策略未启用该状态的自动消费",
+        "strategy_plugin_consumption_review_only": "🧩 插件消费：仅通知复核，未参与自动仓位计算",
+        "strategy_plugin_consumption_unavailable": "🧩 插件消费：未消费插件信号",
         "strategy_plugin_alert_subject": "🚨 策略插件告警：{plugin} | {route}",
         "strategy_plugin_alert_title": "🚨 【策略插件告警】",
         "strategy_plugin_alert_context": "运行环境：{context}",
@@ -146,7 +158,7 @@ I18N = {
         "strategy_plugin_alert_scope": "仅作人工复核提醒；插件不会自动下单或改仓位",
         "strategy_plugin_name_crisis_response_shadow": "危机观察通知",
         "strategy_plugin_name_macro_risk_governor": "宏观风险控制通知",
-        "strategy_plugin_name_market_regime_control": "市场状态控制通知",
+        "strategy_plugin_name_market_regime_control": "市场状态控制",
         "strategy_plugin_name_panic_reversal_shadow": "恐慌反转观察通知",
         "strategy_plugin_name_taco_rebound_shadow": "TACO 反弹观察通知",
         "strategy_plugin_mode_shadow": "影子观察",
@@ -220,6 +232,7 @@ I18N = {
         "order_filled": "✅ Order Filled | {symbol} {side} {qty} shares avg ${price} (ID: {order_id})",
         "order_partial": "⚠️ Partial Fill | {symbol} {side} filled {executed}/{qty} shares avg ${price} (ID: {order_id})",
         "order_error": "❌ Order Error | {symbol} {side} {qty} shares {status} (ID: {order_id}) reason: {reason}",
+        "order_status_unconfirmed": "⏳ Order Pending Confirmation | {symbol} {side} {qty} shares not confirmed after polling (ID: {order_id}); limit orders may remain open or cancel at session close",
         "small_account_warning_note": "small account warning: portfolio equity {portfolio_equity} is below recommended {min_recommended_equity}; {reason}",
         "small_account_warning_reason_integer_shares_min_position_value_may_prevent_backtest_replication": "integer-share minimum position sizing may prevent backtest replication",
         "order_id_suffix": "[order_id={order_id}]",
@@ -231,6 +244,9 @@ I18N = {
         "buy_deferred_non_usd_cash": "Non-USD cash is present ({currencies}), but this US-equity strategy has USD cash ${available} and investable cash ${investable}; convert or deposit USD before buying",
         "buy_deferred_small_target_gap": "{symbol} target gap ${diff} does not exceed the 1-share price ${price}; skipped to avoid exceeding the target allocation",
         "buy_deferred_small_account_cash_substitution": "{symbol} target ${diff} is below the 1-share price ${price}; to avoid exceeding the target allocation, this cycle keeps cash (cash substitute: {cash_symbols})",
+        "small_account_allocation_drift": "📏 Integer-share drift: if this cycle's orders fully fill, {details}",
+        "small_account_allocation_drift_detail": "{symbol} projected {projected_weight} vs target {target_weight} ({drift_weight})",
+        "buy_lifted_small_account_whole_share": "ℹ️ [Buy note] {symbols} target is close to one share; small-account whole-share compatibility allows a 1-share order this cycle",
         "risk_control_tqqq_volatility_delever_applied": "🛡️ Risk control: QQQ {window}d annualized volatility {volatility} is above {threshold}; {source_symbol} redirects to {redirect_symbol} ({allocation_detail})",
         "risk_control_tqqq_volatility_delever_applied_dynamic": "🛡️ Risk control: QQQ {window}d annualized volatility {volatility} is above effective threshold {threshold} ({threshold_detail}); {source_symbol} redirects to {redirect_symbol} ({allocation_detail})",
         "risk_control_tqqq_volatility_delever_hysteresis": "🛡️ Risk control: QQQ {window}d annualized volatility {volatility} remains above the exit threshold {exit_threshold}; keep {source_symbol} redirected to {redirect_symbol} ({allocation_detail})",
@@ -249,9 +265,9 @@ I18N = {
         "buy_deferred_cash_sweep_cash_limit": "{symbol} residual investable cash ${investable}, budget supports {budget_qty} tail-rebuy shares, but broker estimate returned 0; an open order, settlement, or buying-power hold may still be blocking funds",
         "execution_already_recorded": "Duplicate execution skipped: signal date {signal_date} / effective date {effective_date} is already recorded; no orders will be generated this cycle",
         "cash_sweep_rebuy": "🏦 [tail rebuy] residual investable cash rebought {symbol}: {qty} shares @ ${price}",
-        "limit_buy": "📈 [Limit buy] {symbol}: {qty} shares @ ${price}",
+        "limit_buy": "📈 [Limit buy] {symbol}: {qty} shares @ ${price} (submitted; awaiting fill confirmation)",
         "market_buy": "📈 [Market buy] {symbol}: {qty} shares @ ${price}",
-        "limit_sell": "📉 [Limit sell] {symbol}: {qty} shares @ ${price}",
+        "limit_sell": "📉 [Limit sell] {symbol}: {qty} shares @ ${price} (submitted; awaiting fill confirmation)",
         "market_sell": "📉 [Market sell] {symbol}: {qty} shares @ ${price}",
         "dry_run_order": "🧪 DRY_RUN {order_type} {side} {symbol} {qty} @ {price}",
         "order_type_market": "market",
@@ -289,7 +305,15 @@ I18N = {
         "strategy_name_ibit_smart_dca": "IBIT Smart DCA",
         "strategy_name_hk_global_etf_tactical_rotation": "HK Global ETF Tactical Rotation",
         "strategy_name_hk_low_vol_dividend_quality_snapshot": "HK Low-Vol Dividend Quality Snapshot",
-        "strategy_plugin_line": "🧩 Plugin: {plugin} | status: {route} | notice: {action}",
+        "strategy_plugin_line": "🧩 Plugin: {plugin} | enabled: {enabled} | status: {route} | notice: {action}",
+        "strategy_plugin_enabled_true": "yes",
+        "strategy_plugin_enabled_false": "no",
+        "strategy_plugin_consumption_auto": "🧩 Plugin consumption: included in this cycle's position calculation under strategy rules",
+        "strategy_plugin_consumption_auto_defend": "🧩 Plugin consumption: included in this cycle's position calculation; risk exposure follows defensive rules",
+        "strategy_plugin_consumption_auto_delever": "🧩 Plugin consumption: included in this cycle's position calculation; leveraged exposure follows de-risking rules",
+        "strategy_plugin_consumption_loaded_not_applied": "🧩 Plugin consumption: loaded but did not rewrite positions; this strategy does not enable automatic consumption for this state",
+        "strategy_plugin_consumption_review_only": "🧩 Plugin consumption: review-only notice, not used for automatic position calculation",
+        "strategy_plugin_consumption_unavailable": "🧩 Plugin consumption: no plugin signal consumed",
         "strategy_plugin_alert_subject": "🚨 Strategy plugin alert: {plugin} | {route}",
         "strategy_plugin_alert_title": "🚨 【Strategy Plugin Alert】",
         "strategy_plugin_alert_context": "Context: {context}",
@@ -304,7 +328,7 @@ I18N = {
         "strategy_plugin_alert_scope": "Manual review notice only; the plugin does not place orders or change allocations",
         "strategy_plugin_name_crisis_response_shadow": "Crisis Watch Notice",
         "strategy_plugin_name_macro_risk_governor": "Macro Risk Governor Notice",
-        "strategy_plugin_name_market_regime_control": "Market Regime Control Notice",
+        "strategy_plugin_name_market_regime_control": "Market Regime Control",
         "strategy_plugin_name_panic_reversal_shadow": "Panic Reversal Watch Notice",
         "strategy_plugin_name_taco_rebound_shadow": "TACO Rebound Watch Notice",
         "strategy_plugin_mode_shadow": "shadow",
@@ -341,7 +365,13 @@ I18N = {
 }
 
 if _merge_strategy_plugin_i18n is not None:
-    I18N = _merge_strategy_plugin_i18n(I18N)
+    _PLATFORM_I18N = {locale: dict(values) for locale, values in I18N.items()}
+    try:
+        I18N = _merge_strategy_plugin_i18n(I18N, shared_wins=False)
+    except TypeError:
+        I18N = _merge_strategy_plugin_i18n(I18N)
+        for locale, values in _PLATFORM_I18N.items():
+            I18N.setdefault(locale, {}).update(values)
 
 
 def build_translator(lang):

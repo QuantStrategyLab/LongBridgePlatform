@@ -71,6 +71,8 @@ except ImportError:  # pragma: no cover - compatibility with older pinned shared
 try:
     from quant_platform_kit.common.small_account_compatibility import (
         apply_small_account_cash_compatibility,
+        build_small_account_allocation_drift_notes,
+        format_small_account_allocation_drift_notes,
         format_small_account_cash_substitution_notes,
     )
 except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
@@ -229,6 +231,12 @@ except ImportError:  # pragma: no cover - compatibility with older pinned shared
             )
             messages.append(translator(wrapper_key, detail=detail))
         return tuple(messages)
+
+    def build_small_account_allocation_drift_notes(**_kwargs):
+        return ()
+
+    def format_small_account_allocation_drift_notes(_notes, *, translator, **_kwargs):
+        return ()
 from quant_platform_kit.common.quantity import (
     floor_to_quantity_step,
     format_quantity,
@@ -254,6 +262,39 @@ class ExecutionCycleResult:
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
 SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD = 2000.0
 SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS = frozenset({"TQQQ", "SOXL"})
+SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL = {
+    "SOXX": 0.90,
+}
+SMALL_ACCOUNT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL = {
+    "TQQQ": 0.90,
+    "SOXL": 0.90,
+    "SOXX": 0.90,
+}
+
+
+def _limit_buy_premium_for_symbol(symbol, default_premium, premium_by_symbol=None) -> float:
+    normalized_symbol = str(symbol or "").strip().upper()
+    try:
+        fallback = float(default_premium)
+    except (TypeError, ValueError):
+        fallback = 1.005
+    if not isinstance(premium_by_symbol, dict):
+        return fallback
+    raw_value = premium_by_symbol.get(normalized_symbol)
+    if raw_value is None:
+        return fallback
+    try:
+        premium = float(raw_value)
+    except (TypeError, ValueError):
+        return fallback
+    return premium if premium > 0.0 else fallback
+
+
+def _limit_buy_price(symbol, price, default_premium, premium_by_symbol=None) -> float:
+    return round(
+        float(price) * _limit_buy_premium_for_symbol(symbol, default_premium, premium_by_symbol),
+        2,
+    )
 
 
 def _noop_sleep(_seconds):
@@ -288,6 +329,26 @@ def _safe_haven_cash_symbols(*, portfolio: dict, allocation: dict) -> tuple[str,
     if cash_sweep_symbol:
         symbols.append(cash_sweep_symbol)
     return tuple(dict.fromkeys(symbols))
+
+
+def _small_account_drift_reference_targets(allocation: Mapping, *, portfolio: Mapping | None = None) -> dict:
+    allocation = dict(allocation or {})
+    targets = {
+        str(symbol or "").strip().upper(): float(value or 0.0)
+        for symbol, value in dict(allocation.get("targets") or {}).items()
+    }
+    candidate_symbols = tuple(
+        dict.fromkeys(
+            str(symbol or "").strip().upper()
+            for symbol in tuple(allocation.get("risk_symbols", ()))
+            + tuple(allocation.get("income_symbols", ()))
+            if str(symbol or "").strip()
+        )
+    )
+    if not candidate_symbols:
+        safe_haven_symbols = set(_safe_haven_cash_symbols(portfolio=dict(portfolio or {}), allocation=allocation))
+        candidate_symbols = tuple(symbol for symbol in targets if symbol not in safe_haven_symbols)
+    return {symbol: targets.get(symbol, 0.0) for symbol in candidate_symbols if symbol in targets}
 
 
 def _positive_target_total(targets: dict) -> float:
@@ -326,6 +387,35 @@ def _apply_safe_haven_cash_substitution(
     if changed:
         adjusted_plan["allocation"] = adjusted_allocation
     return adjusted_plan, adjusted_allocation
+
+
+def _should_retain_existing_whole_share(symbol, *, target_value, price) -> bool:
+    normalized_symbol = str(symbol or "").strip().upper()
+    if normalized_symbol in SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS:
+        return True
+
+    min_target_share_ratio = (
+        SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL.get(normalized_symbol)
+    )
+    if min_target_share_ratio is None:
+        return False
+    quote_price = max(0.0, float(price or 0.0))
+    if quote_price <= 0.0:
+        return False
+    return max(0.0, float(target_value or 0.0)) >= quote_price * float(min_target_share_ratio)
+
+
+def _should_bootstrap_whole_share_buy(symbol, *, target_value, limit_price) -> bool:
+    normalized_symbol = str(symbol or "").strip().upper()
+    min_target_share_ratio = (
+        SMALL_ACCOUNT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL.get(normalized_symbol)
+    )
+    if min_target_share_ratio is None:
+        return False
+    effective_limit_price = max(0.0, float(limit_price or 0.0))
+    if effective_limit_price <= 0.0:
+        return False
+    return max(0.0, float(target_value or 0.0)) >= effective_limit_price * float(min_target_share_ratio)
 
 
 def _normalize_cash_by_currency(raw_cash) -> dict[str, float]:
@@ -414,6 +504,69 @@ def record_small_account_cash_substitution_notes(
         print(with_prefix(message), flush=True)
 
 
+def _format_symbol_with_suffix(symbol, *, suffix=".US") -> str:
+    normalized = str(symbol or "").strip().upper()
+    if not normalized:
+        return normalized
+    if "." in normalized:
+        return normalized
+    normalized_suffix = str(suffix or "").strip().upper()
+    return f"{normalized}{normalized_suffix}" if normalized_suffix else normalized
+
+
+def format_small_account_whole_share_bootstrap_notes(
+    symbols,
+    *,
+    translator,
+    symbol_suffix=".US",
+) -> tuple[str, ...]:
+    normalized_symbols = tuple(
+        dict.fromkeys(
+            _format_symbol_with_suffix(symbol, suffix=symbol_suffix)
+            for symbol in tuple(symbols or ())
+            if str(symbol or "").strip()
+        )
+    )
+    if not normalized_symbols:
+        return ()
+    try:
+        message = translator(
+            "buy_lifted_small_account_whole_share",
+            symbols=", ".join(normalized_symbols),
+        )
+    except Exception:
+        message = ""
+    if not message or message == "buy_lifted_small_account_whole_share":
+        message = (
+            f"ℹ️ [买入说明] {', '.join(normalized_symbols)} 目标金额接近 1 股；"
+            "小账户整数股兼容，本轮允许按 1 股下单"
+        )
+    return (message,)
+
+
+def record_small_account_whole_share_bootstrap_notes(
+    note_logs,
+    *,
+    allocation,
+    translator,
+    with_prefix,
+    seen_keys,
+    symbol_suffix=".US",
+):
+    for message in format_small_account_whole_share_bootstrap_notes(
+        tuple(allocation.get("small_account_whole_share_bootstrap_symbols") or ()),
+        translator=translator,
+        symbol_suffix=symbol_suffix,
+    ):
+        note_key = f"small_account_bootstrap:{message}"
+        if note_key in seen_keys or message in seen_keys:
+            continue
+        seen_keys.add(note_key)
+        seen_keys.add(message)
+        note_logs.append(message)
+        print(with_prefix(message), flush=True)
+
+
 def _floor_whole_share_quantity(quantity):
     return normalize_order_quantity(floor_to_quantity_step(quantity, 1.0))
 
@@ -494,6 +647,8 @@ def _apply_small_account_whole_share_compatibility(
     market_data_port,
     notify_issue,
     symbol_suffix=".US",
+    limit_buy_premium=1.005,
+    limit_buy_premium_by_symbol=None,
 ) -> tuple[dict, dict]:
     target_values = dict(allocation.get("targets") or {})
     candidate_symbols = tuple(
@@ -522,6 +677,7 @@ def _apply_small_account_whole_share_compatibility(
         if price > 0.0:
             quote_prices[symbol] = price
     retained_symbols = []
+    bootstrap_symbols = []
     portfolio = dict((plan or {}).get("portfolio") or {})
     quantities = {
         str(symbol or "").strip().upper(): float(quantity or 0.0)
@@ -532,13 +688,33 @@ def _apply_small_account_whole_share_compatibility(
         for symbol, value in target_values.items()
     }
     for symbol in candidate_symbols:
-        if symbol not in SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS:
-            continue
         target_value = max(0.0, float(compatibility_targets.get(symbol, 0.0) or 0.0))
         price = max(0.0, float(quote_prices.get(symbol, 0.0) or 0.0))
+        limit_price = (
+            _limit_buy_price(symbol, price, limit_buy_premium, limit_buy_premium_by_symbol)
+            if price > 0.0
+            else 0.0
+        )
+        if not _should_retain_existing_whole_share(symbol, target_value=target_value, price=price):
+            if (
+                quantities.get(symbol, 0.0) <= 0.0
+                and 0.0 < target_value < limit_price
+                and _should_bootstrap_whole_share_buy(symbol, target_value=target_value, limit_price=limit_price)
+            ):
+                compatibility_targets[symbol] = limit_price
+                bootstrap_symbols.append(symbol)
+            continue
         if price > 0.0 and 0.0 < target_value < price and quantities.get(symbol, 0.0) >= 1.0:
             compatibility_targets[symbol] = price
             retained_symbols.append(symbol)
+            continue
+        if (
+            quantities.get(symbol, 0.0) <= 0.0
+            and 0.0 < target_value < limit_price
+            and _should_bootstrap_whole_share_buy(symbol, target_value=target_value, limit_price=limit_price)
+        ):
+            compatibility_targets[symbol] = limit_price
+            bootstrap_symbols.append(symbol)
     safe_haven_symbols = _safe_haven_cash_symbols(
         portfolio=portfolio,
         allocation=allocation,
@@ -577,10 +753,14 @@ def _apply_small_account_whole_share_compatibility(
         adjusted_allocation["small_account_existing_whole_share_retained_symbols"] = tuple(
             dict.fromkeys(retained_symbols)
         )
+    if bootstrap_symbols:
+        adjusted_allocation["small_account_whole_share_bootstrap_symbols"] = tuple(
+            dict.fromkeys(bootstrap_symbols)
+        )
     if cash_substitution_notes:
         adjusted_allocation["small_account_whole_share_cash_notes"] = cash_substitution_notes
     adjusted_plan = dict(plan or {})
-    if substituted or safe_haven_substituted or retained_symbols:
+    if substituted or safe_haven_substituted or retained_symbols or bootstrap_symbols:
         adjusted_plan["allocation"] = adjusted_allocation
     return adjusted_plan, adjusted_allocation
 
@@ -654,6 +834,7 @@ def execute_rebalance_cycle(
     with_prefix,
     limit_sell_discount,
     limit_buy_premium,
+    limit_buy_premium_by_symbol=None,
     dry_run_only=False,
     symbol_suffix=".US",
     post_sell_refresh_attempts=1,
@@ -665,9 +846,11 @@ def execute_rebalance_cycle(
     logs: list[str] = []
     skip_logs: list[str] = []
     note_logs: list[str] = []
+    submitted_orders: list[dict] = []
     dry_run_orders: list[dict] = []
     quote_snapshots_by_symbol: dict[str, dict] = {}
     small_account_cash_note_keys: set[str] = set()
+    small_account_bootstrap_note_keys: set[str] = set()
     action_done = False
     sell_submitted = False
     threshold_value = float(execution["trade_threshold_value"])
@@ -688,11 +871,18 @@ def execute_rebalance_cycle(
     market_values = dict(portfolio["market_values"])
     quantities = dict(portfolio["quantities"])
     sellable_quantities = dict(portfolio["sellable_quantities"])
+    allocation_drift_base_market_values = dict(market_values)
+    allocation_drift_base_quantities = dict(quantities)
+    allocation_drift_base_cash = float(portfolio.get("liquid_cash", 0.0) or 0.0)
     plan, allocation = _apply_safe_haven_cash_substitution(
         plan=plan,
         portfolio=portfolio,
         allocation=allocation,
         threshold_usd=safe_haven_cash_substitute_threshold_usd,
+    )
+    small_account_reference_target_values = _small_account_drift_reference_targets(
+        allocation,
+        portfolio=portfolio,
     )
     cash_sweep_symbol = str(portfolio.get("cash_sweep_symbol") or "").strip().upper()
     plan, allocation = _apply_small_account_whole_share_compatibility(
@@ -702,6 +892,8 @@ def execute_rebalance_cycle(
         market_data_port=market_data_port,
         notify_issue=notify_issue,
         symbol_suffix=symbol_suffix,
+        limit_buy_premium=limit_buy_premium,
+        limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
     )
     record_small_account_cash_substitution_notes(
         note_logs,
@@ -709,6 +901,14 @@ def execute_rebalance_cycle(
         translator=translator,
         with_prefix=with_prefix,
         seen_keys=small_account_cash_note_keys,
+        symbol_suffix=symbol_suffix,
+    )
+    record_small_account_whole_share_bootstrap_notes(
+        note_logs,
+        allocation=allocation,
+        translator=translator,
+        with_prefix=with_prefix,
+        seen_keys=small_account_bootstrap_note_keys,
         symbol_suffix=symbol_suffix,
     )
     target_values = dict(allocation["targets"])
@@ -773,6 +973,20 @@ def execute_rebalance_cycle(
         log_with_order_id = append_order_id_suffix(log_message, report.broker_order_id)
         print(with_prefix(f"OK {log_with_order_id}"), flush=True)
         logs.append(log_with_order_id)
+        order_payload = {
+            "symbol": str(symbol or "").strip().upper(),
+            "side": str(side or "").strip().lower(),
+            "quantity": float(order_intent.quantity or 0.0),
+            "order_type": str(order_type or "").strip().lower(),
+            "status": report.status,
+        }
+        if submitted_price is not None:
+            order_payload["price"] = round(float(submitted_price), 4)
+            if order_type == "limit":
+                order_payload["limit_price"] = round(float(submitted_price), 4)
+        if report.broker_order_id:
+            order_payload["broker_order_id"] = report.broker_order_id
+        submitted_orders.append(order_payload)
         if post_submit_order is not None:
             try:
                 post_submit_order(trade_context, order_intent, report)
@@ -928,7 +1142,7 @@ def execute_rebalance_cycle(
                 funding_needs.append(
                     (
                         target_values[buy_symbol] - market_values[buy_symbol],
-                        round(buy_price * limit_buy_premium, 2)
+                        _limit_buy_price(buy_symbol, buy_price, limit_buy_premium, limit_buy_premium_by_symbol)
                         if buy_symbol in limit_order_symbols
                         else round(buy_price, 2),
                     )
@@ -1005,6 +1219,10 @@ def execute_rebalance_cycle(
                 allocation=allocation,
                 threshold_usd=safe_haven_cash_substitute_threshold_usd,
             )
+            small_account_reference_target_values = _small_account_drift_reference_targets(
+                allocation,
+                portfolio=portfolio,
+            )
             plan, allocation = _apply_small_account_whole_share_compatibility(
                 plan=plan,
                 allocation=allocation,
@@ -1012,6 +1230,8 @@ def execute_rebalance_cycle(
                 market_data_port=market_data_port,
                 notify_issue=notify_issue,
                 symbol_suffix=symbol_suffix,
+                limit_buy_premium=limit_buy_premium,
+                limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
             )
             record_small_account_cash_substitution_notes(
                 note_logs,
@@ -1019,6 +1239,14 @@ def execute_rebalance_cycle(
                 translator=translator,
                 with_prefix=with_prefix,
                 seen_keys=small_account_cash_note_keys,
+                symbol_suffix=symbol_suffix,
+            )
+            record_small_account_whole_share_bootstrap_notes(
+                note_logs,
+                allocation=allocation,
+                translator=translator,
+                with_prefix=with_prefix,
+                seen_keys=small_account_bootstrap_note_keys,
                 symbol_suffix=symbol_suffix,
             )
             threshold_value = float(execution["trade_threshold_value"])
@@ -1073,7 +1301,11 @@ def execute_rebalance_cycle(
         if can_buy_value > price:
             is_limit_order = symbol in limit_order_symbols or symbol == cash_sweep_symbol
             limit_order_kind = "limit" if is_limit_order else "market"
-            limit_ref_price = round(price * limit_buy_premium, 2) if is_limit_order else round(price, 2)
+            limit_ref_price = (
+                _limit_buy_price(symbol, price, limit_buy_premium, limit_buy_premium_by_symbol)
+                if is_limit_order
+                else round(price, 2)
+            )
             limit_candidate = _estimate_buy_quantity_candidate(
                 trade_context,
                 market_symbol(symbol),
@@ -1194,7 +1426,12 @@ def execute_rebalance_cycle(
                 float(safe_haven_cash_substitute_threshold_usd or 0.0),
             )
             if substitution_threshold <= 0.0 or investable_cash >= substitution_threshold:
-                ref_price = round(cash_sweep_price * limit_buy_premium, 2)
+                ref_price = _limit_buy_price(
+                    cash_sweep_symbol,
+                    cash_sweep_price,
+                    limit_buy_premium,
+                    limit_buy_premium_by_symbol,
+                )
                 budget_quantity = floor_to_quantity_step(investable_cash / ref_price, 1.0)
                 cash_limit_quantity = estimate_cash_buy_quantity_safe(
                     trade_context,
@@ -1256,6 +1493,30 @@ def execute_rebalance_cycle(
                     investable=f"{investable_cash:.2f}",
                     budget_qty=format_quantity(budget_quantity),
                 )
+
+    reference_prices = {
+        str(payload.get("symbol") or "").strip().upper(): float(payload.get("last_price") or 0.0)
+        for payload in quote_snapshots_by_symbol.values()
+        if str(payload.get("symbol") or "").strip()
+    }
+    total_value = float(portfolio.get("total_strategy_equity") or portfolio.get("total_equity") or 0.0)
+    drift_notes = build_small_account_allocation_drift_notes(
+        target_values=small_account_reference_target_values,
+        current_values=allocation_drift_base_market_values,
+        current_quantities=allocation_drift_base_quantities,
+        prices=reference_prices,
+        submitted_orders=tuple(submitted_orders) + tuple(dry_run_orders),
+        total_value=total_value,
+        cash_value=allocation_drift_base_cash,
+        symbol_suffix=symbol_suffix,
+    )
+    note_logs.extend(
+        format_small_account_allocation_drift_notes(
+            drift_notes,
+            translator=translator,
+            symbol_suffix=symbol_suffix,
+        )
+    )
 
     return ExecutionCycleResult(
         plan=dict(plan or {}),

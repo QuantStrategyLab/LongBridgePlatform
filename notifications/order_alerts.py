@@ -33,6 +33,10 @@ def is_terminal_error_status(status):
     return any(keyword in status for keyword in ["Rejected", "Canceled", "Expired"])
 
 
+def is_unconfirmed_status(status):
+    return str(status or "") == "StatusCheckTimeout"
+
+
 def build_order_lifecycle_event(
     symbol,
     side_text,
@@ -94,6 +98,14 @@ def render_order_lifecycle_message(event: OrderLifecycleEvent, *, translator) ->
             order_id=event.order_id,
             reason=event.reason or "—",
         )
+    if is_unconfirmed_status(event.status):
+        return translator(
+            "order_status_unconfirmed",
+            symbol=root_symbol,
+            side=localized_side,
+            qty=event.quantity,
+            order_id=event.order_id,
+        )
     return translator(
         "order_filled",
         symbol=root_symbol,
@@ -150,6 +162,7 @@ def monitor_submitted_order_status(
         return
 
     try:
+        published_any_status = False
         for _ in range(order_poll_max_attempts):
             sleeper(order_poll_interval_sec)
             order_status = fetch_order_status(trade_context, order_id)
@@ -177,10 +190,22 @@ def monitor_submitted_order_status(
 
             if is_partial_filled_status(status):
                 publish_order_event(event)
+                published_any_status = True
 
             if is_terminal_error_status(status):
                 publish_order_event(event)
                 return
+        if not published_any_status:
+            publish_order_event(
+                build_order_lifecycle_event(
+                    symbol,
+                    side_text,
+                    quantity,
+                    order_id,
+                    "StatusCheckTimeout",
+                    reason="poll_timeout",
+                )
+            )
     except Exception:
         notify_issue(
             "Order status poll failed",

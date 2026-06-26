@@ -209,11 +209,13 @@ jobs:
             echo "Cloud Scheduler location: ${scheduler_location}"
           fi
 
-          echo "url=${service_url}" >> "$GITHUB_OUTPUT"
-          echo "path=${raw_path}" >> "$GITHUB_OUTPUT"
-          echo "invoke_method=${invoke_method}" >> "$GITHUB_OUTPUT"
-          echo "scheduler_job=${scheduler_job}" >> "$GITHUB_OUTPUT"
-          echo "scheduler_location=${scheduler_location}" >> "$GITHUB_OUTPUT"
+          {
+            echo "url=${service_url}"
+            echo "path=${raw_path}"
+            echo "invoke_method=${invoke_method}"
+            echo "scheduler_job=${scheduler_job}"
+            echo "scheduler_location=${scheduler_location}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Authenticate for service invocation
         if: steps.service.outputs.invoke_method == 'direct'
