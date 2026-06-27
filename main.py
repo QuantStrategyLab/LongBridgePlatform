@@ -19,8 +19,10 @@ from application.runtime_composer import build_runtime_composer
 from application.rebalance_service import run_strategy as run_rebalance_cycle
 from application.runtime_strategy_adapters import build_runtime_strategy_adapters
 from application.longbridge_execution import submit_order
+from runtime_execution_policy import fractional_buy_execution_enabled, FRACTIONAL_BUY_QUANTITY_STEP
 from application.longbridge_portfolio import fetch_strategy_account_state
 from entrypoints.cloud_run import is_market_open_now
+from runtime_execution_policy import dca_execution_unsupported_reason
 from runtime_config_support import load_platform_runtime_settings
 from notifications.telegram import build_signal_text, build_strategy_display_name, build_translator
 from quant_platform_kit.common.runtime_reports import (
@@ -109,6 +111,27 @@ ORDER_POLL_MAX_ATTEMPTS = 8
 TOKEN_REFRESH_THRESHOLD_DAYS = 30
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
 DEFAULT_MIN_ORDER_NOTIONAL_USD = 100.0
+
+_FRACTIONAL_BUY_EXECUTION = fractional_buy_execution_enabled(STRATEGY_PROFILE)
+
+
+def _profile_submit_order(t_ctx, symbol, **kwargs):
+    return submit_order(
+        t_ctx,
+        symbol,
+        allow_fractional_shares=_FRACTIONAL_BUY_EXECUTION,
+        quantity_step=FRACTIONAL_BUY_QUANTITY_STEP if _FRACTIONAL_BUY_EXECUTION else 1.0,
+        **kwargs,
+    )
+
+
+def _profile_estimate_max_purchase_quantity(t_ctx, symbol, **kwargs):
+    return estimate_max_purchase_quantity(
+        t_ctx,
+        symbol,
+        fractional_shares=_FRACTIONAL_BUY_EXECUTION,
+        **kwargs,
+    )
 
 SEPARATOR = "━━━━━━━━━━━━━━━━━━"
 
@@ -254,7 +277,7 @@ BROKER_ADAPTERS = build_runtime_broker_adapters(
         ),
         warning_log_fn=log_runtime_warning,
     ),
-    submit_order_fn=submit_order,
+    submit_order_fn=_profile_submit_order,
     symbol_suffix=SYMBOL_SUFFIX,
     currency=TRADING_CURRENCY,
     cash_only_execution=CASH_ONLY_EXECUTION,
@@ -328,7 +351,7 @@ def build_composer(*, dry_run_only_override: bool | None = None):
         dry_run_only_override=dry_run_only_override,
         broker_adapters=BROKER_ADAPTERS,
         strategy_adapters=STRATEGY_ADAPTERS,
-        estimate_max_purchase_quantity_fn=estimate_max_purchase_quantity,
+        estimate_max_purchase_quantity_fn=_profile_estimate_max_purchase_quantity,
         fetch_order_status_fn=fetch_order_status,
         fetch_token_from_secret_fn=fetch_token_from_secret,
         refresh_token_if_needed_fn=refresh_token_if_needed,
@@ -542,6 +565,30 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 ),
                 flush=True,
             )
+        unsupported_reason = dca_execution_unsupported_reason(STRATEGY_PROFILE)
+        if unsupported_reason is not None:
+            reporting_adapters.log_event(
+                log_context,
+                "strategy_execution_unsupported",
+                message="Strategy requires fractional-share execution; skip",
+                skip_reason=unsupported_reason,
+                strategy_profile=STRATEGY_PROFILE,
+                market=MARKET,
+                market_calendar=MARKET_CALENDAR,
+                market_timezone=MARKET_TIMEZONE,
+            )
+            finalize_runtime_report(
+                report,
+                status="skipped",
+                diagnostics={"skip_reason": unsupported_reason},
+            )
+            print(
+                composer.with_prefix(
+                    f"Strategy {STRATEGY_PROFILE} requires fractional-share execution; skip."
+                ),
+                flush=True,
+            )
+            return True
         if not validation_only:
             publish_strategy_plugin_alerts(strategy_plugin_signals, report=report)
         notification_delivery_events: list[dict] = []

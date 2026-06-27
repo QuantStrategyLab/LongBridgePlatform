@@ -338,6 +338,8 @@ def run_strategy(
             min_order_notional_usd=config.min_order_notional_usd,
             safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
             cash_only_execution=config.cash_only_execution,
+            fractional_buy_execution=config.fractional_buy_execution,
+            buy_quantity_step=config.buy_quantity_step,
         )
         if _should_record_execution_marker(result=execution_result, config=config):
             _record_execution_marker(
