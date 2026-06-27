@@ -261,6 +261,9 @@ class ExecutionCycleResult:
 
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
 SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD = 2000.0
+MIN_FRACTIONAL_BUY_NOTIONAL_USD = 1.0
+DEFAULT_BUY_QUANTITY_STEP = 1.0
+FRACTIONAL_BUY_QUANTITY_STEP = 0.0001
 SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS = frozenset({"TQQQ", "SOXL"})
 SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL = {
     "SOXX": 0.90,
@@ -578,6 +581,13 @@ def _normalize_trade_quantity(quantity):
     return _floor_whole_share_quantity(raw_quantity)
 
 
+def _normalize_buy_quantity(quantity, *, quantity_step: float):
+    raw_quantity = max(0.0, float(quantity or 0.0))
+    if raw_quantity <= 0.0:
+        return 0
+    return normalize_order_quantity(floor_to_quantity_step(raw_quantity, quantity_step))
+
+
 def _market_symbol(symbol, *, symbol_suffix=".US"):
     normalized = str(symbol or "").strip().upper()
     if not normalized:
@@ -773,6 +783,7 @@ def estimate_cash_buy_quantity_safe(
     *,
     estimate_max_purchase_quantity,
     notify_issue,
+    estimate_kwargs=None,
 ):
     try:
         return estimate_max_purchase_quantity(
@@ -780,6 +791,7 @@ def estimate_cash_buy_quantity_safe(
             symbol,
             order_kind=order_kind,
             ref_price=ref_price,
+            **dict(estimate_kwargs or {}),
         )
     except Exception:
         notify_issue(
@@ -799,8 +811,10 @@ def _estimate_buy_quantity_candidate(
     estimate_max_purchase_quantity,
     notify_issue,
     dry_run_only=False,
+    quantity_step=DEFAULT_BUY_QUANTITY_STEP,
+    estimate_kwargs=None,
 ):
-    budget_quantity = floor_to_quantity_step(can_buy_value / ref_price, 1.0)
+    budget_quantity = floor_to_quantity_step(can_buy_value / ref_price, quantity_step)
     cash_limit_quantity = estimate_cash_buy_quantity_safe(
         trade_context,
         symbol,
@@ -808,11 +822,13 @@ def _estimate_buy_quantity_candidate(
         ref_price,
         estimate_max_purchase_quantity=estimate_max_purchase_quantity,
         notify_issue=notify_issue,
+        estimate_kwargs=estimate_kwargs,
     )
     if cash_limit_quantity is None:
         return None
-    candidate_quantity = _normalize_trade_quantity(
+    candidate_quantity = _normalize_buy_quantity(
         min(budget_quantity, float(cash_limit_quantity)),
+        quantity_step=quantity_step,
     )
     return candidate_quantity, budget_quantity, float(cash_limit_quantity)
 
@@ -843,6 +859,8 @@ def execute_rebalance_cycle(
     min_order_notional_usd=0.0,
     safe_haven_cash_substitute_threshold_usd=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
     cash_only_execution=True,
+    fractional_buy_execution: bool = False,
+    buy_quantity_step: float = DEFAULT_BUY_QUANTITY_STEP,
 ) -> ExecutionCycleResult:
     logs: list[str] = []
     skip_logs: list[str] = []
@@ -887,16 +905,21 @@ def execute_rebalance_cycle(
         portfolio=portfolio,
     )
     cash_sweep_symbol = str(portfolio.get("cash_sweep_symbol") or "").strip().upper()
-    plan, allocation = _apply_small_account_whole_share_compatibility(
-        plan=plan,
-        allocation=allocation,
-        strategy_assets=strategy_assets,
-        market_data_port=market_data_port,
-        notify_issue=notify_issue,
-        symbol_suffix=symbol_suffix,
-        limit_buy_premium=limit_buy_premium,
-        limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+    estimate_kwargs = {"fractional_shares": True} if fractional_buy_execution else {}
+    effective_buy_quantity_step = (
+        float(buy_quantity_step) if fractional_buy_execution else DEFAULT_BUY_QUANTITY_STEP
     )
+    if not fractional_buy_execution:
+        plan, allocation = _apply_small_account_whole_share_compatibility(
+            plan=plan,
+            allocation=allocation,
+            strategy_assets=strategy_assets,
+            market_data_port=market_data_port,
+            notify_issue=notify_issue,
+            symbol_suffix=symbol_suffix,
+            limit_buy_premium=limit_buy_premium,
+            limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+        )
     record_small_account_cash_substitution_notes(
         note_logs,
         allocation=allocation,
@@ -918,7 +941,10 @@ def execute_rebalance_cycle(
     cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
     investable_cash = float(execution["investable_cash"])
     min_order_notional = max(0.0, float(min_order_notional_usd or 0.0))
-    current_min_trade = max(float(execution["current_min_trade"]), min_order_notional)
+    if fractional_buy_execution:
+        current_min_trade = max(float(execution["current_min_trade"]), MIN_FRACTIONAL_BUY_NOTIONAL_USD)
+    else:
+        current_min_trade = max(float(execution["current_min_trade"]), min_order_notional)
     dry_run_sale_proceeds = 0.0
     cash_sweep_sold_this_cycle = False
 
@@ -932,10 +958,17 @@ def execute_rebalance_cycle(
         return f"{log_message} {suffix}"
 
     def submit_order_via_port(symbol, order_type, side, quantity, log_message, *, submitted_price=None):
+        if fractional_buy_execution and side == "buy":
+            normalized_quantity = _normalize_buy_quantity(
+                quantity,
+                quantity_step=effective_buy_quantity_step,
+            )
+        else:
+            normalized_quantity = _floor_whole_share_quantity(quantity)
         order_intent = OrderIntent(
             symbol=symbol,
             side=side,
-            quantity=_floor_whole_share_quantity(quantity),
+            quantity=normalized_quantity,
             order_type=order_type,
             limit_price=float(submitted_price) if submitted_price is not None else None,
         )
@@ -1240,16 +1273,17 @@ def execute_rebalance_cycle(
                 allocation,
                 portfolio=portfolio,
             )
-            plan, allocation = _apply_small_account_whole_share_compatibility(
-                plan=plan,
-                allocation=allocation,
-                strategy_assets=tuple(allocation["strategy_symbols"]),
-                market_data_port=market_data_port,
-                notify_issue=notify_issue,
-                symbol_suffix=symbol_suffix,
-                limit_buy_premium=limit_buy_premium,
-                limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
-            )
+            if not fractional_buy_execution:
+                plan, allocation = _apply_small_account_whole_share_compatibility(
+                    plan=plan,
+                    allocation=allocation,
+                    strategy_assets=tuple(allocation["strategy_symbols"]),
+                    market_data_port=market_data_port,
+                    notify_issue=notify_issue,
+                    symbol_suffix=symbol_suffix,
+                    limit_buy_premium=limit_buy_premium,
+                    limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+                )
             record_small_account_cash_substitution_notes(
                 note_logs,
                 allocation=allocation,
@@ -1278,7 +1312,10 @@ def execute_rebalance_cycle(
             available_cash = float(portfolio["liquid_cash"])
             cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
             investable_cash = float(execution["investable_cash"])
-            current_min_trade = max(float(execution["current_min_trade"]), min_order_notional)
+            if fractional_buy_execution:
+                current_min_trade = max(float(execution["current_min_trade"]), MIN_FRACTIONAL_BUY_NOTIONAL_USD)
+            else:
+                current_min_trade = max(float(execution["current_min_trade"]), min_order_notional)
 
     if (
         available_cash <= 0.0
@@ -1313,7 +1350,13 @@ def execute_rebalance_cycle(
                 notify_issue=notify_issue,
                 quote_recorder=record_quote_snapshot,
             )
-            if price is None or can_buy_value <= price:
+            if price is None:
+                continue
+            if fractional_buy_execution:
+                if can_buy_value >= MIN_FRACTIONAL_BUY_NOTIONAL_USD:
+                    estimated_buy_cost += can_buy_value
+                continue
+            if can_buy_value <= price:
                 continue
             limit_price = _limit_buy_price(
                 symbol, price, limit_buy_premium, limit_buy_premium_by_symbol
@@ -1353,8 +1396,17 @@ def execute_rebalance_cycle(
         if price is None:
             continue
         can_buy_value = min(diff, investable_cash)
-        if can_buy_value > price:
-            is_limit_order = symbol in limit_order_symbols or symbol == cash_sweep_symbol
+        can_afford_buy = (
+            can_buy_value >= MIN_FRACTIONAL_BUY_NOTIONAL_USD
+            if fractional_buy_execution
+            else can_buy_value > price
+        )
+        if can_afford_buy:
+            is_limit_order = (
+                False
+                if fractional_buy_execution
+                else (symbol in limit_order_symbols or symbol == cash_sweep_symbol)
+            )
             limit_order_kind = "limit" if is_limit_order else "market"
             limit_ref_price = (
                 _limit_buy_price(symbol, price, limit_buy_premium, limit_buy_premium_by_symbol)
@@ -1370,11 +1422,16 @@ def execute_rebalance_cycle(
                 estimate_max_purchase_quantity=estimate_max_purchase_quantity,
                 notify_issue=notify_issue,
                 dry_run_only=dry_run_only,
+                quantity_step=effective_buy_quantity_step,
+                estimate_kwargs=estimate_kwargs,
             )
             if limit_candidate is None:
                 continue
             limit_candidate_quantity, limit_budget_quantity, limit_cash_limit_quantity = limit_candidate
-            limit_quantity = _normalize_trade_quantity(limit_candidate_quantity)
+            limit_quantity = _normalize_buy_quantity(
+                limit_candidate_quantity,
+                quantity_step=effective_buy_quantity_step,
+            )
             order_kind = limit_order_kind
             ref_price = limit_ref_price
             quantity = limit_quantity

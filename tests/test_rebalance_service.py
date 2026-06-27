@@ -265,6 +265,79 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertFalse(result.action_done)
         self.assertEqual(submitted_orders, [])
 
+    def test_fractional_buy_execution_submits_sub_share_market_buy(self):
+        submitted_orders = []
+        plan = _build_plan(
+            strategy_profile="nasdaq_sp500_smart_dca",
+            strategy_symbols=("QQQM",),
+            risk_symbols=("QQQM",),
+            targets={"QQQM": 50.0},
+            market_values={"QQQM": 0.0},
+            sellable_quantities={"QQQM": 0},
+            quantities={"QQQM": 0},
+            current_min_trade=1.0,
+            trade_threshold_value=1.0,
+            investable_cash=50.0,
+            market_status="DCA buy",
+            deploy_ratio_text="100.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="Smart DCA",
+            available_cash=50.0,
+            total_strategy_equity=50.0,
+            portfolio_rows=(("QQQM",),),
+        )
+
+        result = execute_rebalance_cycle(
+            trade_context=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_replanned_state=lambda: (
+                plan,
+                plan["portfolio"],
+                plan["execution"],
+                plan["allocation"],
+            ),
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-06-12",
+                    last_price=500.0,
+                )
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 0.2,
+            execution_port=CallableExecutionPort(
+                lambda order_intent: (
+                    submitted_orders.append(order_intent),
+                    ExecutionReport(
+                        symbol=order_intent.symbol,
+                        side=order_intent.side,
+                        quantity=order_intent.quantity,
+                        status="accepted",
+                        broker_order_id=f"order-{len(submitted_orders)}",
+                    ),
+                )[-1]
+            ),
+            notify_issue=lambda _title, _detail: None,
+            translator=build_translator("zh"),
+            with_prefix=lambda message: message,
+            limit_sell_discount=1.0,
+            limit_buy_premium=1.0,
+            min_order_notional_usd=100.0,
+            fractional_buy_execution=True,
+            buy_quantity_step=0.0001,
+        )
+
+        self.assertTrue(result.action_done)
+        self.assertEqual(len(submitted_orders), 1)
+        order = submitted_orders[0]
+        self.assertEqual(order.side, "buy")
+        self.assertEqual(order.symbol, "QQQM.US")
+        self.assertEqual(order.order_type, "market")
+        self.assertAlmostEqual(float(order.quantity), 0.1, places=4)
+
     def test_min_order_notional_does_not_block_zero_target_risk_sell(self):
         submitted_orders = []
         plan = _build_plan(

@@ -44,6 +44,8 @@ def submit_order(
     side: str,
     quantity: float,
     submitted_price: float | None = None,
+    allow_fractional_shares: bool = False,
+    quantity_step: float = 1.0,
 ) -> ExecutionReport:
     last_error: Exception | None = None
     for attempt in range(2):
@@ -55,6 +57,8 @@ def submit_order(
                 side=side,
                 quantity=quantity,
                 submitted_price=submitted_price,
+                allow_fractional_shares=allow_fractional_shares,
+                quantity_step=quantity_step,
             )
         except Exception as exc:
             last_error = exc

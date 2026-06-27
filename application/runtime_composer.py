@@ -19,6 +19,7 @@ from quant_platform_kit.common.runtime_assembly import build_runtime_assembly
 from quant_platform_kit.common.runtime_target import build_runtime_context_fields
 from quant_platform_kit.common.runtime_target import RuntimeTarget
 from notifications.telegram import build_prefixer, build_sender
+from runtime_execution_policy import FRACTIONAL_BUY_QUANTITY_STEP, fractional_buy_execution_enabled
 
 
 @dataclass(frozen=True)
@@ -218,6 +219,7 @@ class LongBridgeRuntimeComposer:
             lambda _error: (),
         )
         plugin_error_lines = tuple(build_plugin_error_lines(strategy_plugin_error))
+        fractional_buy_execution = fractional_buy_execution_enabled(self.strategy_profile)
         return LongBridgeRebalanceConfig(
             limit_sell_discount=self.limit_sell_discount,
             limit_buy_premium=self.limit_buy_premium,
@@ -234,6 +236,8 @@ class LongBridgeRuntimeComposer:
             min_order_notional_usd=self.min_order_notional_usd,
             safe_haven_cash_substitute_threshold_usd=self.safe_haven_cash_substitute_threshold_usd,
             cash_only_execution=bool(cash_only_execution),
+            fractional_buy_execution=fractional_buy_execution,
+            buy_quantity_step=FRACTIONAL_BUY_QUANTITY_STEP if fractional_buy_execution else 1.0,
             sleeper=self.sleeper,
             extra_notification_lines=(market_scope_line, *plugin_lines, *plugin_error_lines),
             notification_title_key=notification_title_key,
