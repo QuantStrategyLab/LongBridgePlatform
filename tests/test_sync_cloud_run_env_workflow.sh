@@ -209,6 +209,8 @@ grep -Fq 'gcloud_args+=(--remove-secrets "$(IFS=,; echo "${remove_secret_vars[*]
 grep -Fq 'gcloud_args+=(--update-secrets "$(IFS=,; echo "${secret_pairs[*]}")")' "$workflow_file"
 grep -Fq -- '--update-env-vars "^|^$(join_by_delimiter "|" "${env_pairs[@]}")"' "$workflow_file"
 grep -Fq 'MONITOR_DISPATCH_TARGETS_JSON=${monitor_targets_json}' "$workflow_file"
+grep -Fq 'region_by_service' "$workflow_file"
+grep -Fq 'service_url_by_service' "$workflow_file"
 grep -Fq 'Sync Cloud Scheduler schedule' "$workflow_file"
 grep -Fq 'scheduler_location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}"' "$workflow_file"
 grep -Fq 'scheduler_job_candidates=("${CLOUD_RUN_SERVICE}-scheduler")' "$workflow_file"
