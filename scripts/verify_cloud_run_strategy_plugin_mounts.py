@@ -230,6 +230,32 @@ def _verify_target(
     return checked
 
 
+def _region_for_service(service: str) -> str:
+    default_region = (os.environ.get("CLOUD_RUN_REGION") or "").strip()
+    raw_targets = (os.environ.get("CLOUD_RUN_SERVICE_TARGETS_JSON") or "").strip()
+    if not raw_targets:
+        return default_region
+    payload = json.loads(raw_targets)
+    for item in payload.get("targets") or []:
+        if not isinstance(item, Mapping):
+            continue
+        service_name = str(item.get("service_name") or item.get("service") or "").strip()
+        if service_name != service:
+            continue
+        region = str(item.get("region") or "").strip()
+        if region:
+            return region
+    return default_region
+
+
+def _filter_targets_for_current_service(targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    current_service = (os.environ.get("CLOUD_RUN_SERVICE") or "").strip()
+    if not current_service:
+        return targets
+    filtered = [target for target in targets if target.get("service") == current_service]
+    return filtered or targets
+
+
 def main() -> int:
     region = (os.environ.get("CLOUD_RUN_REGION") or "").strip()
     if not region:
@@ -241,10 +267,11 @@ def main() -> int:
     allowed_prefixes = _allowed_signal_prefixes()
 
     try:
-        targets = _load_expected_targets(mount_env_names)
+        targets = _filter_targets_for_current_service(_load_expected_targets(mount_env_names))
         for target in targets:
             service = target["service"]
-            service_json = _describe_service(service, region, project or None)
+            service_region = _region_for_service(service) or region
+            service_json = _describe_service(service, service_region, project or None)
             actual_env = _container_env(service_json)
             checked = _verify_target(
                 service=service,
