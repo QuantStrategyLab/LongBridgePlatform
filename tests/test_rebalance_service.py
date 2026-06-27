@@ -71,7 +71,7 @@ def _build_plan(
         dashboard_lines = [
             "📌 策略账户概览",
             f"  - 总资产（策略标的+现金）: ${float(total_strategy_equity):,.2f}",
-            f"  - 购买力: ${float(available_cash):.2f} | 可投资现金: ${float(investable_cash):.2f}",
+            f"  - 可用现金: ${float(available_cash):.2f} | 可投资现金: ${float(investable_cash):.2f}",
         ]
         nonzero_cash = {
             currency: amount
@@ -1899,7 +1899,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
         self.assertEqual(len(sent_messages), 1)
         self.assertNotIn("账户现金", sent_messages[0])
-        self.assertIn("购买力: $3065.61 | 可投资现金: $0.00", sent_messages[0])
+        self.assertIn("可用现金: $3065.61 | 可投资现金: $0.00", sent_messages[0])
         self.assertIn("BOXX: $24,880.00 / 214股", sent_messages[0])
         self.assertIn("✅ 无需调仓", sent_messages[0])
         self.assertNotIn("本轮没有可执行订单", sent_messages[0])
@@ -2585,7 +2585,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertNotIn("💵 资金\n  - 账户现金:", sent_messages[0])
         self.assertIn("📌 策略账户概览", sent_messages[0])
         self.assertIn("总资产（策略标的+现金）: $60,000.00", sent_messages[0])
-        self.assertIn("购买力: $101.95 | 可投资现金: $101.95", sent_messages[0])
+        self.assertIn("可用现金: $101.95 | 可投资现金: $101.95", sent_messages[0])
         self.assertIn("SOXX: $0.00 / 0股", sent_messages[0])
 
     def test_hybrid_heartbeat_hides_empty_semiconductor_fields_and_shows_benchmark_line(self):

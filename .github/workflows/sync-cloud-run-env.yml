@@ -1,8 +1,10 @@
 name: Deploy Cloud Run
 
 on:
-  push:
-    branches: [ main ]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       target:
@@ -63,6 +65,13 @@ concurrency:
 jobs:
   sync:
     name: Deploy / Sync ${{ matrix.target.label }} Cloud Run
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -79,6 +88,7 @@ jobs:
             environment: longbridge-sg
             default_account_region: SG
     permissions:
+      actions: read
       contents: read
       id-token: write
     environment: ${{ matrix.target.environment }}
@@ -257,6 +267,8 @@ jobs:
       - name: Checkout repository
         if: steps.config.outputs.enabled == 'true'
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Apply HK verify-only dispatch defaults
         if: steps.config.outputs.enabled == 'true' && github.event_name == 'workflow_dispatch' && inputs.target == 'hk-verify'
