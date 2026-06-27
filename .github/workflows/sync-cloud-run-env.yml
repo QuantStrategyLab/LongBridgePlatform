@@ -946,6 +946,7 @@ jobs:
       - name: Verify strategy plugin mounts
         if: steps.config.outputs.env_sync_enabled == 'true'
         env:
+          SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
           STRATEGY_PLUGIN_MOUNT_ENV_NAMES: LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON
         run: |
           set -euo pipefail
