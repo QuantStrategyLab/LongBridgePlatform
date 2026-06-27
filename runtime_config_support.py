@@ -8,6 +8,7 @@ from typing import Callable
 
 from quant_platform_kit.common.runtime_config import (
     resolve_bool_value,
+    resolve_dry_run_env,
     resolve_optional_float_env,
     resolve_strategy_runtime_path_settings,
 )
@@ -285,7 +286,7 @@ def load_platform_runtime_settings(
         notify_lang=os.getenv("NOTIFY_LANG", "en"),
         tg_token=os.getenv("TELEGRAM_TOKEN"),
         tg_chat_id=os.getenv("GLOBAL_TELEGRAM_CHAT_ID"),
-        dry_run_only=resolve_bool_value(os.getenv("LONGBRIDGE_DRY_RUN_ONLY")),
+        dry_run_only=resolve_dry_run_env(os.environ, "LONGBRIDGE_DRY_RUN_ONLY"),
         runtime_target_enabled=_runtime_target_enabled_env(),
         reserved_cash_floor_usd=_resolve_non_negative_float_env(
             "LONGBRIDGE_MIN_RESERVED_CASH_USD",

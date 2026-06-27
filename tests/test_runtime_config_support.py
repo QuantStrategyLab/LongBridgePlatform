@@ -137,7 +137,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.notify_lang, "en")
         self.assertIsNone(settings.tg_token)
         self.assertIsNone(settings.tg_chat_id)
-        self.assertFalse(settings.dry_run_only)
+        self.assertTrue(settings.dry_run_only)
         self.assertEqual(
             settings.safe_haven_cash_substitute_threshold_usd,
             DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
