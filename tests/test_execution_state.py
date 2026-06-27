@@ -8,8 +8,10 @@ if str(ROOT) not in sys.path:
 
 from application.execution_state import (  # noqa: E402
     ExecutionMarkerStore,
-    _report_matches_execution,
     resolve_execution_dedup_enabled,
+)
+from quant_platform_kit.common.execution_state import (  # noqa: E402
+    _report_matches_execution,
 )
 
 
