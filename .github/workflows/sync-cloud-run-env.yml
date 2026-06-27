@@ -864,6 +864,24 @@ jobs:
           plan = json.loads(os.environ["SYNC_PLAN_JSON"])
           project = os.environ.get("GCP_PROJECT_ID", "").strip()
           default_region = os.environ.get("CLOUD_RUN_REGION", "").strip()
+          configured_targets = json.loads(
+              os.environ.get("CLOUD_RUN_SERVICE_TARGETS_JSON") or "{}"
+          ).get("targets") or []
+          region_by_service: dict[str, str] = {}
+          service_url_by_service: dict[str, str] = {}
+          for item in configured_targets:
+              if not isinstance(item, dict):
+                  continue
+              service_name = str(item.get("service_name") or item.get("service") or "").strip()
+              if not service_name:
+                  continue
+              region = str(item.get("region") or "").strip()
+              if region:
+                  region_by_service[service_name] = region
+              service_url = str(item.get("service_url") or "").strip()
+              if service_url:
+                  service_url_by_service[service_name] = service_url
+
           output = []
           for target in plan.get("targets") or []:
               if not isinstance(target, dict):
@@ -871,22 +889,26 @@ jobs:
               env = target.get("env") or {}
               runtime_target = json.loads(env.get("RUNTIME_TARGET_JSON") or "{}")
               service_name = str(target.get("service_name") or "").strip()
-              region = default_region
-              if not service_name or not region:
+              if not service_name:
                   continue
-              service_url = subprocess.check_output(
-                  [
-                      "gcloud",
-                      "run",
-                      "services",
-                      "describe",
-                      service_name,
-                      f"--project={project}",
-                      f"--region={region}",
-                      "--format=value(status.url)",
-                  ],
-                  text=True,
-              ).strip()
+              service_url = service_url_by_service.get(service_name)
+              if not service_url:
+                  region = region_by_service.get(service_name) or default_region
+                  if not region:
+                      continue
+                  service_url = subprocess.check_output(
+                      [
+                          "gcloud",
+                          "run",
+                          "services",
+                          "describe",
+                          service_name,
+                          f"--project={project}",
+                          f"--region={region}",
+                          "--format=value(status.url)",
+                      ],
+                      text=True,
+                  ).strip()
               if not service_url:
                   continue
               output.append(
