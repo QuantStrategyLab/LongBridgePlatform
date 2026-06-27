@@ -6,6 +6,7 @@ from typing import Any
 
 from us_equity_strategies.cash_only_equity import (
     build_portfolio_inputs_from_snapshot,
+    resolve_weight_translation_equity,
 )
 from quant_platform_kit.strategy_contracts import (
     PositionTarget,
@@ -464,6 +465,7 @@ def _normalize_to_value_target_decision(
     *,
     portfolio_inputs,
     runtime_metadata: Mapping[str, Any] | None = None,
+    cash_only_execution: bool = True,
 ) -> tuple[StrategyDecision, ValueTargetExecutionAnnotations | None]:
     target_mode = resolve_decision_target_mode(decision)
     no_execute = "no_execute" in set(decision.risk_flags)
@@ -472,18 +474,30 @@ def _normalize_to_value_target_decision(
         return decision, None
 
     if target_mode == "weight" and not no_execute:
-        total_equity = float(portfolio_inputs.total_equity)
-        if total_equity <= 0.0:
+        total_equity, block_execution, deleverage_mode = resolve_weight_translation_equity(
+            portfolio_inputs,
+            cash_only_execution=cash_only_execution,
+        )
+        if block_execution:
             return _build_zero_equity_value_decision(
                 decision,
             ), _build_weight_translation_annotations(
                 decision,
-                total_equity=total_equity,
+                total_equity=float(portfolio_inputs.total_equity),
                 liquid_cash=float(portfolio_inputs.liquid_cash),
                 runtime_metadata=runtime_metadata,
             )
+        decision_for_translation = decision
+        if deleverage_mode:
+            decision_for_translation = replace(
+                decision,
+                diagnostics={
+                    **dict(decision.diagnostics),
+                    "cash_only_deleverage_mode": True,
+                },
+            )
         translated = translate_decision_to_target_mode(
-            decision,
+            decision_for_translation,
             target_mode="value",
             total_equity=total_equity,
         )
@@ -652,6 +666,7 @@ def map_strategy_decision_to_plan(
         decision,
         portfolio_inputs=portfolio_inputs,
         runtime_metadata=runtime_metadata,
+        cash_only_execution=cash_only_execution,
     )
     annotations = normalized_annotations
     if annotations is None:

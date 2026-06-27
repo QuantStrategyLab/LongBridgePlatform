@@ -8,6 +8,7 @@ from typing import Callable
 
 from quant_platform_kit.common.runtime_config import (
     resolve_bool_value,
+    resolve_cash_only_execution_env,
     resolve_dry_run_env,
     resolve_optional_float_env,
     resolve_strategy_runtime_path_settings,
@@ -305,7 +306,10 @@ def load_platform_runtime_settings(
             if safe_haven_cash_substitute_threshold_usd is not None
             else DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD
         ),
-        cash_only_execution=resolve_cash_only_execution_env(),
+        cash_only_execution=resolve_cash_only_execution_env(
+            os.environ,
+            platform_env_prefix="LONGBRIDGE",
+        ),
         debug_position_snapshot=resolve_bool_value(os.getenv("LONGBRIDGE_DEBUG_POSITION_SNAPSHOT")),
         income_threshold_usd=resolve_optional_float_env(os.environ, "INCOME_THRESHOLD_USD"),
         qqqi_income_ratio=_qqqi_income_ratio_env(),
@@ -472,11 +476,6 @@ def _optional_bool_env(name: str) -> bool | None:
 
 def _runtime_target_enabled_env() -> bool:
     value = _optional_bool_env("RUNTIME_TARGET_ENABLED")
-    return True if value is None else value
-
-
-def resolve_cash_only_execution_env(name: str = "CASH_ONLY_EXECUTION") -> bool:
-    value = _optional_bool_env(name)
     return True if value is None else value
 
 
