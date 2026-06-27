@@ -495,7 +495,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.income_layer_start_usd, 250000.0)
         self.assertEqual(settings.income_layer_max_ratio, 0.25)
 
-    def test_ibit_zscore_exit_overrides_are_loaded_from_env(self):
+    def test_ibit_smart_dca_profile_is_rejected_on_longbridge(self):
         with patch.dict(
             os.environ,
             {
@@ -509,14 +509,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             },
             clear=True,
         ):
-            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
-
-        self.assertTrue(settings.ibit_zscore_exit_enabled)
-        self.assertEqual(settings.ibit_zscore_exit_mode, "live")
-        self.assertEqual(settings.ibit_zscore_exit_parking_symbol, "BOXX")
-        self.assertEqual(settings.ibit_zscore_exit_risk_reduced_exposure, 0.5)
-        self.assertEqual(settings.ibit_zscore_exit_risk_off_exposure, 0.25)
-        self.assertTrue(settings.ibit_zscore_exit_allow_outside_execution_window)
+            with self.assertRaises(ValueError):
+                load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
     def test_tech_runtime_execution_window_override_rejects_research_only_profile(self):
         with patch.dict(
