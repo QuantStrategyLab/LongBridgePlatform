@@ -331,7 +331,22 @@ def _build_risk_control_lines(execution, *, translator):
     return []
 
 
-def _format_dashboard_text(text, *, translator=None) -> str:
+def _relabel_dashboard_buying_power(text: str, *, cash_only_execution: bool, translator) -> str:
+    value = str(text or "")
+    if cash_only_execution:
+        target = translator("buying_power")
+        for source in ("Buying power", "购买力"):
+            if source != target:
+                value = value.replace(source, target)
+        return value
+    target = translator("buying_power_margin")
+    for source in ("Available cash", "可用现金"):
+        if source != target:
+            value = value.replace(source, target)
+    return value
+
+
+def _format_dashboard_text(text, *, translator=None, cash_only_execution: bool = True) -> str:
     lines = []
     for raw_line in str(text or "").splitlines():
         line = raw_line.rstrip()
@@ -340,11 +355,23 @@ def _format_dashboard_text(text, *, translator=None) -> str:
         if translator is not None and _translator_uses_zh(translator):
             line = _localize_notification_text(line, translator=translator)
         lines.append(line)
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    if translator is not None:
+        result = _relabel_dashboard_buying_power(
+            result,
+            cash_only_execution=cash_only_execution,
+            translator=translator,
+        )
+    return result
 
 
 def _append_dashboard_block(lines, *, execution, separator, translator) -> None:
-    dashboard_text = _format_dashboard_text(execution.get("dashboard_text"), translator=translator)
+    cash_only_execution = bool(execution.get("cash_only_execution", True))
+    dashboard_text = _format_dashboard_text(
+        execution.get("dashboard_text"),
+        translator=translator,
+        cash_only_execution=cash_only_execution,
+    )
     if dashboard_text:
         lines.append(separator)
         lines.extend(dashboard_text.splitlines())

@@ -14,7 +14,7 @@ from notifications.telegram import (
     build_strategy_display_name,
     build_translator,
 )
-from notifications.renderers import render_heartbeat_notification
+from notifications.renderers import render_heartbeat_notification, render_rebalance_notification
 from strategy_registry import SUPPORTED_STRATEGY_PROFILES
 
 
@@ -387,6 +387,44 @@ class NotificationTests(unittest.TestCase):
         self.assertNotIn("benchmark_trend=up", rendered.compact_text)
         self.assertNotIn("target_stock=", rendered.compact_text)
         self.assertNotIn("partial_history_refresh", rendered.compact_text)
+
+    def test_dashboard_relabels_buying_power_for_cash_only_execution(self):
+        rendered = render_rebalance_notification(
+            execution={
+                "dashboard_text": "  - 购买力: $100.00 | 可投资现金: $50.00",
+                "cash_only_execution": True,
+                "signal_display": "hold",
+                "status_display": "hold",
+            },
+            logs=(),
+            skip_logs=(),
+            note_logs=(),
+            translator=build_translator("zh"),
+            separator="━━━━━━━━━━━━━━━━━━",
+            strategy_display_name="demo",
+            dry_run_only=False,
+        )
+        self.assertIn("可用现金: $100.00", rendered.compact_text)
+        self.assertNotIn("购买力: $100.00", rendered.compact_text)
+
+    def test_dashboard_keeps_margin_buying_power_label_when_cash_only_disabled(self):
+        rendered = render_rebalance_notification(
+            execution={
+                "dashboard_text": "  - Available cash: $100.00 | Investable cash: $50.00",
+                "cash_only_execution": False,
+                "signal_display": "hold",
+                "status_display": "hold",
+            },
+            logs=(),
+            skip_logs=(),
+            note_logs=(),
+            translator=build_translator("en"),
+            separator="━━━━━━━━━━━━━━━━━━",
+            strategy_display_name="demo",
+            dry_run_only=False,
+        )
+        self.assertIn("Buying power: $100.00", rendered.compact_text)
+        self.assertNotIn("Available cash: $100.00", rendered.compact_text)
 
     def test_build_prefixer_prefers_account_prefix_only(self):
         with_prefix = build_prefixer("HK", "longbridge-quant-semiconductor-rotation-income-hk")
