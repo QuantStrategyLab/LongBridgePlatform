@@ -574,6 +574,12 @@ def _floor_whole_share_quantity(quantity):
     return normalize_order_quantity(floor_to_quantity_step(quantity, 1.0))
 
 
+def _floor_lot_quantity(quantity, *, lot_size: int = 100):
+    """Floor to the nearest board lot for HK stocks."""
+    step = float(max(1, int(lot_size)))
+    return normalize_order_quantity(floor_to_quantity_step(float(quantity), step))
+
+
 def _normalize_trade_quantity(quantity):
     raw_quantity = max(0.0, float(quantity or 0.0))
     if raw_quantity <= 0.0:

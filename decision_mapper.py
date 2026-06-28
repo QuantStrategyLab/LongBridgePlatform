@@ -17,8 +17,10 @@ from quant_platform_kit.strategy_contracts import (
 from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
 
 _SAFE_HAVEN_SYMBOLS = frozenset({"BOXX", "BIL"})
+_HK_SAFE_HAVEN_SYMBOLS = frozenset({"02800", "82800"})  # TraHK (HKD + RMB counters)
 _INCOME_SYMBOLS = frozenset({"QQQI", "SPYI"})
 _DEFAULT_MIN_TRADE_FLOOR = 100.0
+_DEFAULT_HK_LOT_SIZE = 100  # most HK stocks trade in lots of 100 shares
 _DEFAULT_REBALANCE_THRESHOLD_RATIO = 0.01
 _SNAPSHOT_DIAGNOSTIC_FIELDS = (
     "snapshot_manifest_price_as_of",
@@ -190,7 +192,7 @@ def _cash_by_currency_from_snapshot(snapshot: Any | None) -> dict[str, float]:
 
 def _symbol_role(symbol: str) -> str | None:
     normalized = str(symbol or "").strip().upper()
-    if normalized in _SAFE_HAVEN_SYMBOLS:
+    if normalized in _SAFE_HAVEN_SYMBOLS or normalized in _HK_SAFE_HAVEN_SYMBOLS:
         return "safe_haven"
     if normalized in _INCOME_SYMBOLS:
         return "income"
