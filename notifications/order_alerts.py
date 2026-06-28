@@ -106,12 +106,13 @@ def render_order_lifecycle_message(event: OrderLifecycleEvent, *, translator) ->
             qty=event.quantity,
             order_id=event.order_id,
         )
+    # Fallback for unhandled status codes — render as unknown rather than incorrectly claiming filled
     return translator(
-        "order_filled",
+        "order_status_unknown",
         symbol=root_symbol,
         side=localized_side,
         qty=event.quantity,
-        price=event.executed_price,
+        status=str(event.status or "unknown"),
         order_id=event.order_id,
     )
 
