@@ -18,7 +18,8 @@ from quant_platform_kit.common.port_adapters import CallableNotificationPort
 from quant_platform_kit.common.runtime_assembly import build_runtime_assembly
 from quant_platform_kit.common.runtime_target import build_runtime_context_fields
 from quant_platform_kit.common.runtime_target import RuntimeTarget
-from notifications.telegram import build_prefixer, build_sender
+from notifications.telegram import build_prefixer
+from quant_platform_kit.notifications.cycle_channel import build_cycle_sender
 from runtime_execution_policy import FRACTIONAL_BUY_QUANTITY_STEP, fractional_buy_execution_enabled
 
 
@@ -63,8 +64,9 @@ class LongBridgeRuntimeComposer:
     report_persister: Callable[..., Any] | None = None
     translator: Callable[..., str] | None = None
     runtime_target: RuntimeTarget | None = None
+    notification_channel: str = "telegram"
+    webhook_url: str | None = None
     prefixer_builder: Callable[..., Callable[[str], str]] = build_prefixer
-    sender_builder: Callable[..., Callable[[str], None]] = build_sender
     env_reader: Callable[[str, str], str | None] | None = None
     sleeper: Callable[[float], None] | None = None
     printer: Callable[..., Any] = print
@@ -98,18 +100,24 @@ class LongBridgeRuntimeComposer:
     def with_prefix(self, message: str) -> str:
         return self.prefixer_builder(self.account_prefix)(message)
 
-    def send_tg_message(self, message: str) -> None:
-        sender = self.sender_builder(
-            self.tg_token,
-            self.tg_chat_id,
-            with_prefix_fn=self.with_prefix,
+    def send_message(self, message: str) -> None:
+        """Send a cycle notification through the configured channel."""
+        prefixed = self.with_prefix(message)
+        sender = build_cycle_sender(
+            channel=self.notification_channel,
+            telegram_token=self.tg_token,
+            telegram_chat_id=self.tg_chat_id,
+            webhook_url=self.webhook_url,
         )
-        sender(message)
+        sender(prefixed)
+
+    send_tg_message = send_message  # backward-compat alias
 
     def build_notification_adapters(self, *, delivery_events: list[dict[str, Any]] | None = None):
         return self.notification_adapter_builder(
             with_prefix=self.with_prefix,
-            send_message=self.send_tg_message,
+            send_message=self.send_message,
+            notification_channel=self.notification_channel,
             translator=self.translator,
             fetch_order_status=self.fetch_order_status_fn,
             order_poll_interval_sec=self.order_poll_interval_sec,
@@ -282,6 +290,8 @@ def build_runtime_composer(
     notify_lang: str,
     tg_token: str | None,
     tg_chat_id: str | None,
+    notification_channel: str = "telegram",
+    webhook_url: str | None = None,
     managed_symbols: tuple[str, ...],
     benchmark_symbol: str,
     signal_effective_after_trading_days: int | None,
@@ -329,6 +339,8 @@ def build_runtime_composer(
         notify_lang=str(notify_lang or ""),
         tg_token=tg_token,
         tg_chat_id=tg_chat_id,
+        notification_channel=notification_channel,
+        webhook_url=webhook_url,
         managed_symbols=tuple(managed_symbols),
         benchmark_symbol=str(benchmark_symbol or ""),
         signal_effective_after_trading_days=signal_effective_after_trading_days,

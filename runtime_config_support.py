@@ -87,6 +87,11 @@ class PlatformRuntimeSettings:
     notify_lang: str
     tg_token: str | None
     tg_chat_id: str | None
+    notification_channel: str = "telegram"
+    wecom_webhook_url: str | None = None
+    dingtalk_webhook_url: str | None = None
+    feishu_webhook_url: str | None = None
+    serverchan_webhook_url: str | None = None
     dry_run_only: bool
     runtime_target_enabled: bool = True
     market: str = DEFAULT_MARKET
@@ -287,6 +292,11 @@ def load_platform_runtime_settings(
         notify_lang=os.getenv("NOTIFY_LANG", "en"),
         tg_token=os.getenv("TELEGRAM_TOKEN"),
         tg_chat_id=os.getenv("GLOBAL_TELEGRAM_CHAT_ID"),
+        notification_channel=os.getenv("NOTIFICATION_CHANNEL", "telegram"),
+        wecom_webhook_url=os.getenv("NOTIFICATION_WECOM_WEBHOOK_URL"),
+        dingtalk_webhook_url=os.getenv("NOTIFICATION_DINGTALK_WEBHOOK_URL"),
+        feishu_webhook_url=os.getenv("NOTIFICATION_FEISHU_WEBHOOK_URL"),
+        serverchan_webhook_url=os.getenv("NOTIFICATION_SERVERCHAN_WEBHOOK_URL"),
         dry_run_only=resolve_dry_run_env(os.environ, "LONGBRIDGE_DRY_RUN_ONLY"),
         runtime_target_enabled=_runtime_target_enabled_env(),
         reserved_cash_floor_usd=_resolve_non_negative_float_env(

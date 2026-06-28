@@ -40,6 +40,7 @@ def build_runtime_notification_adapters(
     *,
     with_prefix: Callable[[str], str],
     send_message: Callable[[str], None],
+    notification_channel: str = "telegram",
     translator: Callable[..., str],
     fetch_order_status: Callable[..., Any],
     order_poll_interval_sec: int,
@@ -55,7 +56,7 @@ def build_runtime_notification_adapters(
         compact = str(message or "")
         recorded_delivery_events.append(
             {
-                "sink": "telegram",
+                "sink": notification_channel,
                 "delivery_status": "sent",
                 "compact_text_sha256": hashlib.sha256(compact.encode("utf-8")).hexdigest(),
                 "compact_text_length": len(compact),
