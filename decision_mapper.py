@@ -4,10 +4,6 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
-from us_equity_strategies.cash_only_equity import (
-    build_portfolio_inputs_from_snapshot,
-    resolve_weight_translation_equity,
-)
 from quant_platform_kit.strategy_contracts import (
     PositionTarget,
     StrategyDecision,
@@ -148,6 +144,9 @@ def _build_portfolio_inputs(
     if account_state is not None:
         return build_value_target_portfolio_inputs_from_account_state(account_state)
     if snapshot is not None:
+        from us_equity_strategies.cash_only_equity import (
+            build_portfolio_inputs_from_snapshot,
+        )
         return build_portfolio_inputs_from_snapshot(
             snapshot,
             cash_only_execution=cash_only_execution,
@@ -474,6 +473,9 @@ def _normalize_to_value_target_decision(
         return decision, None
 
     if target_mode == "weight" and not no_execute:
+        from us_equity_strategies.cash_only_equity import (
+            resolve_weight_translation_equity,
+        )
         total_equity, block_execution, deleverage_mode = resolve_weight_translation_equity(
             portfolio_inputs,
             cash_only_execution=cash_only_execution,
