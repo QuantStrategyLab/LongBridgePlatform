@@ -30,7 +30,7 @@ def build_execution_marker_store_from_env(
     return _build_execution_marker_store_from_env(
         platform_env_prefix="LONGBRIDGE",
         env_reader=env_reader,
-        gcp_project_id=gcp_project_id,
+        project_id=gcp_project_id,
         client_factory=client_factory,
     )
 

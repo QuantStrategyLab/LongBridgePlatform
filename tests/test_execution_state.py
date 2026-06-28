@@ -132,7 +132,7 @@ def test_prior_report_scan_is_scoped_to_signal_month():
 
     store = ExecutionMarkerStore(
         local_dir=None,
-        gcs_prefix_uri="gs://bucket/execution-reports",
+        cloud_prefix_uri="gs://bucket/execution-reports",
         client_factory=lambda **_kwargs: FakeClient(),
     )
 

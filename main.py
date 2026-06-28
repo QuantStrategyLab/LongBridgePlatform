@@ -462,7 +462,7 @@ def _route_with_runtime_error_fallback(handler, *, success_body: str, route_labe
 
 def build_strategy_plugin_alert_state_settings():
     return StrategyPluginAlertStateSettings.from_env(
-        gcp_project_id=PROJECT_ID,
+        project_id=PROJECT_ID,
     )
 
 

@@ -47,7 +47,7 @@ def test_runtime_reporting_adapters_start_run_builds_context_and_report():
         dry_run=True,
         signal_effective_after_trading_days=1,
         report_base_dir="/tmp/reports",
-        report_gcs_prefix_uri="gs://bucket/reports",
+        report_cloud_prefix_uri="gs://bucket/reports",
         run_id_builder=lambda: "run-001",
         event_logger=lambda *_args, **_kwargs: {},
         report_builder=fake_report_builder,
