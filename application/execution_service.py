@@ -872,6 +872,7 @@ def execute_rebalance_cycle(
     fractional_buy_execution: bool = False,
     buy_quantity_step: float = DEFAULT_BUY_QUANTITY_STEP,
     lot_sizes: dict[str, int] | None = None,
+    notional_buy_compat_mode: bool = False,
 ) -> ExecutionCycleResult:
     logs: list[str] = []
     skip_logs: list[str] = []
@@ -935,6 +936,16 @@ def execute_rebalance_cycle(
     effective_buy_quantity_step = (
         float(buy_quantity_step) if fractional_buy_execution else DEFAULT_BUY_QUANTITY_STEP
     )
+
+    if notional_buy_compat_mode:
+        compat_note = translator(
+            "buy_deferred",
+            detail=translator(
+                "dca_notional_to_whole_share_compat",
+            ),
+        )
+        note_logs.append(compat_note)
+        print(with_prefix(compat_note), flush=True)
 
     def _buy_step_for(symbol: str) -> float:
         """Return the per-symbol buy quantity step, falling back to lot_size or 1."""

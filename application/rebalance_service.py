@@ -356,6 +356,7 @@ def run_strategy(
             fractional_buy_execution=config.fractional_buy_execution,
             buy_quantity_step=config.buy_quantity_step,
             lot_sizes=_lot_sizes or None,
+            notional_buy_compat_mode=config.notional_buy_compat_mode,
         )
         if _should_record_execution_marker(result=execution_result, config=config):
             _record_execution_marker(

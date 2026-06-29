@@ -28,6 +28,7 @@ class LongBridgeRebalanceConfig:
     cash_only_execution: bool = True
     fractional_buy_execution: bool = False
     buy_quantity_step: float = 1.0
+    notional_buy_compat_mode: bool = False
     sleeper: Callable[[float], None] | None = None
     extra_notification_lines: tuple[str, ...] = ()
     notification_title_key: str = ""
