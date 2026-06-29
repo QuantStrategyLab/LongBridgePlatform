@@ -8,6 +8,7 @@ from datetime import datetime
 from application.execution_service import ExecutionCycleResult, execute_rebalance_cycle
 from application.execution_state import build_execution_marker_key
 from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
+from quant_platform_kit.longbridge.market_data import fetch_lot_sizes
 from application.signal_snapshot import build_signal_snapshot
 from notifications.events import NotificationPublisher
 from notifications import renderers as notification_renderers
@@ -313,6 +314,20 @@ def run_strategy(
             action_done=False,
         )
     else:
+        # Fetch per-symbol board-lot sizes for HK stocks so quantity
+        # flooring uses the correct lot_size (e.g. 100, 200) instead of 1.
+        _lot_sizes: dict[str, int] = {}
+        if config.symbol_suffix == ".HK":
+            _candidates = [
+                f"{str(s).strip().upper()}{config.symbol_suffix}"
+                for s in allocation.get("strategy_symbols", [])
+                if str(s).strip()
+            ]
+            if _candidates:
+                try:
+                    _lot_sizes = fetch_lot_sizes(quote_context, _candidates)
+                except Exception:
+                    _lot_sizes = {}
         execution_result = execute_rebalance_cycle(
             trade_context=trade_context,
             plan=plan,
@@ -340,6 +355,7 @@ def run_strategy(
             cash_only_execution=config.cash_only_execution,
             fractional_buy_execution=config.fractional_buy_execution,
             buy_quantity_step=config.buy_quantity_step,
+            lot_sizes=_lot_sizes or None,
         )
         if _should_record_execution_marker(result=execution_result, config=config):
             _record_execution_marker(

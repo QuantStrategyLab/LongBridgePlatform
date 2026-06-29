@@ -580,10 +580,12 @@ def _floor_lot_quantity(quantity, *, lot_size: int = 100):
     return normalize_order_quantity(floor_to_quantity_step(float(quantity), step))
 
 
-def _normalize_trade_quantity(quantity):
+def _normalize_trade_quantity(quantity, *, lot_size: int = 1):
     raw_quantity = max(0.0, float(quantity or 0.0))
     if raw_quantity <= 0.0:
         return 0
+    if lot_size > 1:
+        return _floor_lot_quantity(raw_quantity, lot_size=lot_size)
     return _floor_whole_share_quantity(raw_quantity)
 
 
@@ -610,6 +612,7 @@ def _sell_order_quantity(
     target_value,
     price,
     sellable_quantity,
+    lot_size: int = 1,
 ):
     sellable = max(0.0, float(sellable_quantity or 0.0))
     if sellable <= 0.0:
@@ -617,13 +620,14 @@ def _sell_order_quantity(
 
     target = max(0.0, float(target_value or 0.0))
     if target <= 0.0:
-        return _normalize_trade_quantity(sellable)
+        return _normalize_trade_quantity(sellable, lot_size=lot_size)
 
     sell_value = max(0.0, float(current_value or 0.0) - target)
     if sell_value <= 0.0 or float(price or 0.0) <= 0.0:
         return 0
     return _normalize_trade_quantity(
         min(sell_value / float(price), sellable),
+        lot_size=lot_size,
     )
 
 
@@ -867,6 +871,7 @@ def execute_rebalance_cycle(
     cash_only_execution=True,
     fractional_buy_execution: bool = False,
     buy_quantity_step: float = DEFAULT_BUY_QUANTITY_STEP,
+    lot_sizes: dict[str, int] | None = None,
 ) -> ExecutionCycleResult:
     logs: list[str] = []
     skip_logs: list[str] = []
@@ -886,6 +891,21 @@ def execute_rebalance_cycle(
 
     def market_symbol(symbol):
         return _market_symbol(symbol, symbol_suffix=symbol_suffix)
+
+    _lot_map: dict[str, int] = dict(lot_sizes or {})
+    def _lot_for(symbol: str) -> int:
+        """Return the board-lot size for *symbol* (≥1), falling back to 1."""
+        if not _lot_map:
+            return 1
+        key = str(symbol or "").strip().upper()
+        lot = _lot_map.get(key)
+        if lot is not None:
+            return max(1, lot)
+        if "." in key:
+            lot = _lot_map.get(key.split(".")[0])
+            if lot is not None:
+                return max(1, lot)
+        return 1
 
     def record_quote_snapshot(snapshot) -> None:
         payload = _serialize_quote_snapshot(snapshot)
@@ -915,6 +935,13 @@ def execute_rebalance_cycle(
     effective_buy_quantity_step = (
         float(buy_quantity_step) if fractional_buy_execution else DEFAULT_BUY_QUANTITY_STEP
     )
+
+    def _buy_step_for(symbol: str) -> float:
+        """Return the per-symbol buy quantity step, falling back to lot_size or 1."""
+        if fractional_buy_execution:
+            return FRACTIONAL_BUY_QUANTITY_STEP
+        lot = _lot_for(symbol)
+        return float(lot) if lot > 1 else DEFAULT_BUY_QUANTITY_STEP
     if not fractional_buy_execution:
         plan, allocation = _apply_small_account_whole_share_compatibility(
             plan=plan,
@@ -967,10 +994,14 @@ def execute_rebalance_cycle(
         if fractional_buy_execution and side == "buy":
             normalized_quantity = _normalize_buy_quantity(
                 quantity,
-                quantity_step=effective_buy_quantity_step,
+                quantity_step=_buy_step_for(symbol),
             )
         else:
-            normalized_quantity = _floor_whole_share_quantity(quantity)
+            sym_lot = _lot_for(symbol)
+            if sym_lot > 1:
+                normalized_quantity = _floor_lot_quantity(quantity, lot_size=sym_lot)
+            else:
+                normalized_quantity = _floor_whole_share_quantity(quantity)
         order_intent = OrderIntent(
             symbol=symbol,
             side=side,
@@ -1086,6 +1117,7 @@ def execute_rebalance_cycle(
                 target_value=target_values[symbol],
                 price=price,
                 sellable_quantity=sellable_quantities[symbol],
+                lot_size=_lot_for(symbol),
             )
             if quantity > 0:
                 quantity_text = format_quantity(quantity)
@@ -1428,7 +1460,7 @@ def execute_rebalance_cycle(
                 estimate_max_purchase_quantity=estimate_max_purchase_quantity,
                 notify_issue=notify_issue,
                 dry_run_only=dry_run_only,
-                quantity_step=effective_buy_quantity_step,
+                quantity_step=_buy_step_for(market_symbol(symbol)),
                 estimate_kwargs=estimate_kwargs,
             )
             if limit_candidate is None:
@@ -1436,7 +1468,7 @@ def execute_rebalance_cycle(
             limit_candidate_quantity, limit_budget_quantity, limit_cash_limit_quantity = limit_candidate
             limit_quantity = _normalize_buy_quantity(
                 limit_candidate_quantity,
-                quantity_step=effective_buy_quantity_step,
+                quantity_step=_buy_step_for(market_symbol(symbol)),
             )
             order_kind = limit_order_kind
             ref_price = limit_ref_price
@@ -1564,6 +1596,7 @@ def execute_rebalance_cycle(
                 else:
                     quantity = _normalize_trade_quantity(
                         min(budget_quantity, float(cash_limit_quantity)),
+                        lot_size=_lot_for(cash_sweep_symbol),
                     )
             else:
                 quantity = 0
