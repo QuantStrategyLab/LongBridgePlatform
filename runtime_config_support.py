@@ -90,12 +90,12 @@ class PlatformRuntimeSettings:
     notify_lang: str
     tg_token: str | None
     tg_chat_id: str | None
+    dry_run_only: bool
     notification_channel: str = "telegram"
     wecom_webhook_url: str | None = None
     dingtalk_webhook_url: str | None = None
     feishu_webhook_url: str | None = None
     serverchan_webhook_url: str | None = None
-    dry_run_only: bool
     runtime_target_enabled: bool = True
     market: str = DEFAULT_MARKET
     market_calendar: str = DEFAULT_MARKET_CALENDAR

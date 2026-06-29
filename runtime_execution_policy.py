@@ -1,11 +1,32 @@
 from __future__ import annotations
 
-from quant_platform_kit.common.execution_capabilities import (
-    FRACTIONAL_SHARE_EXECUTION_SKIP_REASON,
-    definition_requires_fractional_share_execution,
-    fractional_share_execution_unsupported_reason,
-    notional_buy_compat_mode_enabled,
-)
+try:
+    from quant_platform_kit.common.execution_capabilities import (
+        FRACTIONAL_SHARE_EXECUTION_SKIP_REASON,
+        definition_requires_fractional_share_execution,
+        fractional_share_execution_unsupported_reason,
+        notional_buy_compat_mode_enabled,
+    )
+except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
+    FRACTIONAL_SHARE_EXECUTION_SKIP_REASON = "fractional_share_execution_unsupported"
+
+    def definition_requires_fractional_share_execution(_definition: object) -> bool:
+        return False
+
+    def fractional_share_execution_unsupported_reason(
+        strategy_profile: str,
+        strategy_catalog: object = None,
+        capability_matrix: object = None,
+    ) -> str | None:
+        return FRACTIONAL_SHARE_EXECUTION_SKIP_REASON
+
+    def notional_buy_compat_mode_enabled(
+        strategy_profile: str,
+        strategy_catalog: object = None,
+        capability_matrix: object = None,
+    ) -> bool:
+        return False
+
 from quant_platform_kit.common.strategies import normalize_profile_name
 from strategy_registry import PLATFORM_CAPABILITY_MATRIX, STRATEGY_CATALOG
 
