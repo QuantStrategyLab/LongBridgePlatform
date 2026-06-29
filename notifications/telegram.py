@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from notifications.events import NotificationPublisher, RenderedNotification
 
 try:
     from quant_platform_kit.common.notification_localization import (
+        resolve_strategy_display_name as _resolve_strategy_display_name,
         merge_strategy_plugin_i18n as _merge_strategy_plugin_i18n,
     )
 except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
+    _resolve_strategy_display_name = None
     _merge_strategy_plugin_i18n = None
 
 
@@ -437,7 +440,19 @@ def build_signal_text(translate_fn):
 
 
 def build_strategy_display_name(translate_fn):
-    def strategy_display_name(profile: str, *, fallback_name: str | None = None) -> str:
+    def strategy_display_name(
+        profile: str,
+        *,
+        fallback_name: str | None = None,
+        metadata: Any = None,
+        locale: str | None = None,
+    ) -> str:
+        if metadata is not None and _resolve_strategy_display_name is not None:
+            return _resolve_strategy_display_name(
+                locale or "en",
+                metadata,
+                translator=translate_fn,
+            )
         key = f"strategy_name_{str(profile or '').strip()}"
         translated = translate_fn(key)
         if translated != key:

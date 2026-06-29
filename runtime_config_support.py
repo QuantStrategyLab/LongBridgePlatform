@@ -4,7 +4,7 @@ import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from quant_platform_kit.common.runtime_config import (
     resolve_bool_value,
@@ -48,6 +48,9 @@ from strategy_registry import (
     resolve_strategy_definition,
     resolve_strategy_metadata,
 )
+
+if TYPE_CHECKING:
+    from strategy_registry import StrategyMetadata
 
 DEFAULT_ACCOUNT_REGION = "DEFAULT"
 DEFAULT_LONGPORT_SECRET_NAME = "longport_token_hk"
@@ -165,6 +168,7 @@ class PlatformRuntimeSettings:
     strategy_plugin_alert_telegram_disable_web_page_preview: str | None = None
     strategy_plugin_alert_telegram_body_max_chars: str | None = None
     runtime_target: RuntimeTarget | None = None
+    strategy_metadata: Any = None
 
 
 def resolve_strategy_profile(raw_value: str | None) -> str:
@@ -453,6 +457,7 @@ def load_platform_runtime_settings(
             os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_BODY_MAX_CHARS")
         ),
         runtime_target=runtime_target,
+        strategy_metadata=strategy_metadata,
     )
 
 
