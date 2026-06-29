@@ -74,6 +74,37 @@ SECRET_NAME = RUNTIME_SETTINGS.secret_name
 ACCOUNT_PREFIX = RUNTIME_SETTINGS.account_prefix
 STRATEGY_PROFILE = RUNTIME_SETTINGS.strategy_profile
 STRATEGY_DISPLAY_NAME = RUNTIME_SETTINGS.strategy_display_name
+
+
+def _normalize_plugin_mounts_strategy(raw_mounts_json: str | None) -> str | None:
+    if not raw_mounts_json:
+        return raw_mounts_json
+    try:
+        mounts = json.loads(raw_mounts_json)
+    except json.JSONDecodeError:
+        return raw_mounts_json
+    if not isinstance(mounts, dict):
+        return raw_mounts_json
+    plugins = mounts.get("strategy_plugins")
+    if not isinstance(plugins, list):
+        return raw_mounts_json
+    changed = False
+    for entry in plugins:
+        if not isinstance(entry, dict):
+            continue
+        old = entry.get("strategy")
+        if old and old != STRATEGY_PROFILE:
+            entry["strategy"] = STRATEGY_PROFILE
+            changed = True
+            print(f"[config-sync] Plugin mount strategy corrected: {old} → {STRATEGY_PROFILE}", flush=True)
+    return json.dumps(mounts, ensure_ascii=False) if changed else raw_mounts_json
+
+
+if hasattr(RUNTIME_SETTINGS, "strategy_plugin_mounts_json"):
+    normalized = _normalize_plugin_mounts_strategy(RUNTIME_SETTINGS.strategy_plugin_mounts_json)
+    if normalized != RUNTIME_SETTINGS.strategy_plugin_mounts_json:
+        object.__setattr__(RUNTIME_SETTINGS, "strategy_plugin_mounts_json", normalized)
+
 ACCOUNT_REGION = RUNTIME_SETTINGS.account_region
 MARKET = RUNTIME_SETTINGS.market
 MARKET_CALENDAR = RUNTIME_SETTINGS.market_calendar
