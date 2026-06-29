@@ -699,6 +699,10 @@ def _apply_small_account_whole_share_compatibility(
     retained_symbols = []
     bootstrap_symbols = []
     portfolio = dict((plan or {}).get("portfolio") or {})
+    execution = dict((plan or {}).get("execution") or {})
+    _liquid_cash = float(portfolio.get("liquid_cash", 0.0) or 0.0)
+    _reserved_cash = float(execution.get("reserved_cash", 0.0) or 0.0)
+    _estimated_buying_power = max(0.0, _liquid_cash - _reserved_cash)
     quantities = {
         str(symbol or "").strip().upper(): float(quantity or 0.0)
         for symbol, quantity in dict(portfolio.get("quantities") or {}).items()
@@ -715,10 +719,13 @@ def _apply_small_account_whole_share_compatibility(
             if price > 0.0
             else 0.0
         )
+        # Skip bootstrap if the account cannot afford even 1 share at limit price.
+        _can_afford_one_share = limit_price > 0.0 and _estimated_buying_power >= limit_price
         if not _should_retain_existing_whole_share(symbol, target_value=target_value, price=price):
             if (
                 quantities.get(symbol, 0.0) <= 0.0
                 and 0.0 < target_value < limit_price
+                and _can_afford_one_share
                 and _should_bootstrap_whole_share_buy(symbol, target_value=target_value, limit_price=limit_price)
             ):
                 compatibility_targets[symbol] = limit_price
@@ -731,6 +738,7 @@ def _apply_small_account_whole_share_compatibility(
         if (
             quantities.get(symbol, 0.0) <= 0.0
             and 0.0 < target_value < limit_price
+            and _can_afford_one_share
             and _should_bootstrap_whole_share_buy(symbol, target_value=target_value, limit_price=limit_price)
         ):
             compatibility_targets[symbol] = limit_price
