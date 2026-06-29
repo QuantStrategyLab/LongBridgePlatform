@@ -122,8 +122,12 @@ PLATFORM_CAPABILITY_MATRIX = PlatformCapabilityMatrix(
             "snapshot",
         }
     ),
-    # DCA / fractional buy stays disabled on LongBridge until paper/live validation.
-    # Non-DCA profiles continue whole-share execution via runtime_execution_policy.
+    # LongPort API enforces quantity ≥ 1 (regex ``^([1-9]\d*(\.\d+)?)$``).
+    # Fractional / notional orders are NOT natively supported.
+    # DCA profiles (ibit_smart_dca, nasdaq_sp500_smart_dca, etc.) run in
+    # **compat mode**: each notional buy is converted to a minimum 1‑share
+    # (US) or 1‑lot (HK) order.  Orders below one unit price are deferred.
+    # Paper-verified 2026-06-29.
     supported_capabilities=frozenset(),
 )
 _STRUCTURALLY_ELIGIBLE_STRATEGY_PROFILES = derive_eligible_profiles_for_platform(
