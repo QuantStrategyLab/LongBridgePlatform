@@ -7,18 +7,6 @@ name = "longbridge-platform"
 version = "0.1.0"
 description = "QuantStrategyLab platform layer for LongBridge broker."
 requires-python = ">=3.11"
-dependencies = [
-    "flask",
-    "gunicorn",
-    "pandas",
-    "requests",
-    "pytz",
-    "pandas-market-calendars",
-    "google-cloud-secret-manager",
-    "google-cloud-storage",
-    "google-auth",
-    "longport",
-]
 
 [tool.coverage.run]
 branch = true
