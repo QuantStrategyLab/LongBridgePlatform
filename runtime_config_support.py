@@ -10,7 +10,14 @@ from quant_platform_kit.common.runtime_config import (
     resolve_bool_value,
     resolve_cash_only_execution_env,
     resolve_dry_run_env,
+    resolve_optional_bool_env,
+    resolve_optional_dca_mode_env,
     resolve_optional_float_env,
+    resolve_optional_ibit_zscore_exit_mode_env,
+    resolve_optional_positive_float_env,
+    resolve_optional_ratio_env,
+    resolve_optional_symbol_env,
+    resolve_split_env_list,
     resolve_strategy_runtime_path_settings,
 )
 from quant_platform_kit.common.runtime_target import (
@@ -327,19 +334,19 @@ def load_platform_runtime_settings(
         debug_position_snapshot=resolve_bool_value(os.getenv("LONGBRIDGE_DEBUG_POSITION_SNAPSHOT")),
         income_threshold_usd=resolve_optional_float_env(os.environ, "INCOME_THRESHOLD_USD"),
         qqqi_income_ratio=_qqqi_income_ratio_env(),
-        income_layer_enabled=_optional_bool_env("INCOME_LAYER_ENABLED"),
+        income_layer_enabled=resolve_optional_bool_env("INCOME_LAYER_ENABLED"),
         income_layer_start_usd=_optional_non_negative_float_env("INCOME_LAYER_START_USD"),
-        income_layer_max_ratio=_optional_ratio_env("INCOME_LAYER_MAX_RATIO"),
-        dca_mode=_optional_dca_mode_env("DCA_MODE"),
-        dca_base_investment_usd=_optional_positive_float_env("DCA_BASE_INVESTMENT_USD"),
-        ibit_zscore_exit_enabled=_optional_bool_env("IBIT_ZSCORE_EXIT_ENABLED"),
-        ibit_zscore_exit_mode=_optional_ibit_zscore_exit_mode_env("IBIT_ZSCORE_EXIT_MODE"),
-        ibit_zscore_exit_parking_symbol=_optional_symbol_env("IBIT_ZSCORE_EXIT_PARKING_SYMBOL"),
-        ibit_zscore_exit_risk_reduced_exposure=_optional_ratio_env(
+        income_layer_max_ratio=resolve_optional_ratio_env("INCOME_LAYER_MAX_RATIO"),
+        dca_mode=resolve_optional_dca_mode_env("DCA_MODE"),
+        dca_base_investment_usd=resolve_optional_positive_float_env("DCA_BASE_INVESTMENT_USD"),
+        ibit_zscore_exit_enabled=resolve_optional_bool_env("IBIT_ZSCORE_EXIT_ENABLED"),
+        ibit_zscore_exit_mode=resolve_optional_ibit_zscore_exit_mode_env("IBIT_ZSCORE_EXIT_MODE"),
+        ibit_zscore_exit_parking_symbol=resolve_optional_symbol_env("IBIT_ZSCORE_EXIT_PARKING_SYMBOL"),
+        ibit_zscore_exit_risk_reduced_exposure=resolve_optional_ratio_env(
             "IBIT_ZSCORE_EXIT_RISK_REDUCED_EXPOSURE"
         ),
-        ibit_zscore_exit_risk_off_exposure=_optional_ratio_env("IBIT_ZSCORE_EXIT_RISK_OFF_EXPOSURE"),
-        ibit_zscore_exit_allow_outside_execution_window=_optional_bool_env(
+        ibit_zscore_exit_risk_off_exposure=resolve_optional_ratio_env("IBIT_ZSCORE_EXIT_RISK_OFF_EXPOSURE"),
+        ibit_zscore_exit_allow_outside_execution_window=resolve_optional_bool_env(
             "IBIT_ZSCORE_EXIT_ALLOW_OUTSIDE_EXECUTION_WINDOW"
         ),
         runtime_execution_window_trading_days=_runtime_execution_window_trading_days_env(
@@ -404,8 +411,8 @@ def load_platform_runtime_settings(
             os.getenv("LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON")
             or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
         ),
-        strategy_plugin_alert_channels=_split_env_list(os.getenv("STRATEGY_PLUGIN_ALERT_CHANNELS")),
-        strategy_plugin_alert_email_recipients=_split_env_list(os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_RECIPIENTS")),
+        strategy_plugin_alert_channels=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_CHANNELS")),
+        strategy_plugin_alert_email_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_EMAIL_RECIPIENTS")),
         strategy_plugin_alert_email_sender_email=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_EMAIL")),
         strategy_plugin_alert_email_sender_password=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD")
@@ -415,7 +422,7 @@ def load_platform_runtime_settings(
         strategy_plugin_alert_email_smtp_security=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_SECURITY")
         ),
-        strategy_plugin_alert_sms_recipients=_split_env_list(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_RECIPIENTS")),
+        strategy_plugin_alert_sms_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_SMS_RECIPIENTS")),
         strategy_plugin_alert_sms_provider=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_PROVIDER")),
         strategy_plugin_alert_sms_account_id=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_ACCOUNT_ID")),
         strategy_plugin_alert_sms_auth_token=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN")),
@@ -427,7 +434,7 @@ def load_platform_runtime_settings(
         strategy_plugin_alert_sms_body_max_chars=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_SMS_BODY_MAX_CHARS")
         ),
-        strategy_plugin_alert_push_recipients=_split_env_list(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_RECIPIENTS")),
+        strategy_plugin_alert_push_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_PUSH_RECIPIENTS")),
         strategy_plugin_alert_push_provider=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_PROVIDER")),
         strategy_plugin_alert_push_app_token=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN")),
         strategy_plugin_alert_push_access_token=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN")),
@@ -477,7 +484,7 @@ def _qqqi_income_ratio_env() -> float | None:
     return value
 
 
-def _optional_bool_env(name: str) -> bool | None:
+def resolve_optional_bool_env(name: str) -> bool | None:
     raw_value = os.getenv(name)
     if raw_value is None or str(raw_value).strip() == "":
         return None
@@ -490,11 +497,11 @@ def _optional_bool_env(name: str) -> bool | None:
 
 
 def _runtime_target_enabled_env() -> bool:
-    value = _optional_bool_env("RUNTIME_TARGET_ENABLED")
+    value = resolve_optional_bool_env("RUNTIME_TARGET_ENABLED")
     return True if value is None else value
 
 
-def _optional_ratio_env(name: str) -> float | None:
+def resolve_optional_ratio_env(name: str) -> float | None:
     value = resolve_optional_float_env(os.environ, name)
     if value is None:
         return None
@@ -516,7 +523,7 @@ def _optional_non_negative_float_env(name: str) -> float | None:
     return float(value)
 
 
-def _optional_positive_float_env(name: str) -> float | None:
+def resolve_optional_positive_float_env(name: str) -> float | None:
     value = resolve_optional_float_env(os.environ, name)
     if value is None:
         return None
@@ -527,7 +534,7 @@ def _optional_positive_float_env(name: str) -> float | None:
     return float(value)
 
 
-def _optional_dca_mode_env(name: str) -> str | None:
+def resolve_optional_dca_mode_env(name: str) -> str | None:
     raw_value = os.getenv(name)
     if raw_value is None or str(raw_value).strip() == "":
         return None
@@ -544,7 +551,7 @@ def _optional_dca_mode_env(name: str) -> str | None:
     return mode
 
 
-def _optional_ibit_zscore_exit_mode_env(name: str) -> str | None:
+def resolve_optional_ibit_zscore_exit_mode_env(name: str) -> str | None:
     raw_value = os.getenv(name)
     if raw_value is None or str(raw_value).strip() == "":
         return None
@@ -565,7 +572,7 @@ def _optional_ibit_zscore_exit_mode_env(name: str) -> str | None:
     return mode
 
 
-def _optional_symbol_env(name: str) -> str | None:
+def resolve_optional_symbol_env(name: str) -> str | None:
     raw_value = os.getenv(name)
     if raw_value is None or str(raw_value).strip() == "":
         return None
