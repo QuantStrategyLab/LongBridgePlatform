@@ -570,17 +570,10 @@ def render_rebalance_notification(
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
     _append_extra_notification_lines(compact_lines, extra_notification_lines)
+    compact_lines.append(separator)
     _append_dashboard_block(compact_lines, execution=execution, separator=separator, translator=translator)
-    _append_timing_lines(compact_lines, execution=execution, translator=translator)
-    _append_signal_snapshot_line(compact_lines, execution=execution, translator=translator)
-    _append_source_input_line(compact_lines, execution=execution, translator=translator)
-    _append_compact_status_lines(
-        compact_lines,
-        execution=execution,
-        translator=translator,
-        signal_key="signal",
-    )
-    compact_lines.extend([separator, translator("order_logs_title"), formatted_logs])
+    compact_lines.append(separator)
+    compact_lines.append(formatted_logs)
     return RenderedNotification(
         detailed_text="\n".join(detailed_lines),
         compact_text="\n".join(compact_lines),
