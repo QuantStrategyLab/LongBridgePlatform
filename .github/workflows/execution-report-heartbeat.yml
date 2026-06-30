@@ -17,7 +17,7 @@ on:
           - "true"
           - "false"
   schedule:
-    - #cron: "25 23 * * 1-5"
+        # cron disabled — notify only on trades/errors "25 23 * * 1-5"
 
 env:
   GCP_PROJECT_ID: longbridgequant
