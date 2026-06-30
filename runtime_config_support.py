@@ -300,9 +300,9 @@ def load_platform_runtime_settings(
             )
             or DEFAULT_TRADING_CURRENCY
         ).upper(),
-        notify_lang=os.getenv("NOTIFY_LANG", "en"),
+        notify_lang=os.getenv("QSL_NOTIFY_LANG") or os.getenv("NOTIFY_LANG", "en"),
         tg_token=os.getenv("TELEGRAM_TOKEN"),
-        tg_chat_id=os.getenv("GLOBAL_TELEGRAM_CHAT_ID"),
+        tg_chat_id=os.getenv("QSL_GLOBAL_TELEGRAM_CHAT_ID") or os.getenv("GLOBAL_TELEGRAM_CHAT_ID"),
         notification_channel=os.getenv("NOTIFICATION_CHANNEL", "telegram"),
         wecom_webhook_url=os.getenv("NOTIFICATION_WECOM_WEBHOOK_URL"),
         dingtalk_webhook_url=os.getenv("NOTIFICATION_DINGTALK_WEBHOOK_URL"),
@@ -409,6 +409,7 @@ def load_platform_runtime_settings(
         strategy_config_source=runtime_paths.strategy_config_source,
         strategy_plugin_mounts_json=(
             os.getenv("LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON")
+            or os.getenv("QSL_STRATEGY_PLUGIN_MOUNTS_JSON")
             or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
         ),
         strategy_plugin_alert_channels=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_CHANNELS"),
@@ -449,7 +450,8 @@ def load_platform_runtime_settings(
             "STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS"
         ),
         strategy_plugin_alert_telegram_bot_token=_first_non_empty(
-            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
+            os.getenv("QSL_STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
+            or os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
         ),
         strategy_plugin_alert_telegram_api_base_url=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_API_BASE_URL")
