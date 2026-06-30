@@ -411,8 +411,8 @@ def load_platform_runtime_settings(
             os.getenv("LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON")
             or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
         ),
-        strategy_plugin_alert_channels=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_CHANNELS")),
-        strategy_plugin_alert_email_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_EMAIL_RECIPIENTS")),
+        strategy_plugin_alert_channels=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_CHANNELS"),
+        strategy_plugin_alert_email_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_EMAIL_RECIPIENTS"),
         strategy_plugin_alert_email_sender_email=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_EMAIL")),
         strategy_plugin_alert_email_sender_password=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD")
@@ -422,7 +422,7 @@ def load_platform_runtime_settings(
         strategy_plugin_alert_email_smtp_security=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_SECURITY")
         ),
-        strategy_plugin_alert_sms_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_SMS_RECIPIENTS")),
+        strategy_plugin_alert_sms_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_SMS_RECIPIENTS"),
         strategy_plugin_alert_sms_provider=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_PROVIDER")),
         strategy_plugin_alert_sms_account_id=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_ACCOUNT_ID")),
         strategy_plugin_alert_sms_auth_token=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN")),
@@ -434,7 +434,7 @@ def load_platform_runtime_settings(
         strategy_plugin_alert_sms_body_max_chars=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_SMS_BODY_MAX_CHARS")
         ),
-        strategy_plugin_alert_push_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_PUSH_RECIPIENTS")),
+        strategy_plugin_alert_push_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_PUSH_RECIPIENTS"),
         strategy_plugin_alert_push_provider=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_PROVIDER")),
         strategy_plugin_alert_push_app_token=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN")),
         strategy_plugin_alert_push_access_token=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN")),
@@ -445,8 +445,8 @@ def load_platform_runtime_settings(
         strategy_plugin_alert_push_body_max_chars=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_BODY_MAX_CHARS")
         ),
-        strategy_plugin_alert_telegram_chat_ids=_split_env_list(
-            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS")
+        strategy_plugin_alert_telegram_chat_ids=resolve_split_env_list(
+            "STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS"
         ),
         strategy_plugin_alert_telegram_bot_token=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
@@ -484,32 +484,9 @@ def _qqqi_income_ratio_env() -> float | None:
     return value
 
 
-def resolve_optional_bool_env(name: str) -> bool | None:
-    raw_value = os.getenv(name)
-    if raw_value is None or str(raw_value).strip() == "":
-        return None
-    value = str(raw_value).strip().lower()
-    if value in {"1", "true", "yes", "y", "on"}:
-        return True
-    if value in {"0", "false", "no", "n", "off"}:
-        return False
-    raise ValueError(f"{name} must be boolean, got {raw_value!r}")
-
-
 def _runtime_target_enabled_env() -> bool:
     value = resolve_optional_bool_env("RUNTIME_TARGET_ENABLED")
     return True if value is None else value
-
-
-def resolve_optional_ratio_env(name: str) -> float | None:
-    value = resolve_optional_float_env(os.environ, name)
-    if value is None:
-        return None
-    if not math.isfinite(value):
-        raise ValueError(f"{name} must be finite, got {value}")
-    if not (0.0 <= value <= 1.0):
-        raise ValueError(f"{name} must be in [0,1], got {value}")
-    return value
 
 
 def _optional_non_negative_float_env(name: str) -> float | None:
@@ -522,64 +499,6 @@ def _optional_non_negative_float_env(name: str) -> float | None:
         raise ValueError(f"{name} must be non-negative, got {value}")
     return float(value)
 
-
-def resolve_optional_positive_float_env(name: str) -> float | None:
-    value = resolve_optional_float_env(os.environ, name)
-    if value is None:
-        return None
-    if not math.isfinite(value):
-        raise ValueError(f"{name} must be finite, got {value}")
-    if value <= 0:
-        raise ValueError(f"{name} must be positive, got {value}")
-    return float(value)
-
-
-def resolve_optional_dca_mode_env(name: str) -> str | None:
-    raw_value = os.getenv(name)
-    if raw_value is None or str(raw_value).strip() == "":
-        return None
-    value = str(raw_value).strip().lower()
-    aliases = {
-        "ordinary": "fixed",
-        "ordinary_dca": "fixed",
-        "fixed_dca": "fixed",
-        "smart_dca": "smart",
-    }
-    mode = aliases.get(value, value)
-    if mode not in {"fixed", "smart"}:
-        raise ValueError(f"{name} must be fixed or smart, got {raw_value!r}")
-    return mode
-
-
-def resolve_optional_ibit_zscore_exit_mode_env(name: str) -> str | None:
-    raw_value = os.getenv(name)
-    if raw_value is None or str(raw_value).strip() == "":
-        return None
-    value = str(raw_value).strip().lower()
-    aliases = {
-        "off": "disabled",
-        "none": "disabled",
-        "false": "disabled",
-        "disable": "disabled",
-        "enabled": "live",
-        "shadow": "paper",
-        "dry_run": "paper",
-        "dry-run": "paper",
-    }
-    mode = aliases.get(value, value)
-    if mode not in {"disabled", "paper", "live"}:
-        raise ValueError(f"{name} must be disabled, paper, or live, got {raw_value!r}")
-    return mode
-
-
-def resolve_optional_symbol_env(name: str) -> str | None:
-    raw_value = os.getenv(name)
-    if raw_value is None or str(raw_value).strip() == "":
-        return None
-    value = str(raw_value).strip().upper()
-    if len(value) > 16 or not value.replace(".", "").replace("-", "").isalnum():
-        raise ValueError(f"{name} must be a symbol")
-    return value
 
 
 def _resolve_non_negative_float_env(name: str, *, default: float) -> float:
@@ -614,19 +533,6 @@ def _optional_int(raw_value: str | None) -> int | None:
         return None
     return int(value)
 
-
-def _split_env_list(raw_value: str | None) -> tuple[str, ...]:
-    if raw_value is None:
-        return ()
-    items = []
-    seen = set()
-    for value in str(raw_value).replace(";", ",").replace("\n", ",").split(","):
-        item = value.strip()
-        if not item or item in seen:
-            continue
-        items.append(item)
-        seen.add(item)
-    return tuple(items)
 
 
 def _runtime_execution_window_trading_days_env(strategy_profile: str) -> int | None:
