@@ -50,7 +50,7 @@ from strategy_registry import (
 )
 
 if TYPE_CHECKING:
-    from strategy_registry import StrategyMetadata
+    pass
 
 DEFAULT_ACCOUNT_REGION = "DEFAULT"
 DEFAULT_LONGPORT_SECRET_NAME = "longport_token_hk"
