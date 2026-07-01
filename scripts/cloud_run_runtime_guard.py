@@ -46,6 +46,8 @@ def _load_services() -> list[str]:
         "CLOUD_RUN_SERVICE",
     ):
         services.extend(_split_values(os.environ.get(name)))
+    if services:
+        return list(dict.fromkeys(services))
 
     raw_targets = (os.environ.get("CLOUD_RUN_SERVICE_TARGETS_JSON") or "").strip()
     if raw_targets:
@@ -83,6 +85,17 @@ def _load_services() -> list[str]:
             seen.add(service)
             unique.append(service)
     return unique
+
+
+def _cloud_run_log_filter(service: str, since_text: str, region: str = "") -> str:
+    parts = [
+        'resource.type="cloud_run_revision"',
+        f'resource.labels.service_name="{service}"',
+    ]
+    if region:
+        parts.append(f'resource.labels.location="{region}"')
+    parts.append(f'timestamp >= "{since_text}"')
+    return " AND ".join(parts)
 
 
 def _scheduler_job_pattern_for_services(services: list[str]) -> str:
@@ -442,11 +455,7 @@ def main() -> int:
     for service in services:
         service_since = _cloud_run_log_since(project, service, since) if ignore_pre_ready_logs else since
         service_since_text = _format_timestamp(service_since)
-        log_filter = (
-            'resource.type="cloud_run_revision" '
-            f'AND resource.labels.service_name="{service}" '
-            f'AND timestamp >= "{service_since_text}"'
-        )
+        log_filter = _cloud_run_log_filter(service, service_since_text, _region_for_service(service))
         try:
             entries = _run_gcloud_logging(project, log_filter, limit)
         except RuntimeError as exc:
