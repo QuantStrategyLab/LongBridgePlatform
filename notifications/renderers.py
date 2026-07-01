@@ -346,11 +346,26 @@ def _build_risk_control_lines(execution, *, translator):
 def _relabel_dashboard_buying_power(text: str, *, cash_only_execution: bool, translator) -> str:
     value = str(text or "")
     if cash_only_execution:
+        value = value.replace("总资产（策略净值）", "总资产（策略标的+现金，不含融资额度）")
+        value = value.replace(
+            "Total assets (strategy net liquidation)",
+            "Total assets (strategy symbols + cash, ex-margin)",
+        )
         target = translator("buying_power")
         for source in ("Buying power", "购买力"):
             if source != target:
                 value = value.replace(source, target)
         return value
+    value = value.replace("总资产（策略标的+现金，不含融资额度）", "总资产（策略净值）")
+    value = value.replace("总资产（策略标的+现金）", "总资产（策略净值）")
+    value = value.replace(
+        "Total assets (strategy symbols + cash, ex-margin)",
+        "Total assets (strategy net liquidation)",
+    )
+    value = value.replace(
+        "Total assets (strategy symbols + cash)",
+        "Total assets (strategy net liquidation)",
+    )
     target = translator("buying_power_margin")
     for source in ("Available cash", "可用现金"):
         if source != target:
@@ -377,16 +392,30 @@ def _format_dashboard_text(text, *, translator=None, cash_only_execution: bool =
     return result
 
 
-def _append_dashboard_block(lines, *, execution, separator, translator) -> None:
+def _is_compact_dashboard_audit_line(line: str) -> bool:
+    text = str(line or "").strip()
+    lowered = text.lower()
+    return (
+        text.startswith(("⏱", "🧾", "🧩 输入状态", "📊", "🎯", "🛡️"))
+        or lowered.startswith(("signal:", "signal：", "market status:"))
+        or text.startswith(("信号:", "信号：", "市场状态:", "市场状态："))
+    )
+
+
+def _append_dashboard_block(lines, *, execution, separator, translator, compact: bool = False) -> None:
     cash_only_execution = bool(execution.get("cash_only_execution", True))
     dashboard_text = _format_dashboard_text(
         execution.get("dashboard_text"),
         translator=translator,
         cash_only_execution=cash_only_execution,
     )
-    if dashboard_text:
+    dashboard_lines = [
+        line for line in dashboard_text.splitlines()
+        if not (compact and _is_compact_dashboard_audit_line(line))
+    ]
+    if dashboard_lines:
         lines.append(separator)
-        lines.extend(dashboard_text.splitlines())
+        lines.extend(dashboard_lines)
 
 
 def _append_timing_lines(lines, *, execution, translator) -> None:
@@ -570,8 +599,7 @@ def render_rebalance_notification(
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
     _append_extra_notification_lines(compact_lines, extra_notification_lines)
-    compact_lines.append(separator)
-    _append_dashboard_block(compact_lines, execution=execution, separator=separator, translator=translator)
+    _append_dashboard_block(compact_lines, execution=execution, separator=separator, translator=translator, compact=True)
     compact_lines.append(separator)
     compact_lines.append(formatted_logs)
     return RenderedNotification(
@@ -633,16 +661,7 @@ def render_heartbeat_notification(
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
     _append_extra_notification_lines(compact_lines, extra_notification_lines)
-    _append_dashboard_block(compact_lines, execution=execution, separator=separator, translator=translator)
-    _append_timing_lines(compact_lines, execution=execution, translator=translator)
-    _append_signal_snapshot_line(compact_lines, execution=execution, translator=translator)
-    _append_source_input_line(compact_lines, execution=execution, translator=translator)
-    _append_compact_status_lines(
-        compact_lines,
-        execution=execution,
-        translator=translator,
-        signal_key="heartbeat_signal",
-    )
+    _append_dashboard_block(compact_lines, execution=execution, separator=separator, translator=translator, compact=True)
     compact_lines.extend(
         [
             separator,
