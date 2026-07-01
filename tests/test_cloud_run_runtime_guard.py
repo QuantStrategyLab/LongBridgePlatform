@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import subprocess
+import datetime as dt
+import json
 import re
+import subprocess
 
 from scripts import cloud_run_runtime_guard as guard
 
@@ -12,6 +14,7 @@ def test_scheduler_job_pattern_includes_service_alias():
     assert re.search(pattern, "longbridge-quant-hk-service-scheduler")
     assert re.search(pattern, "longbridge-quant-hk-scheduler")
     assert not re.search(pattern, "longbridge-quant-sg-scheduler")
+
 
 def test_telegram_token_falls_back_to_secret_manager(monkeypatch):
     monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
@@ -39,3 +42,51 @@ def test_telegram_token_falls_back_to_secret_manager(monkeypatch):
         "longbridgequant",
     ]
 
+
+def test_cloud_run_log_since_uses_latest_ready_revision(monkeypatch):
+    monkeypatch.setenv("CLOUD_RUN_REGION", "us-central1")
+    observed = []
+
+    def fake_run_gcloud(command):
+        observed.append(command)
+        if command[1:4] == ["run", "services", "describe"]:
+            payload = {"status": {"latestReadyRevisionName": "longbridge-quant-hk-service-00002"}}
+        else:
+            payload = {"metadata": {"creationTimestamp": "2026-07-01T06:50:04.123Z"}}
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(guard, "_run_gcloud", fake_run_gcloud)
+
+    fallback = dt.datetime(2026, 7, 1, 6, 0, tzinfo=dt.timezone.utc)
+    result = guard._cloud_run_log_since("longbridgequant", "longbridge-quant-hk-service", fallback)
+
+    assert result == dt.datetime(2026, 7, 1, 6, 50, 4, 123000, tzinfo=dt.timezone.utc)
+    assert observed[0] == [
+        "gcloud",
+        "run",
+        "services",
+        "describe",
+        "longbridge-quant-hk-service",
+        "--project",
+        "longbridgequant",
+        "--region",
+        "us-central1",
+        "--format=json",
+    ]
+    assert observed[1][1:5] == ["run", "revisions", "describe", "longbridge-quant-hk-service-00002"]
+
+
+def test_region_for_service_prefers_target_region(monkeypatch):
+    monkeypatch.setenv("CLOUD_RUN_REGION", "us-central1")
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {"service": "longbridge-quant-hk-service", "region": "asia-east1"},
+                ]
+            }
+        ),
+    )
+
+    assert guard._region_for_service("longbridge-quant-hk-service") == "asia-east1"
