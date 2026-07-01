@@ -171,10 +171,11 @@ class NotificationTests(unittest.TestCase):
             dry_run_only=False,
         )
 
-        self.assertIn("数据源 LongBridge 日线K线", rendered.compact_text)
-        self.assertIn("🧩 输入状态: 价格 2026-05-28 | 股票池 2026-04-30 | 股票池复用 连续1次", rendered.compact_text)
-        self.assertNotIn("报价覆盖", rendered.compact_text)
-        self.assertIn("📊 市场状态: 🚀 风险开启（SOXX+SOXL）", rendered.compact_text)
+        self.assertIn("数据源 LongBridge 日线K线", rendered.detailed_text)
+        self.assertIn("🧩 输入状态: 价格 2026-05-28 | 股票池 2026-04-30 | 股票池复用 连续1次", rendered.detailed_text)
+        self.assertIn("📊 市场状态: 🚀 风险开启（SOXX+SOXL）", rendered.detailed_text)
+        self.assertNotIn("数据源 LongBridge 日线K线", rendered.compact_text)
+        self.assertNotIn("📊 市场状态", rendered.compact_text)
         self.assertNotIn("longbridge_candlesticks", rendered.compact_text)
 
     def test_dry_run_heartbeat_uses_dry_run_title(self):
@@ -264,12 +265,14 @@ class NotificationTests(unittest.TestCase):
 
         self.assertIn(
             "🛡️ 风控: QQQ 5 日年化波动率 31.2% 高于实际阈值 30.0%（动态 p90，252日窗口，范围 24.0%-36.0%，样本 252），TQQQ 转向 QQQ（杠杆仓位：TQQQ 保留 25.0%，QQQ 75.0%）",
-            zh_rendered.compact_text,
+            zh_rendered.detailed_text,
         )
+        self.assertNotIn("🛡️ 风控:", zh_rendered.compact_text)
         self.assertIn(
             "🛡️ Risk control: QQQ 5d annualized volatility 31.2% is above effective threshold 30.0% (dynamic p90, 252d lookback, bounded 24.0%-36.0%, samples 252); TQQQ redirects to QQQ (leveraged sleeve: TQQQ retained 25.0%, QQQ 75.0%)",
-            en_rendered.compact_text,
+            en_rendered.detailed_text,
         )
+        self.assertNotIn("🛡️ Risk control:", en_rendered.compact_text)
 
     def test_heartbeat_renders_tqqq_volatility_delever_hysteresis_risk_control(self):
         zh_rendered = render_heartbeat_notification(
@@ -331,12 +334,14 @@ class NotificationTests(unittest.TestCase):
 
         self.assertIn(
             "🛡️ 风控: QQQ 5 日年化波动率 26.2% 仍高于退出阈值 24.0%；入场实际阈值 30.0%（动态 p90，252日窗口，范围 24.0%-36.0%，样本 252），维持 TQQQ 转向 QQQM（杠杆仓位：TQQQ 保留 0.0%，QQQM 100.0%）",
-            zh_rendered.compact_text,
+            zh_rendered.detailed_text,
         )
+        self.assertNotIn("🛡️ 风控:", zh_rendered.compact_text)
         self.assertIn(
             "🛡️ Risk control: QQQ 5d annualized volatility 26.2% remains above exit threshold 24.0%; entry effective threshold 30.0% (dynamic p90, 252d lookback, bounded 24.0%-36.0%, samples 252); keep TQQQ redirected to QQQM (leveraged sleeve: TQQQ retained 0.0%, QQQM 100.0%)",
-            en_rendered.compact_text,
+            en_rendered.detailed_text,
         )
+        self.assertNotIn("🛡️ Risk control:", en_rendered.compact_text)
 
     def test_heartbeat_localizes_strategy_diagnostics_and_source_input_status(self):
         rendered = render_heartbeat_notification(
@@ -369,24 +374,36 @@ class NotificationTests(unittest.TestCase):
             dry_run_only=False,
         )
 
-        self.assertIn("🧩 输入状态: 价格 2026-06-01 | 股票池 2026-05-14 | 状态 部分行情刷新", rendered.compact_text)
-        self.assertIn(
-            "🎯 信号: 市场阶段=进攻 市场宽度=68.0% 基准趋势=向上 "
-            "目标股票仓位=100.0% 实际股票仓位=100.0% 入选标的数=4 "
-            "前排标的=MU(4.07), INTC(2.23), AMD(1.96)",
-            rendered.compact_text,
-        )
-        self.assertIn("📊 市场状态: 市场阶段=进攻", rendered.compact_text)
-        self.assertIn(
-            "🎯 信号: 市场阶段=进攻 市场宽度=68.0% 基准趋势=向上 "
-            "目标股票仓位=100.0% 实际股票仓位=100.0% 入选标的数=4 "
-            "前排标的=MU(4.07), INTC(2.23), AMD(1.96)",
-            rendered.compact_text,
-        )
+        self.assertIn("🧩 输入状态: 价格 2026-06-01 | 股票池 2026-05-14 | 状态 部分行情刷新", rendered.detailed_text)
+        self.assertNotIn("🎯 信号:", rendered.compact_text)
+        self.assertIn("📊 市场状态: 市场阶段=进攻", rendered.detailed_text)
+        self.assertNotIn("🧩 输入状态", rendered.compact_text)
+        self.assertNotIn("📊 市场状态", rendered.compact_text)
         self.assertNotIn("regime=risk_on", rendered.compact_text)
         self.assertNotIn("benchmark_trend=up", rendered.compact_text)
         self.assertNotIn("target_stock=", rendered.compact_text)
         self.assertNotIn("partial_history_refresh", rendered.compact_text)
+
+    def test_dashboard_relabels_total_assets_for_margin_execution(self):
+        rendered = render_rebalance_notification(
+            execution={
+                "dashboard_text": "  - 总资产（策略标的+现金，不含融资额度）: $50,000.00\n  - 可用现金: $75,000.00",
+                "cash_only_execution": False,
+                "signal_display": "hold",
+                "status_display": "hold",
+            },
+            logs=(),
+            skip_logs=(),
+            note_logs=(),
+            translator=build_translator("zh"),
+            separator="━━━━━━━━━━━━━━━━━━",
+            strategy_display_name="TQQQ 增长收益",
+            dry_run_only=False,
+        )
+
+        self.assertIn("总资产（策略净值）: $50,000.00", rendered.compact_text)
+        self.assertIn("购买力: $75,000.00", rendered.compact_text)
+        self.assertNotIn("不含融资额度", rendered.compact_text)
 
     def test_dashboard_relabels_buying_power_for_cash_only_execution(self):
         rendered = render_rebalance_notification(
