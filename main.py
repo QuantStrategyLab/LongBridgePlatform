@@ -26,7 +26,6 @@ from entrypoints.cloud_run import is_market_open_now
 from runtime_execution_policy import dca_execution_unsupported_reason
 from runtime_config_support import load_platform_runtime_settings
 from notifications.telegram import build_signal_text, build_strategy_display_name, build_translator
-from quant_platform_kit.common.health import register_health_endpoint
 from quant_platform_kit.common.runtime_reports import (
     append_runtime_report_error,
     build_runtime_report_base,
@@ -58,7 +57,6 @@ from strategy_runtime import load_strategy_runtime
 from decision_mapper import map_strategy_decision_to_plan
 
 app = Flask(__name__)
-register_health_endpoint(app)  # GET /health /healthz
 
 # ---------------------------------------------------------------------------
 # Config and constants (GCP project, Telegram, execution and strategy params)
@@ -901,6 +899,7 @@ def request_method() -> str:
         return "GET"
 
 
+@app.route("/healthz", methods=["GET"])
 @app.route("/health", methods=["GET"])
 def health():
     critical_errors: list[str] = []
