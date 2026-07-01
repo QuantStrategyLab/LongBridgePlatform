@@ -8,6 +8,67 @@ import subprocess
 from scripts import cloud_run_runtime_guard as guard
 
 
+def _clear_runtime_guard_env(monkeypatch):
+    for name in (
+        "RUNTIME_GUARD_CLOUD_RUN_SERVICES",
+        "CLOUD_RUN_SERVICES",
+        "CLOUD_RUN_SERVICE",
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        "CLOUD_RUN_REGION",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_load_services_prefers_explicit_service_over_target_list(monkeypatch):
+    _clear_runtime_guard_env(monkeypatch)
+    monkeypatch.setenv("CLOUD_RUN_SERVICE", "longbridge-quant-hk-service")
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {"service": "longbridge-quant-paper-service"},
+                    {"service": "longbridge-quant-sg-service"},
+                ]
+            }
+        ),
+    )
+
+    assert guard._load_services() == ["longbridge-quant-hk-service"]
+
+
+def test_load_services_falls_back_to_target_list(monkeypatch):
+    _clear_runtime_guard_env(monkeypatch)
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {"service": "longbridge-quant-paper-service"},
+                    {"runtime_target": {"service_name": "longbridge-quant-sg-service"}},
+                ]
+            }
+        ),
+    )
+
+    assert guard._load_services() == [
+        "longbridge-quant-paper-service",
+        "longbridge-quant-sg-service",
+    ]
+
+
+def test_cloud_run_log_filter_includes_region_when_available():
+    log_filter = guard._cloud_run_log_filter(
+        "longbridge-quant-paper-service",
+        "2026-07-01T12:00:00Z",
+        "asia-east1",
+    )
+
+    assert 'resource.labels.service_name="longbridge-quant-paper-service"' in log_filter
+    assert 'resource.labels.location="asia-east1"' in log_filter
+    assert 'timestamp >= "2026-07-01T12:00:00Z"' in log_filter
+
+
 def test_scheduler_job_pattern_includes_service_alias():
     pattern = guard._scheduler_job_pattern_for_services(["longbridge-quant-hk-service"])
 
