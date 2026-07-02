@@ -396,7 +396,7 @@ def run_strategy(
                 title_key=config.notification_title_key or "rebalance_title",
             )
         )
-    else:
+    elif getattr(config, "notify_no_trade_cycles", True):
         notification_publisher.publish(
             notification_renderers.render_heartbeat_notification(
                 execution=execution,
@@ -410,4 +410,6 @@ def run_strategy(
                 title_key=config.notification_title_key or "heartbeat_title",
             )
         )
+    else:
+        print(config.with_prefix("notification_suppressed reason=no_trade_or_error"), flush=True)
     return execution_result

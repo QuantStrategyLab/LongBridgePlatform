@@ -8,10 +8,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from quant_platform_kit.common import build_runtime_target  # noqa: E402
+from application import runtime_composer as runtime_composer_module
 from application.runtime_composer import LongBridgeRuntimeComposer
 
 
-def test_runtime_composer_builds_runtime_and_config_from_local_builders():
+def test_runtime_composer_builds_runtime_and_config_from_local_builders(monkeypatch):
     observed = {}
 
     def fake_notification_builder(**kwargs):
@@ -29,6 +30,15 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     def fake_bootstrap_builder(**kwargs):
         observed["bootstrap_builder"] = kwargs
         return "bootstrap"
+
+    def fake_cycle_sender(**kwargs):
+        observed["cycle_sender"] = kwargs
+        return lambda message: observed.setdefault(
+            "sent_message",
+            (kwargs["telegram_token"], kwargs["telegram_chat_id"], message),
+        )
+
+    monkeypatch.setattr(runtime_composer_module, "build_cycle_sender", fake_cycle_sender)
 
     composer = LongBridgeRuntimeComposer(
         project_id="project-1",
@@ -84,10 +94,6 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
         report_persister="report-persister",
         translator=lambda key, **_kwargs: key,
         prefixer_builder=lambda prefix: lambda message: f"[{prefix}] {message}",
-        sender_builder=lambda token, chat_id, *, with_prefix_fn: lambda message: observed.setdefault(
-            "sent_message",
-            (token, chat_id, with_prefix_fn(message)),
-        ),
         env_reader=lambda name, default="": {
             "K_SERVICE": "longbridge-platform",
             "EXECUTION_REPORT_OUTPUT_DIR": "/tmp/runtime-reports",
@@ -140,6 +146,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     assert config.dry_run_only is True
     assert config.safe_haven_cash_substitute_threshold_usd == 1000.0
     assert config.min_order_notional_usd == 100.0
+    assert config.notify_no_trade_cycles is False
     assert config.execution_dedup_enabled is True
     assert config.execution_state_account_scope == "HK"
-    assert config.execution_state_store.gcs_prefix_uri == "gs://bucket/runtime-reports"
+    assert config.execution_state_store.cloud_prefix_uri == "gs://bucket/runtime-reports"

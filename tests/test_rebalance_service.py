@@ -870,14 +870,14 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 translator=build_translator("zh"),
                 with_prefix=lambda message: f"[HK/LongBridgeQuant] {message}",
                 strategy_display_name="SOXL/SOXX 半导体趋势收益",
+                notify_no_trade_cycles=False,
             ),
         )
 
         self.assertIs(observed["snapshot"], snapshot)
         self.assertIsNone(observed["account_state"])
         self.assertEqual(observed["indicators"], {"soxl": {"price": 1.0}})
-        self.assertEqual(len(sent_messages), 1)
-        self.assertIn("【心跳", sent_messages[0])
+        self.assertEqual(sent_messages, [])
 
     def test_run_strategy_supports_execution_port_runtime_path(self):
         sent_messages = []
