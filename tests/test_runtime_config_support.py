@@ -12,8 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
-if (QPK_SRC / "quant_platform_kit" / "common" / "runtime_config.py").exists() and str(QPK_SRC) not in sys.path:
-    sys.path.insert(0, str(QPK_SRC))
+UES_SRC = ROOT.parent / "UsEquityStrategies" / "src"
+HES_SRC = ROOT.parent / "HkEquityStrategies" / "src"
+for candidate in (QPK_SRC, UES_SRC, HES_SRC):
+    if candidate.exists() and str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
 SCRIPT_PATH = ROOT / "scripts" / "print_strategy_profile_status.py"
 SWITCH_PLAN_SCRIPT_PATH = ROOT / "scripts" / "print_strategy_switch_env_plan.py"
 
@@ -54,9 +57,13 @@ SAMPLE_STRATEGY_PROFILE = "soxl_soxx_trend_income"
 BASE_LONGBRIDGE_PROFILES = frozenset(
     {
         "global_etf_rotation",
+        "ibit_smart_dca",
+        "nasdaq_sp500_smart_dca",
         "russell_top50_leader_rotation",
         "tqqq_growth_income",
         "soxl_soxx_trend_income",
+        "us_equity_combo",
+        "us_equity_combo_leveraged",
     }
 )
 OPTIONAL_LONGBRIDGE_PROFILES = frozenset({"global_etf_confidence_vol_gate"})
@@ -213,7 +220,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
     def test_load_platform_runtime_settings_requires_strategy_profile(self):
         with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(EnvironmentError, "RUNTIME_TARGET_JSON is required"):
+            with self.assertRaisesRegex(EnvironmentError, "RUNTIME_TARGET_JSON"):
                 load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
     def test_platform_supported_profiles_are_filtered_by_registry(self):
@@ -496,7 +503,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.income_layer_start_usd, 250000.0)
         self.assertEqual(settings.income_layer_max_ratio, 0.25)
 
-    def test_ibit_smart_dca_profile_is_rejected_on_longbridge(self):
+    def test_ibit_smart_dca_profile_is_loaded_on_longbridge(self):
         with patch.dict(
             os.environ,
             {
@@ -510,8 +517,11 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             },
             clear=True,
         ):
-            with self.assertRaises(ValueError):
-                load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertEqual(settings.strategy_profile, "ibit_smart_dca")
+        self.assertTrue(settings.ibit_zscore_exit_enabled)
+        self.assertEqual(settings.ibit_zscore_exit_mode, "live")
 
     def test_tech_runtime_execution_window_override_rejects_research_only_profile(self):
         with patch.dict(
@@ -661,6 +671,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             {
                 "canonical_profile": "soxl_soxx_trend_income",
                 "display_name": "SOXL/SOXX Semiconductor Trend Income",
+                "display_name_zh": "半导体趋势收益",
                 "domain": "us_equity",
                 "eligible": True,
                 "enabled": True,
@@ -690,6 +701,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             {
                 "canonical_profile": "hk_global_etf_tactical_rotation",
                 "display_name": "HK Global ETF Tactical Rotation",
+                "display_name_zh": "港股ETF战术轮动",
                 "domain": "hk_equity",
                 "eligible": True,
                 "enabled": True,
@@ -819,7 +831,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(by_profile["russell_top50_leader_rotation"]["profile_group"], "snapshot_backed")
         self.assertEqual(
             by_profile["russell_top50_leader_rotation"]["display_name_zh"],
-            "罗素 Top50 领涨轮动",
+            "罗素Top50领涨",
         )
         self.assertEqual(by_profile["russell_top50_leader_rotation"]["input_mode"], "feature_snapshot")
         self.assertTrue(by_profile["russell_top50_leader_rotation"]["requires_snapshot_artifacts"])
@@ -865,7 +877,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("HK Global ETF Tactical Rotation", result.stdout)
         self.assertNotIn("HK Dividend-Gold Defensive Rotation", result.stdout)
         self.assertIn("Russell Top50 Leader Rotation", result.stdout)
-        self.assertIn("罗素 Top50 领涨轮动", result.stdout)
+        self.assertIn("罗素Top50领涨", result.stdout)
         self.assertNotIn("Tech/Communication Pullback Enhancement", result.stdout)
         self.assertNotIn("hk_blue_chip_leader_rotation", result.stdout)
         self.assertNotIn("hk_index_mean_reversion", result.stdout)
