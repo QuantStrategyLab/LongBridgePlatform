@@ -41,4 +41,4 @@ def test_hk_low_vol_snapshot_artifact_workflow_keeps_generation_diagnostics():
     assert "failed_symbols_preview" in workflow
     assert '${generation_label} factor snapshot generation failed; see generation_summary.json' in workflow
     assert "if: always() && steps.build.outputs.generated_input_name != ''" in workflow
-    assert "if-no-files-found: ignore" in workflow
+    assert "if-no-files-found: error" in workflow
