@@ -7,3 +7,5 @@ backtest_output_*/
 backtest_research/
 backtest_high_offense/
 research/backtests/
+
+*.egg-info/
