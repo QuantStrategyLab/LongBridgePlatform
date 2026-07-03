@@ -1147,6 +1147,11 @@ jobs:
               "${CLOUD_RUN_SERVICE%-service}-precheck-scheduler"
             )
           fi
+          legacy_scope="${CLOUD_RUN_SERVICE#longbridge-quant-}"
+          legacy_scope="${legacy_scope%-service}"
+          if [ -n "${legacy_scope}" ] && [ "${legacy_scope}" != "${CLOUD_RUN_SERVICE}" ]; then
+            legacy_jobs+=("lb-${legacy_scope}-backup-execution")
+          fi
           for legacy_job in "${legacy_jobs[@]}"; do
             if gcloud scheduler jobs describe "${legacy_job}" \
               --project="${GCP_PROJECT_ID}" \
