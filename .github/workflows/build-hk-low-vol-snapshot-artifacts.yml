@@ -354,7 +354,7 @@ jobs:
         with:
           name: ${{ steps.build.outputs.artifact_name }}
           path: ${{ steps.build.outputs.artifact_dir }}
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 14
 
       - name: Upload generated input snapshot
@@ -363,7 +363,7 @@ jobs:
         with:
           name: ${{ steps.build.outputs.generated_input_name }}
           path: ${{ steps.build.outputs.generated_input_dir }}
-          if-no-files-found: ignore
+          if-no-files-found: error
           retention-days: 14
 
       - name: Append job summary
