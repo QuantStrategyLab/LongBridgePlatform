@@ -224,10 +224,27 @@ grep -Fq 'gcloud scheduler jobs update http "${job_name}"' "$workflow_file"
 grep -Fq 'gcloud scheduler jobs create http "${job_name}"' "$workflow_file"
 grep -Fq 'monitor_job_name="longbridge-monitor-dispatcher-scheduler"' "$workflow_file"
 grep -Fq 'monitor_uri="${service_url}/monitor-dispatch"' "$workflow_file"
-grep -Fq 'legacy_jobs+=("lb-${legacy_scope}-backup-execution")' "$workflow_file"
-grep -Fq 'gcloud scheduler jobs delete "${legacy_job}"' "$workflow_file"
+grep -Fq 'Reconcile Cloud Run traffic' "$workflow_file"
+grep -Fq 'python3 scripts/reconcile_cloud_runtime.py --platform longbridge --ensure-latest-traffic' "$workflow_file"
+grep -Fq 'Reconcile legacy Cloud Scheduler jobs' "$workflow_file"
+grep -Fq 'python3 scripts/reconcile_cloud_runtime.py --platform longbridge --delete-legacy-schedulers' "$workflow_file"
 grep -Fq -- '--schedule="${desired_schedule}"' "$workflow_file"
 grep -Fq -- '--time-zone="${market_timezone}"' "$workflow_file"
+
+if grep -Fq 'legacy_jobs=(' "$workflow_file"; then
+  echo "unexpected inline legacy scheduler deletion logic still present" >&2
+  exit 1
+fi
+
+if grep -Fq 'legacy_scheduler_locations=' "$workflow_file"; then
+  echo "unexpected inline legacy scheduler location logic still present" >&2
+  exit 1
+fi
+
+if grep -Fq 'gcloud scheduler jobs delete "${legacy_job}"' "$workflow_file"; then
+  echo "unexpected inline legacy scheduler deletion command still present" >&2
+  exit 1
+fi
 
 if grep -Fq 'SERVICE_NAME: ${{ vars.SERVICE_NAME }}' "$workflow_file"; then
   echo "unexpected SERVICE_NAME env wiring still present" >&2

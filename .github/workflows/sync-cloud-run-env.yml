@@ -959,6 +959,14 @@ jobs:
           set -euo pipefail
           python3 scripts/verify_cloud_run_strategy_plugin_mounts.py
 
+      - name: Reconcile Cloud Run traffic
+        if: steps.config.outputs.env_sync_enabled == 'true'
+        env:
+          SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
+        run: |
+          set -euo pipefail
+          python3 scripts/reconcile_cloud_runtime.py --platform longbridge --ensure-latest-traffic
+
       - name: Sync Cloud Scheduler schedule
         if: steps.config.outputs.env_sync_enabled == 'true'
         env:
@@ -1136,32 +1144,13 @@ jobs:
             echo "Skipping shared LongBridge monitor dispatcher scheduler from ${DEPLOYMENT_LABEL}; owner is ${MONITOR_DISPATCHER_OWNER_LABEL:-SG}."
           fi
 
-          legacy_jobs=(
-            "${CLOUD_RUN_SERVICE}-probe-scheduler"
-            "${CLOUD_RUN_SERVICE}-precheck-scheduler"
-          )
-          if [[ "${CLOUD_RUN_SERVICE}" == *-service ]]; then
-            legacy_jobs+=(
-              "${CLOUD_RUN_SERVICE%-service}-probe-scheduler"
-              "${CLOUD_RUN_SERVICE%-service}-precheck-scheduler"
-            )
-          fi
-          legacy_scope="${CLOUD_RUN_SERVICE#longbridge-quant-}"
-          legacy_scope="${legacy_scope%-service}"
-          if [ -n "${legacy_scope}" ] && [ "${legacy_scope}" != "${CLOUD_RUN_SERVICE}" ]; then
-            legacy_jobs+=("lb-${legacy_scope}-backup-execution")
-          fi
-          for legacy_job in "${legacy_jobs[@]}"; do
-            if gcloud scheduler jobs describe "${legacy_job}" \
-              --project="${GCP_PROJECT_ID}" \
-              --location="${scheduler_location}" >/dev/null 2>&1; then
-              echo "Deleting legacy Cloud Scheduler job ${legacy_job}; monitor dispatcher now owns probe/precheck."
-              gcloud scheduler jobs delete "${legacy_job}" \
-                --project="${GCP_PROJECT_ID}" \
-                --location="${scheduler_location}" \
-                --quiet
-            fi
-          done
+      - name: Reconcile legacy Cloud Scheduler jobs
+        if: steps.config.outputs.env_sync_enabled == 'true'
+        env:
+          SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
+        run: |
+          set -euo pipefail
+          python3 scripts/reconcile_cloud_runtime.py --platform longbridge --delete-legacy-schedulers
 
       - name: Prune old Cloud Run revisions
         if: steps.config.outputs.enabled == 'true'
