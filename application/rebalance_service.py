@@ -30,6 +30,7 @@ def _record_platform_execution_telemetry(
     if not profile:
         return
     execution = dict(execution_result.execution or {})
+    portfolio = dict(execution_result.portfolio or {})
     try_record_platform_execution(
         profile,
         {
@@ -38,6 +39,7 @@ def _record_platform_execution_telemetry(
             "effective_date": execution.get("effective_date"),
             "signal_date": execution.get("signal_date"),
             "dry_run_only": bool(getattr(config, "dry_run_only", False)),
+            "total_equity": portfolio.get("total_strategy_equity") or portfolio.get("total_equity"),
         },
     )
 
