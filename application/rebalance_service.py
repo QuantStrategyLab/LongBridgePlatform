@@ -17,8 +17,29 @@ from quant_platform_kit.common.notification_localization import (
     translator_uses_zh as _base_translator_uses_zh,
 )
 from quant_platform_kit.common.strategy_plugins import attach_strategy_plugin_metadata
+from quant_platform_kit.strategy_lifecycle.performance_monitor import try_record_platform_execution
 
 _DETAIL_FIELD_SPLIT_RE = re.compile(r"\s+(?=[^\s=:：]+[=:：])")
+
+
+def _record_platform_execution_telemetry(
+    config: LongBridgeRebalanceConfig,
+    execution_result: ExecutionCycleResult,
+) -> None:
+    profile = str(getattr(config, "strategy_profile", "") or "").strip()
+    if not profile:
+        return
+    execution = dict(execution_result.execution or {})
+    try_record_platform_execution(
+        profile,
+        {
+            "platform": "longbridge",
+            "action_done": bool(execution_result.action_done),
+            "effective_date": execution.get("effective_date"),
+            "signal_date": execution.get("signal_date"),
+            "dry_run_only": bool(getattr(config, "dry_run_only", False)),
+        },
+    )
 
 
 def _plan_portfolio(plan):
@@ -412,4 +433,5 @@ def run_strategy(
         )
     else:
         print(config.with_prefix("notification_suppressed reason=no_trade_or_error"), flush=True)
+    _record_platform_execution_telemetry(config, execution_result)
     return execution_result
