@@ -423,6 +423,100 @@ def _should_bootstrap_whole_share_buy(symbol, *, target_value, limit_price) -> b
     return max(0.0, float(target_value or 0.0)) >= effective_limit_price * float(min_target_share_ratio)
 
 
+def _should_top_up_existing_whole_share_buy(
+    symbol,
+    *,
+    target_value,
+    current_value,
+    quantity=0.0,
+    limit_price,
+    quantity_step: float = 1.0,
+) -> bool:
+    del symbol
+    if abs(float(quantity_step or 0.0) - 1.0) > 1e-9:
+        return False
+    held_quantity = max(0.0, float(quantity or 0.0))
+    effective_limit_price = max(0.0, float(limit_price or 0.0))
+    if held_quantity < 1.0 or effective_limit_price <= 0.0:
+        return False
+    remaining_value = max(0.0, float(target_value or 0.0) - float(current_value or 0.0))
+    if remaining_value <= 0.0 or remaining_value >= effective_limit_price:
+        return False
+    held_whole_shares = int(held_quantity)
+    if held_whole_shares <= 0:
+        return False
+    target_quantity = max(0.0, float(target_value or 0.0)) / effective_limit_price
+    return target_quantity >= held_whole_shares + 0.5
+
+
+def _planned_whole_share_buy_quantity(
+    symbol,
+    *,
+    target_value,
+    current_value,
+    quantity=0.0,
+    buy_budget,
+    available_buying_power,
+    ref_price,
+    quantity_step: float = 1.0,
+    allow_top_up=False,
+):
+    effective_ref_price = max(0.0, float(ref_price or 0.0))
+    if effective_ref_price <= 0.0:
+        return 0
+    planned_quantity = _normalize_buy_quantity(
+        max(0.0, float(buy_budget or 0.0)) / effective_ref_price,
+        quantity_step=quantity_step,
+    )
+    if planned_quantity > 0:
+        return planned_quantity
+    if not allow_top_up:
+        return 0
+    if max(0.0, float(available_buying_power or 0.0)) < effective_ref_price:
+        return 0
+    if _should_top_up_existing_whole_share_buy(
+        symbol,
+        target_value=target_value,
+        current_value=current_value,
+        quantity=quantity,
+        limit_price=effective_ref_price,
+        quantity_step=quantity_step,
+    ):
+        return _normalize_buy_quantity(1.0, quantity_step=quantity_step)
+    return 0
+
+
+def _filled_sell_release_value(
+    *,
+    trade_context,
+    submitted_sell_orders,
+    fetch_order_status,
+) -> float:
+    if fetch_order_status is None:
+        return 0.0
+    released_value = 0.0
+    for order in tuple(submitted_sell_orders or ()):
+        broker_order_id = str((order or {}).get("broker_order_id") or "").strip()
+        if not broker_order_id:
+            continue
+        try:
+            status_payload = fetch_order_status(trade_context, broker_order_id)
+        except Exception:
+            continue
+        if not isinstance(status_payload, Mapping):
+            continue
+        status = str(status_payload.get("status") or "").strip()
+        try:
+            executed_qty = max(0.0, float(status_payload.get("executed_qty") or 0.0))
+            executed_price = max(0.0, float(status_payload.get("executed_price") or 0.0))
+        except (TypeError, ValueError):
+            continue
+        if status not in {"Filled", "PartiallyFilled", "Partial"} and executed_qty <= 0.0:
+            continue
+        released_value += executed_qty * executed_price
+    return released_value
+
+
 def _normalize_cash_by_currency(raw_cash) -> dict[str, float]:
     if not isinstance(raw_cash, Mapping):
         return {}
@@ -864,6 +958,7 @@ def execute_rebalance_cycle(
     market_data_port,
     estimate_max_purchase_quantity,
     execution_port,
+    fetch_order_status=None,
     post_submit_order=None,
     notify_issue,
     translator,
@@ -889,6 +984,7 @@ def execute_rebalance_cycle(
     note_logs: list[str] = []
     submitted_orders: list[dict] = []
     dry_run_orders: list[dict] = []
+    submitted_sell_orders: list[dict[str, Any]] = []
     quote_snapshots_by_symbol: dict[str, dict] = {}
     small_account_cash_note_keys: set[str] = set()
     small_account_bootstrap_note_keys: set[str] = set()
@@ -1080,6 +1176,8 @@ def execute_rebalance_cycle(
         if report.broker_order_id:
             order_payload["broker_order_id"] = report.broker_order_id
         submitted_orders.append(order_payload)
+        if str(side or "").strip().lower() == "sell":
+            submitted_sell_orders.append(order_payload)
         if post_submit_order is not None:
             try:
                 post_submit_order(trade_context, order_intent, report)
@@ -1309,12 +1407,21 @@ def execute_rebalance_cycle(
             refresh_interval = max(0.0, float(post_sell_refresh_interval_sec or 0.0))
             best_refreshed_state = None
             best_investable_cash = previous_investable_cash
+            projected_sell_release_value = 0.0
             for attempt in range(refresh_attempts):
                 if attempt > 0:
                     sleeper(refresh_interval)
                 refreshed_state = fetch_replanned_state()
                 refreshed_execution = refreshed_state[2]
                 refreshed_investable_cash = float(refreshed_execution["investable_cash"])
+                projected_sell_release_value = max(
+                    projected_sell_release_value,
+                    _filled_sell_release_value(
+                        trade_context=trade_context,
+                        submitted_sell_orders=submitted_sell_orders,
+                        fetch_order_status=fetch_order_status,
+                    ),
+                )
                 if best_refreshed_state is None or refreshed_investable_cash > best_investable_cash:
                     best_refreshed_state = refreshed_state
                     best_investable_cash = refreshed_investable_cash
@@ -1370,7 +1477,10 @@ def execute_rebalance_cycle(
             target_values = dict(allocation["targets"])
             available_cash = float(portfolio["liquid_cash"])
             cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
-            investable_cash = float(execution["investable_cash"])
+            investable_cash = max(
+                float(execution["investable_cash"]),
+                previous_investable_cash + projected_sell_release_value,
+            )
             if fractional_buy_execution:
                 current_min_trade = max(float(execution["current_min_trade"]), MIN_FRACTIONAL_BUY_NOTIONAL_USD)
             else:
@@ -1415,14 +1525,25 @@ def execute_rebalance_cycle(
                 if can_buy_value >= MIN_FRACTIONAL_BUY_NOTIONAL_USD:
                     estimated_buy_cost += can_buy_value
                 continue
-            if can_buy_value <= price:
-                continue
-            limit_price = _limit_buy_price(
-                symbol, price, limit_buy_premium, limit_buy_premium_by_symbol
+            is_limit_order = symbol in limit_order_symbols or symbol == cash_sweep_symbol
+            ref_price = (
+                _limit_buy_price(symbol, price, limit_buy_premium, limit_buy_premium_by_symbol)
+                if is_limit_order
+                else round(price, 2)
             )
-            quantity = int(can_buy_value // limit_price) if limit_price > 0 else 0
+            quantity = _planned_whole_share_buy_quantity(
+                symbol,
+                target_value=target_values[symbol],
+                current_value=market_values[symbol],
+                quantity=quantities.get(symbol, 0.0),
+                buy_budget=can_buy_value,
+                available_buying_power=investable_cash,
+                ref_price=ref_price,
+                quantity_step=_buy_step_for(market_symbol(symbol)),
+                allow_top_up=sell_submitted,
+            )
             if quantity > 0:
-                estimated_buy_cost += quantity * limit_price
+                estimated_buy_cost += quantity * ref_price
         if estimated_buy_cost > investable_cash:
             buys_blocked_reason = "pending_sell_release"
             message = translator(
@@ -1455,29 +1576,45 @@ def execute_rebalance_cycle(
         if price is None:
             continue
         can_buy_value = min(diff, investable_cash)
+        planned_quantity = 0
+        effective_can_buy_value = can_buy_value
+        is_limit_order = (
+            False
+            if fractional_buy_execution
+            else (symbol in limit_order_symbols or symbol == cash_sweep_symbol)
+        )
+        ref_price = (
+            _limit_buy_price(symbol, price, limit_buy_premium, limit_buy_premium_by_symbol)
+            if is_limit_order
+            else round(price, 2)
+        )
+        if not fractional_buy_execution:
+            planned_quantity = _planned_whole_share_buy_quantity(
+                symbol,
+                target_value=target_values[symbol],
+                current_value=market_values[symbol],
+                quantity=quantities.get(symbol, 0.0),
+                buy_budget=can_buy_value,
+                available_buying_power=investable_cash,
+                ref_price=ref_price,
+                quantity_step=_buy_step_for(market_symbol(symbol)),
+                allow_top_up=sell_submitted,
+            )
+            if planned_quantity > 0:
+                effective_can_buy_value = max(can_buy_value, planned_quantity * ref_price)
         can_afford_buy = (
             can_buy_value >= MIN_FRACTIONAL_BUY_NOTIONAL_USD
             if fractional_buy_execution
-            else can_buy_value > price
+            else planned_quantity > 0
         )
         if can_afford_buy:
-            is_limit_order = (
-                False
-                if fractional_buy_execution
-                else (symbol in limit_order_symbols or symbol == cash_sweep_symbol)
-            )
             limit_order_kind = "limit" if is_limit_order else "market"
-            limit_ref_price = (
-                _limit_buy_price(symbol, price, limit_buy_premium, limit_buy_premium_by_symbol)
-                if is_limit_order
-                else round(price, 2)
-            )
             limit_candidate = _estimate_buy_quantity_candidate(
                 trade_context,
                 market_symbol(symbol),
                 limit_order_kind,
-                limit_ref_price,
-                can_buy_value=can_buy_value,
+                ref_price,
+                can_buy_value=effective_can_buy_value,
                 estimate_max_purchase_quantity=estimate_max_purchase_quantity,
                 notify_issue=notify_issue,
                 dry_run_only=dry_run_only,
@@ -1492,7 +1629,6 @@ def execute_rebalance_cycle(
                 quantity_step=_buy_step_for(market_symbol(symbol)),
             )
             order_kind = limit_order_kind
-            ref_price = limit_ref_price
             quantity = limit_quantity
             cost_estimate = 0.0
             if quantity <= 0:

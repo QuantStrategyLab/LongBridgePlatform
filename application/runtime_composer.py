@@ -199,6 +199,7 @@ class LongBridgeRuntimeComposer:
             portfolio_port_factory=self.broker_adapters.build_portfolio_port,
             execution_port_factory=self.broker_adapters.build_execution_port,
             post_submit_order=notification_adapters.post_submit_order,
+            fetch_order_status=self.fetch_order_status_fn,
         )
 
     def build_rebalance_config(

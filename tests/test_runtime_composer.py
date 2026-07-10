@@ -137,6 +137,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders(monkeypa
     assert runtime.resolve_rebalance_plan == "resolve-plan"
     assert runtime.market_data_port_factory == "market-data-port-factory"
     assert runtime.notifications == "notification-port"
+    assert runtime.fetch_order_status == "fetch-order-status"
     silent_runtime.notifications.send_text("precheck heartbeat")
     assert observed["sent_message"] == ("tg-token", "chat-id", "[HK] hello")
     assert runtime.post_submit_order == "post-submit-order"

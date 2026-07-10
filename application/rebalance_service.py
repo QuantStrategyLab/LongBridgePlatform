@@ -361,6 +361,7 @@ def run_strategy(
             market_data_port=market_data_port,
             estimate_max_purchase_quantity=runtime.estimate_max_purchase_quantity,
             execution_port=execution_port,
+            fetch_order_status=runtime.fetch_order_status,
             post_submit_order=runtime.post_submit_order,
             notify_issue=runtime.notify_issue,
             translator=config.translator,

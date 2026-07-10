@@ -425,6 +425,80 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             [("SOXL.US", "sell", 1)],
         )
 
+    def test_sell_fill_bridge_can_top_up_existing_position_after_stale_refresh(self):
+        submitted_orders = []
+        stale_plan = _build_plan(
+            strategy_symbols=("SOXL", "SOXX"),
+            risk_symbols=("SOXL", "SOXX"),
+            targets={"SOXL": 0.0, "SOXX": 260.0},
+            market_values={"SOXL": 120.0, "SOXX": 200.0},
+            sellable_quantities={"SOXL": 3, "SOXX": 0},
+            quantities={"SOXL": 3, "SOXX": 2},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=10.0,
+            market_status="rotation",
+            deploy_ratio_text="",
+            income_ratio_text="",
+            income_locked_ratio_text="",
+            signal_message="sell then top up",
+            available_cash=10.0,
+            total_strategy_equity=330.0,
+            portfolio_rows=(("SOXL", "SOXX"),),
+        )
+
+        result = execute_rebalance_cycle(
+            trade_context=object(),
+            plan=stale_plan,
+            portfolio=stale_plan["portfolio"],
+            execution=stale_plan["execution"],
+            allocation=stale_plan["allocation"],
+            fetch_replanned_state=lambda: (
+                stale_plan,
+                stale_plan["portfolio"],
+                stale_plan["execution"],
+                stale_plan["allocation"],
+            ),
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-07-10",
+                    last_price={"SOXL.US": 40.0, "SOXX.US": 100.0}[symbol],
+                )
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 10,
+            execution_port=CallableExecutionPort(
+                lambda order_intent: (
+                    submitted_orders.append(order_intent),
+                    ExecutionReport(
+                        symbol=order_intent.symbol,
+                        side=order_intent.side,
+                        quantity=order_intent.quantity,
+                        status="accepted",
+                        broker_order_id=f"order-{len(submitted_orders)}",
+                    ),
+                )[-1]
+            ),
+            fetch_order_status=lambda _ctx, order_id: {
+                "status": "Filled",
+                "executed_qty": "3",
+                "executed_price": "40",
+            }
+            if order_id == "order-1"
+            else None,
+            notify_issue=lambda _title, _detail: None,
+            translator=build_translator("zh"),
+            with_prefix=lambda message: message,
+            limit_sell_discount=0.995,
+            limit_buy_premium=1.0,
+        )
+
+        self.assertTrue(result.action_done)
+        self.assertEqual(
+            [(order.symbol, order.side, order.quantity) for order in submitted_orders],
+            [("SOXL.US", "sell", 3), ("SOXX.US", "buy", 1)],
+        )
+
     def test_small_account_whole_share_layer_sells_unbuyable_soxx_sleeve(self):
         submitted_orders = []
         prices = {"SOXL": 191.15, "SOXX": 536.88, "BOXX": 100.0}
