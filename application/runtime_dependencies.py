@@ -50,3 +50,4 @@ class LongBridgeRebalanceRuntime:
     portfolio_port_factory: Callable[[Any, Any], PortfolioPort]
     execution_port_factory: Callable[[Any], ExecutionPort]
     post_submit_order: Callable[[Any, Any, Any], None] | None = None
+    fetch_order_status: Callable[..., Any] | None = None
