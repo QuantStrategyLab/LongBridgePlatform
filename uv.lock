@@ -1210,7 +1210,7 @@ wheels = [
 [[package]]
 name = "quant-platform-kit"
 version = "0.10.0"
-source = { git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=2381aa4577e9fd6329053a73a1c888929170eaf3#53b2ca73a5a50257b5d1a3c769b75c40924e4ba6" }
+source = { git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=2381aa4577e9fd6329053a73a1c888929170eaf3#2381aa4577e9fd6329053a73a1c888929170eaf3" }
 
 [[package]]
 name = "requests"
