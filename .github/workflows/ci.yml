@@ -65,11 +65,13 @@ jobs:
           set -euo pipefail
           uv run --no-sync python - <<'PY'
           from quant_platform_kit.common.port_adapters import CallableNotificationPort, CallablePortfolioPort
+          from quant_platform_kit.strategy_lifecycle.live_equity import stamp_consecutive_losses_on_snapshot
           from hk_equity_strategies import resolve_canonical_profile as resolve_hk_canonical_profile
           from us_equity_strategies import resolve_canonical_profile
 
           assert CallableNotificationPort
           assert CallablePortfolioPort
+          assert stamp_consecutive_losses_on_snapshot
           assert resolve_canonical_profile("russell_top50_leader_rotation") == "russell_top50_leader_rotation"
           assert resolve_hk_canonical_profile("hk_global_etf_tactical_rotation") == "hk_global_etf_tactical_rotation"
           PY
