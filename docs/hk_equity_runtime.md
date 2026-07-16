@@ -108,7 +108,7 @@ gh workflow run build-hk-low-vol-snapshot-artifacts.yml \
   -f execute_publish=false
 ```
 
-如果生成结果通过校验，并确认目标 bucket 可由 HK Cloud Run runtime service account 读取，可以发布到 GCS：
+如果生成结果通过校验，并确认 workflow 使用的 publisher/deploy service account 对自定义目标 bucket 具备所需对象写权限，同时 HK Cloud Run runtime service account 具备读取权限，可以发布到 GCS：
 
 ```bash
 gh workflow run build-hk-low-vol-snapshot-artifacts.yml \

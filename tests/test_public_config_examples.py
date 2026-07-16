@@ -28,3 +28,12 @@ def test_public_gcs_examples_use_portable_bucket_placeholders():
                 ), f"{path.name}:{line_number} uses a deployment-specific GCS bucket"
 
     assert observed == 6
+
+
+def test_snapshot_publish_prerequisites_cover_writer_and_runtime_reader():
+    runtime_doc = (
+        REPOSITORY_ROOT / "docs" / "hk_equity_runtime.md"
+    ).read_text(encoding="utf-8")
+
+    assert "publisher/deploy service account 对自定义目标 bucket 具备所需对象写权限" in runtime_doc
+    assert "runtime service account 具备读取权限" in runtime_doc
