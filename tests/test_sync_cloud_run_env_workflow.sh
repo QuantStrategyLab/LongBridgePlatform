@@ -61,7 +61,7 @@ grep -Fq 'STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD: ${{ secrets.STRATEGY_PLUG
 grep -Fq 'STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN: ${{ secrets.STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN }}' "$workflow_file"
 grep -Fq 'STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN: ${{ secrets.STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN }}' "$workflow_file"
 grep -Fq 'STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN: ${{ secrets.STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN }}' "$workflow_file"
-grep -Fq 'STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN }}' "$workflow_file"
+grep -Fq 'STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.TG_TOKEN }}' "$workflow_file"
 grep -Fq 'TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}' "$workflow_file"
 grep -Fq 'LONGPORT_APP_KEY_SECRET_NAME: ${{ vars.LONGPORT_APP_KEY_SECRET_NAME }}' "$workflow_file"
 grep -Fq 'LONGPORT_APP_SECRET_SECRET_NAME: ${{ vars.LONGPORT_APP_SECRET_SECRET_NAME }}' "$workflow_file"
@@ -209,11 +209,11 @@ grep -Fq 'join_by_delimiter()' "$workflow_file"
 grep -Fq 'gcloud_args+=(--remove-secrets "$(IFS=,; echo "${remove_secret_vars[*]}")")' "$workflow_file"
 grep -Fq 'gcloud_args+=(--update-secrets "$(IFS=,; echo "${secret_pairs[*]}")")' "$workflow_file"
 grep -Fq -- '--update-env-vars "^|^$(join_by_delimiter "|" "${env_pairs[@]}")"' "$workflow_file"
-grep -Fq 'MONITOR_DISPATCH_TARGETS_JSON=${monitor_targets_json}' "$workflow_file"
-grep -Fq 'region_by_service' "$workflow_file"
-grep -Fq 'service_url_by_service' "$workflow_file"
+grep -Fq 'remove_env_vars+=("MONITOR_DISPATCH_TARGETS_JSON" "LONGBRIDGE_MONITOR_DISPATCH_TARGETS_JSON")' "$workflow_file"
 grep -Fq 'Sync Cloud Scheduler schedule' "$workflow_file"
 grep -Fq 'scheduler_location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}"' "$workflow_file"
+grep -Fq 'target_env = target.get("env") or {}' "$workflow_file"
+grep -Fq 'runtime_target_enabled="${scheduler_config[4]}"' "$workflow_file"
 grep -Fq 'scheduler_job_candidates=("${CLOUD_RUN_SERVICE}-scheduler")' "$workflow_file"
 grep -Fq 'current_schedule="$(gcloud scheduler jobs describe "${candidate_job}"' "$workflow_file"
 grep -Fq 'desired_schedule="$(CURRENT_SCHEDULE="${current_schedule}" SCHEDULE_TIME="${main_time}" python - <<' "$workflow_file"
@@ -222,14 +222,22 @@ grep -Fq 'print(" ".join(time_fields))' "$workflow_file"
 grep -Fq 'print(" ".join([*time_fields, *current_fields[2:]]))' "$workflow_file"
 grep -Fq 'gcloud scheduler jobs update http "${job_name}"' "$workflow_file"
 grep -Fq 'gcloud scheduler jobs create http "${job_name}"' "$workflow_file"
-grep -Fq 'monitor_job_name="longbridge-monitor-dispatcher-scheduler"' "$workflow_file"
-grep -Fq 'monitor_uri="${service_url}/monitor-dispatch"' "$workflow_file"
+grep -Fq 'precheck_job_name="${CLOUD_RUN_SERVICE}-precheck-scheduler"' "$workflow_file"
+grep -Fq 'precheck_uri="${service_url}/dry-run"' "$workflow_file"
+grep -Fq 'managed_scheduler_jobs=("${job_name}" "${precheck_job_name}")' "$workflow_file"
+grep -Fq 'gcloud scheduler jobs resume "${managed_job_name}"' "$workflow_file"
+grep -Fq 'gcloud scheduler jobs pause "${managed_job_name}"' "$workflow_file"
 grep -Fq 'Reconcile Cloud Run traffic' "$workflow_file"
 grep -Fq 'python3 scripts/reconcile_cloud_runtime.py --platform longbridge --ensure-latest-traffic' "$workflow_file"
 grep -Fq 'Reconcile legacy Cloud Scheduler jobs' "$workflow_file"
 grep -Fq 'python3 scripts/reconcile_cloud_runtime.py --platform longbridge --delete-legacy-schedulers' "$workflow_file"
 grep -Fq -- '--schedule="${desired_schedule}"' "$workflow_file"
 grep -Fq -- '--time-zone="${market_timezone}"' "$workflow_file"
+
+if grep -Fq 'longbridge-monitor-dispatcher-scheduler' "$workflow_file"; then
+  echo "unexpected shared monitor dispatcher scheduler still present" >&2
+  exit 1
+fi
 
 if grep -Fq 'legacy_jobs=(' "$workflow_file"; then
   echo "unexpected inline legacy scheduler deletion logic still present" >&2

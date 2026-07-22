@@ -219,3 +219,50 @@ def test_build_cloud_run_env_sync_plan_supports_per_service_targets():
         live_mega["env"]["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"]
         == "gs://runtime/mega/snapshot.csv.manifest.json"
     )
+
+
+def test_current_service_uses_environment_runtime_enabled_state():
+    payload = {
+        "defaults": {
+            "GLOBAL_TELEGRAM_CHAT_ID": "5992562050",
+            "NOTIFY_LANG": "zh",
+            "LONGBRIDGE_MARKET": "US",
+        },
+        "targets": [
+            {
+                "service": service,
+                "account_prefix": scope,
+                "runtime_target": json.loads(
+                    runtime_target_json(
+                        "tqqq_growth_income",
+                        deployment_selector=scope,
+                        account_scope=scope,
+                        service_name=service,
+                    )
+                ),
+            }
+            for service, scope in (
+                ("longbridge-quant-paper-service", "PAPER"),
+                ("longbridge-quant-sg-service", "SG"),
+            )
+        ],
+    }
+    env = {
+        **os.environ,
+        "CLOUD_RUN_SERVICE_TARGETS_JSON": json.dumps(payload),
+        "CLOUD_RUN_SERVICE": "longbridge-quant-sg-service",
+        "RUNTIME_TARGET_ENABLED": "false",
+    }
+
+    result = subprocess.run(
+        [sys.executable, str(SYNC_PLAN_SCRIPT_PATH), "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    plan = json.loads(result.stdout)
+    by_service = {target["service_name"]: target for target in plan["targets"]}
+    assert by_service["longbridge-quant-sg-service"]["env"]["RUNTIME_TARGET_ENABLED"] == "false"
+    assert by_service["longbridge-quant-paper-service"]["env"]["RUNTIME_TARGET_ENABLED"] == "true"

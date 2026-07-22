@@ -399,6 +399,10 @@ def _build_target_plan(
             per_service_mode=per_service_mode,
             allow_shared_fallback=name in SHARED_TARGET_FALLBACK_ENV,
         )
+        if name == "RUNTIME_TARGET_ENABLED" and service_name == str(
+            env.get("CLOUD_RUN_SERVICE") or ""
+        ).strip():
+            value = _coerce_env_value(env.get(name)) or value
         # 2. runtime_target-derived
         if value is None and name == "LONGBRIDGE_DRY_RUN_ONLY":
             dry_run_value = runtime_target.get("dry_run_only")
@@ -412,6 +416,9 @@ def _build_target_plan(
             override_value = overrides.get(name) or overrides.get(name.lower())
             if override_value is not None:
                 value = _coerce_env_value(override_value)
+
+        if name == "RUNTIME_TARGET_ENABLED" and value is None:
+            value = "true"
 
         if value is None:
             remove_env_vars.append(name)
