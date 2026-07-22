@@ -1303,7 +1303,13 @@ jobs:
           import os
 
           payload = json.loads(os.environ.get("CLOUD_RUN_SERVICE_TARGETS_JSON") or "{}")
-          for target in payload.get("targets") or []:
+          if isinstance(payload, list):
+              targets = payload
+          elif isinstance(payload, dict):
+              targets = payload.get("targets") or []
+          else:
+              targets = []
+          for target in targets:
               if not isinstance(target, dict):
                   continue
               service_name = str(target.get("service_name") or target.get("service") or "").strip()

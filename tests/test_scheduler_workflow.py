@@ -26,6 +26,9 @@ def test_replacement_verifier_falls_back_to_global_scheduler_location() -> None:
     workflow = Path(".github/workflows/sync-cloud-run-env.yml").read_text(encoding="utf-8")
     cleanup_section = workflow[workflow.index("cleanup-shared-monitor:") :]
 
+    assert "if isinstance(payload, list):" in cleanup_section
+    assert "elif isinstance(payload, dict):" in cleanup_section
+    assert "for target in targets:" in cleanup_section
     assert 'or os.environ.get("CLOUD_SCHEDULER_LOCATION")' in cleanup_section
     assert 'or os.environ.get("CLOUD_RUN_REGION")' in cleanup_section
 
