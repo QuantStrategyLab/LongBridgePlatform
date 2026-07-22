@@ -277,7 +277,7 @@ def ensure_latest_traffic(
 
 def _legacy_jobs_for_target(platform: str, target: RuntimeTarget) -> list[str]:
     service = target.service_name
-    jobs = [f"{service}-probe-scheduler", f"{service}-precheck-scheduler"]
+    jobs: list[str] = []
     if service.endswith("-service"):
         base = service[: -len("-service")]
         jobs.extend([f"{base}-probe-scheduler", f"{base}-precheck-scheduler"])

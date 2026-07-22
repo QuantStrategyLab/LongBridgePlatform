@@ -399,6 +399,10 @@ def _build_target_plan(
             per_service_mode=per_service_mode,
             allow_shared_fallback=name in SHARED_TARGET_FALLBACK_ENV,
         )
+        if name == "RUNTIME_TARGET_ENABLED" and service_name == str(
+            env.get("CLOUD_RUN_SERVICE") or ""
+        ).strip():
+            value = _coerce_env_value(env.get(name)) or value
         # 2. runtime_target-derived
         if value is None and name == "LONGBRIDGE_DRY_RUN_ONLY":
             dry_run_value = runtime_target.get("dry_run_only")
@@ -412,6 +416,9 @@ def _build_target_plan(
             override_value = overrides.get(name) or overrides.get(name.lower())
             if override_value is not None:
                 value = _coerce_env_value(override_value)
+
+        if name == "RUNTIME_TARGET_ENABLED" and value is None:
+            value = "true"
 
         if value is None:
             remove_env_vars.append(name)
@@ -473,8 +480,21 @@ def _build_scheduler_plan(
             per_service_mode=per_service_mode,
             allow_shared_fallback=True,
         )
-        scheduler[key] = str(runtime_scheduler.get(key) or configured_value or SCHEDULER_TIME_DEFAULTS[key])
+        scheduler[key] = _validate_scheduler_time(
+            key,
+            str(runtime_scheduler.get(key) or configured_value or SCHEDULER_TIME_DEFAULTS[key]),
+        )
     return scheduler
+
+
+def _validate_scheduler_time(name: str, value: str) -> str:
+    fields = value.split()
+    if len(fields) == 5 and fields[2] != "*" and fields[4] != "*":
+        raise ValueError(
+            f"{name} cannot constrain both day-of-month and day-of-week; "
+            "Cloud Scheduler applies OR semantics to those fields"
+        )
+    return value
 
 
 def _validate_profile_inputs(

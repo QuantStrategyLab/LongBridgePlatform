@@ -159,16 +159,6 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
         self.assertEqual(
             delete_commands,
             [
-                ("longbridge-quant-paper-service-probe-scheduler", "asia-east2"),
-                ("longbridge-quant-paper-service-probe-scheduler", "asia-east1"),
-                ("longbridge-quant-paper-service-probe-scheduler", "europe-west1"),
-                ("longbridge-quant-paper-service-probe-scheduler", "asia-northeast1"),
-                ("longbridge-quant-paper-service-probe-scheduler", "asia-south1"),
-                ("longbridge-quant-paper-service-precheck-scheduler", "asia-east2"),
-                ("longbridge-quant-paper-service-precheck-scheduler", "asia-east1"),
-                ("longbridge-quant-paper-service-precheck-scheduler", "europe-west1"),
-                ("longbridge-quant-paper-service-precheck-scheduler", "asia-northeast1"),
-                ("longbridge-quant-paper-service-precheck-scheduler", "asia-south1"),
                 ("longbridge-quant-paper-probe-scheduler", "asia-east2"),
                 ("longbridge-quant-paper-probe-scheduler", "asia-east1"),
                 ("longbridge-quant-paper-probe-scheduler", "europe-west1"),

@@ -117,7 +117,6 @@ jobs:
       CLOUD_SCHEDULER_MAIN_TIME: ${{ vars.CLOUD_SCHEDULER_MAIN_TIME }}
       CLOUD_SCHEDULER_PROBE_TIME: ${{ vars.CLOUD_SCHEDULER_PROBE_TIME }}
       CLOUD_SCHEDULER_PRECHECK_TIME: ${{ vars.CLOUD_SCHEDULER_PRECHECK_TIME }}
-      MONITOR_DISPATCHER_OWNER_LABEL: ${{ vars.MONITOR_DISPATCHER_OWNER_LABEL || 'SG' }}
       ACCOUNT_PREFIX: ${{ vars.ACCOUNT_PREFIX }}
       TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
       LONGPORT_APP_KEY_SECRET_NAME: ${{ vars.LONGPORT_APP_KEY_SECRET_NAME }}
@@ -862,77 +861,6 @@ jobs:
             remove_env_vars+=("STRATEGY_PLUGIN_ALERT_TELEGRAM_BODY_MAX_CHARS")
           fi
 
-          monitor_targets_json="$(
-            python - <<'PY'
-          import json
-          import os
-          import subprocess
-
-          plan = json.loads(os.environ["SYNC_PLAN_JSON"])
-          project = os.environ.get("GCP_PROJECT_ID", "").strip()
-          default_region = os.environ.get("CLOUD_RUN_REGION", "").strip()
-          configured_targets = json.loads(
-              os.environ.get("CLOUD_RUN_SERVICE_TARGETS_JSON") or "{}"
-          ).get("targets") or []
-          region_by_service: dict[str, str] = {}
-          service_url_by_service: dict[str, str] = {}
-          for item in configured_targets:
-              if not isinstance(item, dict):
-                  continue
-              service_name = str(item.get("service_name") or item.get("service") or "").strip()
-              if not service_name:
-                  continue
-              region = str(item.get("region") or "").strip()
-              if region:
-                  region_by_service[service_name] = region
-              service_url = str(item.get("service_url") or "").strip()
-              if service_url:
-                  service_url_by_service[service_name] = service_url
-
-          output = []
-          for target in plan.get("targets") or []:
-              if not isinstance(target, dict):
-                  continue
-              env = target.get("env") or {}
-              runtime_target = json.loads(env.get("RUNTIME_TARGET_JSON") or "{}")
-              service_name = str(target.get("service_name") or "").strip()
-              if not service_name:
-                  continue
-              service_url = service_url_by_service.get(service_name)
-              if not service_url:
-                  region = region_by_service.get(service_name) or default_region
-                  if not region:
-                      continue
-                  service_url = subprocess.check_output(
-                      [
-                          "gcloud",
-                          "run",
-                          "services",
-                          "describe",
-                          service_name,
-                          f"--project={project}",
-                          f"--region={region}",
-                          "--format=value(status.url)",
-                      ],
-                      text=True,
-                  ).strip()
-              if not service_url:
-                  continue
-              output.append(
-                  {
-                      "service_name": service_name,
-                      "service_url": service_url,
-                      "strategy_profile": target.get("strategy_profile") or env.get("STRATEGY_PROFILE"),
-                      "account_scope": runtime_target.get("account_scope"),
-                      "runtime_target_enabled": env.get("RUNTIME_TARGET_ENABLED", "true"),
-                      "scheduler": target.get("scheduler") or {},
-                  }
-              )
-          print(json.dumps({"targets": output}, separators=(",", ":")))
-          PY
-          )"
-          env_pairs+=("MONITOR_DISPATCH_TARGETS_JSON=${monitor_targets_json}")
-
           gcloud_args=(
             run services update "${CLOUD_RUN_SERVICE}"
             --region "${CLOUD_RUN_REGION}"
@@ -992,18 +920,21 @@ jobs:
               targets[0],
           )
           scheduler = target.get("scheduler") or {}
+          target_env = target.get("env") or {}
           print(str(scheduler.get("timezone") or os.environ.get("LONGBRIDGE_MARKET_TIMEZONE", "")).strip() or "America/New_York")
           print(str(scheduler.get("main_time") or os.environ.get("CLOUD_SCHEDULER_MAIN_TIME", "").strip() or "45 15"))
           print(str(scheduler.get("probe_time") or os.environ.get("CLOUD_SCHEDULER_PROBE_TIME", "").strip() or "35 9,15"))
           print(str(scheduler.get("precheck_time") or os.environ.get("CLOUD_SCHEDULER_PRECHECK_TIME", "").strip() or "45 9"))
+          print(str(target_env.get("RUNTIME_TARGET_ENABLED") or "true").strip().lower())
           PY
           )
           market_timezone="${scheduler_config[0]}"
           main_time="${scheduler_config[1]}"
           probe_time="${scheduler_config[2]}"
           precheck_time="${scheduler_config[3]}"
-          # Keep probe/precheck parsed for runtime-target schema parity; this step only syncs the main scheduler.
-          : "${probe_time}" "${precheck_time}"
+          runtime_target_enabled="${scheduler_config[4]}"
+          # Keep probe parsed for runtime-target schema parity.
+          : "${probe_time}"
 
           service_url="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
             --project="${GCP_PROJECT_ID}" \
@@ -1059,6 +990,10 @@ jobs:
           if len(time_fields) == 5:
               print(" ".join(time_fields))
           elif len(time_fields) == 2:
+              if current_fields[2] != "*" and current_fields[4] != "*":
+                  raise SystemExit(
+                      "Cloud Scheduler schedule cannot constrain both day-of-month and day-of-week"
+                  )
               print(" ".join([*time_fields, *current_fields[2:]]))
           else:
               raise SystemExit(
@@ -1082,6 +1017,42 @@ jobs:
           PY
             )"
           fi
+
+          desired_precheck_schedule="$(CURRENT_SCHEDULE="${desired_schedule}" SCHEDULE_TIME="${precheck_time}" python - <<'PY'
+          import os
+
+          current_fields = os.environ["CURRENT_SCHEDULE"].split()
+          time_fields = os.environ["SCHEDULE_TIME"].split()
+          if len(current_fields) != 5:
+              raise SystemExit(f"Cloud Scheduler schedule must have 5 fields: {os.environ['CURRENT_SCHEDULE']!r}")
+          if len(time_fields) == 5:
+              print(" ".join(time_fields))
+          elif len(time_fields) == 2:
+              print(" ".join([*time_fields, *current_fields[2:]]))
+          else:
+              raise SystemExit(
+                  f"Cloud Scheduler override must have 2 time fields or 5 cron fields: {os.environ['SCHEDULE_TIME']!r}"
+              )
+          PY
+          )"
+
+          desired_probe_schedule="$(CURRENT_SCHEDULE="${desired_schedule}" SCHEDULE_TIME="${probe_time}" python - <<'PY'
+          import os
+
+          current_fields = os.environ["CURRENT_SCHEDULE"].split()
+          time_fields = os.environ["SCHEDULE_TIME"].split()
+          if len(current_fields) != 5:
+              raise SystemExit(f"Cloud Scheduler schedule must have 5 fields: {os.environ['CURRENT_SCHEDULE']!r}")
+          if len(time_fields) == 5:
+              print(" ".join(time_fields))
+          elif len(time_fields) == 2:
+              print(" ".join([*time_fields, *current_fields[2:]]))
+          else:
+              raise SystemExit(
+                  f"Cloud Scheduler override must have 2 time fields or 5 cron fields: {os.environ['SCHEDULE_TIME']!r}"
+              )
+          PY
+          )"
 
           scheduler_uri="${service_url}/run"
           if [ -n "${current_schedule}" ]; then
@@ -1108,41 +1079,105 @@ jobs:
               --quiet
           fi
 
-          if [ "${DEPLOYMENT_LABEL:-}" = "${MONITOR_DISPATCHER_OWNER_LABEL:-SG}" ]; then
-            monitor_job_name="longbridge-monitor-dispatcher-scheduler"
-            monitor_uri="${service_url}/monitor-dispatch"
-            if gcloud scheduler jobs describe "${monitor_job_name}" \
+          probe_job_name="${CLOUD_RUN_SERVICE}-probe-scheduler"
+          probe_uri="${service_url}/probe"
+          if gcloud scheduler jobs describe "${probe_job_name}" \
+            --project="${GCP_PROJECT_ID}" \
+            --location="${scheduler_location}" >/dev/null 2>&1; then
+            echo "Updating Cloud Scheduler probe ${probe_job_name} to ${desired_probe_schedule}."
+            gcloud scheduler jobs update http "${probe_job_name}" \
               --project="${GCP_PROJECT_ID}" \
-              --location="${scheduler_location}" >/dev/null 2>&1; then
-              echo "Updating Cloud Scheduler job ${monitor_job_name} to ${monitor_uri}."
-              gcloud scheduler jobs update http "${monitor_job_name}" \
-                --project="${GCP_PROJECT_ID}" \
-                --location="${scheduler_location}" \
-                --uri="${monitor_uri}" \
-                --http-method=POST \
-                --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
-                --oidc-token-audience="${service_url}" \
-                --schedule="*/5 * * * *" \
-                --time-zone="UTC" \
-                --attempt-deadline=180s \
-                --quiet
-            else
-              echo "Creating Cloud Scheduler job ${monitor_job_name} at ${monitor_uri}."
-              gcloud scheduler jobs create http "${monitor_job_name}" \
-                --project="${GCP_PROJECT_ID}" \
-                --location="${scheduler_location}" \
-                --uri="${monitor_uri}" \
-                --http-method=POST \
-                --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
-                --oidc-token-audience="${service_url}" \
-                --schedule="*/5 * * * *" \
-                --time-zone="UTC" \
-                --attempt-deadline=180s \
-                --quiet
-            fi
+              --location="${scheduler_location}" \
+              --uri="${probe_uri}" \
+              --schedule="${desired_probe_schedule}" \
+              --time-zone="${market_timezone}" \
+              --http-method=POST \
+              --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
+              --oidc-token-audience="${service_url}" \
+              --attempt-deadline=180s \
+              --max-retry-attempts=0 \
+              --max-retry-duration=0s \
+              --quiet
           else
-            echo "Skipping shared LongBridge monitor dispatcher scheduler from ${DEPLOYMENT_LABEL}; owner is ${MONITOR_DISPATCHER_OWNER_LABEL:-SG}."
+            echo "Creating Cloud Scheduler probe ${probe_job_name} at ${desired_probe_schedule}."
+            gcloud scheduler jobs create http "${probe_job_name}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" \
+              --uri="${probe_uri}" \
+              --schedule="${desired_probe_schedule}" \
+              --time-zone="${market_timezone}" \
+              --http-method=POST \
+              --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
+              --oidc-token-audience="${service_url}" \
+              --attempt-deadline=180s \
+              --max-retry-attempts=0 \
+              --max-retry-duration=0s \
+              --quiet
           fi
+
+          precheck_job_name="${CLOUD_RUN_SERVICE}-precheck-scheduler"
+          precheck_uri="${service_url}/dry-run"
+          if gcloud scheduler jobs describe "${precheck_job_name}" \
+            --project="${GCP_PROJECT_ID}" \
+            --location="${scheduler_location}" >/dev/null 2>&1; then
+            echo "Updating Cloud Scheduler precheck ${precheck_job_name} to ${desired_precheck_schedule}."
+            gcloud scheduler jobs update http "${precheck_job_name}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" \
+              --uri="${precheck_uri}" \
+              --schedule="${desired_precheck_schedule}" \
+              --time-zone="${market_timezone}" \
+              --http-method=POST \
+              --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
+              --oidc-token-audience="${service_url}" \
+              --attempt-deadline=180s \
+              --max-retry-attempts=0 \
+              --max-retry-duration=0s \
+              --quiet
+          else
+            echo "Creating Cloud Scheduler precheck ${precheck_job_name} at ${desired_precheck_schedule}."
+            gcloud scheduler jobs create http "${precheck_job_name}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" \
+              --uri="${precheck_uri}" \
+              --schedule="${desired_precheck_schedule}" \
+              --time-zone="${market_timezone}" \
+              --http-method=POST \
+              --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
+              --oidc-token-audience="${service_url}" \
+              --attempt-deadline=180s \
+              --max-retry-attempts=0 \
+              --max-retry-duration=0s \
+              --quiet
+          fi
+
+          managed_scheduler_jobs=("${job_name}" "${probe_job_name}" "${precheck_job_name}")
+          for managed_job_name in "${managed_scheduler_jobs[@]}"; do
+            managed_job_state="$(gcloud scheduler jobs describe "${managed_job_name}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" \
+              --format='value(state)')"
+            case "${runtime_target_enabled}" in
+              1|true|yes|on)
+                if [ "${managed_job_state}" = "PAUSED" ]; then
+                  echo "Resuming Cloud Scheduler job ${managed_job_name} because ${CLOUD_RUN_SERVICE} is enabled."
+                  gcloud scheduler jobs resume "${managed_job_name}" \
+                    --project="${GCP_PROJECT_ID}" \
+                    --location="${scheduler_location}" \
+                    --quiet
+                fi
+                ;;
+              *)
+                if [ "${managed_job_state}" != "PAUSED" ]; then
+                  echo "Pausing Cloud Scheduler job ${managed_job_name} because ${CLOUD_RUN_SERVICE} is disabled."
+                  gcloud scheduler jobs pause "${managed_job_name}" \
+                    --project="${GCP_PROJECT_ID}" \
+                    --location="${scheduler_location}" \
+                    --quiet
+                fi
+                ;;
+            esac
+          done
 
       - name: Reconcile legacy Cloud Scheduler jobs
         if: steps.config.outputs.env_sync_enabled == 'true'
@@ -1224,3 +1259,117 @@ jobs:
               --async \
               --quiet
           done <<< "${old_digests}"
+
+  cleanup-shared-monitor:
+    name: Retire shared monitor dispatcher
+    needs: sync
+    if: >
+      needs.sync.result == 'success' &&
+      (
+        github.event_name == 'workflow_run' ||
+        (github.event_name == 'workflow_dispatch' && inputs.target == 'configured')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: longbridge-sg
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON }}
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      CLOUD_SCHEDULER_LOCATION: ${{ vars.CLOUD_SCHEDULER_LOCATION }}
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          version: ">= 416.0.0"
+
+      - name: Verify per-service scheduler replacements
+        id: replacements
+        run: |
+          set -euo pipefail
+
+          replacements_ready="true"
+          mapfile -t configured_targets < <(python3 - <<'PY'
+          import json
+          import os
+
+          payload = json.loads(os.environ.get("CLOUD_RUN_SERVICE_TARGETS_JSON") or "{}")
+          if isinstance(payload, list):
+              targets = payload
+          elif isinstance(payload, dict):
+              targets = payload.get("targets") or []
+          else:
+              targets = []
+          for target in targets:
+              if not isinstance(target, dict):
+                  continue
+              service_name = str(target.get("service_name") or target.get("service") or "").strip()
+              scheduler = target.get("scheduler") if isinstance(target.get("scheduler"), dict) else {}
+              location = str(
+                  target.get("scheduler_location")
+                  or scheduler.get("location")
+                  or target.get("region")
+                  or target.get("cloud_run_region")
+                  or os.environ.get("CLOUD_SCHEDULER_LOCATION")
+                  or os.environ.get("CLOUD_RUN_REGION")
+                  or ""
+              ).strip()
+              if service_name:
+                  print(f"{service_name}\t{location}")
+          PY
+          )
+
+          if [ "${#configured_targets[@]}" -eq 0 ]; then
+            echo "No configured LongBridge targets; keeping the shared monitor dispatcher." >&2
+            replacements_ready="false"
+          fi
+
+          for configured_target in "${configured_targets[@]}"; do
+            IFS=$'\t' read -r service_name scheduler_location <<< "${configured_target}"
+            if [ -z "${scheduler_location}" ]; then
+              echo "No scheduler location for ${service_name}; keeping the shared monitor dispatcher." >&2
+              replacements_ready="false"
+              continue
+            fi
+            replacement_jobs=("${service_name}-probe-scheduler" "${service_name}-precheck-scheduler")
+            for replacement_job in "${replacement_jobs[@]}"; do
+              if ! gcloud scheduler jobs describe "${replacement_job}" \
+                --project="${GCP_PROJECT_ID}" \
+                --location="${scheduler_location}" >/dev/null 2>&1; then
+                echo "Replacement ${replacement_job} is not ready in ${scheduler_location}." >&2
+                replacements_ready="false"
+              fi
+            done
+          done
+
+          echo "ready=${replacements_ready}" >> "$GITHUB_OUTPUT"
+
+      - name: Delete obsolete shared monitor dispatcher
+        if: steps.replacements.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+
+          scheduler_location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}"
+          if [ -z "${scheduler_location}" ]; then
+            echo "Shared monitor dispatcher cleanup requires a scheduler location." >&2
+            exit 1
+          fi
+          monitor_job_name="longbridge-monitor-dispatcher-scheduler"
+          if gcloud scheduler jobs describe "${monitor_job_name}" \
+            --project="${GCP_PROJECT_ID}" \
+            --location="${scheduler_location}" >/dev/null 2>&1; then
+            echo "Deleting obsolete shared monitor dispatcher ${monitor_job_name}."
+            gcloud scheduler jobs delete "${monitor_job_name}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" \
+              --quiet
+          fi

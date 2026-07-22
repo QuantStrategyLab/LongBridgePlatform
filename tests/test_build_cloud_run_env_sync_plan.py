@@ -82,6 +82,34 @@ def test_build_cloud_run_env_sync_plan_legacy_mode_uses_shared_env():
     }
 
 
+def test_build_cloud_run_env_sync_plan_rejects_ambiguous_cloud_scheduler_cron():
+    env = {
+        **os.environ,
+        "CLOUD_RUN_SERVICE": "longbridge-quant-paper-service",
+        "GLOBAL_TELEGRAM_CHAT_ID": "5992562050",
+        "NOTIFY_LANG": "zh",
+        "ACCOUNT_PREFIX": "PAPER",
+        "RUNTIME_TARGET_JSON": runtime_target_json(
+            "soxl_soxx_trend_income",
+            deployment_selector="PAPER",
+            account_scope="PAPER",
+            service_name="longbridge-quant-paper-service",
+        ),
+        "LONGBRIDGE_MARKET": "US",
+        "CLOUD_SCHEDULER_PROBE_TIME": "35 9 1-7 * 1-5",
+    }
+
+    result = subprocess.run(
+        [sys.executable, str(SYNC_PLAN_SCRIPT_PATH), "--json"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert "cannot constrain both day-of-month and day-of-week" in result.stderr
+
+
 def test_build_cloud_run_env_sync_plan_requires_target_snapshot_in_per_service_mode():
     payload = {
         "defaults": {
@@ -219,3 +247,50 @@ def test_build_cloud_run_env_sync_plan_supports_per_service_targets():
         live_mega["env"]["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"]
         == "gs://runtime/mega/snapshot.csv.manifest.json"
     )
+
+
+def test_current_service_uses_environment_runtime_enabled_state():
+    payload = {
+        "defaults": {
+            "GLOBAL_TELEGRAM_CHAT_ID": "5992562050",
+            "NOTIFY_LANG": "zh",
+            "LONGBRIDGE_MARKET": "US",
+        },
+        "targets": [
+            {
+                "service": service,
+                "account_prefix": scope,
+                "runtime_target": json.loads(
+                    runtime_target_json(
+                        "tqqq_growth_income",
+                        deployment_selector=scope,
+                        account_scope=scope,
+                        service_name=service,
+                    )
+                ),
+            }
+            for service, scope in (
+                ("longbridge-quant-paper-service", "PAPER"),
+                ("longbridge-quant-sg-service", "SG"),
+            )
+        ],
+    }
+    env = {
+        **os.environ,
+        "CLOUD_RUN_SERVICE_TARGETS_JSON": json.dumps(payload),
+        "CLOUD_RUN_SERVICE": "longbridge-quant-sg-service",
+        "RUNTIME_TARGET_ENABLED": "false",
+    }
+
+    result = subprocess.run(
+        [sys.executable, str(SYNC_PLAN_SCRIPT_PATH), "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    plan = json.loads(result.stdout)
+    by_service = {target["service_name"]: target for target in plan["targets"]}
+    assert by_service["longbridge-quant-sg-service"]["env"]["RUNTIME_TARGET_ENABLED"] == "false"
+    assert by_service["longbridge-quant-paper-service"]["env"]["RUNTIME_TARGET_ENABLED"] == "true"
