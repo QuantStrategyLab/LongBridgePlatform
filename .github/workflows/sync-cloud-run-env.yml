@@ -992,6 +992,10 @@ jobs:
           if len(time_fields) == 5:
               print(" ".join(time_fields))
           elif len(time_fields) == 2:
+              if current_fields[2] != "*" and current_fields[4] != "*":
+                  raise SystemExit(
+                      "Cloud Scheduler schedule cannot constrain both day-of-month and day-of-week"
+                  )
               print(" ".join([*time_fields, *current_fields[2:]]))
           else:
               raise SystemExit(

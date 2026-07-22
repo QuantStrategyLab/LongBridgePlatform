@@ -17,3 +17,10 @@ def test_replacement_probe_and_precheck_exist_before_shared_dispatcher_cleanup()
     assert "environment: longbridge-sg" in cleanup_section
     assert 'replacement_jobs=("${service_name}-probe-scheduler" "${service_name}-precheck-scheduler")' in cleanup_section
     assert "if: steps.replacements.outputs.ready == 'true'" in cleanup_section
+
+
+def test_existing_scheduler_cron_rejects_ambiguous_day_fields() -> None:
+    workflow = Path(".github/workflows/sync-cloud-run-env.yml").read_text(encoding="utf-8")
+
+    assert 'if current_fields[2] != "*" and current_fields[4] != "*":' in workflow
+    assert "cannot constrain both day-of-month and day-of-week" in workflow

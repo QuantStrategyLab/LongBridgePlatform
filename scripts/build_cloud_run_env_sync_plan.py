@@ -480,8 +480,21 @@ def _build_scheduler_plan(
             per_service_mode=per_service_mode,
             allow_shared_fallback=True,
         )
-        scheduler[key] = str(runtime_scheduler.get(key) or configured_value or SCHEDULER_TIME_DEFAULTS[key])
+        scheduler[key] = _validate_scheduler_time(
+            key,
+            str(runtime_scheduler.get(key) or configured_value or SCHEDULER_TIME_DEFAULTS[key]),
+        )
     return scheduler
+
+
+def _validate_scheduler_time(name: str, value: str) -> str:
+    fields = value.split()
+    if len(fields) == 5 and fields[2] != "*" and fields[4] != "*":
+        raise ValueError(
+            f"{name} cannot constrain both day-of-month and day-of-week; "
+            "Cloud Scheduler applies OR semantics to those fields"
+        )
+    return value
 
 
 def _validate_profile_inputs(

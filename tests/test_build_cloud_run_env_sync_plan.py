@@ -82,6 +82,34 @@ def test_build_cloud_run_env_sync_plan_legacy_mode_uses_shared_env():
     }
 
 
+def test_build_cloud_run_env_sync_plan_rejects_ambiguous_cloud_scheduler_cron():
+    env = {
+        **os.environ,
+        "CLOUD_RUN_SERVICE": "longbridge-quant-paper-service",
+        "GLOBAL_TELEGRAM_CHAT_ID": "5992562050",
+        "NOTIFY_LANG": "zh",
+        "ACCOUNT_PREFIX": "PAPER",
+        "RUNTIME_TARGET_JSON": runtime_target_json(
+            "soxl_soxx_trend_income",
+            deployment_selector="PAPER",
+            account_scope="PAPER",
+            service_name="longbridge-quant-paper-service",
+        ),
+        "LONGBRIDGE_MARKET": "US",
+        "CLOUD_SCHEDULER_PROBE_TIME": "35 9 1-7 * 1-5",
+    }
+
+    result = subprocess.run(
+        [sys.executable, str(SYNC_PLAN_SCRIPT_PATH), "--json"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert "cannot constrain both day-of-month and day-of-week" in result.stderr
+
+
 def test_build_cloud_run_env_sync_plan_requires_target_snapshot_in_per_service_mode():
     payload = {
         "defaults": {
