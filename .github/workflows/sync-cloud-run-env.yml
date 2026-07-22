@@ -861,8 +861,6 @@ jobs:
             remove_env_vars+=("STRATEGY_PLUGIN_ALERT_TELEGRAM_BODY_MAX_CHARS")
           fi
 
-          remove_env_vars+=("MONITOR_DISPATCH_TARGETS_JSON" "LONGBRIDGE_MONITOR_DISPATCH_TARGETS_JSON")
-
           gcloud_args=(
             run services update "${CLOUD_RUN_SERVICE}"
             --region "${CLOUD_RUN_REGION}"
@@ -1315,6 +1313,8 @@ jobs:
                   or scheduler.get("location")
                   or target.get("region")
                   or target.get("cloud_run_region")
+                  or os.environ.get("CLOUD_SCHEDULER_LOCATION")
+                  or os.environ.get("CLOUD_RUN_REGION")
                   or ""
               ).strip()
               if service_name:
