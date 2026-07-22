@@ -222,11 +222,15 @@ grep -Fq 'print(" ".join(time_fields))' "$workflow_file"
 grep -Fq 'print(" ".join([*time_fields, *current_fields[2:]]))' "$workflow_file"
 grep -Fq 'gcloud scheduler jobs update http "${job_name}"' "$workflow_file"
 grep -Fq 'gcloud scheduler jobs create http "${job_name}"' "$workflow_file"
+grep -Fq 'probe_job_name="${CLOUD_RUN_SERVICE}-probe-scheduler"' "$workflow_file"
+grep -Fq 'probe_uri="${service_url}/probe"' "$workflow_file"
 grep -Fq 'precheck_job_name="${CLOUD_RUN_SERVICE}-precheck-scheduler"' "$workflow_file"
 grep -Fq 'precheck_uri="${service_url}/dry-run"' "$workflow_file"
-grep -Fq 'managed_scheduler_jobs=("${job_name}" "${precheck_job_name}")' "$workflow_file"
+grep -Fq 'managed_scheduler_jobs=("${job_name}" "${probe_job_name}" "${precheck_job_name}")' "$workflow_file"
 grep -Fq 'gcloud scheduler jobs resume "${managed_job_name}"' "$workflow_file"
 grep -Fq 'gcloud scheduler jobs pause "${managed_job_name}"' "$workflow_file"
+grep -Fq 'monitor_job_name="longbridge-monitor-dispatcher-scheduler"' "$workflow_file"
+grep -Fq 'gcloud scheduler jobs delete "${monitor_job_name}"' "$workflow_file"
 grep -Fq 'Reconcile Cloud Run traffic' "$workflow_file"
 grep -Fq 'python3 scripts/reconcile_cloud_runtime.py --platform longbridge --ensure-latest-traffic' "$workflow_file"
 grep -Fq 'Reconcile legacy Cloud Scheduler jobs' "$workflow_file"
@@ -234,8 +238,8 @@ grep -Fq 'python3 scripts/reconcile_cloud_runtime.py --platform longbridge --del
 grep -Fq -- '--schedule="${desired_schedule}"' "$workflow_file"
 grep -Fq -- '--time-zone="${market_timezone}"' "$workflow_file"
 
-if grep -Fq 'longbridge-monitor-dispatcher-scheduler' "$workflow_file"; then
-  echo "unexpected shared monitor dispatcher scheduler still present" >&2
+if grep -Fq 'monitor_uri="${service_url}/monitor-dispatch"' "$workflow_file"; then
+  echo "unexpected shared monitor dispatcher creation still present" >&2
   exit 1
 fi
 

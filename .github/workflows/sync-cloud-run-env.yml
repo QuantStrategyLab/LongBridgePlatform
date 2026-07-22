@@ -1034,6 +1034,24 @@ jobs:
           PY
           )"
 
+          desired_probe_schedule="$(CURRENT_SCHEDULE="${desired_schedule}" SCHEDULE_TIME="${probe_time}" python - <<'PY'
+          import os
+
+          current_fields = os.environ["CURRENT_SCHEDULE"].split()
+          time_fields = os.environ["SCHEDULE_TIME"].split()
+          if len(current_fields) != 5:
+              raise SystemExit(f"Cloud Scheduler schedule must have 5 fields: {os.environ['CURRENT_SCHEDULE']!r}")
+          if len(time_fields) == 5:
+              print(" ".join(time_fields))
+          elif len(time_fields) == 2:
+              print(" ".join([*time_fields, *current_fields[2:]]))
+          else:
+              raise SystemExit(
+                  f"Cloud Scheduler override must have 2 time fields or 5 cron fields: {os.environ['SCHEDULE_TIME']!r}"
+              )
+          PY
+          )"
+
           scheduler_uri="${service_url}/run"
           if [ -n "${current_schedule}" ]; then
             echo "Updating Cloud Scheduler job ${job_name} schedule to ${desired_schedule}, timezone to ${market_timezone}, and URI to ${scheduler_uri}."
@@ -1056,6 +1074,42 @@ jobs:
               --schedule="${desired_schedule}" \
               --time-zone="${market_timezone}" \
               --attempt-deadline=600s \
+              --quiet
+          fi
+
+          probe_job_name="${CLOUD_RUN_SERVICE}-probe-scheduler"
+          probe_uri="${service_url}/probe"
+          if gcloud scheduler jobs describe "${probe_job_name}" \
+            --project="${GCP_PROJECT_ID}" \
+            --location="${scheduler_location}" >/dev/null 2>&1; then
+            echo "Updating Cloud Scheduler probe ${probe_job_name} to ${desired_probe_schedule}."
+            gcloud scheduler jobs update http "${probe_job_name}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" \
+              --uri="${probe_uri}" \
+              --schedule="${desired_probe_schedule}" \
+              --time-zone="${market_timezone}" \
+              --http-method=POST \
+              --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
+              --oidc-token-audience="${service_url}" \
+              --attempt-deadline=180s \
+              --max-retry-attempts=0 \
+              --max-retry-duration=0s \
+              --quiet
+          else
+            echo "Creating Cloud Scheduler probe ${probe_job_name} at ${desired_probe_schedule}."
+            gcloud scheduler jobs create http "${probe_job_name}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" \
+              --uri="${probe_uri}" \
+              --schedule="${desired_probe_schedule}" \
+              --time-zone="${market_timezone}" \
+              --http-method=POST \
+              --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
+              --oidc-token-audience="${service_url}" \
+              --attempt-deadline=180s \
+              --max-retry-attempts=0 \
+              --max-retry-duration=0s \
               --quiet
           fi
 
@@ -1095,7 +1149,7 @@ jobs:
               --quiet
           fi
 
-          managed_scheduler_jobs=("${job_name}" "${precheck_job_name}")
+          managed_scheduler_jobs=("${job_name}" "${probe_job_name}" "${precheck_job_name}")
           for managed_job_name in "${managed_scheduler_jobs[@]}"; do
             managed_job_state="$(gcloud scheduler jobs describe "${managed_job_name}" \
               --project="${GCP_PROJECT_ID}" \
@@ -1122,6 +1176,19 @@ jobs:
                 ;;
             esac
           done
+
+          if [ "${DEPLOYMENT_LABEL:-}" = "SG" ]; then
+            monitor_job_name="longbridge-monitor-dispatcher-scheduler"
+            if gcloud scheduler jobs describe "${monitor_job_name}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" >/dev/null 2>&1; then
+              echo "Deleting obsolete shared monitor dispatcher ${monitor_job_name}."
+              gcloud scheduler jobs delete "${monitor_job_name}" \
+                --project="${GCP_PROJECT_ID}" \
+                --location="${scheduler_location}" \
+                --quiet
+            fi
+          fi
 
       - name: Reconcile legacy Cloud Scheduler jobs
         if: steps.config.outputs.env_sync_enabled == 'true'
