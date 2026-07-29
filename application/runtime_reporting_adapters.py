@@ -95,6 +95,10 @@ class LongBridgeRuntimeReportingAdapters:
         )
         if isinstance(persisted, str):
             return persisted
+        missing = object()
+        cloud_uri = getattr(persisted, "cloud_uri", missing)
+        if cloud_uri is not missing:
+            return cloud_uri or getattr(persisted, "local_path", None)
         return getattr(persisted, "gcs_uri", None) or getattr(persisted, "local_path", None)
 
 

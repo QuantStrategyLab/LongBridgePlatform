@@ -88,7 +88,7 @@ def test_runtime_reporting_adapters_log_and_persist_route_to_dependencies():
 
     def fake_report_persister(report, **kwargs):
         observed["persist"] = (report, kwargs)
-        return types.SimpleNamespace(local_path="/tmp/report.json", gcs_uri=None)
+        return types.SimpleNamespace(local_path="/tmp/report.json", cloud_uri=None)
 
     adapters = build_runtime_reporting_adapters(
         runtime_assembly=build_runtime_assembly(
@@ -122,7 +122,34 @@ def test_runtime_reporting_adapters_log_and_persist_route_to_dependencies():
     assert observed["event"][2]["printer"] is adapters.printer
     assert observed["persist"][1] == {
         "base_dir": None,
-        "gcs_prefix_uri": None,
-        "gcp_project_id": "project-1",
+        "cloud_prefix_uri": None,
+        "project_id": "project-1",
     }
     assert persisted == "/tmp/report.json"
+
+
+def test_runtime_reporting_adapters_prefers_legacy_gcs_uri_over_local_path():
+    adapters = build_runtime_reporting_adapters(
+        runtime_assembly=build_runtime_assembly(
+            platform="longbridge",
+            deploy_target="cloud_run",
+            service_name="longbridge-platform",
+            strategy_profile="soxl_soxx_trend_income",
+            account_scope="HK",
+            account_region="HK",
+            project_id="project-1",
+        ),
+        strategy_domain="us_equity",
+        managed_symbols=(),
+        signal_effective_after_trading_days=1,
+        run_id_builder=lambda: "run-001",
+        event_logger=lambda *_args, **_kwargs: {},
+        report_builder=lambda **kwargs: kwargs,
+        report_persister=lambda *_args, **_kwargs: types.SimpleNamespace(
+            local_path="/tmp/report.json",
+            gcs_uri="gs://bucket/report.json",
+        ),
+        printer=lambda *_args, **_kwargs: None,
+    )
+
+    assert adapters.persist_execution_report({}) == "gs://bucket/report.json"

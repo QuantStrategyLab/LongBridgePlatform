@@ -200,6 +200,7 @@ def _profile_estimate_max_purchase_quantity(t_ctx, symbol, **kwargs):
     )
 
 SEPARATOR = "━━━━━━━━━━━━━━━━━━"
+COMPACT_ERROR_NOTIFICATION_MAX_CHARS = 3500
 
 
 def _load_limit_buy_premium_by_symbol(*env_names: str) -> dict[str, float]:
@@ -237,6 +238,22 @@ LIMIT_BUY_PREMIUM_BY_SYMBOL = _load_limit_buy_premium_by_symbol(
 
 def t(key, **kwargs):
     return build_translator(NOTIFY_LANG)(key, **kwargs)
+
+
+def _compact_error_notification(
+    exc: Exception,
+    *,
+    title: str | None = None,
+    prefix: str = "",
+) -> str:
+    detail = " ".join(str(exc).split())
+    error_text = type(exc).__name__
+    if detail:
+        error_text = f"{error_text}: {detail}"
+    message = f"{title or t('error_title')}\n{prefix}{error_text}"
+    if len(message) <= COMPACT_ERROR_NOTIFICATION_MAX_CHARS:
+        return message
+    return message[: COMPACT_ERROR_NOTIFICATION_MAX_CHARS - 1].rstrip() + "…"
 
 
 def _split_env_list(value: str | None) -> tuple[str, ...]:
@@ -591,17 +608,18 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         )
         if isinstance(market_open, tuple):
             market_open, error = market_open
-            reporting_adapters.log_event(
-                log_context,
-                "market_hours_check_failed",
-                message="Market hours check failed",
-                severity="WARNING",
-                error_message=str(error),
-                market=MARKET,
-                market_calendar=MARKET_CALENDAR,
-                market_timezone=MARKET_TIMEZONE,
-            )
-            print(composer.with_prefix(f"Market hours check failed: {error}"), flush=True)
+            if error is not None:
+                reporting_adapters.log_event(
+                    log_context,
+                    "market_hours_check_failed",
+                    message="Market hours check failed",
+                    severity="WARNING",
+                    error_message=str(error),
+                    market=MARKET,
+                    market_calendar=MARKET_CALENDAR,
+                    market_timezone=MARKET_TIMEZONE,
+                )
+                print(composer.with_prefix(f"Market hours check failed: {error}"), flush=True)
         if not market_open and not force_run:
             reporting_adapters.log_event(
                 log_context,
@@ -743,7 +761,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         err = traceback.format_exc()
         notification_adapters.publish_cycle_notification(
             detailed_text=f"Strategy error:\n{err}",
-            compact_text=f"{t('error_title')}\n{err}",
+            compact_text=_compact_error_notification(exc),
         )
         return False
     finally:
@@ -820,7 +838,11 @@ def run_probe(*, response_body: str = "Probe OK"):
         if composer is not None:
             composer.build_notification_adapters().publish_cycle_notification(
                 detailed_text=err,
-                compact_text=err,
+                compact_text=_compact_error_notification(
+                    exc,
+                    title=t("health_probe_title"),
+                    prefix=t("health_probe_error_prefix"),
+                ),
             )
         else:
             print(err, flush=True)

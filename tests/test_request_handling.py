@@ -71,6 +71,12 @@ def install_stub_modules(*, notify_lang="en"):
         tg_token=None,
         tg_chat_id="shared-chat-id",
         dry_run_only=False,
+        notification_channel="telegram",
+        wecom_webhook_url=None,
+        dingtalk_webhook_url=None,
+        feishu_webhook_url=None,
+        serverchan_webhook_url=None,
+        strategy_metadata=None,
         strategy_plugin_alert_email_recipients=(),
         strategy_plugin_alert_email_sender_email=None,
         strategy_plugin_alert_email_sender_password=None,
@@ -89,6 +95,7 @@ def install_stub_modules(*, notify_lang="en"):
     )
 
     qpk_longbridge_module = types.ModuleType("quant_platform_kit.longbridge")
+    qpk_longbridge_module.__path__ = []
     qpk_longbridge_module.build_contexts = lambda *args, **kwargs: ("quote-context", "trade-context")
     qpk_longbridge_module.calculate_rotation_indicators = lambda *args, **kwargs: {}
     qpk_longbridge_module.estimate_max_purchase_quantity = lambda *args, **kwargs: 0
@@ -98,6 +105,12 @@ def install_stub_modules(*, notify_lang="en"):
     qpk_longbridge_module.fetch_token_from_secret = lambda *args, **kwargs: "token"
     qpk_longbridge_module.refresh_token_if_needed = lambda *args, **kwargs: "token"
     qpk_longbridge_module.submit_order = lambda *args, **kwargs: None
+    qpk_longbridge_market_data_module = types.ModuleType(
+        "quant_platform_kit.longbridge.market_data"
+    )
+    qpk_longbridge_market_data_module.fetch_lot_sizes = (
+        lambda *_args, **_kwargs: {}
+    )
 
     google_module = types.ModuleType("google")
     google_module.__path__ = []
@@ -155,11 +168,19 @@ def install_stub_modules(*, notify_lang="en"):
 
     us_equity_strategies_module = types.ModuleType("us_equity_strategies")
     us_equity_strategies_module.__path__ = []
+    cash_only_equity_module = types.ModuleType("us_equity_strategies.cash_only_equity")
+    cash_only_equity_module.normalize_account_state_from_snapshot = (
+        lambda snapshot, **_kwargs: snapshot
+    )
     catalog_module = types.ModuleType("us_equity_strategies.catalog")
     catalog_module.resolve_canonical_profile = lambda profile: profile
 
     strategy_registry_module = types.ModuleType("strategy_registry")
     strategy_registry_module.LONGBRIDGE_PLATFORM = "longbridge"
+    strategy_registry_module.PLATFORM_CAPABILITY_MATRIX = types.SimpleNamespace(
+        supported_capabilities=frozenset()
+    )
+    strategy_registry_module.STRATEGY_CATALOG = types.SimpleNamespace(definitions={})
     strategy_registry_module.resolve_strategy_definition = lambda profile, **_kwargs: types.SimpleNamespace(
         profile=profile
     )
@@ -170,6 +191,7 @@ def install_stub_modules(*, notify_lang="en"):
         "entrypoints.cloud_run": cloud_run_module,
         "runtime_config_support": runtime_config_support_module,
         "quant_platform_kit.longbridge": qpk_longbridge_module,
+        "quant_platform_kit.longbridge.market_data": qpk_longbridge_market_data_module,
         "google": google_module,
         "google.auth": google_auth_module,
         "google.auth.transport": google_auth_transport_module,
@@ -184,6 +206,7 @@ def install_stub_modules(*, notify_lang="en"):
         "longport": longport_module,
         "longport.openapi": openapi_module,
         "us_equity_strategies": us_equity_strategies_module,
+        "us_equity_strategies.cash_only_equity": cash_only_equity_module,
         "us_equity_strategies.catalog": catalog_module,
         "strategy_registry": strategy_registry_module,
     }
@@ -467,7 +490,7 @@ class RequestHandlingTests(unittest.TestCase):
 
         class FakeRuntime:
             def bootstrap(self):
-                raise RuntimeError("probe failed")
+                raise RuntimeError("probe failed " + "x" * 5000)
 
         class FakeNotifications:
             def publish_cycle_notification(self, **kwargs):
@@ -507,7 +530,12 @@ class RequestHandlingTests(unittest.TestCase):
             ["health_probe_received", "health_probe_failed"],
         )
         self.assertEqual(len(observed["notifications"]), 1)
-        self.assertIn("probe failed", observed["notifications"][0]["detailed_text"])
+        notification = observed["notifications"][0]
+        self.assertIn("probe failed", notification["detailed_text"])
+        self.assertIn("Traceback", notification["detailed_text"])
+        self.assertNotIn("Traceback", notification["compact_text"])
+        self.assertIn("RuntimeError: probe failed", notification["compact_text"])
+        self.assertLessEqual(len(notification["compact_text"]), 3500)
 
     def test_run_strategy_emits_structured_runtime_events(self):
         module = load_module()
@@ -525,6 +553,73 @@ class RequestHandlingTests(unittest.TestCase):
             ["strategy_cycle_started", "strategy_cycle_completed"],
         )
         self.assertTrue(all(run_id == "run-001" for run_id, _event, _fields in observed))
+
+    def test_run_strategy_market_hours_tuple_without_error_does_not_warn(self):
+        module = load_module()
+        observed = []
+
+        module.emit_runtime_log = (
+            lambda context, event, **fields: observed.append((event, fields))
+        )
+        module.is_market_open_now = lambda **_kwargs: (True, None)
+        module.run_rebalance_cycle = lambda **_kwargs: None
+
+        self.assertTrue(module.run_strategy())
+        self.assertNotIn(
+            "market_hours_check_failed",
+            [event for event, _fields in observed],
+        )
+
+    def test_run_strategy_error_notification_is_compact_and_bounded(self):
+        module = load_module()
+        observed = {}
+
+        class FakeComposer:
+            def build_reporting_adapters(self):
+                return types.SimpleNamespace(
+                    start_run=lambda: (
+                        types.SimpleNamespace(run_id="run-001"),
+                        {"status": "pending"},
+                    ),
+                    log_event=lambda *args, **kwargs: None,
+                    persist_execution_report=lambda report: types.SimpleNamespace(
+                        local_path="/tmp/report.json"
+                    ),
+                )
+
+            def build_notification_adapters(self):
+                return types.SimpleNamespace(
+                    publish_cycle_notification=lambda **kwargs: observed.update(
+                        kwargs
+                    )
+                )
+
+            def load_strategy_plugin_signals(self, *_args, **_kwargs):
+                return (), None
+
+            def attach_strategy_plugin_report(self, *_args, **_kwargs):
+                return None
+
+            def with_prefix(self, message):
+                return message
+
+            def build_rebalance_runtime(self, **_kwargs):
+                return types.SimpleNamespace()
+
+            def build_rebalance_config(self, **_kwargs):
+                return types.SimpleNamespace()
+
+        module.build_composer = lambda *, dry_run_only_override=None: FakeComposer()
+        module.is_market_open_now = lambda **_kwargs: True
+        module.run_rebalance_cycle = lambda **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("x" * 5000)
+        )
+
+        self.assertFalse(module.run_strategy())
+        self.assertIn("Traceback", observed["detailed_text"])
+        self.assertNotIn("Traceback", observed["compact_text"])
+        self.assertIn("RuntimeError:", observed["compact_text"])
+        self.assertLessEqual(len(observed["compact_text"]), 3500)
 
     def test_run_strategy_sends_escalated_strategy_plugin_alert(self):
         module = load_module()

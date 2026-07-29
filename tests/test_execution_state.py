@@ -121,19 +121,21 @@ def test_prior_report_match_does_not_treat_blocked_no_action_as_completed():
     )
 
 
-def test_prior_report_scan_is_scoped_to_signal_month():
+def test_prior_report_scan_is_scoped_to_signal_month(monkeypatch):
     observed = {}
 
-    class FakeClient:
-        def list_blobs(self, bucket_name, *, prefix):
-            observed["bucket_name"] = bucket_name
-            observed["prefix"] = prefix
+    class FakeObjectStore:
+        def list(self, prefix_uri):
+            observed["prefix_uri"] = prefix_uri
             return ()
 
+    monkeypatch.setattr(
+        "quant_platform_kit.cloud.get_object_store",
+        lambda **_kwargs: FakeObjectStore(),
+    )
     store = ExecutionMarkerStore(
         local_dir=None,
         cloud_prefix_uri="gs://bucket/execution-reports",
-        client_factory=lambda **_kwargs: FakeClient(),
     )
 
     assert (
@@ -147,10 +149,7 @@ def test_prior_report_scan_is_scoped_to_signal_month():
         )
         is False
     )
-    assert observed == {
-        "bucket_name": "bucket",
-        "prefix": (
-            "execution-reports/longbridge/"
-            "russell_top50_leader_rotation/PAPER/2026-06"
-        ),
-    }
+    assert observed["prefix_uri"] == (
+        "gs://bucket/execution-reports/longbridge/"
+        "russell_top50_leader_rotation/PAPER/2026-06"
+    )

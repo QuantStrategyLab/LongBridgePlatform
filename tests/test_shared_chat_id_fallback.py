@@ -52,7 +52,7 @@ def install_stub_modules():
     requests_module.post = lambda *args, **kwargs: None
 
     cloud_run_module = types.ModuleType("entrypoints.cloud_run")
-    cloud_run_module.is_market_open_now = lambda: True
+    cloud_run_module.is_market_open_now = lambda **_kwargs: True
 
     runtime_config_support_module = types.ModuleType("runtime_config_support")
     runtime_config_support_module.load_platform_runtime_settings = lambda **_kwargs: types.SimpleNamespace(
@@ -72,6 +72,12 @@ def install_stub_modules():
         tg_token=None,
         tg_chat_id="shared-chat-id",
         dry_run_only=False,
+        notification_channel="telegram",
+        wecom_webhook_url=None,
+        dingtalk_webhook_url=None,
+        feishu_webhook_url=None,
+        serverchan_webhook_url=None,
+        strategy_metadata=None,
         runtime_target=build_runtime_target(
             platform_id="longbridge",
             strategy_profile="soxl_soxx_trend_income",
@@ -84,6 +90,7 @@ def install_stub_modules():
     )
 
     qpk_longbridge_module = types.ModuleType("quant_platform_kit.longbridge")
+    qpk_longbridge_module.__path__ = []
     qpk_longbridge_module.build_contexts = lambda *args, **kwargs: ("quote-context", "trade-context")
     qpk_longbridge_module.calculate_rotation_indicators = lambda *args, **kwargs: {}
     qpk_longbridge_module.estimate_max_purchase_quantity = lambda *args, **kwargs: 0
@@ -93,18 +100,37 @@ def install_stub_modules():
     qpk_longbridge_module.fetch_token_from_secret = lambda *args, **kwargs: "token"
     qpk_longbridge_module.refresh_token_if_needed = lambda *args, **kwargs: "token"
     qpk_longbridge_module.submit_order = lambda *args, **kwargs: None
+    qpk_longbridge_market_data_module = types.ModuleType(
+        "quant_platform_kit.longbridge.market_data"
+    )
+    qpk_longbridge_market_data_module.fetch_lot_sizes = (
+        lambda *_args, **_kwargs: {}
+    )
 
     google_module = types.ModuleType("google")
     google_module.__path__ = []
 
     google_auth_module = types.ModuleType("google.auth")
     google_auth_module.default = lambda *args, **kwargs: (None, None)
+    google_auth_transport_module = types.ModuleType("google.auth.transport")
+    google_auth_transport_requests_module = types.ModuleType(
+        "google.auth.transport.requests"
+    )
+    google_auth_transport_requests_module.Request = type("Request", (), {})
+    google_oauth2_module = types.ModuleType("google.oauth2")
+    google_oauth2_id_token_module = types.ModuleType("google.oauth2.id_token")
+    google_oauth2_id_token_module.fetch_id_token = (
+        lambda *_args, **_kwargs: "id-token"
+    )
 
     google_cloud_module = types.ModuleType("google.cloud")
     google_cloud_module.__path__ = []
     google_secretmanager_module = types.ModuleType("google.cloud.secretmanager_v1")
 
     google_module.auth = google_auth_module
+    google_auth_module.transport = google_auth_transport_module
+    google_auth_transport_module.requests = google_auth_transport_requests_module
+    google_oauth2_module.id_token = google_oauth2_id_token_module
     google_cloud_module.secretmanager_v1 = google_secretmanager_module
 
     pandas_module = types.ModuleType("pandas")
@@ -140,11 +166,19 @@ def install_stub_modules():
 
     us_equity_strategies_module = types.ModuleType("us_equity_strategies")
     us_equity_strategies_module.__path__ = []
+    cash_only_equity_module = types.ModuleType("us_equity_strategies.cash_only_equity")
+    cash_only_equity_module.normalize_account_state_from_snapshot = (
+        lambda snapshot, **_kwargs: snapshot
+    )
     catalog_module = types.ModuleType("us_equity_strategies.catalog")
     catalog_module.resolve_canonical_profile = lambda profile: profile
 
     strategy_registry_module = types.ModuleType("strategy_registry")
     strategy_registry_module.LONGBRIDGE_PLATFORM = "longbridge"
+    strategy_registry_module.PLATFORM_CAPABILITY_MATRIX = types.SimpleNamespace(
+        supported_capabilities=frozenset()
+    )
+    strategy_registry_module.STRATEGY_CATALOG = types.SimpleNamespace(definitions={})
     strategy_registry_module.resolve_strategy_definition = lambda profile, **_kwargs: types.SimpleNamespace(
         profile=profile
     )
@@ -155,8 +189,13 @@ def install_stub_modules():
         "entrypoints.cloud_run": cloud_run_module,
         "runtime_config_support": runtime_config_support_module,
         "quant_platform_kit.longbridge": qpk_longbridge_module,
+        "quant_platform_kit.longbridge.market_data": qpk_longbridge_market_data_module,
         "google": google_module,
         "google.auth": google_auth_module,
+        "google.auth.transport": google_auth_transport_module,
+        "google.auth.transport.requests": google_auth_transport_requests_module,
+        "google.oauth2": google_oauth2_module,
+        "google.oauth2.id_token": google_oauth2_id_token_module,
         "google.cloud": google_cloud_module,
         "google.cloud.secretmanager_v1": google_secretmanager_module,
         "pandas": pandas_module,
@@ -165,6 +204,7 @@ def install_stub_modules():
         "longport": longport_module,
         "longport.openapi": openapi_module,
         "us_equity_strategies": us_equity_strategies_module,
+        "us_equity_strategies.cash_only_equity": cash_only_equity_module,
         "us_equity_strategies.catalog": catalog_module,
         "strategy_registry": strategy_registry_module,
     }
