@@ -623,6 +623,97 @@ def _hydrate_runtime_target_schedules(
     return hydrated
 
 
+def _cloud_run_region() -> str:
+    return (
+        os.environ.get("RUNTIME_HEARTBEAT_CLOUD_RUN_REGION")
+        or os.environ.get("CLOUD_RUN_REGION")
+        or "us-central1"
+    )
+
+
+def _describe_cloud_run_service(
+    service: str,
+    *,
+    project: str | None,
+) -> dict[str, Any]:
+    command = [
+        "gcloud",
+        "run",
+        "services",
+        "describe",
+        service,
+        "--region",
+        _cloud_run_region(),
+        "--format=json",
+    ]
+    if project:
+        command.extend(["--project", project])
+    result = _run_gcloud(command)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(detail or f"gcloud run services describe failed for {service}")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"gcloud run services describe returned invalid JSON for {service}: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"gcloud run services describe returned no data for {service}")
+    return payload
+
+
+def _deployed_runtime_target(payload: dict[str, Any]) -> dict[str, Any]:
+    template = payload.get("spec", {}).get("template", {})
+    containers = template.get("spec", {}).get("containers")
+    if not isinstance(containers, list):
+        containers = template.get("containers")
+    for container in containers if isinstance(containers, list) else []:
+        if not isinstance(container, dict):
+            continue
+        for entry in container.get("env") or []:
+            if not isinstance(entry, dict) or entry.get("name") not in {
+                "RUNTIME_TARGET_JSON",
+                "QSL_RUNTIME_TARGET_JSON",
+            }:
+                continue
+            try:
+                runtime_target = json.loads(str(entry.get("value") or ""))
+            except json.JSONDecodeError as exc:
+                raise RuntimeError("deployed runtime target JSON is invalid") from exc
+            if isinstance(runtime_target, dict):
+                return runtime_target
+    return {}
+
+
+def _hydrate_runtime_target_profiles(
+    targets: list[dict[str, Any]],
+    *,
+    project: str | None,
+) -> list[dict[str, Any]]:
+    hydrated = []
+    deployed_by_service: dict[str, dict[str, Any]] = {}
+    for target in targets:
+        strategy_profile = str(target.get("strategy_profile") or "").strip()
+        service = str(target.get("service") or "").strip()
+        if not strategy_profile or not service:
+            hydrated.append(target)
+            continue
+        if service not in deployed_by_service:
+            deployed_by_service[service] = _deployed_runtime_target(
+                _describe_cloud_run_service(service, project=project)
+            )
+        canonical_profile = str(
+            deployed_by_service[service].get("strategy_profile") or ""
+        ).strip()
+        if not canonical_profile:
+            raise RuntimeError(
+                f"deployed runtime target has no strategy profile for {service}"
+            )
+        hydrated.append({**target, "strategy_profile": canonical_profile})
+    return hydrated
+
+
 def _scheduler_job_targets_strategy_run(job: dict[str, Any], service: str) -> bool:
     if str(job.get("state") or "").strip().upper() not in {"", "ENABLED"}:
         return False
@@ -1045,19 +1136,18 @@ def main(now: dt.datetime | None = None) -> int:
         now = now.replace(tzinfo=dt.timezone.utc)
     now = now.astimezone(dt.timezone.utc)
     since = now - dt.timedelta(hours=lookback_hours)
-    from runtime_config_support import resolve_strategy_profile
-
-    runtime_targets = load_runtime_targets(
-        os.environ,
-        profile_resolver=resolve_strategy_profile,
-    )
+    runtime_targets = load_runtime_targets(os.environ)
     try:
+        runtime_targets = _hydrate_runtime_target_profiles(
+            runtime_targets,
+            project=project,
+        )
         runtime_targets = _hydrate_runtime_target_schedules(
             runtime_targets,
             project=project,
         )
     except RuntimeError as exc:
-        message = f"[Execution Report Heartbeat] {name}\nScheduler policy error: {exc}"
+        message = f"[Execution Report Heartbeat] {name}\nRuntime target policy error: {exc}"
         print(message)
         _send_telegram(message)
         return 1 if fail_workflow else 0

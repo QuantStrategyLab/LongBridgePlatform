@@ -24,3 +24,9 @@ def test_runtime_monitor_workflows_retry_gcp_authentication() -> None:
         assert "id: gcp_auth_primary" in workflow
         assert "continue-on-error: true" in workflow
         assert "steps.gcp_auth_primary.outcome == 'failure'" in workflow
+
+
+def test_heartbeat_script_does_not_import_project_runtime_dependencies() -> None:
+    script = (ROOT / "scripts/execution_report_heartbeat.py").read_text()
+
+    assert "from runtime_config_support import" not in script

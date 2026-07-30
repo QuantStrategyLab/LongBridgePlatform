@@ -696,6 +696,49 @@ def test_incomplete_target_schedule_uses_deployed_scheduler_cron(monkeypatch):
     assert hydrated[0]["scheduler"]["main_time"] == "45 15 25-29 * *"
 
 
+def test_target_profile_uses_deployed_canonical_runtime_target(monkeypatch):
+    monkeypatch.setattr(
+        heartbeat,
+        "_describe_cloud_run_service",
+        lambda *_args, **_kwargs: {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "env": [
+                                    {
+                                        "name": "RUNTIME_TARGET_JSON",
+                                        "value": json.dumps(
+                                            {
+                                                "strategy_profile": (
+                                                    "global_etf_rotation"
+                                                )
+                                            }
+                                        ),
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    )
+
+    hydrated = heartbeat._hydrate_runtime_target_profiles(
+        [
+            {
+                "service": "longbridge-service",
+                "strategy_profile": "global_macro_etf_rotation",
+            }
+        ],
+        project="test-project",
+    )
+
+    assert hydrated[0]["strategy_profile"] == "global_etf_rotation"
+
+
 def test_main_skips_when_all_configured_targets_are_disabled(monkeypatch, capsys):
     _clear_runtime_env(monkeypatch)
     monkeypatch.setenv("RUNTIME_HEARTBEAT_NAME", "LongBridge disabled targets")
