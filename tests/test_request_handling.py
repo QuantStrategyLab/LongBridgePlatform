@@ -582,16 +582,29 @@ class RequestHandlingTests(unittest.TestCase):
                         {"status": "pending"},
                     ),
                     log_event=lambda *args, **kwargs: None,
-                    persist_execution_report=lambda report: types.SimpleNamespace(
-                        local_path="/tmp/report.json"
+                    persist_execution_report=lambda report: (
+                        observed.update({"report": report})
+                        or types.SimpleNamespace(local_path="/tmp/report.json")
                     ),
                 )
 
-            def build_notification_adapters(self):
+            def build_notification_adapters(self, *, delivery_events=None):
+                def publish_cycle_notification(**kwargs):
+                    observed.update(kwargs)
+                    if delivery_events is not None:
+                        delivery_events.append(
+                            {
+                                "sink": "telegram",
+                                "delivery_status": "sent",
+                                "transport_acknowledged": True,
+                                "compact_text_sha256": "a" * 64,
+                                "compact_text_length": len(kwargs["compact_text"]),
+                            }
+                        )
+                    return True
+
                 return types.SimpleNamespace(
-                    publish_cycle_notification=lambda **kwargs: observed.update(
-                        kwargs
-                    )
+                    publish_cycle_notification=publish_cycle_notification
                 )
 
             def load_strategy_plugin_signals(self, *_args, **_kwargs):
@@ -620,6 +633,11 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertNotIn("Traceback", observed["compact_text"])
         self.assertIn("RuntimeError:", observed["compact_text"])
         self.assertLessEqual(len(observed["compact_text"]), 3500)
+        delivery_summary = observed["report"]["summary"][
+            "notification_delivery_summary"
+        ]
+        self.assertEqual(delivery_summary["sent_count"], 1)
+        self.assertTrue(delivery_summary["all_acknowledged"])
 
     def test_run_strategy_sends_escalated_strategy_plugin_alert(self):
         module = load_module()

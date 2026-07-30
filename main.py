@@ -623,7 +623,15 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
     composer = build_composer(dry_run_only_override=True if validation_only else None)
     reporting_adapters = composer.build_reporting_adapters()
     log_context, report = reporting_adapters.start_run()
-    notification_adapters = composer.build_notification_adapters()
+    notification_delivery_events: list[dict] = []
+    try:
+        notification_adapters = composer.build_notification_adapters(
+            delivery_events=notification_delivery_events,
+        )
+    except TypeError as exc:
+        if "delivery_events" not in str(exc):
+            raise
+        notification_adapters = composer.build_notification_adapters()
     strategy_plugin_signals, strategy_plugin_error = composer.load_strategy_plugin_signals(
         getattr(RUNTIME_SETTINGS, "strategy_plugin_mounts_json", None)
     )
@@ -717,7 +725,6 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             return True
         if not validation_only:
             publish_strategy_plugin_alerts(strategy_plugin_signals, report=report)
-        notification_delivery_events: list[dict] = []
         try:
             rebalance_runtime = composer.build_rebalance_runtime(
                 silent_cycle_notifications=validation_only,
@@ -792,7 +799,6 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             message=str(exc),
             error_type=type(exc).__name__,
         )
-        finalize_runtime_report(report, status="error")
         reporting_adapters.log_event(
             log_context,
             "strategy_cycle_failed",
@@ -802,9 +808,39 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             error_message=str(exc),
         )
         err = traceback.format_exc()
-        notification_adapters.publish_cycle_notification(
-            detailed_text=f"Strategy error:\n{err}",
-            compact_text=_compact_error_notification(exc),
+        try:
+            notification_adapters.publish_cycle_notification(
+                detailed_text=f"Strategy error:\n{err}",
+                compact_text=_compact_error_notification(exc),
+            )
+        except Exception as notification_exc:
+            notification_delivery_events.append(
+                {
+                    "sink": "telegram",
+                    "delivery_status": "failed",
+                    "transport_acknowledged": False,
+                    "error_type": type(notification_exc).__name__,
+                }
+            )
+            reporting_adapters.log_event(
+                log_context,
+                "strategy_error_notification_failed",
+                message="Strategy error notification failed",
+                severity="ERROR",
+                error_type=type(notification_exc).__name__,
+            )
+        error_summary = {}
+        notification_delivery_summary = _build_notification_delivery_summary(
+            notification_delivery_events
+        )
+        if notification_delivery_summary:
+            error_summary["notification_delivery_summary"] = (
+                notification_delivery_summary
+            )
+        finalize_runtime_report(
+            report,
+            status="error",
+            summary=error_summary or None,
         )
         return False
     finally:
