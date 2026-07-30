@@ -101,6 +101,9 @@ def runtime_target_json(
     account_selector: list[str] | tuple[str, ...] | None = None,
     account_scope: str | None = None,
     service_name: str | None = None,
+    market: str | None = None,
+    market_calendar: str | None = None,
+    market_timezone: str | None = None,
 ) -> str:
     payload: dict[str, object] = {
         "platform_id": platform_id,
@@ -115,6 +118,12 @@ def runtime_target_json(
         payload["account_scope"] = account_scope
     if service_name is not None:
         payload["service_name"] = service_name
+    if market is not None:
+        payload["market"] = market
+    if market_calendar is not None:
+        payload["market_calendar"] = market_calendar
+    if market_timezone is not None:
+        payload["market_timezone"] = market_timezone
     payload["execution_mode"] = "paper" if dry_run_only else "live"
     return json.dumps(payload, separators=(",", ":"))
 
@@ -202,6 +211,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                     '{"platform_id":"longbridge","strategy_profile":"global_etf_rotation",'
                     '"dry_run_only":true,"deployment_selector":"SG","account_selector":["SG"],'
                     '"account_scope":"SG","service_name":"longbridge-quant-sg-service",'
+                    '"market":"US","market_calendar":"NYSE",'
+                    '"market_timezone":"America/New_York",'
                     '"execution_mode":"paper"}'
                 ),
             },
@@ -217,6 +228,9 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.runtime_target.deployment_selector, "SG")
         self.assertEqual(settings.runtime_target.account_selector, ("SG",))
         self.assertEqual(settings.runtime_target.service_name, "longbridge-quant-sg-service")
+        self.assertEqual(settings.market, DEFAULT_MARKET)
+        self.assertEqual(settings.market_calendar, "NYSE")
+        self.assertEqual(settings.market_timezone, "America/New_York")
 
     def test_load_platform_runtime_settings_requires_strategy_profile(self):
         with patch.dict(os.environ, {}, clear=True):

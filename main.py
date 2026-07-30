@@ -329,6 +329,32 @@ def _build_notification_delivery_log_for_report(
     }
 
 
+def _build_notification_delivery_summary(delivery_events: list[dict]) -> dict:
+    safe_fields = (
+        "sink",
+        "delivery_status",
+        "transport_acknowledged",
+        "error_type",
+        "compact_text_sha256",
+        "compact_text_length",
+    )
+    events = [
+        {key: event[key] for key in safe_fields if key in event}
+        for event in (dict(item) for item in delivery_events)
+    ]
+    if not events:
+        return {}
+    sent_count = sum(event.get("delivery_status") == "sent" for event in events)
+    failed_count = sum(event.get("delivery_status") == "failed" for event in events)
+    return {
+        "attempted_count": len(events),
+        "sent_count": sent_count,
+        "failed_count": failed_count,
+        "all_acknowledged": failed_count == 0 and sent_count == len(events),
+        "delivery_events": events,
+    }
+
+
 signal_text = build_signal_text(t)
 strategy_display_name = build_strategy_display_name(t)(
     STRATEGY_PROFILE,
@@ -516,16 +542,28 @@ def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
         print("LongBridge runtime error notification skipped: no Telegram target configured.", flush=True)
         return False
     message = _runtime_error_notification_message(exc, route_label=route_label)
+    outcomes = []
     for token, chat_id in targets:
         try:
-            requests.post(
+            response = requests.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 json={"chat_id": chat_id, "text": message},
                 timeout=10,
             )
+            status_code = int(getattr(response, "status_code", 200) or 200)
+            acknowledged = 200 <= status_code < 300
+            load_payload = getattr(response, "json", None)
+            payload = load_payload() if acknowledged and callable(load_payload) else None
+            if isinstance(payload, dict) and payload.get("ok") is False:
+                acknowledged = False
+            outcomes.append(acknowledged)
         except Exception as send_exc:
-            print(f"LongBridge runtime error Telegram send failed: {send_exc}", flush=True)
-    return True
+            print(
+                f"LongBridge runtime error Telegram send failed: {type(send_exc).__name__}",
+                flush=True,
+            )
+            outcomes.append(False)
+    return bool(outcomes) and all(outcomes)
 
 
 def _handle_route_runtime_error(exc: Exception, *, route_label: str):
@@ -585,7 +623,15 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
     composer = build_composer(dry_run_only_override=True if validation_only else None)
     reporting_adapters = composer.build_reporting_adapters()
     log_context, report = reporting_adapters.start_run()
-    notification_adapters = composer.build_notification_adapters()
+    notification_delivery_events: list[dict] = []
+    try:
+        notification_adapters = composer.build_notification_adapters(
+            delivery_events=notification_delivery_events,
+        )
+    except TypeError as exc:
+        if "delivery_events" not in str(exc):
+            raise
+        notification_adapters = composer.build_notification_adapters()
     strategy_plugin_signals, strategy_plugin_error = composer.load_strategy_plugin_signals(
         getattr(RUNTIME_SETTINGS, "strategy_plugin_mounts_json", None)
     )
@@ -679,7 +725,6 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             return True
         if not validation_only:
             publish_strategy_plugin_alerts(strategy_plugin_signals, report=report)
-        notification_delivery_events: list[dict] = []
         try:
             rebalance_runtime = composer.build_rebalance_runtime(
                 silent_cycle_notifications=validation_only,
@@ -722,6 +767,11 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         )
         if notification_delivery_log:
             execution_summary["notification_delivery_log"] = notification_delivery_log
+        notification_delivery_summary = _build_notification_delivery_summary(
+            notification_delivery_events
+        )
+        if notification_delivery_summary:
+            execution_summary["notification_delivery_summary"] = notification_delivery_summary
         if signal_snapshot:
             reporting_adapters.log_event(
                 log_context,
@@ -749,7 +799,6 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             message=str(exc),
             error_type=type(exc).__name__,
         )
-        finalize_runtime_report(report, status="error")
         reporting_adapters.log_event(
             log_context,
             "strategy_cycle_failed",
@@ -759,9 +808,39 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             error_message=str(exc),
         )
         err = traceback.format_exc()
-        notification_adapters.publish_cycle_notification(
-            detailed_text=f"Strategy error:\n{err}",
-            compact_text=_compact_error_notification(exc),
+        try:
+            notification_adapters.publish_cycle_notification(
+                detailed_text=f"Strategy error:\n{err}",
+                compact_text=_compact_error_notification(exc),
+            )
+        except Exception as notification_exc:
+            notification_delivery_events.append(
+                {
+                    "sink": "telegram",
+                    "delivery_status": "failed",
+                    "transport_acknowledged": False,
+                    "error_type": type(notification_exc).__name__,
+                }
+            )
+            reporting_adapters.log_event(
+                log_context,
+                "strategy_error_notification_failed",
+                message="Strategy error notification failed",
+                severity="ERROR",
+                error_type=type(notification_exc).__name__,
+            )
+        error_summary = {}
+        notification_delivery_summary = _build_notification_delivery_summary(
+            notification_delivery_events
+        )
+        if notification_delivery_summary:
+            error_summary["notification_delivery_summary"] = (
+                notification_delivery_summary
+            )
+        finalize_runtime_report(
+            report,
+            status="error",
+            summary=error_summary or None,
         )
         return False
     finally:

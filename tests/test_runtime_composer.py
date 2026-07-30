@@ -33,10 +33,13 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders(monkeypa
 
     def fake_cycle_sender(**kwargs):
         observed["cycle_sender"] = kwargs
-        return lambda message: observed.setdefault(
-            "sent_message",
-            (kwargs["telegram_token"], kwargs["telegram_chat_id"], message),
-        )
+        return lambda message: (
+            observed.setdefault(
+                "sent_message",
+                (kwargs["telegram_token"], kwargs["telegram_chat_id"], message),
+            ),
+            False,
+        )[1]
 
     monkeypatch.setattr(runtime_composer_module, "build_cycle_sender", fake_cycle_sender)
 
@@ -107,7 +110,8 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders(monkeypa
     )
 
     assert composer.with_prefix("hello") == "[HK] hello"
-    composer.send_tg_message("hello")
+    sent = composer.send_tg_message("hello")
+    assert sent is False
     assert observed["sent_message"] == ("tg-token", "chat-id", "[HK] hello")
 
     notification_adapters = composer.build_notification_adapters()

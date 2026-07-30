@@ -100,7 +100,7 @@ class LongBridgeRuntimeComposer:
     def with_prefix(self, message: str) -> str:
         return self.prefixer_builder(self.account_prefix)(message)
 
-    def send_message(self, message: str) -> None:
+    def send_message(self, message: str) -> bool:
         """Send a cycle notification through the configured channel."""
         prefixed = self.with_prefix(message)
         sender = build_cycle_sender(
@@ -109,7 +109,7 @@ class LongBridgeRuntimeComposer:
             telegram_chat_id=self.tg_chat_id,
             webhook_url=self.webhook_url,
         )
-        sender(prefixed)
+        return sender(prefixed)
 
     send_tg_message = send_message  # backward-compat alias
 

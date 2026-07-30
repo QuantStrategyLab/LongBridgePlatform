@@ -52,3 +52,56 @@ def test_runtime_notification_adapters_post_submit_order_publishes_order_events(
     )
 
     assert messages == ["✅ Order Filled | SOXL Buy 10 shares avg $123.45 (ID: order-1)"]
+
+
+def test_runtime_notification_adapter_records_negative_ack_as_failed():
+    events = []
+    adapters = build_runtime_notification_adapters(
+        with_prefix=lambda message: f"[HK] {message}",
+        send_message=lambda _message: False,
+        translator=build_translator("en"),
+        fetch_order_status=lambda *_args, **_kwargs: None,
+        order_poll_interval_sec=0,
+        order_poll_max_attempts=0,
+        sleeper=lambda _seconds: None,
+        log_message=lambda _message: None,
+        delivery_events=events,
+    )
+
+    sent = adapters.publish_cycle_notification(
+        detailed_text="details",
+        compact_text="rebalance",
+    )
+
+    assert sent is False
+    assert events[0]["delivery_status"] == "failed"
+    assert events[0]["transport_acknowledged"] is False
+    assert "compact_text" not in events[0]
+
+
+def test_runtime_notification_adapter_records_sender_exception_without_raising():
+    events = []
+
+    def fail(_message):
+        raise RuntimeError("transport unavailable")
+
+    adapters = build_runtime_notification_adapters(
+        with_prefix=lambda message: f"[HK] {message}",
+        send_message=fail,
+        translator=build_translator("en"),
+        fetch_order_status=lambda *_args, **_kwargs: None,
+        order_poll_interval_sec=0,
+        order_poll_max_attempts=0,
+        sleeper=lambda _seconds: None,
+        log_message=lambda _message: None,
+        delivery_events=events,
+    )
+
+    sent = adapters.publish_cycle_notification(
+        detailed_text="details",
+        compact_text="rebalance",
+    )
+
+    assert sent is False
+    assert events[0]["delivery_status"] == "failed"
+    assert events[0]["error_type"] == "RuntimeError"

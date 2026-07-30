@@ -132,6 +132,7 @@ def test_explicit_required_services_skip_disabled_targets(monkeypatch):
         "CLOUD_RUN_SERVICE_TARGETS_JSON",
         json.dumps(
             {
+                "defaults": {"runtime_target_enabled": "false"},
                 "targets": [
                     {
                         "service": "longbridge-enabled-service",
@@ -139,7 +140,6 @@ def test_explicit_required_services_skip_disabled_targets(monkeypatch):
                     },
                     {
                         "service": "longbridge-disabled-service",
-                        "runtime_target_enabled": "false",
                     },
                 ]
             }
@@ -619,6 +619,25 @@ def test_main_checks_reports_inside_expected_day_of_month_window(monkeypatch, ca
     assert "Execution report heartbeat OK for Monthly runtime" in output
     assert "longbridge-monthly-service@2026-06-04T23:20:00+00:00" in output
 
+def test_report_with_failed_notification_delivery_is_rejected():
+    accepted, reason = heartbeat._is_accepted_report(
+        {
+            "status": "ok",
+            "summary": {
+                "notification_delivery_summary": {
+                    "event_count": 1,
+                    "sent_count": 0,
+                    "failed_count": 1,
+                    "all_acknowledged": False,
+                }
+            },
+        }
+    )
+
+    assert accepted is False
+    assert "notification delivery not acknowledged" in reason
+
+
 def test_telegram_token_falls_back_to_secret_manager(monkeypatch):
     monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
     monkeypatch.delenv("TG_TOKEN", raising=False)
@@ -644,3 +663,101 @@ def test_telegram_token_falls_back_to_secret_manager(monkeypatch):
         "--project",
         "longbridgequant",
     ]
+
+
+def test_incomplete_target_schedule_uses_deployed_scheduler_cron(monkeypatch):
+    targets = [
+        {
+            "service": "longbridge-service",
+            "scheduler": {
+                "main_time": "45 15",
+                "timezone": "America/New_York",
+            },
+        }
+    ]
+    monkeypatch.setattr(
+        heartbeat,
+        "_describe_scheduler_job",
+        lambda job_name, **_kwargs: (
+            {
+                "schedule": "45 15 25-29 * *",
+                "timeZone": "America/New_York",
+            }
+            if job_name == "longbridge-service-scheduler"
+            else None
+        ),
+    )
+
+    hydrated = heartbeat._hydrate_runtime_target_schedules(
+        targets,
+        project="test-project",
+    )
+
+    assert hydrated[0]["scheduler"]["main_time"] == "45 15 25-29 * *"
+
+
+def test_target_profile_uses_deployed_canonical_runtime_target(monkeypatch):
+    monkeypatch.setattr(
+        heartbeat,
+        "_describe_cloud_run_service",
+        lambda *_args, **_kwargs: {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "env": [
+                                    {
+                                        "name": "RUNTIME_TARGET_JSON",
+                                        "value": json.dumps(
+                                            {
+                                                "strategy_profile": (
+                                                    "global_etf_rotation"
+                                                )
+                                            }
+                                        ),
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    )
+
+    hydrated = heartbeat._hydrate_runtime_target_profiles(
+        [
+            {
+                "service": "longbridge-service",
+                "strategy_profile": "global_macro_etf_rotation",
+            }
+        ],
+        project="test-project",
+    )
+
+    assert hydrated[0]["strategy_profile"] == "global_etf_rotation"
+
+
+def test_main_skips_when_all_configured_targets_are_disabled(monkeypatch, capsys):
+    _clear_runtime_env(monkeypatch)
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_NAME", "LongBridge disabled targets")
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "defaults": {"runtime_target_enabled": False},
+                "targets": [{"service": "disabled-service"}],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        heartbeat,
+        "_list_gcs_objects",
+        lambda *_args, **_kwargs: pytest.fail("GCS should not be queried"),
+    )
+
+    assert heartbeat.main(
+        now=dt.datetime(2026, 6, 20, 23, 10, tzinfo=dt.timezone.utc)
+    ) == 0
+    assert "no enabled runtime target matches this heartbeat" in capsys.readouterr().out
