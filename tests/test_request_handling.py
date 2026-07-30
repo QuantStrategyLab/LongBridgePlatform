@@ -900,6 +900,29 @@ class RequestHandlingTests(unittest.TestCase):
 
         self.assertEqual(payload, {})
 
+    def test_notification_delivery_summary_keeps_failed_transport_receipt(self):
+        module = load_module()
+
+        payload = module._build_notification_delivery_summary(
+            [
+                {
+                    "sink": "telegram",
+                    "delivery_status": "failed",
+                    "transport_acknowledged": False,
+                    "error_type": "RuntimeError",
+                    "compact_text_sha256": "a" * 64,
+                    "compact_text_length": 42,
+                }
+            ]
+        )
+
+        self.assertEqual(payload["attempted_count"], 1)
+        self.assertEqual(payload["sent_count"], 0)
+        self.assertEqual(payload["failed_count"], 1)
+        self.assertFalse(payload["all_acknowledged"])
+        self.assertEqual(payload["delivery_events"][0]["error_type"], "RuntimeError")
+        self.assertNotIn("compact_text", payload["delivery_events"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

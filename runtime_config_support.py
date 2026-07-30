@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 from dataclasses import dataclass
@@ -235,6 +236,21 @@ def _market_defaults(market: str) -> dict[str, str]:
     }
 
 
+def _runtime_target_market_value(runtime_target: RuntimeTarget, field: str) -> str | None:
+    value = getattr(runtime_target, field, None)
+    if value is not None and str(value).strip():
+        return str(value).strip()
+    raw = os.getenv("QSL_RUNTIME_TARGET_JSON") or os.getenv("RUNTIME_TARGET_JSON")
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    value = payload.get(field) if isinstance(payload, dict) else None
+    return str(value).strip() if value is not None and str(value).strip() else None
+
+
 def load_platform_runtime_settings(
     *,
     project_id_resolver: Callable[[], str | None],
@@ -268,7 +284,13 @@ def load_platform_runtime_settings(
         os.getenv("ACCOUNT_REGION"),
         account_prefix=account_prefix,
     )
-    market = infer_market(os.getenv("LONGBRIDGE_MARKET"), account_region=account_region)
+    market = infer_market(
+        _first_non_empty(
+            os.getenv("LONGBRIDGE_MARKET"),
+            _runtime_target_market_value(runtime_target, "market"),
+        ),
+        account_region=account_region,
+    )
     market_defaults = _market_defaults(market)
     return PlatformRuntimeSettings(
         project_id=project_id_resolver(),
@@ -281,11 +303,13 @@ def load_platform_runtime_settings(
         market=market,
         market_calendar=_first_non_empty(
             os.getenv("LONGBRIDGE_MARKET_CALENDAR"),
+            _runtime_target_market_value(runtime_target, "market_calendar"),
             market_defaults["market_calendar"],
         )
         or DEFAULT_MARKET_CALENDAR,
         market_timezone=_first_non_empty(
             os.getenv("LONGBRIDGE_MARKET_TIMEZONE"),
+            _runtime_target_market_value(runtime_target, "market_timezone"),
             market_defaults["market_timezone"],
         )
         or DEFAULT_MARKET_TIMEZONE,

@@ -619,6 +619,25 @@ def test_main_checks_reports_inside_expected_day_of_month_window(monkeypatch, ca
     assert "Execution report heartbeat OK for Monthly runtime" in output
     assert "longbridge-monthly-service@2026-06-04T23:20:00+00:00" in output
 
+def test_report_with_failed_notification_delivery_is_rejected():
+    accepted, reason = heartbeat._is_accepted_report(
+        {
+            "status": "ok",
+            "summary": {
+                "notification_delivery_summary": {
+                    "event_count": 1,
+                    "sent_count": 0,
+                    "failed_count": 1,
+                    "all_acknowledged": False,
+                }
+            },
+        }
+    )
+
+    assert accepted is False
+    assert "notification delivery not acknowledged" in reason
+
+
 def test_telegram_token_falls_back_to_secret_manager(monkeypatch):
     monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
     monkeypatch.delenv("TG_TOKEN", raising=False)
