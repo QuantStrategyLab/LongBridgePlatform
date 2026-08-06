@@ -854,6 +854,10 @@ class RequestHandlingTests(unittest.TestCase):
             skip_logs=("skip",),
             note_logs=("note",),
             action_done=True,
+            execution={
+                "signal_date": "2026-07-31",
+                "execution_timing_contract": "monthly_snapshot_window",
+            },
             dry_run_orders=(
                 {"symbol": "02800.HK", "side": "buy", "quantity": 100, "status": "dry_run"},
                 {"symbol": "03033.HK", "side": "buy", "quantity": 200, "status": "dry_run"},
@@ -872,6 +876,8 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(summary["orders_skipped_count"], 1)
         self.assertEqual(summary["notes_count"], 1)
         self.assertTrue(summary["dry_run_order_preview_available"])
+        self.assertEqual(summary["signal_date"], "2026-07-31")
+        self.assertEqual(summary["execution_timing_contract"], "monthly_snapshot_window")
         self.assertEqual(summary["orders_previewed"][0]["symbol"], "02800.HK")
         self.assertEqual(summary["quote_snapshot"]["quotes"][0]["symbol"], "02800.HK")
 

@@ -483,6 +483,7 @@ class DecisionMapperTests(unittest.TestCase):
                 "signal_description": "risk on",
                 "status_description": "breadth=62.0% | regime=risk_on | benchmark=up",
                 "benchmark_symbol": "SPY",
+                "snapshot_as_of": "2026-07-31",
             },
         )
         snapshot = PortfolioSnapshot(
@@ -506,6 +507,7 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["allocation"]["targets"]["AAPL"], 2550.0)
         self.assertEqual(plan["allocation"]["targets"]["BOXX"], 1700.0)
         self.assertEqual(plan["execution"]["signal_display"], "risk on")
+        self.assertEqual(plan["execution"]["signal_date"], "2026-07-31")
         self.assertEqual(
             plan["execution"]["status_display"],
             "breadth=62.0% | regime=risk_on | benchmark=up",

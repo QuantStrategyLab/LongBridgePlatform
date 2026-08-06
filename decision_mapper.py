@@ -388,7 +388,13 @@ def _build_weight_translation_annotations(
             else None
         ),
         signal_date=(
-            str(execution_annotations.get("signal_date") or diagnostics.get("signal_date") or "").strip() or None
+            str(
+                execution_annotations.get("signal_date")
+                or diagnostics.get("signal_date")
+                or diagnostics.get("snapshot_as_of")
+                or ""
+            ).strip()
+            or None
         ),
         effective_date=(
             str(execution_annotations.get("effective_date") or diagnostics.get("effective_date") or "").strip()
