@@ -295,6 +295,15 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
         summary["quote_snapshot"] = {
             "quotes": [dict(snapshot) for snapshot in quote_snapshots],
         }
+    execution = dict(getattr(cycle_result, "execution", {}) or {})
+    for field in (
+        "signal_date",
+        "effective_date",
+        "execution_timing_contract",
+        "execution_calendar_source",
+    ):
+        if execution.get(field) not in (None, ""):
+            summary[field] = execution[field]
     return summary
 
 
