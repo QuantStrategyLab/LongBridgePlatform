@@ -74,8 +74,10 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
                     "metadata": {
                         "labels": {
                             "commit-sha": "abc123",
+                            "release-set": "release-1",
                         }
-                    }
+                    },
+                    "spec": {"containers": [{"image": "gcr.io/example/app@sha256:abc"}]},
                 }
             if args[1:4] == ["run", "services", "update-traffic"]:
                 return {}
@@ -87,6 +89,8 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
                 region="asia-east1",
                 targets=[reconcile.RuntimeTarget(service_name="longbridge-quant-paper-service")],
                 expected_commit="abc123",
+                expected_release_set="release-1",
+                expected_image_digest="gcr.io/example/app@sha256:abc",
                 dry_run=False,
             )
 
@@ -97,6 +101,22 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
             )
         )
         self.assertEqual(describe_calls, 2)
+
+    def test_ensure_latest_traffic_rejects_stale_release_set_even_when_revision_is_healthy(self) -> None:
+        def fake_run(args, *, json_output=False, dry_run=False):
+            if args[1:4] == ["run", "services", "describe"]:
+                return {"status": {"latestReadyRevisionName": "service-00002", "traffic": []}}
+            if args[1:4] == ["run", "revisions", "describe"]:
+                return {"metadata": {"labels": {"commit-sha": "abc123", "release-set": "old"}}, "spec": {"containers": [{"image": "img@sha256:x"}]}}
+            self.fail(f"unexpected command: {args!r}")
+
+        with patch.object(reconcile, "_run", side_effect=fake_run):
+            with self.assertRaisesRegex(reconcile.ReconcileError, "release-set"):
+                reconcile.ensure_latest_traffic(
+                    project="p", region="r",
+                    targets=[reconcile.RuntimeTarget(service_name="service")],
+                    expected_commit="abc123", expected_release_set="new", dry_run=False,
+                )
 
     def test_ensure_latest_traffic_requires_latest_ready_revision(self) -> None:
         def fake_run(args, *, json_output=False, dry_run=False):
