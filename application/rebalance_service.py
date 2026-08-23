@@ -293,6 +293,7 @@ def run_strategy(
     execution_marker_key = _build_execution_marker_key(config=config, execution=execution)
     execution_state_store = getattr(config, "execution_state_store", None)
     execution_already_recorded = False
+    execution_claim_acquired = False
     if execution_marker_key and execution_state_store:
         try:
             execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
@@ -318,6 +319,24 @@ def run_strategy(
                     "Execution report dedup read failed",
                     f"Marker: {execution_marker_key}\n{type(exc).__name__}: {exc}",
                 )
+
+    if (
+        not execution_already_recorded
+        and execution_marker_key
+        and execution_state_store
+        and bool(getattr(config, "execution_dedup_enabled", False))
+        and not bool(getattr(config, "dry_run_only", False))
+    ):
+        try:
+            execution_claim_acquired = bool(execution_state_store.claim_marker(
+                execution_marker_key,
+                metadata={"platform": "longbridge", "strategy_profile": getattr(config, "strategy_profile", "")},
+            ))
+            execution_already_recorded = not execution_claim_acquired
+        except Exception as exc:
+            raise RuntimeError(
+                f"LongBridge execution claim unavailable; refusing broker submission: {type(exc).__name__}"
+            ) from exc
 
     if execution_already_recorded:
         message = _execution_already_recorded_message(
