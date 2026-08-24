@@ -568,7 +568,10 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertEqual(entrypoint.ctx.market_data["feature_snapshot"][0]["symbol"], "NVDA")
         self.assertEqual(entrypoint.ctx.portfolio.total_equity, portfolio.total_equity)
         self.assertEqual(entrypoint.ctx.portfolio.buying_power, portfolio.buying_power)
-        self.assertEqual(entrypoint.ctx.portfolio.metadata["consecutive_losses"], 0)
+        # No live performance history was supplied in this fixture. The shared
+        # lifecycle helper must not fabricate a zero-loss record from missing
+        # evidence; a later runtime gate can classify unavailable evidence.
+        self.assertNotIn("consecutive_losses", entrypoint.ctx.portfolio.metadata)
         self.assertEqual(result.metadata["managed_symbols"], ("NVDA", "META", "BOXX"))
         self.assertEqual(result.metadata["status_icon"], "👑")
 
