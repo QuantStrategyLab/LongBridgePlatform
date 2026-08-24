@@ -7,6 +7,7 @@ from datetime import datetime
 
 from application.execution_service import ExecutionCycleResult, execute_rebalance_cycle
 from application.execution_state import build_execution_marker_key
+from application.durable_execution_commands import enqueue_paper_execution_command
 from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
 from quant_platform_kit.longbridge.market_data import fetch_lot_sizes
 from application.signal_snapshot import build_signal_snapshot
@@ -317,6 +318,18 @@ def run_strategy(
         return load_plan(current_snapshot=current_snapshot)
 
     plan, portfolio, execution, allocation = fetch_replanned_state()
+    paper_command_observation = enqueue_paper_execution_command(
+        enabled=bool(getattr(config, "durable_execution_command_paper_enabled", False)),
+        dry_run_only=bool(getattr(config, "dry_run_only", False)),
+        store=getattr(config, "execution_command_store", None),
+        platform="longbridge",
+        account_scope=str(getattr(config, "execution_state_account_scope", "") or "unknown"),
+        strategy_profile=str(getattr(config, "strategy_profile", "") or "unknown"),
+        execution=execution,
+        allocation=allocation,
+    )
+    if paper_command_observation is not None:
+        execution["durable_execution_command"] = paper_command_observation
 
     execution_marker_key = _build_execution_marker_key(config=config, execution=execution)
     execution_state_store = getattr(config, "execution_state_store", None)

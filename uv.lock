@@ -17,7 +17,7 @@ resolution-markers = [
 ]
 
 [manifest]
-overrides = [{ name = "quant-platform-kit", git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=68fcad8c68ab48a1109d99715f8315af449de493" }]
+overrides = [{ name = "quant-platform-kit", git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=0393349dabad79de60fdfed6c3580c8193ed9789" }]
 
 [[package]]
 name = "blinker"
@@ -727,7 +727,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'" },
     { name = "pytest-cov", marker = "extra == 'test'" },
     { name = "pytz" },
-    { name = "quant-platform-kit", git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=68fcad8c68ab48a1109d99715f8315af449de493" },
+    { name = "quant-platform-kit", git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=0393349dabad79de60fdfed6c3580c8193ed9789" },
     { name = "requests" },
     { name = "ruff", marker = "extra == 'test'" },
     { name = "us-equity-strategies", git = "https://github.com/QuantStrategyLab/UsEquityStrategies.git?rev=291033051fec86586eab223142e5b5b2532a43b5" },
@@ -1210,7 +1210,7 @@ wheels = [
 [[package]]
 name = "quant-platform-kit"
 version = "0.10.0"
-source = { git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=68fcad8c68ab48a1109d99715f8315af449de493#68fcad8c68ab48a1109d99715f8315af449de493" }
+source = { git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=0393349dabad79de60fdfed6c3580c8193ed9789#0393349dabad79de60fdfed6c3580c8193ed9789" }
 
 [[package]]
 name = "requests"

@@ -12,6 +12,10 @@ from application.execution_state import (
     build_execution_marker_store_from_env,
     resolve_execution_dedup_enabled,
 )
+from application.durable_execution_commands import (
+    build_execution_command_store_from_env,
+    resolve_paper_execution_command_producer_enabled,
+)
 from application.runtime_notification_adapters import build_runtime_notification_adapters
 from application.runtime_reporting_adapters import build_runtime_reporting_adapters
 from quant_platform_kit.common.port_adapters import CallableNotificationPort
@@ -264,6 +268,14 @@ class LongBridgeRuntimeComposer:
                 gcp_project_id=self.project_id,
             ),
             execution_state_account_scope=self.account_region,
+            durable_execution_command_paper_enabled=resolve_paper_execution_command_producer_enabled(
+                env_reader=self.env_reader,
+                dry_run_only=self.dry_run_only,
+            ),
+            execution_command_store=build_execution_command_store_from_env(
+                env_reader=self.env_reader,
+                gcp_project_id=self.project_id,
+            ),
         )
 
     def load_strategy_plugin_signals(self, raw_mounts):
