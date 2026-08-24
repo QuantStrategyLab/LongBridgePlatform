@@ -881,6 +881,36 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(summary["orders_previewed"][0]["symbol"], "02800.HK")
         self.assertEqual(summary["quote_snapshot"]["quotes"][0]["symbol"], "02800.HK")
 
+    def test_cycle_result_summary_keeps_broker_submission_pending_until_reconciled(self):
+        module = load_module()
+        cycle_result = types.SimpleNamespace(
+            logs=("pending broker order",),
+            skip_logs=(),
+            note_logs=(),
+            action_done=True,
+            execution={},
+            dry_run_orders=(),
+            pending_orders=(
+                {
+                    "symbol": "SOXL.US",
+                    "side": "sell",
+                    "quantity": 1,
+                    "status": "pending_reconciliation",
+                    "broker_order_id": "lb-order-pending",
+                },
+            ),
+            quote_snapshots=(),
+        )
+
+        summary = module._summarize_cycle_result_for_report(cycle_result, dry_run=False)
+
+        self.assertFalse(summary["action_done"])
+        self.assertTrue(summary["broker_submission_done"])
+        self.assertEqual(summary["execution_status"], "pending_reconciliation")
+        self.assertEqual(summary["order_events_count"], 0)
+        self.assertEqual(summary["orders_pending_count"], 1)
+        self.assertEqual(summary["orders_pending"][0]["broker_order_id"], "lb-order-pending")
+
     def test_notification_delivery_log_summary_records_sent_dry_run_without_raw_text(self):
         module = load_module()
 

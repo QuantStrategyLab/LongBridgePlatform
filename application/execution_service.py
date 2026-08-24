@@ -256,6 +256,7 @@ class ExecutionCycleResult:
     note_logs: tuple[str, ...]
     action_done: bool
     dry_run_orders: tuple[dict, ...] = ()
+    pending_orders: tuple[dict, ...] = ()
     quote_snapshots: tuple[dict, ...] = ()
 
 
@@ -275,6 +276,19 @@ SMALL_ACCOUNT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL = {
     "SOXX": 0.90,
     "QQQM": 0.85,
 }
+
+
+def _is_truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _format_optional_equity(value) -> str:
+    try:
+        return f"${float(value):,.0f}"
+    except (TypeError, ValueError):
+        return "unknown"
 
 
 def _limit_buy_premium_for_symbol(symbol, default_premium, premium_by_symbol=None) -> float:
@@ -984,6 +998,7 @@ def execute_rebalance_cycle(
     note_logs: list[str] = []
     submitted_orders: list[dict] = []
     dry_run_orders: list[dict] = []
+    pending_orders: list[dict] = []
     submitted_sell_orders: list[dict[str, Any]] = []
     quote_snapshots_by_symbol: dict[str, dict] = {}
     small_account_cash_note_keys: set[str] = set()
@@ -1087,6 +1102,9 @@ def execute_rebalance_cycle(
         symbol_suffix=symbol_suffix,
     )
     target_values = dict(allocation["targets"])
+    small_account_buy_blocked = _is_truthy(execution.get("small_account_warning"))
+    small_account_portfolio_equity = execution.get("portfolio_total_equity")
+    small_account_min_equity = execution.get("min_recommended_equity_usd")
     available_cash = float(portfolio["liquid_cash"])
     cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
     investable_cash = float(execution["investable_cash"])
@@ -1160,14 +1178,16 @@ def execute_rebalance_cycle(
             return False
 
         log_with_order_id = append_order_id_suffix(log_message, report.broker_order_id)
-        print(with_prefix(f"OK {log_with_order_id}"), flush=True)
-        logs.append(log_with_order_id)
+        pending_log = translator("order_pending_confirmation", detail=log_with_order_id)
+        print(with_prefix(pending_log), flush=True)
+        logs.append(pending_log)
         order_payload = {
             "symbol": str(symbol or "").strip().upper(),
             "side": str(side or "").strip().lower(),
             "quantity": float(order_intent.quantity or 0.0),
             "order_type": str(order_type or "").strip().lower(),
-            "status": report.status,
+            "status": "pending_reconciliation",
+            "submission_status": report.status,
         }
         if submitted_price is not None:
             order_payload["price"] = round(float(submitted_price), 4)
@@ -1176,6 +1196,7 @@ def execute_rebalance_cycle(
         if report.broker_order_id:
             order_payload["broker_order_id"] = report.broker_order_id
         submitted_orders.append(order_payload)
+        pending_orders.append(order_payload)
         if str(side or "").strip().lower() == "sell":
             submitted_sell_orders.append(order_payload)
         if post_submit_order is not None:
@@ -1323,6 +1344,8 @@ def execute_rebalance_cycle(
         for symbol in buy_candidates
         if symbol != cash_sweep_symbol
     ]
+    if small_account_buy_blocked:
+        funding_buy_candidates = []
     if (
         not sell_submitted
         and funding_buy_candidates
@@ -1508,7 +1531,17 @@ def execute_rebalance_cycle(
         and abs(target_values[symbol] - market_values[symbol]) > current_min_trade
     ]
     buys_blocked_reason: str | None = None
-    if cash_only_execution and buy_candidates and pending_sell_release_symbols:
+    if small_account_buy_blocked and buy_candidates:
+        buys_blocked_reason = "small_account_below_recommended_equity"
+        message = translator(
+            "buy_deferred_small_account",
+            portfolio_equity=_format_optional_equity(small_account_portfolio_equity),
+            min_recommended_equity=_format_optional_equity(small_account_min_equity),
+        )
+        note_logs.append(message)
+        print(with_prefix(message), flush=True)
+        buy_candidates = []
+    elif cash_only_execution and buy_candidates and pending_sell_release_symbols:
         estimated_buy_cost = 0.0
         for symbol in buy_candidates:
             diff = target_values[symbol] - market_values[symbol]
@@ -1716,6 +1749,7 @@ def execute_rebalance_cycle(
         not cash_sweep_sold_this_cycle
         and cash_sweep_symbol
         and cash_sweep_symbol in strategy_assets
+        and not small_account_buy_blocked
         and (
             float(target_values.get(cash_sweep_symbol, 0.0) or 0.0) > 0.0
             or not cash_sweep_substituted_to_cash
@@ -1836,5 +1870,6 @@ def execute_rebalance_cycle(
         note_logs=tuple(note_logs),
         action_done=action_done,
         dry_run_orders=tuple(dry_run_orders),
+        pending_orders=tuple(pending_orders),
         quote_snapshots=tuple(quote_snapshots_by_symbol.values()),
     )

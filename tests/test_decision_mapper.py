@@ -363,6 +363,10 @@ class DecisionMapperTests(unittest.TestCase):
                 "snapshot_manifest_source_input_fallback_used": True,
                 "snapshot_manifest_source_input_fallback_streak": 1,
                 "snapshot_manifest_source_refresh_run_id": "26785047433",
+                "small_account_warning": True,
+                "small_account_warning_reason": "integer_share_rounding",
+                "portfolio_total_equity": 500.0,
+                "min_recommended_equity_usd": 1000.0,
             },
         )
 
@@ -372,6 +376,9 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertIs(plan["execution"]["snapshot_manifest_source_input_fallback_used"], True)
         self.assertEqual(plan["execution"]["snapshot_manifest_source_input_fallback_streak"], 1)
         self.assertEqual(plan["execution"]["snapshot_manifest_source_refresh_run_id"], "26785047433")
+        self.assertIs(plan["execution"]["small_account_warning"], True)
+        self.assertEqual(plan["execution"]["portfolio_total_equity"], 500.0)
+        self.assertEqual(plan["execution"]["min_recommended_equity_usd"], 1000.0)
 
     def test_platform_reserved_cash_policy_does_not_lower_strategy_reserve(self):
         decision = StrategyDecision(

@@ -32,6 +32,10 @@ _SNAPSHOT_DIAGNOSTIC_FIELDS = (
     "snapshot_manifest_source_input_manifest_path",
     "snapshot_manifest_source_refresh_run_id",
     "snapshot_manifest_source_refresh_generated_at",
+    "small_account_warning",
+    "small_account_warning_reason",
+    "portfolio_total_equity",
+    "min_recommended_equity_usd",
 )
 _TQQQ_RISK_CONTROL_EXECUTION_FIELDS = (
     "dual_drive_volatility_delever_enabled",
