@@ -42,6 +42,7 @@ SIGNAL_ICONS = {
 I18N = {
     "zh": {
         "rebalance_title": "🔔 【调仓指令】",
+        "pending_order_title": "⏳ 【订单待券商最终确认】",
         "dry_run_banner": "🧪 模拟运行模式，本次不会真实下单",
         "strategy_label": "🧭 策略: {name}",
         "market_scope_detail": "🌏 市场: {market} | 交易币种: {currency} | 标的后缀: {symbol_suffix}",
@@ -93,6 +94,7 @@ I18N = {
         "buy_skip_whole_share_detail": "{symbol} 需增 ${diff}，整数股不足 1 股，无需下单",
         "sell_skip_no_sellable_detail": "{symbol} 调仓差额 ${diff}，持仓 {held} 股但无可卖数量（可卖 {sellable}）",
         "buy_deferred": "ℹ️ [买入说明] {detail}",
+        "buy_deferred_small_account": "⛔ [买入保护] 净值 {portfolio_equity} 低于策略建议 {min_recommended_equity}；本轮禁止新增买入或加仓，允许策略减仓卖出",
         "buy_deferred_pending_sell_release": "ℹ️ [买入跳过] 需先卖出 {symbols} 但整数股不足 1 股未成交；为避免融资本轮跳过对应买入",
         "buy_deferred_negative_cash": "ℹ️ [买入跳过] 账户现金已为负（${cash}），为避免额外融资本轮跳过买入",
         "buy_deferred_no_investable_cash": "账户现金 ${available} 低于策略保留阈值，可投资现金为 ${investable}，本轮不发起买单",
@@ -120,6 +122,7 @@ I18N = {
         "buy_deferred_cash_sweep_cash_limit": "{symbol} 剩余可投资现金 ${investable}，预算可回补 {budget_qty} 股，但券商估算可买数量为 0；可能有未完成挂单、结算或购买力占用",
         "dca_notional_to_whole_share_compat": "平台不支持碎股（API quantity ≥1），DCA 定投金额已转换为最小整股/整手订单",
         "execution_already_recorded": "已跳过重复执行：信号日 {signal_date} / 执行日 {effective_date} 已记录，本轮不再生成订单",
+        "order_pending_confirmation": "⏳ 已提交给券商，等待最终成交/拒绝确认：{detail}",
         "cash_sweep_rebuy": "🏦 [尾部回补] 剩余可投资现金回补 {symbol}: {qty}股 @ ${price}",
         "limit_buy": "📈 [限价买入] {symbol}: {qty}股 @ ${price}（已提交，等待成交确认）",
         "market_buy": "📈 [市价买入] {symbol}: {qty}股 @ ${price}",
@@ -231,6 +234,7 @@ I18N = {
     },
     "en": {
         "rebalance_title": "🔔 【Trade Execution Report】",
+        "pending_order_title": "⏳ 【Broker Order Pending Confirmation】",
         "dry_run_banner": "🧪 Dry run mode, no real orders will be submitted",
         "strategy_label": "🧭 Strategy: {name}",
         "market_scope_detail": "🌏 Market: {market} | trading currency: {currency} | symbol suffix: {symbol_suffix}",
@@ -282,6 +286,7 @@ I18N = {
         "buy_skip_whole_share_detail": "{symbol} needs ${diff} added; whole-share quantity rounds to 0; no order needed",
         "sell_skip_no_sellable_detail": "{symbol} rebalance gap ${diff}; held {held} shares but no sellable quantity (sellable {sellable})",
         "buy_deferred": "ℹ️ [Buy note] {detail}",
+        "buy_deferred_small_account": "⛔ [Buy guard] equity {portfolio_equity} is below the recommended {min_recommended_equity}; new buys and top-ups are blocked while strategy-driven sells remain allowed",
         "buy_deferred_pending_sell_release": "ℹ️ [Buy skipped] {symbols} still needs trimming but whole-share sell rounded to 0; skipping paired buys this cycle to avoid margin",
         "buy_deferred_negative_cash": "ℹ️ [Buy skipped] account cash is already negative (${cash}); skipping buys this cycle to avoid additional margin",
         "buy_deferred_no_investable_cash": "Account cash ${available} is below the strategy reserve threshold, investable cash is ${investable}; no buy order this cycle",
@@ -309,6 +314,7 @@ I18N = {
         "buy_deferred_cash_sweep_cash_limit": "{symbol} residual investable cash ${investable}, budget supports {budget_qty} tail-rebuy shares, but broker estimate returned 0; an open order, settlement, or buying-power hold may still be blocking funds",
         "dca_notional_to_whole_share_compat": "Platform does not support fractional shares (API quantity >=1); DCA notional amounts converted to minimum whole-share / whole-lot orders",
         "execution_already_recorded": "Duplicate execution skipped: signal date {signal_date} / effective date {effective_date} is already recorded; no orders will be generated this cycle",
+        "order_pending_confirmation": "⏳ Submitted to the broker; waiting for final fill or rejection confirmation: {detail}",
         "cash_sweep_rebuy": "🏦 [tail rebuy] residual investable cash rebought {symbol}: {qty} shares @ ${price}",
         "limit_buy": "📈 [Limit buy] {symbol}: {qty} shares @ ${price} (submitted; awaiting fill confirmation)",
         "market_buy": "📈 [Market buy] {symbol}: {qty} shares @ ${price}",

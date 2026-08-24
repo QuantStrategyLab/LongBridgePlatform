@@ -156,6 +156,134 @@ def _build_snapshot(plan, *, phase=""):
 
 
 class RebalanceServiceNotificationTests(unittest.TestCase):
+    def test_submitted_broker_order_is_recorded_as_pending_reconciliation(self):
+        submitted_orders = []
+        plan = _build_plan(
+            strategy_symbols=("SOXL",),
+            risk_symbols=("SOXL",),
+            targets={"SOXL": 400.0},
+            market_values={"SOXL": 0.0},
+            sellable_quantities={"SOXL": 0},
+            quantities={"SOXL": 0},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=500.0,
+            market_status="Risk on",
+            deploy_ratio_text="70.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXL target",
+            available_cash=500.0,
+            total_strategy_equity=500.0,
+            portfolio_rows=(("SOXL",),),
+        )
+
+        result = execute_rebalance_cycle(
+            trade_context=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_replanned_state=lambda: (
+                plan,
+                plan["portfolio"],
+                plan["execution"],
+                plan["allocation"],
+            ),
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-08-24",
+                    last_price=100.0,
+                )
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 5,
+            execution_port=CallableExecutionPort(
+                lambda order_intent: (
+                    submitted_orders.append(order_intent),
+                    ExecutionReport(
+                        symbol=order_intent.symbol,
+                        side=order_intent.side,
+                        quantity=order_intent.quantity,
+                        status="submitted",
+                        broker_order_id="lb-order-pending",
+                    ),
+                )[-1]
+            ),
+            notify_issue=lambda _title, _detail: None,
+            translator=build_translator("zh"),
+            with_prefix=lambda message: message,
+            limit_sell_discount=0.995,
+            limit_buy_premium=1.0,
+        )
+
+        self.assertTrue(result.action_done)
+        self.assertEqual(len(submitted_orders), 1)
+        self.assertEqual(len(result.pending_orders), 1)
+        self.assertEqual(result.pending_orders[0]["status"], "pending_reconciliation")
+        self.assertIn("等待最终成交", result.logs[0])
+
+    def test_small_account_warning_blocks_new_buys_but_not_sells(self):
+        submitted_orders = []
+        plan = _build_plan(
+            strategy_symbols=("SOXL",),
+            risk_symbols=("SOXL",),
+            targets={"SOXL": 400.0},
+            market_values={"SOXL": 0.0},
+            sellable_quantities={"SOXL": 0},
+            quantities={"SOXL": 0},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=500.0,
+            market_status="Risk on",
+            deploy_ratio_text="70.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXL target",
+            available_cash=500.0,
+            total_strategy_equity=500.0,
+            portfolio_rows=(("SOXL",),),
+        )
+        plan["execution"].update(
+            {
+                "small_account_warning": True,
+                "portfolio_total_equity": 500.0,
+                "min_recommended_equity_usd": 1000.0,
+            }
+        )
+
+        result = execute_rebalance_cycle(
+            trade_context=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_replanned_state=lambda: (
+                plan,
+                plan["portfolio"],
+                plan["execution"],
+                plan["allocation"],
+            ),
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-08-24",
+                    last_price=100.0,
+                )
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 5,
+            execution_port=CallableExecutionPort(submitted_orders.append),
+            notify_issue=lambda _title, _detail: None,
+            translator=build_translator("zh"),
+            with_prefix=lambda message: message,
+            limit_sell_discount=0.995,
+            limit_buy_premium=1.0,
+        )
+
+        self.assertFalse(result.action_done)
+        self.assertEqual(submitted_orders, [])
+        self.assertTrue(any("禁止新增买入或加仓" in note for note in result.note_logs))
+
     def test_safe_haven_target_below_cash_substitute_threshold_stays_cash(self):
         submitted_orders = []
         plan = _build_plan(
@@ -1033,7 +1161,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(observed_orders[0].order_type, "limit")
         self.assertEqual(observed_post_submit, [("trade-context", "SOXX.US", "lb-order-1")])
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("【调仓", sent_messages[0])
+        self.assertIn("【订单待券商最终确认】", sent_messages[0])
 
     def test_run_strategy_skips_when_execution_marker_already_exists(self):
         sent_messages = []
@@ -1452,7 +1580,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("🔔 【调仓指令】", sent_messages[0])
+        self.assertIn("⏳ 【订单待券商最终确认】", sent_messages[0])
         self.assertIn("🧭 策略: SOXL/SOXX 半导体趋势收益", sent_messages[0])
         self.assertNotIn("⏱ 执行时点:", sent_messages[0])
         self.assertIn("限价卖出", sent_messages[0])
@@ -1520,7 +1648,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("🔔 【调仓指令】", sent_messages[0])
+        self.assertIn("⏳ 【订单待券商最终确认】", sent_messages[0])
         self.assertIn("SOXX.US 目标金额 $163.14 低于 1 股价格 $504.60", sent_messages[0])
         self.assertIn("本轮保留现金", sent_messages[0])
         self.assertIn("现金替代：BOXX.US", sent_messages[0])
@@ -1581,7 +1709,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("🔔 【调仓指令】", sent_messages[0])
+        self.assertIn("⏳ 【订单待券商最终确认】", sent_messages[0])
         self.assertIn("限价卖出] SOXL: 4股", sent_messages[0])
         self.assertEqual(sent_messages[0].count("[买入说明] SOXX.US"), 1)
         self.assertEqual(sent_messages[0].count("本轮保留现金"), 1)
@@ -1702,7 +1830,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("🔔 【调仓指令】", sent_messages[0])
+        self.assertIn("⏳ 【订单待券商最终确认】", sent_messages[0])
         self.assertIn("限价买入] QQQM: 1股", sent_messages[0])
         self.assertNotIn("QQQM.US 目标金额 $507.87 低于 1 股价格", sent_messages[0])
 
@@ -1769,7 +1897,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("🔔 【调仓指令】", sent_messages[0])
+        self.assertIn("⏳ 【订单待券商最终确认】", sent_messages[0])
         self.assertIn("限价卖出] TQQQ: 6股 @ $76.94", sent_messages[0])
         self.assertNotIn("限价卖出] TQQQ: 7股", sent_messages[0])
         self.assertIn("限价买入] QQQM: 1股 @ $298.68", sent_messages[0])
@@ -2171,7 +2299,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
         self.assertEqual(observed_snapshots, [before_sell_snapshot, after_sell_snapshot])
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("🔔 【调仓指令】", sent_messages[0])
+        self.assertIn("⏳ 【订单待券商最终确认】", sent_messages[0])
         self.assertIn("限价卖出", sent_messages[0])
         self.assertIn("限价买入", sent_messages[0])
         self.assertNotIn("买入跳过", sent_messages[0])

@@ -31,11 +31,14 @@ def _record_platform_execution_telemetry(
         return
     execution = dict(execution_result.execution or {})
     portfolio = dict(execution_result.portfolio or {})
+    pending_orders = tuple(getattr(execution_result, "pending_orders", ()) or ())
     try_record_platform_execution(
         profile,
         {
             "platform": "longbridge",
-            "action_done": bool(execution_result.action_done),
+            "action_done": bool(execution_result.action_done) and not pending_orders,
+            "broker_submission_done": bool(execution_result.action_done),
+            "orders_pending_count": len(pending_orders),
             "effective_date": execution.get("effective_date"),
             "signal_date": execution.get("signal_date"),
             "dry_run_only": bool(getattr(config, "dry_run_only", False)),
@@ -239,6 +242,7 @@ def _record_execution_marker(
                 "dry_run_only": bool(getattr(config, "dry_run_only", False)),
                 "action_done": bool(getattr(result, "action_done", False)),
                 "dry_run_orders_count": len(tuple(getattr(result, "dry_run_orders", ()) or ())),
+                "pending_orders_count": len(tuple(getattr(result, "pending_orders", ()) or ())),
                 "signal_date": str(dict(getattr(result, "execution", {}) or {}).get("signal_date") or ""),
                 "effective_date": str(dict(getattr(result, "execution", {}) or {}).get("effective_date") or ""),
             },
@@ -423,8 +427,24 @@ def run_strategy(
     skip_logs = list(execution_result.skip_logs)
     note_logs = list(execution_result.note_logs)
     action_done = execution_result.action_done
+    pending_orders = tuple(getattr(execution_result, "pending_orders", ()) or ())
 
-    if action_done:
+    if pending_orders:
+        notification_publisher.publish(
+            notification_renderers.render_rebalance_notification(
+                execution=execution,
+                logs=logs,
+                skip_logs=skip_logs,
+                note_logs=note_logs,
+                translator=config.translator,
+                separator=config.separator,
+                strategy_display_name=config.strategy_display_name,
+                dry_run_only=config.dry_run_only,
+                extra_notification_lines=config.extra_notification_lines,
+                title_key="pending_order_title",
+            )
+        )
+    elif action_done:
         notification_publisher.publish(
             notification_renderers.render_rebalance_notification(
                 execution=execution,
