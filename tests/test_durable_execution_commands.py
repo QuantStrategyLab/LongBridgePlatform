@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
 from application.durable_execution_commands import (  # noqa: E402
     build_paper_execution_command,
     enqueue_paper_execution_command,
+    resolve_paper_execution_command_consumer_enabled,
     resolve_paper_execution_command_producer_enabled,
 )
 from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt
@@ -139,6 +140,19 @@ def test_paper_producer_persists_observation_gate_receipt_without_authorizing_a_
     assert result["consumer_authorized"] is False
 
 
+def test_paper_command_binds_complete_strategy_release_when_available() -> None:
+    command = build_paper_execution_command(
+        platform="longbridge",
+        account_scope="PAPER",
+        strategy_profile="soxl_soxx_trend_income",
+        execution=_execution(),
+        allocation=_allocation(),
+        strategy_release=_release_identity(),
+    )
+
+    assert command.intent["strategy_release"] == _release_identity()
+
+
 def test_paper_producer_rejects_live_enablement() -> None:
     assert resolve_paper_execution_command_producer_enabled(
         env_reader=lambda _name, _default="": "true",
@@ -146,6 +160,22 @@ def test_paper_producer_rejects_live_enablement() -> None:
     )
     try:
         resolve_paper_execution_command_producer_enabled(
+            env_reader=lambda _name, _default="": "true",
+            dry_run_only=False,
+        )
+    except RuntimeError as exc:
+        assert "paper-only" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("live enablement must fail closed")
+
+
+def test_paper_consumer_rejects_live_enablement() -> None:
+    assert resolve_paper_execution_command_consumer_enabled(
+        env_reader=lambda _name, _default="": "true",
+        dry_run_only=True,
+    )
+    try:
+        resolve_paper_execution_command_consumer_enabled(
             env_reader=lambda _name, _default="": "true",
             dry_run_only=False,
         )

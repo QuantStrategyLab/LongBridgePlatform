@@ -207,6 +207,23 @@ class LongBridgeRuntimeComposer:
             fetch_order_status=self.fetch_order_status_fn,
         )
 
+    def build_read_only_broker_contexts(self) -> tuple[Any, Any]:
+        """Build LongBridge read contexts without strategy evaluation or an order port."""
+        bootstrap = self.bootstrap_builder(
+            project_id=self.project_id,
+            secret_name=self.secret_name,
+            token_refresh_threshold_days=self.token_refresh_threshold_days,
+            fetch_token_from_secret_fn=self.fetch_token_from_secret_fn,
+            refresh_token_if_needed_fn=self.refresh_token_if_needed_fn,
+            build_contexts_fn=self.build_contexts_fn,
+            calculate_strategy_indicators_fn=lambda _quote_context: {},
+            env_reader=self.env_reader,
+        )
+        build_contexts = getattr(bootstrap, "build_read_only_contexts", None)
+        if not callable(build_contexts):
+            raise RuntimeError("runtime bootstrap does not support read-only broker contexts")
+        return build_contexts()
+
     def build_rebalance_config(
         self,
         *,

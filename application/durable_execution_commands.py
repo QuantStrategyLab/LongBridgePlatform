@@ -18,6 +18,7 @@ from quant_platform_kit.common.runtime_command_gate import (
     RuntimeCommandGatePolicy,
     evaluate_runtime_command_gate,
 )
+from quant_platform_kit.common.strategy_release import build_strategy_release_identity
 
 
 PAPER_EXECUTION_INTENT_SCHEMA_VERSION = "longbridge.paper-execution-intent.v1"
@@ -55,6 +56,7 @@ def build_paper_execution_command(
     strategy_profile: str,
     execution: Mapping[str, Any],
     allocation: Mapping[str, Any],
+    strategy_release: Any = None,
 ) -> ExecutionCommand:
     """Bind one paper-only command to immutable timing and target intent."""
     execution = dict(execution or {})
@@ -67,6 +69,12 @@ def build_paper_execution_command(
         "risk_symbols": _normalized_symbols(allocation.get("risk_symbols")),
         "safe_haven_symbols": _normalized_symbols(allocation.get("safe_haven_symbols")),
     }
+    if strategy_release is not None:
+        # The command is content-addressed, so including the release identity
+        # binds a delayed paper command to the exact decision release.  The
+        # future consumer compares it with its self-attested runtime release
+        # before it simulates even a single order.
+        intent["strategy_release"] = build_strategy_release_identity(strategy_release).to_dict()
     intent_json = _canonical_json(intent)
     return ExecutionCommand.from_decision(
         platform=platform,
@@ -107,6 +115,7 @@ def enqueue_paper_execution_command(
         strategy_profile=strategy_profile,
         execution=execution,
         allocation=allocation,
+        strategy_release=expected_strategy_release,
     )
     created = store.enqueue(command)
     gate_decision = evaluate_runtime_command_gate(
@@ -152,4 +161,15 @@ def resolve_paper_execution_command_producer_enabled(*, env_reader, dry_run_only
     enabled = raw_value in {"1", "true", "t", "yes", "y", "on"}
     if enabled and not dry_run_only:
         raise RuntimeError("durable execution command producer is paper-only and cannot be enabled live")
+    return enabled
+
+
+def resolve_paper_execution_command_consumer_enabled(*, env_reader, dry_run_only: bool) -> bool:
+    """Resolve the opt-in paper consumer flag and reject any live runtime."""
+    raw_value = str(
+        env_reader("LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_CONSUMER_ENABLED", "") or ""
+    ).strip().lower()
+    enabled = raw_value in {"1", "true", "t", "yes", "y", "on"}
+    if enabled and not dry_run_only:
+        raise RuntimeError("durable execution command consumer is paper-only and cannot be enabled live")
     return enabled
