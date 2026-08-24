@@ -176,7 +176,7 @@ def _traffic_on_latest(service: Mapping[str, Any], latest_revision: str) -> bool
     return False
 
 
-def _revision_commit(*, project: str, region: str, revision: str, dry_run: bool) -> str:
+def _revision_identity(*, project: str, region: str, revision: str, dry_run: bool) -> tuple[str, str, str]:
     payload = _run(
         [
             "gcloud",
@@ -191,8 +191,15 @@ def _revision_commit(*, project: str, region: str, revision: str, dry_run: bool)
         json_output=True,
         dry_run=dry_run,
     )
-    labels = payload.get("metadata", {}).get("labels") or {}
-    return str(labels.get("commit-sha") or "").strip()
+    metadata = payload.get("metadata", {}) if isinstance(payload, Mapping) else {}
+    labels = metadata.get("labels") or {}
+    template = payload.get("spec", {}).get("containers", []) if isinstance(payload, Mapping) else []
+    image = str(template[0].get("image") or "").strip() if template and isinstance(template[0], Mapping) else ""
+    return (
+        str(labels.get("commit-sha") or "").strip(),
+        str(labels.get("release-set") or labels.get("release_set") or "").strip(),
+        image,
+    )
 
 
 def ensure_latest_traffic(
@@ -201,6 +208,8 @@ def ensure_latest_traffic(
     region: str,
     targets: Sequence[RuntimeTarget],
     expected_commit: str,
+    expected_release_set: str = "",
+    expected_image_digest: str = "",
     dry_run: bool,
 ) -> None:
     for target in targets:
@@ -226,7 +235,7 @@ def ensure_latest_traffic(
         if not latest:
             raise ReconcileError(f"Unable to resolve latest revision for {target.service_name}")
         if expected_commit:
-            actual_commit = _revision_commit(
+            actual_commit, actual_release_set, actual_image = _revision_identity(
                 project=project,
                 region=target_region,
                 revision=latest,
@@ -236,6 +245,16 @@ def ensure_latest_traffic(
                 raise ReconcileError(
                     f"{target.service_name} latest revision {latest} commit {actual_commit!r} "
                     f"does not match expected {expected_commit!r}"
+                )
+            if expected_release_set and actual_release_set != expected_release_set:
+                raise ReconcileError(
+                    f"{target.service_name} latest revision {latest} release-set {actual_release_set!r} "
+                    f"does not match expected {expected_release_set!r}"
+                )
+            if expected_image_digest and actual_image != expected_image_digest:
+                raise ReconcileError(
+                    f"{target.service_name} latest revision {latest} image digest {actual_image!r} "
+                    f"does not match expected {expected_image_digest!r}"
                 )
         if not _traffic_on_latest(service, latest):
             print(f"Updating {target.service_name} traffic to latest revision {latest}.")
@@ -392,6 +411,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--region", default=os.environ.get("CLOUD_RUN_REGION", ""))
     parser.add_argument("--scheduler-location", default=os.environ.get("CLOUD_SCHEDULER_LOCATION", ""))
     parser.add_argument("--expected-commit", default=os.environ.get("GITHUB_SHA", ""))
+    parser.add_argument("--expected-release-set", default=os.environ.get("EXPECTED_RELEASE_SET", ""))
+    parser.add_argument("--expected-image-digest", default=os.environ.get("EXPECTED_IMAGE_DIGEST", ""))
     parser.add_argument("--ensure-latest-traffic", action="store_true")
     parser.add_argument("--delete-legacy-schedulers", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -411,6 +432,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             region=args.region,
             targets=targets,
             expected_commit=args.expected_commit,
+            expected_release_set=args.expected_release_set,
+            expected_image_digest=args.expected_image_digest,
             dry_run=args.dry_run,
         )
     if args.delete_legacy_schedulers:
