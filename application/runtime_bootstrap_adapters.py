@@ -27,7 +27,8 @@ class LongBridgeRuntimeBootstrap:
             str(self.env_reader(self.app_secret_env_name, "") or ""),
         )
 
-    def __call__(self) -> tuple[Any, Any, Any]:
+    def build_contexts(self) -> tuple[Any, Any]:
+        """Build broker contexts for a normal runtime bootstrap."""
         app_key, app_secret = self._read_app_credentials()
         token = self.refresh_token_if_needed_fn(
             self.fetch_token_from_secret_fn(self.project_id, self.secret_name),
@@ -37,7 +38,16 @@ class LongBridgeRuntimeBootstrap:
             app_secret=app_secret,
             refresh_threshold_days=self.token_refresh_threshold_days,
         )
-        quote_context, trade_context = self.build_contexts_fn(app_key, app_secret, token)
+        return self.build_contexts_fn(app_key, app_secret, token)
+
+    def build_read_only_contexts(self) -> tuple[Any, Any]:
+        """Build broker read contexts without refreshing or mutating a token secret."""
+        app_key, app_secret = self._read_app_credentials()
+        token = self.fetch_token_from_secret_fn(self.project_id, self.secret_name)
+        return self.build_contexts_fn(app_key, app_secret, token)
+
+    def __call__(self) -> tuple[Any, Any, Any]:
+        quote_context, trade_context = self.build_contexts()
         indicators = self.calculate_strategy_indicators_fn(quote_context)
         if indicators is None:
             raise Exception("Quote data missing or API limited; cannot compute indicators")

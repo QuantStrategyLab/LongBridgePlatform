@@ -15,6 +15,7 @@ on:
         options:
           - configured
           - hk-verify
+          - paper-command-verify
       cloud_run_region:
         description: "Cloud Run region for hk-verify. Leave blank to use the longbridge-hk Environment value."
         required: false
@@ -49,6 +50,39 @@ on:
         required: true
         type: boolean
         default: true
+      paper_command_verify_service:
+        description: "Dedicated Cloud Run service for the paper command consumer."
+        required: false
+        type: string
+        default: longbridge-quant-paper-command-verify-service
+      paper_command_verify_strategy_profile:
+        description: "Strategy profile to verify with immutable paper commands."
+        required: false
+        type: string
+        default: russell_top50_leader_rotation
+      paper_command_verify_execution_command_cloud_uri:
+        description: "Dedicated GCS prefix for immutable paper commands; never an execution-report URI."
+        required: false
+        type: string
+      paper_command_verify_strategy_release_json:
+        description: "Complete strategy_release identity JSON required for paper command verification."
+        required: false
+        type: string
+      paper_command_verify_longport_secret_name:
+        description: "LongPort token secret name for the isolated paper command verifier."
+        required: false
+        type: string
+        default: longport_token_paper
+      paper_command_verify_longport_app_key_secret_name:
+        description: "LongPort app-key secret name for the isolated paper command verifier."
+        required: false
+        type: string
+        default: longport-app-key-paper
+      paper_command_verify_longport_app_secret_secret_name:
+        description: "LongPort app-secret secret name for the isolated paper command verifier."
+        required: false
+        type: string
+        default: longport-app-secret-paper
 
 env:
   GCP_PROJECT_ID: longbridgequant
@@ -109,6 +143,13 @@ jobs:
       INPUT_LONGPORT_APP_SECRET_SECRET_NAME: ${{ inputs.longport_app_secret_secret_name }}
       INPUT_DEPLOY_IMAGE: ${{ inputs.deploy_image }}
       INPUT_SYNC_ENV: ${{ inputs.sync_env }}
+      INPUT_PAPER_COMMAND_VERIFY_SERVICE: ${{ inputs.paper_command_verify_service }}
+      INPUT_PAPER_COMMAND_VERIFY_STRATEGY_PROFILE: ${{ inputs.paper_command_verify_strategy_profile }}
+      INPUT_PAPER_COMMAND_VERIFY_EXECUTION_COMMAND_CLOUD_URI: ${{ inputs.paper_command_verify_execution_command_cloud_uri }}
+      INPUT_PAPER_COMMAND_VERIFY_STRATEGY_RELEASE_JSON: ${{ inputs.paper_command_verify_strategy_release_json }}
+      INPUT_PAPER_COMMAND_VERIFY_LONGPORT_SECRET_NAME: ${{ inputs.paper_command_verify_longport_secret_name }}
+      INPUT_PAPER_COMMAND_VERIFY_LONGPORT_APP_KEY_SECRET_NAME: ${{ inputs.paper_command_verify_longport_app_key_secret_name }}
+      INPUT_PAPER_COMMAND_VERIFY_LONGPORT_APP_SECRET_SECRET_NAME: ${{ inputs.paper_command_verify_longport_app_secret_secret_name }}
       GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
       # Set CLOUD_RUN_REGION per Environment so paper/HK/SG can target different regions.
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
@@ -201,6 +242,7 @@ jobs:
       # Paper-only durable-command staging. These are intentionally opt-in;
       # a non-paper runtime rejects the producer even if configured.
       LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_ENABLED: ${{ vars.LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_ENABLED }}
+      LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_CONSUMER_ENABLED: ${{ vars.LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_CONSUMER_ENABLED }}
       LONGBRIDGE_EXECUTION_COMMAND_CLOUD_URI: ${{ vars.LONGBRIDGE_EXECUTION_COMMAND_CLOUD_URI }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
@@ -221,6 +263,7 @@ jobs:
 
           deploy_enabled=false
           env_sync_enabled=false
+          scheduler_sync_enabled=false
 
           # QSL_ENABLE_CLOUD_RUN_AUTOMATION overrides ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION
           ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION="${QSL_ENABLE_CLOUD_RUN_AUTOMATION:-$ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION}"
@@ -244,7 +287,20 @@ jobs:
             exit 0
           fi
 
-          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] && [ "${WORKFLOW_TARGET:-configured}" = "hk-verify" ]; then
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] \
+            && [ "${WORKFLOW_TARGET:-configured}" = "paper-command-verify" ] \
+            && [ "${DEPLOYMENT_LABEL:-}" != "PAPER" ]; then
+            write_github_output \
+              "deploy_enabled=false" \
+              "env_sync_enabled=false" \
+              "scheduler_sync_enabled=false" \
+              "enabled=false"
+            echo "Skipping ${DEPLOYMENT_LABEL} Cloud Run automation because paper-command-verify targets only the PAPER deployment." >&2
+            exit 0
+          fi
+
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ] \
+            && { [ "${WORKFLOW_TARGET:-configured}" = "hk-verify" ] || [ "${WORKFLOW_TARGET:-configured}" = "paper-command-verify" ]; }; then
             if [ "${INPUT_DEPLOY_IMAGE:-true}" = "true" ]; then
               deploy_enabled=true
             fi
@@ -261,9 +317,15 @@ jobs:
             fi
           fi
 
+          if [ "${env_sync_enabled}" = "true" ] \
+            && [ "${WORKFLOW_TARGET:-configured}" != "paper-command-verify" ]; then
+            scheduler_sync_enabled=true
+          fi
+
           write_github_output \
             "deploy_enabled=${deploy_enabled}" \
-            "env_sync_enabled=${env_sync_enabled}"
+            "env_sync_enabled=${env_sync_enabled}" \
+            "scheduler_sync_enabled=${scheduler_sync_enabled}"
 
           if [ "${deploy_enabled}" != "true" ] && [ "${env_sync_enabled}" != "true" ]; then
             write_github_output "enabled=false"
@@ -332,6 +394,94 @@ jobs:
           if [ -n "${INPUT_LONGPORT_APP_SECRET_SECRET_NAME:-}" ]; then
             echo "LONGPORT_APP_SECRET_SECRET_NAME=${INPUT_LONGPORT_APP_SECRET_SECRET_NAME}" >> "$GITHUB_ENV"
           fi
+          if [ "${INPUT_DEPLOY_IMAGE:-true}" != "true" ]; then
+            echo "CLOUD_RUN_ENV_SYNC_WAIT_FOR_COMMIT=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Apply isolated paper-command verification defaults
+        if: steps.config.outputs.enabled == 'true' && github.event_name == 'workflow_dispatch' && inputs.target == 'paper-command-verify'
+        run: |
+          set -euo pipefail
+
+          service="${INPUT_PAPER_COMMAND_VERIFY_SERVICE:-longbridge-quant-paper-command-verify-service}"
+          profile="${INPUT_PAPER_COMMAND_VERIFY_STRATEGY_PROFILE:-}"
+          command_uri="${INPUT_PAPER_COMMAND_VERIFY_EXECUTION_COMMAND_CLOUD_URI:-}"
+          release_json="${INPUT_PAPER_COMMAND_VERIFY_STRATEGY_RELEASE_JSON:-}"
+          if [ -z "${profile}" ] || [ -z "${command_uri}" ] || [ -z "${release_json}" ]; then
+            echo "paper-command-verify requires a strategy profile, a dedicated command GCS URI, and a complete strategy release identity." >&2
+            exit 1
+          fi
+          case "${command_uri}" in
+            gs://*) ;;
+            *)
+              echo "paper-command-verify command storage must be a gs:// URI." >&2
+              exit 1
+              ;;
+          esac
+          report_uri="${EXECUTION_REPORT_GCS_URI%/}"
+          command_uri_trimmed="${command_uri%/}"
+          if [ -n "${report_uri}" ] \
+            && { [ "${command_uri_trimmed}" = "${report_uri}" ] || [[ "${command_uri_trimmed}" == "${report_uri}/"* ]]; }; then
+            echo "paper-command-verify command storage must not reuse the execution report URI or its prefix." >&2
+            exit 1
+          fi
+
+          runtime_target="$(SERVICE="${service}" PROFILE="${profile}" RELEASE_JSON="${release_json}" python3 - <<'PY'
+          import json
+          import os
+
+          release = json.loads(os.environ["RELEASE_JSON"])
+          required = {
+              "release_id",
+              "manifest_sha256",
+              "strategy_revision",
+              "config_sha256",
+              "risk_policy_sha256",
+              "evidence_sha256",
+              "plugin_bundle_sha256",
+              "effective_session",
+          }
+          if not isinstance(release, dict) or required.difference(release):
+              raise SystemExit("paper-command-verify strategy release identity is incomplete")
+          print(
+              json.dumps(
+                  {
+                      "platform_id": "longbridge",
+                      "strategy_profile": os.environ["PROFILE"],
+                      "deployment_selector": "paper-command-verify",
+                      "account_scope": "paper-command-verify",
+                      "execution_mode": "paper",
+                      "dry_run_only": True,
+                      "service_name": os.environ["SERVICE"],
+                      "strategy_release": release,
+                  },
+                  separators=(",", ":"),
+              )
+          )
+          PY
+          )"
+
+          {
+            echo "CLOUD_RUN_SERVICE=${service}"
+            echo "ACCOUNT_REGION=PAPER"
+            echo "ACCOUNT_PREFIX=PAPER_VERIFY"
+            echo "STRATEGY_PROFILE=${profile}"
+            echo "RUNTIME_TARGET_JSON=${runtime_target}"
+            echo "RUNTIME_TARGET_ENABLED=false"
+            echo "LONGBRIDGE_DRY_RUN_ONLY=true"
+            echo "LONGBRIDGE_MARKET=US"
+            echo "LONGBRIDGE_MARKET_CALENDAR=NYSE"
+            echo "LONGBRIDGE_MARKET_TIMEZONE=America/New_York"
+            echo "LONGBRIDGE_SYMBOL_SUFFIX=.US"
+            echo "LONGBRIDGE_TRADING_CURRENCY=USD"
+            echo "LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_ENABLED=true"
+            echo "LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_CONSUMER_ENABLED=true"
+            echo "LONGBRIDGE_EXECUTION_COMMAND_CLOUD_URI=${command_uri_trimmed}"
+            echo "LONGPORT_SECRET_NAME=${INPUT_PAPER_COMMAND_VERIFY_LONGPORT_SECRET_NAME}"
+            echo "LONGPORT_APP_KEY_SECRET_NAME=${INPUT_PAPER_COMMAND_VERIFY_LONGPORT_APP_KEY_SECRET_NAME}"
+            echo "LONGPORT_APP_SECRET_SECRET_NAME=${INPUT_PAPER_COMMAND_VERIFY_LONGPORT_APP_SECRET_SECRET_NAME}"
+          } >> "$GITHUB_ENV"
+
           if [ "${INPUT_DEPLOY_IMAGE:-true}" != "true" ]; then
             echo "CLOUD_RUN_ENV_SYNC_WAIT_FOR_COMMIT=false" >> "$GITHUB_ENV"
           fi
@@ -902,7 +1052,7 @@ jobs:
           python3 scripts/reconcile_cloud_runtime.py --platform longbridge --ensure-latest-traffic --service "${CLOUD_RUN_SERVICE}"
 
       - name: Sync Cloud Scheduler schedule
-        if: steps.config.outputs.env_sync_enabled == 'true'
+        if: steps.config.outputs.scheduler_sync_enabled == 'true'
         env:
           SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
         run: |
@@ -1186,7 +1336,7 @@ jobs:
           done
 
       - name: Reconcile legacy Cloud Scheduler jobs
-        if: steps.config.outputs.env_sync_enabled == 'true'
+        if: steps.config.outputs.scheduler_sync_enabled == 'true'
         env:
           SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
         run: |

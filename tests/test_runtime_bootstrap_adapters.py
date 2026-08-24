@@ -73,3 +73,30 @@ def test_build_runtime_bootstrap_raises_when_indicators_unavailable():
         assert str(exc) == "Quote data missing or API limited; cannot compute indicators"
     else:
         raise AssertionError("expected bootstrap to raise when indicators are unavailable")
+
+
+def test_build_runtime_bootstrap_can_build_read_only_contexts_without_indicators():
+    observed = {}
+    bootstrap = build_runtime_bootstrap(
+        project_id="project-1",
+        secret_name="secret-1",
+        token_refresh_threshold_days=30,
+        fetch_token_from_secret_fn=lambda *_args, **_kwargs: "refresh-token",
+        refresh_token_if_needed_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("read-only bootstrap must not refresh or mutate a token secret")
+        ),
+        build_contexts_fn=lambda app_key, app_secret, token: (
+            observed.setdefault("contexts", (app_key, app_secret, token)),
+            ("quote-context", "trade-context"),
+        )[-1],
+        calculate_strategy_indicators_fn=lambda _quote_context: (_ for _ in ()).throw(
+            AssertionError("read-only bootstrap must not calculate indicators")
+        ),
+        env_reader=lambda name, default="": {
+            "LONGPORT_APP_KEY": "app-key",
+            "LONGPORT_APP_SECRET": "app-secret",
+        }.get(name, default),
+    )
+
+    assert bootstrap.build_read_only_contexts() == ("quote-context", "trade-context")
+    assert observed["contexts"] == ("app-key", "app-secret", "refresh-token")

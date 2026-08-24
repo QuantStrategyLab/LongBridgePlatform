@@ -18,6 +18,12 @@ from application.monitor_dispatcher import dispatch_due_monitors, load_monitor_t
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_composer import build_runtime_composer
 from application.rebalance_service import run_strategy as run_rebalance_cycle
+from application.durable_execution_commands import (
+    resolve_paper_execution_command_consumer_enabled,
+)
+from application.paper_execution_command_consumer import (
+    consume_due_paper_execution_commands,
+)
 from application.runtime_strategy_adapters import build_runtime_strategy_adapters
 from application.longbridge_execution import submit_order
 from runtime_execution_policy import fractional_buy_execution_enabled, FRACTIONAL_BUY_QUANTITY_STEP
@@ -958,6 +964,106 @@ def run_probe(*, response_body: str = "Probe OK"):
             print(f"failed to persist execution report: {persist_exc}", flush=True)
 
 
+def _paper_command_consumer_session_date() -> str:
+    """Return the exchange-local session date used to claim due commands."""
+    try:
+        import pytz
+
+        return datetime.now(pytz.timezone(MARKET_TIMEZONE)).date().isoformat()
+    except Exception:
+        return datetime.now().date().isoformat()
+
+
+def _paper_command_consumer_runtime_is_isolated() -> bool:
+    runtime_target = getattr(RUNTIME_SETTINGS, "runtime_target", None)
+    return bool(
+        getattr(RUNTIME_SETTINGS, "dry_run_only", False)
+        and runtime_target is not None
+        and str(getattr(runtime_target, "execution_mode", "") or "").lower() == "paper"
+    )
+
+
+def run_paper_execution_command_consumer() -> bool:
+    """Run an explicitly invoked, read-only paper command consumer.
+
+    This handler never constructs an execution port or calls the LongBridge
+    order API.  It is deliberately separate from ``/run`` so a normal cycle
+    cannot start consuming delayed commands by accident.
+    """
+    if not _paper_command_consumer_runtime_is_isolated():
+        raise RuntimeError(
+            "paper command consumer requires RUNTIME_TARGET_JSON.execution_mode=paper "
+            "and LONGBRIDGE_DRY_RUN_ONLY=true"
+        )
+    if not resolve_paper_execution_command_consumer_enabled(
+        env_reader=os.getenv,
+        dry_run_only=bool(RUNTIME_SETTINGS.dry_run_only),
+    ):
+        raise RuntimeError("paper command consumer is not enabled")
+
+    composer = build_composer()
+    config = composer.build_rebalance_config()
+    reporting_adapters = composer.build_reporting_adapters()
+    log_context, report = reporting_adapters.start_run()
+    try:
+        reporting_adapters.log_event(
+            log_context,
+            "paper_execution_command_consumer_started",
+            message="Starting read-only paper execution command consumer",
+        )
+        quote_context, trade_context = composer.build_read_only_broker_contexts()
+        portfolio = composer.broker_adapters.build_portfolio_port(
+            quote_context,
+            trade_context,
+        ).get_portfolio_snapshot()
+        result = consume_due_paper_execution_commands(
+            store=config.execution_command_store,
+            as_of_session=_paper_command_consumer_session_date(),
+            claimant=str(os.getenv("K_SERVICE") or "longbridge-paper-command-consumer"),
+            portfolio=portfolio,
+            market_data_port=composer.broker_adapters.build_market_data_port(quote_context),
+            runtime_release_receipt=config.runtime_release_receipt,
+            expected_strategy_release=config.expected_strategy_release,
+        )
+        report_status = "ok" if result.get("status") == "ok" else "skipped"
+        finalize_runtime_report(
+            report,
+            status=report_status,
+            summary={"paper_execution_command_consumer": result},
+        )
+        reporting_adapters.log_event(
+            log_context,
+            "paper_execution_command_consumer_completed",
+            message="Paper execution command consumer completed",
+            result_status=result.get("status"),
+            commands_count=len(tuple(result.get("commands") or ())),
+        )
+        return True
+    except Exception as exc:
+        append_runtime_report_error(
+            report,
+            stage="paper_execution_command_consumer",
+            message=str(exc),
+            error_type=type(exc).__name__,
+        )
+        finalize_runtime_report(report, status="error")
+        reporting_adapters.log_event(
+            log_context,
+            "paper_execution_command_consumer_failed",
+            message="Paper execution command consumer failed",
+            severity="ERROR",
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+        )
+        return False
+    finally:
+        try:
+            report_path = reporting_adapters.persist_execution_report(report)
+            print(f"execution_report {report_path}", flush=True)
+        except Exception as persist_exc:
+            print(f"failed to persist execution report: {persist_exc}", flush=True)
+
+
 @app.route("/run", methods=["POST", "GET"])
 def handle_trigger():
     """Entrypoint for Cloud Run / scheduler: run strategy and return 200."""
@@ -1000,6 +1106,16 @@ def handle_probe():
         run_probe,
         success_body="Probe OK",
         route_label="POST /probe",
+    )
+
+
+@app.route("/paper-command-consumer", methods=["POST"])
+def handle_paper_execution_command_consumer():
+    """Explicit paper-only command verification endpoint; never scheduler-routed."""
+    return _route_with_runtime_error_fallback(
+        run_paper_execution_command_consumer,
+        success_body="Paper command consumer OK",
+        route_label="POST /paper-command-consumer",
     )
 
 

@@ -253,6 +253,10 @@ class RequestHandlingTests(unittest.TestCase):
             module.handle_probe,
         )
         self.assertIs(
+            module.app._routes[("/paper-command-consumer", ("POST",))],
+            module.handle_paper_execution_command_consumer,
+        )
+        self.assertIs(
             module.app._routes[("/monitor-dispatch", ("POST", "GET"))],
             module.handle_monitor_dispatch,
         )
@@ -424,6 +428,88 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertTrue(observed["force_run"])
         self.assertTrue(observed["validation_only"])
         self.assertEqual(observed["validation_label"], "dry_run")
+
+    def test_paper_command_consumer_rejects_any_non_paper_runtime_before_building_composer(self):
+        module = load_module()
+        module.build_composer = lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unsafe runtime must fail before building broker contexts")
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "execution_mode=paper"):
+            module.run_paper_execution_command_consumer()
+
+    def test_paper_command_consumer_uses_read_only_contexts_without_an_execution_port(self):
+        module = load_module()
+        observed = {"events": []}
+        module.RUNTIME_SETTINGS = types.SimpleNamespace(
+            dry_run_only=True,
+            runtime_target=build_runtime_target(
+                platform_id="longbridge",
+                strategy_profile="soxl_soxx_trend_income",
+                dry_run_only=True,
+                deployment_selector="paper-command-verify",
+                account_scope="paper-command-verify",
+                service_name="longbridge-quant-paper-command-verify-service",
+            ),
+        )
+
+        class FakePortfolioPort:
+            def get_portfolio_snapshot(self):
+                observed["portfolio_read"] = True
+                return "portfolio-snapshot"
+
+        class FakeBrokerAdapters:
+            def build_portfolio_port(self, quote_context, trade_context):
+                observed["contexts"] = (quote_context, trade_context)
+                return FakePortfolioPort()
+
+            def build_market_data_port(self, quote_context):
+                observed["market_data_context"] = quote_context
+                return "market-data-port"
+
+        class FakeComposer:
+            broker_adapters = FakeBrokerAdapters()
+
+            def build_rebalance_config(self):
+                return types.SimpleNamespace(
+                    execution_command_store="command-store",
+                    runtime_release_receipt={"attestation_state": "self_attested"},
+                    expected_strategy_release={"release_id": "release-1"},
+                )
+
+            def build_reporting_adapters(self):
+                return types.SimpleNamespace(
+                    start_run=lambda: (types.SimpleNamespace(run_id="run-001"), {"status": "pending"}),
+                    log_event=lambda _context, event, **fields: observed["events"].append((event, fields)),
+                    persist_execution_report=lambda report: observed.setdefault("report", dict(report)) or "/tmp/report.json",
+                )
+
+            def build_read_only_broker_contexts(self):
+                observed["read_only_contexts_called"] = True
+                return "quote-context", "trade-context"
+
+        def fake_consume(**kwargs):
+            observed["consumer"] = kwargs
+            return {"status": "ok", "commands": []}
+
+        module.build_composer = lambda **_kwargs: FakeComposer()
+        module.resolve_paper_execution_command_consumer_enabled = lambda **_kwargs: True
+        module.consume_due_paper_execution_commands = fake_consume
+        module.finalize_runtime_report = lambda report, **kwargs: report.update(kwargs)
+        module._paper_command_consumer_session_date = lambda: "2026-08-25"
+
+        with module.app.test_request_context("/paper-command-consumer", method="POST"):
+            body, status = module.handle_paper_execution_command_consumer()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, "Paper command consumer OK")
+        self.assertTrue(observed["read_only_contexts_called"])
+        self.assertTrue(observed["portfolio_read"])
+        self.assertEqual(observed["contexts"], ("quote-context", "trade-context"))
+        self.assertEqual(observed["market_data_context"], "quote-context")
+        self.assertEqual(observed["consumer"]["store"], "command-store")
+        self.assertEqual(observed["consumer"]["portfolio"], "portfolio-snapshot")
+        self.assertEqual(observed["consumer"]["market_data_port"], "market-data-port")
 
     def test_handle_probe_checks_account_snapshot_without_success_notification(self):
         module = load_module()
