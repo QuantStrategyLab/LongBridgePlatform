@@ -64,7 +64,7 @@ def _build_plan(
     exit_line=0.0,
     cash_by_currency=None,
     signal_date="2026-04-21",
-    effective_date="2026-04-22",
+    effective_date="2026-04-21",
     execution_timing_contract="next_trading_day",
 ):
     if dashboard_text is None:
@@ -1162,6 +1162,69 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(observed_post_submit, [("trade-context", "SOXX.US", "lb-order-1")])
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("【订单待券商最终确认】", sent_messages[0])
+
+    def test_run_strategy_blocks_live_next_session_decision_without_routing(self):
+        alerts = []
+        plan = _build_plan(
+            strategy_symbols=("SOXL",),
+            risk_symbols=("SOXL",),
+            targets={"SOXL": 400.0},
+            market_values={"SOXL": 0.0},
+            sellable_quantities={"SOXL": 0},
+            quantities={"SOXL": 0},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=500.0,
+            market_status="Risk on",
+            deploy_ratio_text="70.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXL target",
+            available_cash=500.0,
+            total_strategy_equity=500.0,
+            portfolio_rows=(("SOXL",),),
+            signal_date="2026-07-17",
+            effective_date="2026-07-20",
+        )
+        result = rebalance_service.run_strategy(
+            runtime=LongBridgeRebalanceRuntime(
+                bootstrap=lambda: ("quote-context", "trade-context", {"trend": "ok"}),
+                resolve_rebalance_plan=lambda *, indicators, snapshot=None: plan,
+                market_data_port_factory=lambda _quote_context: CallableMarketDataPort(
+                    quote_loader=lambda _symbol: (_ for _ in ()).throw(AssertionError("quote should not load"))
+                ),
+                estimate_max_purchase_quantity=lambda *args, **kwargs: (_ for _ in ()).throw(
+                    AssertionError("buy estimate should not run")
+                ),
+                notifications=CallableNotificationPort(lambda _message: None),
+                notify_issue=lambda title, detail: alerts.append((title, detail)),
+                portfolio_port_factory=lambda _quote_context, _trade_context: CallablePortfolioPort(
+                    lambda: _build_snapshot(plan)
+                ),
+                execution_port_factory=lambda _trade_context: CallableExecutionPort(
+                    lambda _order_intent: (_ for _ in ()).throw(AssertionError("order should not submit"))
+                ),
+            ),
+            config=LongBridgeRebalanceConfig(
+                limit_sell_discount=0.995,
+                limit_buy_premium=1.005,
+                separator="━━━━━━━━━━━━━━━━━━",
+                translator=build_translator("en"),
+                with_prefix=lambda message: f"[SG/LongBridgeQuant] {message}",
+                strategy_profile="soxl_soxx_trend_income",
+                strategy_display_name="SOXL/SOXX Semiconductor Trend Income",
+                dry_run_only=False,
+                notify_no_trade_cycles=False,
+            ),
+        )
+
+        self.assertFalse(result.action_done)
+        self.assertTrue(result.execution["direct_live_routing_blocked"])
+        self.assertEqual(result.execution["direct_live_routing_block_reason"], "durable_execution_command_required")
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0][0], "Next-session execution blocked")
+        self.assertIn("signal_date=2026-07-17", alerts[0][1])
+        self.assertIn("effective_date=2026-07-20", alerts[0][1])
 
     def test_run_strategy_skips_when_execution_marker_already_exists(self):
         sent_messages = []

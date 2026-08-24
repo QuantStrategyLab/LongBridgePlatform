@@ -215,6 +215,30 @@ def _execution_already_recorded_message(*, config: LongBridgeRebalanceConfig, ma
     return message
 
 
+def _direct_live_routing_requires_durable_command(*, execution: dict, dry_run_only: bool) -> bool:
+    """Fail closed when a direct live cycle carries a next-session decision.
+
+    The direct cycle has no durable command consumer, so it cannot safely hold
+    an immutable signal until its effective session.  Paper previews remain
+    available for staged validation, but a live broker path must not route a
+    decision whose explicit effective date differs from its signal date.
+    """
+    if dry_run_only:
+        return False
+    effective_date = str(execution.get("effective_date") or "").strip()
+    signal_date = str(execution.get("signal_date") or "").strip()
+    return bool(effective_date) and (not signal_date or effective_date != signal_date)
+
+
+def _durable_command_required_message(*, execution: dict) -> str:
+    return (
+        "Direct live routing blocked because the strategy decision is not effective in the "
+        "signal session; a durable execution command and reconciliation path is required. "
+        f"signal_date={execution.get('signal_date') or ''} "
+        f"effective_date={execution.get('effective_date') or ''}"
+    )
+
+
 def _should_record_execution_marker(*, result: ExecutionCycleResult, config: LongBridgeRebalanceConfig) -> bool:
     if not getattr(config, "execution_dedup_enabled", False):
         return False
@@ -296,9 +320,16 @@ def run_strategy(
 
     execution_marker_key = _build_execution_marker_key(config=config, execution=execution)
     execution_state_store = getattr(config, "execution_state_store", None)
-    execution_already_recorded = False
+    direct_live_routing_blocked = _direct_live_routing_requires_durable_command(
+        execution=execution,
+        dry_run_only=bool(getattr(config, "dry_run_only", False)),
+    )
+    if direct_live_routing_blocked:
+        execution["direct_live_routing_blocked"] = True
+        execution["direct_live_routing_block_reason"] = "durable_execution_command_required"
+    execution_already_recorded = direct_live_routing_blocked
     execution_claim_acquired = False
-    if execution_marker_key and execution_state_store:
+    if not direct_live_routing_blocked and execution_marker_key and execution_state_store:
         try:
             execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
         except Exception as exc:
@@ -325,7 +356,8 @@ def run_strategy(
                 )
 
     if (
-        not execution_already_recorded
+        not direct_live_routing_blocked
+        and not execution_already_recorded
         and execution_marker_key
         and execution_state_store
         and bool(getattr(config, "execution_dedup_enabled", False))
@@ -343,11 +375,15 @@ def run_strategy(
             ) from exc
 
     if execution_already_recorded:
-        message = _execution_already_recorded_message(
-            config=config,
-            marker_key=execution_marker_key,
-            execution=execution,
-        )
+        if direct_live_routing_blocked:
+            message = _durable_command_required_message(execution=execution)
+            runtime.notify_issue("Next-session execution blocked", message)
+        else:
+            message = _execution_already_recorded_message(
+                config=config,
+                marker_key=execution_marker_key,
+                execution=execution,
+            )
         print(config.with_prefix(message), flush=True)
         execution_result = ExecutionCycleResult(
             plan=plan,
