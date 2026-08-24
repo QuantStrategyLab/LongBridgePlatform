@@ -208,6 +208,10 @@ def test_build_cloud_run_env_sync_plan_supports_per_service_targets():
         **os.environ,
         "CLOUD_RUN_SERVICE_TARGETS_JSON": json.dumps(payload),
         "LONGBRIDGE_FEATURE_SNAPSHOT_PATH": "gs://stale-paper/snapshot.csv",
+        "LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON": (
+            '{"strategy_plugins":[{"strategy":"tqqq_growth_income",'
+            '"plugin":"market_regime_control","enabled":true}]}'
+        ),
     }
 
     result = subprocess.run(
@@ -228,6 +232,10 @@ def test_build_cloud_run_env_sync_plan_supports_per_service_targets():
     assert hk_verify["env"]["STRATEGY_PROFILE"] == "tqqq_growth_income"
     assert hk_verify["env"]["LONGBRIDGE_MARKET"] == "HK"
     assert hk_verify["env"]["LONGBRIDGE_TRADING_CURRENCY"] == "HKD"
+    assert hk_verify["env"]["LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON"] == (
+        '{"strategy_plugins":[{"strategy":"tqqq_growth_income",'
+        '"plugin":"market_regime_control","enabled":true}]}'
+    )
     assert hk_verify["scheduler"] == {
         "timezone": "Asia/Hong_Kong",
         "main_time": "10 16",
@@ -250,6 +258,10 @@ def test_build_cloud_run_env_sync_plan_supports_per_service_targets():
     assert (
         live_mega["env"]["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"]
         == "gs://runtime/mega/snapshot.csv.manifest.json"
+    )
+    assert live_mega["env"]["LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON"] == (
+        '{"strategy_plugins":[{"strategy":"tqqq_growth_income",'
+        '"plugin":"market_regime_control","enabled":true}]}'
     )
 
 

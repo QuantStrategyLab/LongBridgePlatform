@@ -67,6 +67,10 @@ SHARED_TARGET_FALLBACK_ENV = frozenset(
         "LONGBRIDGE_MARKET_TIMEZONE",
         "LONGBRIDGE_SYMBOL_SUFFIX",
         "LONGBRIDGE_TRADING_CURRENCY",
+        # This value is scoped by the GitHub deployment Environment.  Do not
+        # silently remove a configured plugin mount merely because a
+        # per-service target omits a duplicate copy of it.
+        "LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON",
     }
 )
 REQUIRED_ENV = (
