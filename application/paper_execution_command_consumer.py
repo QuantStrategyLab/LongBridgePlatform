@@ -18,6 +18,7 @@ from quant_platform_kit.common.execution_commands import (
     ExecutionCommand,
     ExecutionCommandState,
     ExecutionCommandStore,
+    validate_execution_command_release_binding,
 )
 from quant_platform_kit.common.runtime_command_gate import (
     RuntimeCommandAction,
@@ -29,8 +30,8 @@ from quant_platform_kit.common.runtime_command_gate import (
 from quant_platform_kit.common.strategy_release import (
     StrategyReleaseIdentity,
     build_strategy_release_identity,
+    validate_runtime_loaded_receipt,
 )
-
 
 PAPER_COMMAND_CONSUMER_SCHEMA_VERSION = "longbridge.paper-execution-command-consumer.v1"
 PAPER_EXECUTION_INTENT_SCHEMA_VERSION = "longbridge.paper-execution-intent.v1"
@@ -56,47 +57,6 @@ def _as_finite_number(value: object, *, field_name: str) -> float:
     if not math.isfinite(number):
         raise ValueError(f"{field_name} must be finite")
     return number
-
-
-def _command_release_findings(
-    command: ExecutionCommand,
-    *,
-    expected_strategy_release: StrategyReleaseIdentity,
-) -> tuple[str, ...]:
-    raw_release = command.intent.get("strategy_release")
-    if not isinstance(raw_release, Mapping):
-        return ("release_identity_mismatch",)
-    try:
-        command_release = build_strategy_release_identity(raw_release)
-    except ValueError:
-        return ("release_identity_invalid",)
-    if command_release != expected_strategy_release:
-        return ("release_identity_mismatch",)
-    return ()
-
-
-def _runtime_release_preflight_reason(
-    receipt: Mapping[str, Any] | None,
-    *,
-    expected_strategy_release: StrategyReleaseIdentity,
-) -> str | None:
-    """Refuse to claim commands until the runtime has self-attested its release."""
-    if not isinstance(receipt, Mapping):
-        return "release_receipt_missing"
-    if str(receipt.get("attestation_state") or "") != "self_attested":
-        return "release_receipt_missing"
-    raw_release = receipt.get("strategy_release")
-    if not isinstance(raw_release, Mapping):
-        return "release_receipt_missing"
-    try:
-        actual_release = build_strategy_release_identity(raw_release)
-    except ValueError:
-        return "release_identity_invalid"
-    if str(receipt.get("release_id") or "") != actual_release.release_id:
-        return "release_identity_invalid"
-    if actual_release != expected_strategy_release:
-        return "release_identity_mismatch"
-    return None
 
 
 def _build_reconciled_order_proposals(
@@ -291,15 +251,15 @@ def consume_due_paper_execution_commands(
             "reason": "release_identity_invalid",
             "commands": [],
         }
-    release_preflight_reason = _runtime_release_preflight_reason(
+    release_preflight = validate_runtime_loaded_receipt(
         runtime_release_receipt,
         expected_strategy_release=expected_release,
     )
-    if release_preflight_reason is not None:
+    if not release_preflight.is_valid:
         return {
             "schema_version": PAPER_COMMAND_CONSUMER_SCHEMA_VERSION,
             "status": "blocked",
-            "reason": release_preflight_reason,
+            "reason": release_preflight.findings[0],
             "commands": [],
         }
 
@@ -313,10 +273,10 @@ def consume_due_paper_execution_commands(
             continue
         try:
             integrity_findings = list(
-                _command_release_findings(
+                validate_execution_command_release_binding(
                     command,
                     expected_strategy_release=expected_release,
-                )
+                ).findings
             )
             if command.execution_mode != "paper":
                 integrity_findings.append("durable_event_history_invalid")
