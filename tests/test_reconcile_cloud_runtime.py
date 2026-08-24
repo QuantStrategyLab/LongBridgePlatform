@@ -8,6 +8,22 @@ from scripts import reconcile_cloud_runtime as reconcile
 
 
 class ReconcileCloudRuntimeTest(unittest.TestCase):
+    def test_select_targets_restricts_reconciliation_to_requested_service(self) -> None:
+        targets = [
+            reconcile.RuntimeTarget(service_name="longbridge-quant-paper-service"),
+            reconcile.RuntimeTarget(service_name="longbridge-quant-hk-service"),
+            reconcile.RuntimeTarget(service_name="longbridge-quant-sg-service"),
+        ]
+
+        selected = reconcile.select_targets(
+            targets,
+            service_name="longbridge-quant-sg-service",
+        )
+
+        self.assertEqual(selected, [reconcile.RuntimeTarget(service_name="longbridge-quant-sg-service")])
+        with self.assertRaisesRegex(reconcile.ReconcileError, "not a resolved Cloud Run target"):
+            reconcile.select_targets(targets, service_name="unknown-service")
+
     def test_scheduler_locations_include_cross_region_sources_and_dedupe(self) -> None:
         env = {
             "CLOUD_RUN_SERVICE_TARGETS_JSON": json.dumps(
