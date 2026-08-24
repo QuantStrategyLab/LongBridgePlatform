@@ -122,6 +122,17 @@ def load_targets(*, env: Mapping[str, str]) -> list[RuntimeTarget]:
     return _dedupe_targets(targets)
 
 
+def select_targets(targets: Sequence[RuntimeTarget], *, service_name: str = "") -> list[RuntimeTarget]:
+    """Optionally restrict reconciliation to one deployment service."""
+    selected_service = str(service_name or "").strip()
+    if not selected_service:
+        return list(targets)
+    selected = [target for target in targets if target.service_name == selected_service]
+    if not selected:
+        raise ReconcileError(f"Requested service {selected_service!r} is not a resolved Cloud Run target")
+    return selected
+
+
 def _run(args: Sequence[str], *, json_output: bool = False, dry_run: bool = False) -> Any:
     printable = " ".join(args)
     if dry_run:
@@ -413,6 +424,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--expected-commit", default=os.environ.get("GITHUB_SHA", ""))
     parser.add_argument("--expected-release-set", default=os.environ.get("EXPECTED_RELEASE_SET", ""))
     parser.add_argument("--expected-image-digest", default=os.environ.get("EXPECTED_IMAGE_DIGEST", ""))
+    parser.add_argument("--service", default="", help="Restrict reconciliation to one Cloud Run service")
     parser.add_argument("--ensure-latest-traffic", action="store_true")
     parser.add_argument("--delete-legacy-schedulers", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -426,6 +438,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     targets = load_targets(env=os.environ)
     if not targets:
         raise ReconcileError("No Cloud Run targets resolved from SYNC_PLAN_JSON, CLOUD_RUN_SERVICE_TARGETS_JSON, or CLOUD_RUN_SERVICE")
+    targets = select_targets(targets, service_name=args.service)
     if args.ensure_latest_traffic:
         ensure_latest_traffic(
             project=args.project,

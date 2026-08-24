@@ -897,7 +897,7 @@ jobs:
           SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
         run: |
           set -euo pipefail
-          python3 scripts/reconcile_cloud_runtime.py --platform longbridge --ensure-latest-traffic
+          python3 scripts/reconcile_cloud_runtime.py --platform longbridge --ensure-latest-traffic --service "${CLOUD_RUN_SERVICE}"
 
       - name: Sync Cloud Scheduler schedule
         if: steps.config.outputs.env_sync_enabled == 'true'
@@ -1189,7 +1189,7 @@ jobs:
           SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
         run: |
           set -euo pipefail
-          python3 scripts/reconcile_cloud_runtime.py --platform longbridge --delete-legacy-schedulers
+          python3 scripts/reconcile_cloud_runtime.py --platform longbridge --delete-legacy-schedulers --service "${CLOUD_RUN_SERVICE}"
 
       - name: Prune old Cloud Run revisions
         if: steps.config.outputs.enabled == 'true'
