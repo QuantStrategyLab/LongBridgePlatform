@@ -8,8 +8,11 @@ from collections.abc import Mapping
 from typing import Any
 
 from quant_platform_kit.common.execution_commands import (
+    EXECUTION_COMMAND_STRATEGY_RELEASE_FIELD,
     ExecutionCommand,
     ExecutionCommandStore,
+)
+from quant_platform_kit.common.execution_commands import (
     build_execution_command_store_from_env as _build_execution_command_store_from_env,
 )
 from quant_platform_kit.common.runtime_command_gate import (
@@ -19,7 +22,6 @@ from quant_platform_kit.common.runtime_command_gate import (
     evaluate_runtime_command_gate,
 )
 from quant_platform_kit.common.strategy_release import build_strategy_release_identity
-
 
 PAPER_EXECUTION_INTENT_SCHEMA_VERSION = "longbridge.paper-execution-intent.v1"
 
@@ -74,7 +76,9 @@ def build_paper_execution_command(
         # binds a delayed paper command to the exact decision release.  The
         # future consumer compares it with its self-attested runtime release
         # before it simulates even a single order.
-        intent["strategy_release"] = build_strategy_release_identity(strategy_release).to_dict()
+        intent[EXECUTION_COMMAND_STRATEGY_RELEASE_FIELD] = build_strategy_release_identity(
+            strategy_release
+        ).to_dict()
     intent_json = _canonical_json(intent)
     return ExecutionCommand.from_decision(
         platform=platform,
