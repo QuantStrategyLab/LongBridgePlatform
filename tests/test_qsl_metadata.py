@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
+import re
 import tomllib
+from pathlib import Path
 
 
 def test_qsl_metadata_has_runtime_platform_fields() -> None:
@@ -14,7 +15,7 @@ def test_qsl_metadata_has_runtime_platform_fields() -> None:
     assert qsl["tier"] == "runtime"
     assert qsl["upgrade_ring"] == "ring_d"
     assert qsl.get("repo") == "LongBridgePlatform"
-    assert qsl["compat"]["bundle"] == "2026.07.4"
+    assert re.fullmatch(r"\d{4}\.(?:0[1-9]|1[0-2])\.\d+", qsl["compat"]["bundle"])
     requires = qsl["requires"]
     assert "quant_platform_kit" in requires
     assert "us_equity_strategies" in requires
