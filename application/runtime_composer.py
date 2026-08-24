@@ -22,6 +22,7 @@ from quant_platform_kit.common.port_adapters import CallableNotificationPort
 from quant_platform_kit.common.runtime_assembly import build_runtime_assembly
 from quant_platform_kit.common.runtime_target import build_runtime_context_fields
 from quant_platform_kit.common.runtime_target import RuntimeTarget
+from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt
 from notifications.telegram import build_prefixer
 from quant_platform_kit.notifications.cycle_channel import build_cycle_sender
 from runtime_execution_policy import FRACTIONAL_BUY_QUANTITY_STEP, dca_compat_mode_enabled, fractional_buy_execution_enabled
@@ -275,6 +276,18 @@ class LongBridgeRuntimeComposer:
             execution_command_store=build_execution_command_store_from_env(
                 env_reader=self.env_reader,
                 gcp_project_id=self.project_id,
+            ),
+            runtime_release_receipt=build_runtime_loaded_receipt(
+                strategy_release=(
+                    self.runtime_target.strategy_release
+                    if self.runtime_target is not None
+                    else None
+                ),
+            ),
+            expected_strategy_release=(
+                self.runtime_target.strategy_release
+                if self.runtime_target is not None
+                else None
             ),
         )
 
