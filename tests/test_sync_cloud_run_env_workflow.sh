@@ -121,6 +121,8 @@ grep -Fq 'IBIT_ZSCORE_EXIT_RISK_REDUCED_EXPOSURE: ${{ vars.IBIT_ZSCORE_EXIT_RISK
 grep -Fq 'IBIT_ZSCORE_EXIT_RISK_OFF_EXPOSURE: ${{ vars.IBIT_ZSCORE_EXIT_RISK_OFF_EXPOSURE }}' "$workflow_file"
 grep -Fq 'IBIT_ZSCORE_EXIT_ALLOW_OUTSIDE_EXECUTION_WINDOW: ${{ vars.IBIT_ZSCORE_EXIT_ALLOW_OUTSIDE_EXECUTION_WINDOW }}' "$workflow_file"
 grep -Fq 'LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}' "$workflow_file"
+grep -Fq 'LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_ENABLED: ${{ vars.LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_ENABLED }}' "$workflow_file"
+grep -Fq 'LONGBRIDGE_EXECUTION_COMMAND_CLOUD_URI: ${{ vars.LONGBRIDGE_EXECUTION_COMMAND_CLOUD_URI }}' "$workflow_file"
 grep -Fq 'RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON }}' "$workflow_file"
 grep -Fq 'ACCOUNT_REGION: ${{ vars.ACCOUNT_REGION || matrix.target.default_account_region }}' "$workflow_file"
 grep -Fq 'write_github_output "enabled=false"' "$workflow_file"
