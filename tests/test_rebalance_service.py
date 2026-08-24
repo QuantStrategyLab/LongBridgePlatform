@@ -1380,6 +1380,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
     def test_run_strategy_records_execution_marker_after_dry_run_order_preview(self):
         sent_messages = []
         recorded_markers = []
+        queued_commands = []
         plan = _build_plan(
             strategy_symbols=("BOXX",),
             safe_haven_symbols=("BOXX",),
@@ -1409,7 +1410,15 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             def record_marker(self, marker_key, *, metadata=None):
                 recorded_markers.append((marker_key, dict(metadata or {})))
 
-        rebalance_service.run_strategy(
+        class CommandStore:
+            cloud_prefix_uri = "gs://paper/commands"
+            local_dir = None
+
+            def enqueue(self, command):
+                queued_commands.append(command)
+                return True
+
+        result = rebalance_service.run_strategy(
             runtime=LongBridgeRebalanceRuntime(
                 bootstrap=lambda: ("quote-context", "trade-context", {"trend": "ok"}),
                 resolve_rebalance_plan=lambda *, indicators, snapshot=None, account_state=None: plan,
@@ -1442,6 +1451,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 execution_dedup_enabled=True,
                 execution_state_store=FakeStore(),
                 execution_state_account_scope="PAPER",
+                durable_execution_command_paper_enabled=True,
+                execution_command_store=CommandStore(),
             ),
         )
 
@@ -1450,6 +1461,10 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(recorded_markers), 1)
         self.assertIn("2026-06-01", recorded_markers[0][0])
         self.assertTrue(recorded_markers[0][1]["dry_run_only"])
+        self.assertEqual(len(queued_commands), 1)
+        self.assertEqual(queued_commands[0].effective_date, "2026-06-02")
+        self.assertEqual(result.execution["durable_execution_command"]["status"], "QUEUED")
+        self.assertFalse(result.execution["durable_execution_command"]["consumer_authorized"])
 
     def test_append_status_lines_localizes_snapshot_guard_text_for_zh(self):
         lines = []
