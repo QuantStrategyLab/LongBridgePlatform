@@ -315,6 +315,9 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
     ):
         if execution.get(field) not in (None, ""):
             summary[field] = execution[field]
+    durable_command = execution.get("durable_execution_command")
+    if isinstance(durable_command, dict):
+        summary["durable_execution_command"] = dict(durable_command)
     return summary
 
 

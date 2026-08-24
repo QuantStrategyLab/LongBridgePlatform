@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -39,6 +39,8 @@ class LongBridgeRebalanceConfig:
     execution_state_account_scope: str = ""
     durable_execution_command_paper_enabled: bool = False
     execution_command_store: Any = None
+    runtime_release_receipt: Mapping[str, Any] | None = None
+    expected_strategy_release: Any = None
 
 
 @dataclass(frozen=True)

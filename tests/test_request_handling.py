@@ -857,6 +857,11 @@ class RequestHandlingTests(unittest.TestCase):
             execution={
                 "signal_date": "2026-07-31",
                 "execution_timing_contract": "monthly_snapshot_window",
+                "durable_execution_command": {
+                    "command_id": "cmd-paper-1",
+                    "consumer_authorized": False,
+                    "runtime_command_gate": {"enforcement": "observe", "would_block": True},
+                },
             },
             dry_run_orders=(
                 {"symbol": "02800.HK", "side": "buy", "quantity": 100, "status": "dry_run"},
@@ -880,6 +885,8 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(summary["execution_timing_contract"], "monthly_snapshot_window")
         self.assertEqual(summary["orders_previewed"][0]["symbol"], "02800.HK")
         self.assertEqual(summary["quote_snapshot"]["quotes"][0]["symbol"], "02800.HK")
+        self.assertEqual(summary["durable_execution_command"]["command_id"], "cmd-paper-1")
+        self.assertTrue(summary["durable_execution_command"]["runtime_command_gate"]["would_block"])
 
     def test_cycle_result_summary_keeps_broker_submission_pending_until_reconciled(self):
         module = load_module()

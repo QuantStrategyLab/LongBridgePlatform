@@ -13,6 +13,7 @@ from application.durable_execution_commands import (  # noqa: E402
     enqueue_paper_execution_command,
     resolve_paper_execution_command_producer_enabled,
 )
+from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt
 
 
 def _execution() -> dict[str, object]:
@@ -30,6 +31,19 @@ def _allocation() -> dict[str, object]:
         "strategy_symbols": ("SOXL", "BOXX"),
         "risk_symbols": ("SOXL",),
         "safe_haven_symbols": ("BOXX",),
+    }
+
+
+def _release_identity() -> dict[str, str]:
+    return {
+        "release_id": "soxl-p2-v3.20260824",
+        "manifest_sha256": "a" * 64,
+        "strategy_revision": "soxl-p2-v3",
+        "config_sha256": "b" * 64,
+        "risk_policy_sha256": "c" * 64,
+        "evidence_sha256": "d" * 64,
+        "plugin_bundle_sha256": "e" * 64,
+        "effective_session": "2026-08-25",
     }
 
 
@@ -90,6 +104,39 @@ def test_paper_producer_enqueues_once_and_never_authorizes_consumer() -> None:
     assert second and second["status"] == "ALREADY_QUEUED"
     assert first["consumer_authorized"] is False
     assert len(observed) == 2
+
+
+def test_paper_producer_persists_observation_gate_receipt_without_authorizing_a_consumer() -> None:
+    class Store:
+        cloud_prefix_uri = "gs://paper/commands"
+        local_dir = None
+
+        def enqueue(self, _command):
+            return True
+
+    release = _release_identity()
+    result = enqueue_paper_execution_command(
+        enabled=True,
+        dry_run_only=True,
+        store=Store(),
+        platform="longbridge",
+        account_scope="PAPER",
+        strategy_profile="soxl_soxx_trend_income",
+        execution=_execution(),
+        allocation=_allocation(),
+        runtime_release_receipt=build_runtime_loaded_receipt(strategy_release=release),
+        expected_strategy_release=release,
+    )
+
+    assert result is not None
+    gate = result["runtime_command_gate"]
+    assert isinstance(gate, dict)
+    assert gate["enforcement"] == "observe"
+    assert gate["mode"] == "active"
+    assert gate["policy_allows"] is False
+    assert gate["broker_write_allowed"] is True
+    assert "exposure_effect_unknown" in gate["reasons"]
+    assert result["consumer_authorized"] is False
 
 
 def test_paper_producer_rejects_live_enablement() -> None:

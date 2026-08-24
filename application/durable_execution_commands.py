@@ -12,6 +12,12 @@ from quant_platform_kit.common.execution_commands import (
     ExecutionCommandStore,
     build_execution_command_store_from_env as _build_execution_command_store_from_env,
 )
+from quant_platform_kit.common.runtime_command_gate import (
+    RuntimeCommandExposureEffect,
+    RuntimeCommandGateEnforcement,
+    RuntimeCommandGatePolicy,
+    evaluate_runtime_command_gate,
+)
 
 
 PAPER_EXECUTION_INTENT_SCHEMA_VERSION = "longbridge.paper-execution-intent.v1"
@@ -85,6 +91,8 @@ def enqueue_paper_execution_command(
     strategy_profile: str,
     execution: Mapping[str, Any],
     allocation: Mapping[str, Any],
+    runtime_release_receipt: Mapping[str, Any] | None = None,
+    expected_strategy_release: Any = None,
 ) -> dict[str, object] | None:
     """Create one command only; this phase never claims or routes it."""
     if not enabled:
@@ -101,6 +109,21 @@ def enqueue_paper_execution_command(
         allocation=allocation,
     )
     created = store.enqueue(command)
+    gate_decision = evaluate_runtime_command_gate(
+        action="submit",
+        # A target-allocation command cannot safely infer the net exposure of
+        # each future order. The future consumer must reconcile positions and
+        # re-evaluate per order before it ever switches to enforcement.
+        exposure_effect=RuntimeCommandExposureEffect.UNKNOWN,
+        command=command,
+        command_state="queued",
+        as_of_session=command.effective_date,
+        runtime_release_receipt=runtime_release_receipt,
+        expected_strategy_release=expected_strategy_release,
+        policy=RuntimeCommandGatePolicy(
+            enforcement=RuntimeCommandGateEnforcement.OBSERVE,
+        ),
+    )
     return {
         "schema_version": "longbridge.paper-execution-command-observation.v1",
         "command_id": command.command_id,
@@ -108,6 +131,7 @@ def enqueue_paper_execution_command(
         "effective_date": command.effective_date,
         "status": "QUEUED" if created else "ALREADY_QUEUED",
         "consumer_authorized": False,
+        "runtime_command_gate": gate_decision.to_receipt(),
     }
 
 

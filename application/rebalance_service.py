@@ -327,6 +327,8 @@ def run_strategy(
         strategy_profile=str(getattr(config, "strategy_profile", "") or "unknown"),
         execution=execution,
         allocation=allocation,
+        runtime_release_receipt=getattr(config, "runtime_release_receipt", None),
+        expected_strategy_release=getattr(config, "expected_strategy_release", None),
     )
     if paper_command_observation is not None:
         execution["durable_execution_command"] = paper_command_observation
