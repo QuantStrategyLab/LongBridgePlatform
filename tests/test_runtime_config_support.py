@@ -62,8 +62,6 @@ BASE_LONGBRIDGE_PROFILES = frozenset(
         "russell_top50_leader_rotation",
         "tqqq_growth_income",
         "soxl_soxx_trend_income",
-        "us_equity_combo",
-        "us_equity_combo_leveraged",
     }
 )
 OPTIONAL_LONGBRIDGE_PROFILES = frozenset({"global_etf_confidence_vol_gate"})
