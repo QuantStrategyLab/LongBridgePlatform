@@ -110,3 +110,14 @@ jobs:
 
       - name: Check recent execution report
         run: python scripts/execution_report_heartbeat.py
+
+      - name: Publish read-only runtime execution evidence
+        if: matrix.target.label == 'PAPER'
+        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@e6ac155e3f602d0a54e24cc6710ded5108f6af84
+        with:
+          source-id: runtime-reports-longbridge
+          report-platform: longbridge
+          report-prefix: ${{ vars.RUNTIME_HEARTBEAT_GCS_URIS || vars.EXECUTION_REPORT_GCS_URI }}
+          sync-url: ${{ vars.EXECUTION_EVIDENCE_SYNC_URL }}
+        env:
+          EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
