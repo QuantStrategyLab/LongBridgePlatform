@@ -324,6 +324,9 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
     durable_command = execution.get("durable_execution_command")
     if isinstance(durable_command, dict):
         summary["durable_execution_command"] = dict(durable_command)
+    account_identity = execution.get("account_identity")
+    if isinstance(account_identity, dict):
+        summary["account_identity"] = dict(account_identity)
     return summary
 
 

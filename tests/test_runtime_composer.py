@@ -142,6 +142,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders(monkeypa
     assert runtime.market_data_port_factory == "market-data-port-factory"
     assert runtime.notifications == "notification-port"
     assert runtime.fetch_order_status == "fetch-order-status"
+    assert runtime.account_identity_observer is not None
     silent_runtime.notifications.send_text("precheck heartbeat")
     assert observed["sent_message"] == ("tg-token", "chat-id", "[HK] hello")
     assert runtime.post_submit_order == "post-submit-order"
@@ -155,3 +156,4 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders(monkeypa
     assert config.execution_dedup_enabled is True
     assert config.execution_state_account_scope == "HK"
     assert config.execution_state_store.cloud_prefix_uri == "gs://bucket/runtime-reports"
+    assert config.account_identity_policy.is_configured is False
