@@ -9,11 +9,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from application.durable_execution_commands import (  # noqa: E402
+    build_paper_execution_decision_digest,
     build_paper_execution_command,
     enqueue_paper_execution_command,
     resolve_paper_execution_command_consumer_enabled,
     resolve_paper_execution_command_producer_enabled,
 )
+from quant_platform_kit.common.paper_execution_admission import build_paper_risk_admission_receipt
 from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt
 
 
@@ -46,6 +48,22 @@ def _release_identity() -> dict[str, str]:
         "plugin_bundle_sha256": "e" * 64,
         "effective_session": "2026-08-25",
     }
+
+
+def _paper_risk_receipt(*, allocation: dict[str, object], effective_session: str) -> dict[str, object]:
+    release = _release_identity()
+    return build_paper_risk_admission_receipt(
+        strategy_profile="soxl_soxx_trend_income",
+        release_id=release["release_id"],
+        risk_policy_sha256=release["risk_policy_sha256"],
+        decision_digest=build_paper_execution_decision_digest(
+            allocation=allocation,
+            strategy_release=release,
+        ),
+        effective_session=effective_session,
+        disposition="allow_new_risk",
+        reason_codes=(),
+    ).to_dict()
 
 
 def test_paper_command_is_content_addressed_and_excludes_broker_authority() -> None:
@@ -141,16 +159,60 @@ def test_paper_producer_persists_observation_gate_receipt_without_authorizing_a_
 
 
 def test_paper_command_binds_complete_strategy_release_when_available() -> None:
+    allocation = _allocation()
     command = build_paper_execution_command(
         platform="longbridge",
         account_scope="PAPER",
         strategy_profile="soxl_soxx_trend_income",
         execution=_execution(),
-        allocation=_allocation(),
+        allocation=allocation,
         strategy_release=_release_identity(),
+        paper_risk_admission_receipt=_paper_risk_receipt(
+            allocation=allocation,
+            effective_session="2026-07-20",
+        ),
     )
 
     assert command.intent["strategy_release"] == _release_identity()
+    assert command.intent["paper_risk_admission_receipt"]["decision_digest"] == command.decision_digest
+
+
+def test_paper_risk_receipt_is_part_of_command_identity() -> None:
+    allocation = _allocation()
+    receipt = _paper_risk_receipt(allocation=allocation, effective_session="2026-07-20")
+    first = build_paper_execution_command(
+        platform="longbridge",
+        account_scope="PAPER",
+        strategy_profile="soxl_soxx_trend_income",
+        execution=_execution(),
+        allocation=allocation,
+        strategy_release=_release_identity(),
+        paper_risk_admission_receipt=receipt,
+    )
+    release = _release_identity()
+    changed = build_paper_risk_admission_receipt(
+        strategy_profile="soxl_soxx_trend_income",
+        release_id=release["release_id"],
+        risk_policy_sha256=release["risk_policy_sha256"],
+        decision_digest=build_paper_execution_decision_digest(
+            allocation=allocation,
+            strategy_release=release,
+        ),
+        effective_session="2026-07-20",
+        disposition="halted",
+        reason_codes=("MANUAL_KILL_SWITCH",),
+    ).to_dict()
+    second = build_paper_execution_command(
+        platform="longbridge",
+        account_scope="PAPER",
+        strategy_profile="soxl_soxx_trend_income",
+        execution=_execution(),
+        allocation=allocation,
+        strategy_release=_release_identity(),
+        paper_risk_admission_receipt=changed,
+    )
+
+    assert first.command_id != second.command_id
 
 
 def test_paper_producer_rejects_live_enablement() -> None:

@@ -12,6 +12,10 @@ from quant_platform_kit.common.execution_commands import (
     ExecutionCommand,
     ExecutionCommandStore,
 )
+from quant_platform_kit.common.paper_execution_admission import (
+    PAPER_RISK_ADMISSION_RECEIPT_INTENT_FIELD,
+    PaperRiskAdmissionReceipt,
+)
 from quant_platform_kit.common.execution_commands import (
     build_execution_command_store_from_env as _build_execution_command_store_from_env,
 )
@@ -51,19 +55,12 @@ def _normalized_targets(value: object) -> dict[str, float]:
     return {symbol: normalized[symbol] for symbol in sorted(normalized)}
 
 
-def build_paper_execution_command(
+def _build_paper_execution_decision_intent(
     *,
-    platform: str,
-    account_scope: str,
-    strategy_profile: str,
-    execution: Mapping[str, Any],
     allocation: Mapping[str, Any],
     strategy_release: Any = None,
-) -> ExecutionCommand:
-    """Bind one paper-only command to immutable timing and target intent."""
-    execution = dict(execution or {})
-    allocation = dict(allocation or {})
-    intent = {
+) -> dict[str, object]:
+    intent: dict[str, object] = {
         "schema_version": PAPER_EXECUTION_INTENT_SCHEMA_VERSION,
         "target_mode": str(allocation.get("target_mode") or "").strip(),
         "targets": _normalized_targets(allocation.get("targets")),
@@ -72,14 +69,55 @@ def build_paper_execution_command(
         "safe_haven_symbols": _normalized_symbols(allocation.get("safe_haven_symbols")),
     }
     if strategy_release is not None:
-        # The command is content-addressed, so including the release identity
-        # binds a delayed paper command to the exact decision release.  The
-        # future consumer compares it with its self-attested runtime release
-        # before it simulates even a single order.
         intent[EXECUTION_COMMAND_STRATEGY_RELEASE_FIELD] = build_strategy_release_identity(
             strategy_release
         ).to_dict()
-    intent_json = _canonical_json(intent)
+    return intent
+
+
+def build_paper_execution_decision_digest(
+    *,
+    allocation: Mapping[str, Any],
+    strategy_release: Any = None,
+) -> str:
+    """Digest the immutable strategy decision before its risk receipt is added.
+
+    The later command ID content-addresses the full intent, including the
+    receipt.  Keeping this decision digest receipt-free avoids a circular hash
+    while still binding both the strategy decision and risk evidence.
+    """
+    intent = _build_paper_execution_decision_intent(
+        allocation=allocation,
+        strategy_release=strategy_release,
+    )
+    return hashlib.sha256(_canonical_json(intent).encode("utf-8")).hexdigest()
+
+
+def build_paper_execution_command(
+    *,
+    platform: str,
+    account_scope: str,
+    strategy_profile: str,
+    execution: Mapping[str, Any],
+    allocation: Mapping[str, Any],
+    strategy_release: Any = None,
+    paper_risk_admission_receipt: Mapping[str, object] | None = None,
+) -> ExecutionCommand:
+    """Bind one paper-only command to immutable timing and target intent."""
+    execution = dict(execution or {})
+    allocation = dict(allocation or {})
+    intent = _build_paper_execution_decision_intent(
+        allocation=allocation,
+        strategy_release=strategy_release,
+    )
+    decision_digest = hashlib.sha256(_canonical_json(intent).encode("utf-8")).hexdigest()
+    if paper_risk_admission_receipt is not None:
+        # Strictly normalize before it becomes part of the command's
+        # content-addressed intent.  A consumer subsequently verifies that
+        # this receipt binds the same pre-receipt decision digest.
+        intent[PAPER_RISK_ADMISSION_RECEIPT_INTENT_FIELD] = PaperRiskAdmissionReceipt.from_dict(
+            paper_risk_admission_receipt
+        ).to_dict()
     return ExecutionCommand.from_decision(
         platform=platform,
         account_scope=account_scope,
@@ -88,7 +126,7 @@ def build_paper_execution_command(
         signal_date=execution.get("signal_date"),
         effective_date=execution.get("effective_date"),
         execution_timing_contract=execution.get("execution_timing_contract"),
-        decision_digest=hashlib.sha256(intent_json.encode("utf-8")).hexdigest(),
+        decision_digest=decision_digest,
         intent=intent,
     )
 
@@ -105,6 +143,7 @@ def enqueue_paper_execution_command(
     allocation: Mapping[str, Any],
     runtime_release_receipt: Mapping[str, Any] | None = None,
     expected_strategy_release: Any = None,
+    paper_risk_admission_receipt: Mapping[str, object] | None = None,
 ) -> dict[str, object] | None:
     """Create one command only; this phase never claims or routes it."""
     if not enabled:
@@ -120,6 +159,7 @@ def enqueue_paper_execution_command(
         execution=execution,
         allocation=allocation,
         strategy_release=expected_strategy_release,
+        paper_risk_admission_receipt=paper_risk_admission_receipt,
     )
     created = store.enqueue(command)
     gate_decision = evaluate_runtime_command_gate(

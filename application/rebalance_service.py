@@ -393,6 +393,7 @@ def run_strategy(
         allocation=allocation,
         runtime_release_receipt=getattr(config, "runtime_release_receipt", None),
         expected_strategy_release=getattr(config, "expected_strategy_release", None),
+        paper_risk_admission_receipt=getattr(config, "paper_risk_admission_receipt", None),
     )
     if paper_command_observation is not None:
         execution["durable_execution_command"] = paper_command_observation

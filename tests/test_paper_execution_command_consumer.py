@@ -9,7 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from application.durable_execution_commands import build_paper_execution_command  # noqa: E402
+from application.durable_execution_commands import (  # noqa: E402
+    build_paper_execution_decision_digest,
+    build_paper_execution_command,
+)
 from application.paper_execution_command_consumer import (  # noqa: E402
     consume_due_paper_execution_commands,
 )
@@ -22,6 +25,7 @@ from quant_platform_kit.common.models import (  # noqa: E402
     Position,
     QuoteSnapshot,
 )
+from quant_platform_kit.common.paper_execution_admission import build_paper_risk_admission_receipt  # noqa: E402
 from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt  # noqa: E402
 
 
@@ -38,7 +42,24 @@ def _release_identity() -> dict[str, str]:
     }
 
 
-def _command(*, bind_release: bool = True):
+def _allocation() -> dict[str, object]:
+    return {
+        "target_mode": "value",
+        "targets": {"SOXL": 100.0, "BOXX": 100.0},
+        "strategy_symbols": ("SOXL", "BOXX"),
+        "risk_symbols": ("SOXL",),
+        "safe_haven_symbols": ("BOXX",),
+    }
+
+
+def _command(*, bind_release: bool = True, receipt_decision_digest: str | None = None):
+    allocation = _allocation()
+    release = _release_identity()
+    command_release = release if bind_release else None
+    decision_digest = receipt_decision_digest or build_paper_execution_decision_digest(
+        allocation=allocation,
+        strategy_release=command_release,
+    )
     return build_paper_execution_command(
         platform="longbridge",
         account_scope="PAPER",
@@ -48,14 +69,17 @@ def _command(*, bind_release: bool = True):
             "effective_date": "2026-08-25",
             "execution_timing_contract": "next_trading_day",
         },
-        allocation={
-            "target_mode": "value",
-            "targets": {"SOXL": 100.0, "BOXX": 100.0},
-            "strategy_symbols": ("SOXL", "BOXX"),
-            "risk_symbols": ("SOXL",),
-            "safe_haven_symbols": ("BOXX",),
-        },
-        strategy_release=_release_identity() if bind_release else None,
+        allocation=allocation,
+        strategy_release=command_release,
+        paper_risk_admission_receipt=build_paper_risk_admission_receipt(
+            strategy_profile="soxl_soxx_trend_income",
+            release_id=release["release_id"],
+            risk_policy_sha256=release["risk_policy_sha256"],
+            decision_digest=decision_digest,
+            effective_session="2026-08-25",
+            disposition="allow_new_risk",
+            reason_codes=(),
+        ).to_dict(),
     )
 
 
@@ -118,6 +142,9 @@ def test_paper_consumer_simulates_reconciled_orders_and_never_calls_an_execution
     receipts = events[1].details["runtime_command_gate_receipts"]
     assert {receipt["enforcement"] for receipt in receipts} == {"enforce"}
     assert all(receipt["broker_write_allowed"] is True for receipt in receipts)
+    admission = events[1].details["paper_execution_admission"]
+    assert admission["disposition"] == "allow_new_risk"
+    assert isinstance(admission["receipt_sha256"], str)
 
 
 def test_paper_consumer_requires_runtime_release_before_claiming(tmp_path: Path) -> None:
@@ -165,3 +192,26 @@ def test_paper_consumer_rejects_unbound_or_unreconciled_commands(tmp_path: Path)
     assert receipt["mode"] == "halted"
     assert "release_identity_mismatch" in receipt["reasons"]
     assert "position_reconciliation_mismatch" in receipt["reasons"]
+
+
+def test_paper_consumer_rejects_risk_receipt_bound_to_another_decision(tmp_path: Path) -> None:
+    store = ExecutionCommandStore(local_dir=tmp_path)
+    command = _command(receipt_decision_digest="f" * 64)
+    assert store.enqueue(command)
+    release = _release_identity()
+
+    result = consume_due_paper_execution_commands(
+        store=store,
+        as_of_session="2026-08-25",
+        claimant="paper-command-verify",
+        portfolio=_portfolio(),
+        market_data_port=_MarketDataPort(),
+        runtime_release_receipt=build_runtime_loaded_receipt(strategy_release=release),
+        expected_strategy_release=release,
+    )
+
+    assert result["commands"][0]["status"] == "rejected"
+    assert store.current_state(command) is ExecutionCommandState.REJECTED
+    receipt = store.events(command)[-1].details["runtime_command_gate_receipts"][0]
+    assert receipt["broker_write_allowed"] is False
+    assert "paper_risk_admission_command_mismatch" in receipt["reasons"]
