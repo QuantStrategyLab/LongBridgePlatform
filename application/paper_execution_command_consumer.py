@@ -2,7 +2,7 @@
 
 The module intentionally never imports an execution adapter.  It reads the
 current account snapshot and quotes, records what *would* be submitted, and
-uses the shared runtime command gate in observation mode.  A command is only
+uses the shared runtime command gate in enforced mode.  A command is only
 marked as paper-filled when every reconciled proposal passes the policy; no
 broker order is ever created here.
 """
@@ -36,6 +36,9 @@ from quant_platform_kit.common.strategy_release import (
 PAPER_COMMAND_CONSUMER_SCHEMA_VERSION = "longbridge.paper-execution-command-consumer.v1"
 PAPER_EXECUTION_INTENT_SCHEMA_VERSION = "longbridge.paper-execution-intent.v1"
 _NOTIONAL_TOLERANCE = 0.01
+_PAPER_COMMAND_GATE_POLICY = RuntimeCommandGatePolicy(
+    enforcement=RuntimeCommandGateEnforcement.ENFORCE,
+)
 
 
 def _normalized_symbol(value: object) -> str:
@@ -298,9 +301,7 @@ def consume_due_paper_execution_commands(
                     runtime_release_receipt=runtime_release_receipt,
                     expected_strategy_release=expected_release,
                     integrity_findings=integrity_findings,
-                    policy=RuntimeCommandGatePolicy(
-                        enforcement=RuntimeCommandGateEnforcement.OBSERVE,
-                    ),
+                    policy=_PAPER_COMMAND_GATE_POLICY,
                 )
                 receipts.append(decision.to_receipt())
 
@@ -316,9 +317,7 @@ def consume_due_paper_execution_commands(
                     runtime_release_receipt=runtime_release_receipt,
                     expected_strategy_release=expected_release,
                     integrity_findings=integrity_findings,
-                    policy=RuntimeCommandGatePolicy(
-                        enforcement=RuntimeCommandGateEnforcement.OBSERVE,
-                    ),
+                    policy=_PAPER_COMMAND_GATE_POLICY,
                 )
                 receipts.append(decision.to_receipt())
 

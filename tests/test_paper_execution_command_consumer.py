@@ -115,6 +115,9 @@ def test_paper_consumer_simulates_reconciled_orders_and_never_calls_an_execution
     ]
     proposals = events[1].details["proposals"]
     assert [proposal["exposure_effect"] for proposal in proposals] == ["increases", "reduces"]
+    receipts = events[1].details["runtime_command_gate_receipts"]
+    assert {receipt["enforcement"] for receipt in receipts} == {"enforce"}
+    assert all(receipt["broker_write_allowed"] is True for receipt in receipts)
 
 
 def test_paper_consumer_requires_runtime_release_before_claiming(tmp_path: Path) -> None:
@@ -157,6 +160,8 @@ def test_paper_consumer_rejects_unbound_or_unreconciled_commands(tmp_path: Path)
     assert result["commands"][0]["would_block"] is True
     assert store.current_state(command) is ExecutionCommandState.REJECTED
     receipt = store.events(command)[-1].details["runtime_command_gate_receipts"][0]
+    assert receipt["enforcement"] == "enforce"
+    assert receipt["broker_write_allowed"] is False
     assert receipt["mode"] == "halted"
     assert "release_identity_mismatch" in receipt["reasons"]
     assert "position_reconciliation_mismatch" in receipt["reasons"]
