@@ -20,6 +20,7 @@ from quant_platform_kit.common.execution_commands import (
     ExecutionCommandStore,
     validate_execution_command_release_binding,
 )
+from quant_platform_kit.common.paper_execution_admission import evaluate_paper_execution_admission
 from quant_platform_kit.common.runtime_command_gate import (
     RuntimeCommandAction,
     RuntimeCommandExposureEffect,
@@ -275,7 +276,12 @@ def consume_due_paper_execution_commands(
         if claim is None:
             continue
         try:
-            integrity_findings = list(
+            admission = evaluate_paper_execution_admission(
+                command=command,
+                expected_strategy_release=expected_release,
+            )
+            integrity_findings = list(admission.integrity_findings)
+            integrity_findings.extend(
                 validate_execution_command_release_binding(
                     command,
                     expected_strategy_release=expected_release,
@@ -324,6 +330,10 @@ def consume_due_paper_execution_commands(
             details = {
                 "paper_simulation": True,
                 "claimant": claimant,
+                "paper_execution_admission": {
+                    "disposition": admission.disposition.value,
+                    "receipt_sha256": admission.receipt_sha256,
+                },
                 "integrity_findings": integrity_findings,
                 "proposals": list(proposals),
                 "runtime_command_gate_receipts": receipts,

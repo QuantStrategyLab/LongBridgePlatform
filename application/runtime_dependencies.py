@@ -41,6 +41,7 @@ class LongBridgeRebalanceConfig:
     execution_command_store: Any = None
     runtime_release_receipt: Mapping[str, Any] | None = None
     expected_strategy_release: Any = None
+    paper_risk_admission_receipt: Mapping[str, object] | None = None
     account_identity_policy: Any = None
     account_identity_expected_platform_id: str = "longbridge"
 
