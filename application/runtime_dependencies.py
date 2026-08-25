@@ -41,6 +41,8 @@ class LongBridgeRebalanceConfig:
     execution_command_store: Any = None
     runtime_release_receipt: Mapping[str, Any] | None = None
     expected_strategy_release: Any = None
+    account_identity_policy: Any = None
+    account_identity_expected_platform_id: str = "longbridge"
 
 
 @dataclass(frozen=True)
@@ -55,3 +57,4 @@ class LongBridgeRebalanceRuntime:
     execution_port_factory: Callable[[Any], ExecutionPort]
     post_submit_order: Callable[[Any, Any, Any], None] | None = None
     fetch_order_status: Callable[..., Any] | None = None
+    account_identity_observer: Callable[[Any], Any] | None = None

@@ -25,6 +25,7 @@ try:
     from application import rebalance_service
     from application.execution_service import execute_rebalance_cycle
     from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
+    from quant_platform_kit.common.account_identity import BrokerAccountIdentity
     from notifications.telegram import build_translator
     from quant_platform_kit.common.models import ExecutionReport, PortfolioSnapshot, Position, QuoteSnapshot
     from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort, CallableNotificationPort, CallablePortfolioPort
@@ -156,6 +157,43 @@ def _build_snapshot(plan, *, phase=""):
 
 
 class RebalanceServiceNotificationTests(unittest.TestCase):
+    def test_account_identity_gate_marks_mismatch_for_pre_execution_block(self):
+        runtime = LongBridgeRebalanceRuntime(
+            bootstrap=lambda: None,
+            resolve_rebalance_plan=lambda **_kwargs: {},
+            market_data_port_factory=lambda _value: None,
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 0,
+            notifications=CallableNotificationPort(lambda _message: None),
+            notify_issue=lambda _title, _detail: None,
+            portfolio_port_factory=lambda *_args: None,
+            execution_port_factory=lambda _value: None,
+            account_identity_observer=lambda _trade_context: BrokerAccountIdentity(
+                platform_id="longbridge",
+                account_types=("margin",),
+            ),
+        )
+        config = LongBridgeRebalanceConfig(
+            limit_sell_discount=1.0,
+            limit_buy_premium=1.0,
+            separator="-",
+            translator=build_translator("en"),
+            with_prefix=lambda message: message,
+            account_identity_policy={
+                "enforcement": "enforce",
+                "expected_account_types": ["cash"],
+            },
+        )
+
+        decision = rebalance_service._evaluate_execution_account_identity(
+            runtime=runtime,
+            config=config,
+            trade_context=object(),
+        )
+
+        self.assertIsNotNone(decision)
+        self.assertFalse(decision.broker_write_allowed)
+        self.assertIn("account_identity_type_mismatch", decision.findings)
+
     def test_submitted_broker_order_is_recorded_as_pending_reconciliation(self):
         submitted_orders = []
         plan = _build_plan(

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from application.runtime_bootstrap_adapters import build_runtime_bootstrap
+from application.account_identity import observe_longbridge_account_identity
 from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
 from application.execution_state import (
     build_execution_marker_store_from_env,
@@ -22,6 +23,7 @@ from quant_platform_kit.common.port_adapters import CallableNotificationPort
 from quant_platform_kit.common.runtime_assembly import build_runtime_assembly
 from quant_platform_kit.common.runtime_target import build_runtime_context_fields
 from quant_platform_kit.common.runtime_target import RuntimeTarget
+from quant_platform_kit.common.account_identity import AccountIdentityPolicy
 from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt
 from notifications.telegram import build_prefixer
 from quant_platform_kit.notifications.cycle_channel import build_cycle_sender
@@ -205,6 +207,7 @@ class LongBridgeRuntimeComposer:
             execution_port_factory=self.broker_adapters.build_execution_port,
             post_submit_order=notification_adapters.post_submit_order,
             fetch_order_status=self.fetch_order_status_fn,
+            account_identity_observer=observe_longbridge_account_identity,
         )
 
     def build_read_only_broker_contexts(self) -> tuple[Any, Any]:
@@ -306,6 +309,12 @@ class LongBridgeRuntimeComposer:
                 if self.runtime_target is not None
                 else None
             ),
+            account_identity_policy=AccountIdentityPolicy.from_mapping(
+                self.runtime_target.account_identity
+                if self.runtime_target is not None
+                else None
+            ),
+            account_identity_expected_platform_id="longbridge",
         )
 
     def load_strategy_plugin_signals(self, raw_mounts):

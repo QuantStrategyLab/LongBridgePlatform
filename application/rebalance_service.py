@@ -9,6 +9,11 @@ from application.execution_service import ExecutionCycleResult, execute_rebalanc
 from application.execution_state import build_execution_marker_key
 from application.durable_execution_commands import enqueue_paper_execution_command
 from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
+from quant_platform_kit.common.account_identity import (
+    AccountIdentityGuardedExecutionPort,
+    AccountIdentityPolicy,
+    evaluate_account_identity,
+)
 from quant_platform_kit.longbridge.market_data import fetch_lot_sizes
 from application.signal_snapshot import build_signal_snapshot
 from notifications.events import NotificationPublisher
@@ -240,6 +245,37 @@ def _durable_command_required_message(*, execution: dict) -> str:
     )
 
 
+def _account_identity_blocked_message(*, findings: tuple[str, ...]) -> str:
+    detail = ", ".join(findings) or "account_identity_blocked"
+    return f"Broker orders blocked by account identity gate: {detail}"
+
+
+def _evaluate_execution_account_identity(
+    *,
+    runtime: LongBridgeRebalanceRuntime,
+    config: LongBridgeRebalanceConfig,
+    trade_context,
+):
+    policy = getattr(config, "account_identity_policy", None)
+    if policy is None:
+        policy = AccountIdentityPolicy()
+    if not isinstance(policy, AccountIdentityPolicy):
+        policy = AccountIdentityPolicy.from_mapping(policy)
+    if not policy.is_configured:
+        return None
+    observer = getattr(runtime, "account_identity_observer", None)
+    observation = observer(trade_context) if callable(observer) else None
+    return evaluate_account_identity(
+        expected_platform_id=getattr(
+            config,
+            "account_identity_expected_platform_id",
+            "longbridge",
+        ),
+        policy=policy,
+        observation=observation,
+    )
+
+
 def _should_record_execution_marker(*, result: ExecutionCycleResult, config: LongBridgeRebalanceConfig) -> bool:
     if not getattr(config, "execution_dedup_enabled", False):
         return False
@@ -293,6 +329,16 @@ def run_strategy(
     quote_context, trade_context, indicators = runtime.bootstrap()
     market_data_port = runtime.market_data_port_factory(quote_context)
     execution_port = runtime.execution_port_factory(trade_context)
+    account_identity_decision = _evaluate_execution_account_identity(
+        runtime=runtime,
+        config=config,
+        trade_context=trade_context,
+    )
+    if account_identity_decision is not None:
+        execution_port = AccountIdentityGuardedExecutionPort(
+            delegate=execution_port,
+            decision=account_identity_decision,
+        )
 
     def load_plan(*, current_snapshot):
         current_snapshot = attach_strategy_plugin_metadata(
@@ -318,6 +364,24 @@ def run_strategy(
         return load_plan(current_snapshot=current_snapshot)
 
     plan, portfolio, execution, allocation = fetch_replanned_state()
+    account_identity_blocked = bool(
+        account_identity_decision is not None
+        and not account_identity_decision.broker_write_allowed
+    )
+    if account_identity_decision is not None:
+        execution["account_identity"] = account_identity_decision.to_receipt()
+        if account_identity_decision.would_block:
+            print(
+                config.with_prefix(
+                    "account_identity_gate "
+                    f"enforcement={account_identity_decision.policy.enforcement.value} "
+                    f"findings={','.join(account_identity_decision.findings)}"
+                ),
+                flush=True,
+            )
+    if account_identity_blocked:
+        execution["account_identity_blocked"] = True
+        execution["account_identity_block_reason"] = "account_identity_verification_failed"
     paper_command_observation = enqueue_paper_execution_command(
         enabled=bool(getattr(config, "durable_execution_command_paper_enabled", False)),
         dry_run_only=bool(getattr(config, "dry_run_only", False)),
@@ -342,7 +406,7 @@ def run_strategy(
     if direct_live_routing_blocked:
         execution["direct_live_routing_blocked"] = True
         execution["direct_live_routing_block_reason"] = "durable_execution_command_required"
-    execution_already_recorded = direct_live_routing_blocked
+    execution_already_recorded = direct_live_routing_blocked or account_identity_blocked
     execution_claim_acquired = False
     if not direct_live_routing_blocked and execution_marker_key and execution_state_store:
         try:
@@ -390,7 +454,12 @@ def run_strategy(
             ) from exc
 
     if execution_already_recorded:
-        if direct_live_routing_blocked:
+        if account_identity_blocked:
+            message = _account_identity_blocked_message(
+                findings=tuple(account_identity_decision.findings),
+            )
+            runtime.notify_issue("Account identity gate blocked broker orders", message)
+        elif direct_live_routing_blocked:
             message = _durable_command_required_message(execution=execution)
             runtime.notify_issue("Next-session execution blocked", message)
         else:
