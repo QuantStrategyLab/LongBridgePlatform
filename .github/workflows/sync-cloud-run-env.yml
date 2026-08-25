@@ -1,10 +1,6 @@
 name: Deploy Cloud Run
 
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       target:
@@ -99,15 +95,8 @@ concurrency:
 jobs:
   sync:
     name: Deploy / Sync ${{ matrix.target.label }} Cloud Run
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (
-        github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        !contains(github.event.workflow_run.head_commit.message, 'chore(deps): align QPK pin') &&
-        !contains(github.event.workflow_run.head_commit.message, '[skip-cloud-run-deploy]')
-      )
+    # Production deployment and environment sync require an explicit operator dispatch.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -339,7 +328,7 @@ jobs:
         if: steps.config.outputs.enabled == 'true'
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.sha }}
 
       - name: Apply HK verify-only dispatch defaults
         if: steps.config.outputs.enabled == 'true' && github.event_name == 'workflow_dispatch' && inputs.target == 'hk-verify'
@@ -1419,12 +1408,7 @@ jobs:
   cleanup-shared-monitor:
     name: Retire shared monitor dispatcher
     needs: sync
-    if: >
-      needs.sync.result == 'success' &&
-      (
-        github.event_name == 'workflow_run' ||
-        (github.event_name == 'workflow_dispatch' && inputs.target == 'configured')
-      )
+    if: needs.sync.result == 'success' && inputs.target == 'configured'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: longbridge-sg

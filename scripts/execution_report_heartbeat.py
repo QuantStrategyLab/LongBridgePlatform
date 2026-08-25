@@ -1108,6 +1108,27 @@ def _send_telegram(message: str) -> bool:
     return ok
 
 
+def _report_activity_label(payload: dict[str, Any]) -> str:
+    summary = payload.get("summary")
+    scope = summary if isinstance(summary, dict) else payload
+    execution_status = str(scope.get("execution_status") or "").strip().lower()
+    if execution_status in {"no_action", "skipped", "outside_market_hours"}:
+        return "no trade"
+    if scope.get("action_done") is True or scope.get("broker_submission_done") is True:
+        return "rebalance action recorded"
+    if scope.get("action_done") is False and scope.get("broker_submission_done") is False:
+        return "no trade"
+    return "run completed"
+
+
+def _notify_normal_heartbeat(name: str, detail: str) -> None:
+    if not _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
+        return
+    message = f"[Execution Report Heartbeat] {name}\nStatus: normal\n{detail}"
+    if not _send_telegram(message):
+        print("Execution report heartbeat normal-summary notification was not acknowledged", file=sys.stderr)
+
+
 def main(now: dt.datetime | None = None) -> int:
     project = (
         os.environ.get("RUNTIME_HEARTBEAT_GCP_PROJECT_ID")
@@ -1117,6 +1138,7 @@ def main(now: dt.datetime | None = None) -> int:
     name = os.environ.get("RUNTIME_HEARTBEAT_NAME") or os.environ.get("GITHUB_REPOSITORY") or "runtime"
     if not _runtime_target_enabled():
         print(f"Execution report heartbeat skipped for {name}: runtime target is disabled")
+        _notify_normal_heartbeat(name, "Runtime target is disabled; no order was submitted.")
         return 0
     if (
         runtime_target_configuration_present(os.environ)
@@ -1126,6 +1148,7 @@ def main(now: dt.datetime | None = None) -> int:
             f"Execution report heartbeat skipped for {name}: "
             "no enabled runtime target matches this heartbeat"
         )
+        _notify_normal_heartbeat(name, "No enabled runtime target matches this heartbeat; no order was submitted.")
         return 0
     lookback_hours = float(os.environ.get("RUNTIME_HEARTBEAT_LOOKBACK_HOURS") or "36")
     max_reports = int(os.environ.get("RUNTIME_HEARTBEAT_MAX_REPORTS_TO_READ") or "20")
@@ -1174,11 +1197,13 @@ def main(now: dt.datetime | None = None) -> int:
                 f"({target_names})"
             )
         )
+        _notify_normal_heartbeat(name, "No scheduled trading window was due; no order was submitted.")
         return 0
     if not runtime_targets:
         runtime_target_skip_reason = _runtime_target_scheduler_skip_reason(since, now)
         if runtime_target_skip_reason:
             print(f"Execution report heartbeat skipped for {name}: {runtime_target_skip_reason}")
+            _notify_normal_heartbeat(name, "No scheduled trading window was due; no order was submitted.")
             return 0
 
     required_services, scheduler_skip_reason, _scheduler_checked = _resolve_required_services(
@@ -1188,6 +1213,7 @@ def main(now: dt.datetime | None = None) -> int:
     )
     if scheduler_skip_reason:
         print(f"Execution report heartbeat skipped for {name}: {scheduler_skip_reason}")
+        _notify_normal_heartbeat(name, "No scheduler-backed run was due; no order was submitted.")
         return 0
     if due_targets:
         required_services = filter_services_for_targets(
@@ -1246,7 +1272,7 @@ def main(now: dt.datetime | None = None) -> int:
 
     sorted_objects = sorted(objects.values(), key=lambda item: item[1], reverse=True)
     accepted = []
-    accepted_by_service: dict[str, tuple[str, dt.datetime, str]] = {}
+    accepted_by_service: dict[str, tuple[str, dt.datetime, str, str]] = {}
     inspected = []
     for uri, updated in sorted_objects[:max_reports]:
         payload = _cat_gcs_json(uri, project=project)
@@ -1271,10 +1297,11 @@ def main(now: dt.datetime | None = None) -> int:
         ok, reason = _is_accepted_report(payload)
         inspected.append(f"- {updated.isoformat()} {uri} {reason}")
         if ok:
+            activity = _report_activity_label(payload)
             if required_keys:
-                accepted_by_service[service_name] = (uri, updated, reason)
+                accepted_by_service[service_name] = (uri, updated, reason, activity)
             else:
-                accepted.append((uri, updated, reason))
+                accepted.append((uri, updated, reason, activity))
 
     if required_keys:
         missing = [key for key in required_keys if key not in accepted_by_service]
@@ -1283,13 +1310,20 @@ def main(now: dt.datetime | None = None) -> int:
                 f"{required_labels[key]}@{accepted_by_service[key][1].isoformat()}"
                 for key in required_keys
             )
+            summary_details = ", ".join(
+                f"{required_labels[key]}: {accepted_by_service[key][3]}"
+                f"@{accepted_by_service[key][1].isoformat()}"
+                for key in required_keys
+            )
             print(f"Execution report heartbeat OK for {name}: {details}")
+            _notify_normal_heartbeat(name, summary_details)
             return 0
     if accepted:
-        uri, updated, reason = accepted[0]
+        uri, updated, reason, activity = accepted[0]
         print(
             f"Execution report heartbeat OK for {name}: {reason}, updated={updated.isoformat()}, uri={uri}"
         )
+        _notify_normal_heartbeat(name, f"{activity}@{updated.isoformat()}")
         return 0
 
     issues = []

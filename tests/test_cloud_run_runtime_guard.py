@@ -6,6 +6,7 @@ import re
 import subprocess
 
 from scripts import cloud_run_runtime_guard as guard
+from scripts import execution_report_heartbeat as heartbeat
 
 
 def _clear_runtime_guard_env(monkeypatch):
@@ -102,6 +103,76 @@ def test_telegram_token_falls_back_to_secret_manager(monkeypatch):
         "--project",
         "longbridgequant",
     ]
+
+
+def test_cloud_run_log_query_retries_transient_google_error(monkeypatch):
+    attempts = []
+    sleeps = []
+
+    def fake_run_gcloud(command):
+        attempts.append(command)
+        if len(attempts) == 1:
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout="",
+                stderr='HttpError: {"error": {"code": 500, "status": "INTERNAL"}}',
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="[]", stderr="")
+
+    monkeypatch.setenv("RUNTIME_GUARD_LOG_QUERY_MAX_ATTEMPTS", "3")
+    monkeypatch.setenv("RUNTIME_GUARD_LOG_QUERY_RETRY_SECONDS", "0")
+    monkeypatch.setattr(guard, "_run_gcloud", fake_run_gcloud)
+    monkeypatch.setattr(guard.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    assert guard._run_gcloud_logging("project-1", 'resource.type="cloud_run_revision"', 10) == []
+    assert len(attempts) == 2
+    assert sleeps == [0.0]
+
+
+def test_cloud_run_log_query_does_not_retry_permission_error(monkeypatch):
+    attempts = []
+
+    def fake_run_gcloud(command):
+        attempts.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="",
+            stderr="ERROR: permission_denied (403)",
+        )
+
+    monkeypatch.setattr(guard, "_run_gcloud", fake_run_gcloud)
+
+    try:
+        guard._run_gcloud_logging("project-1", 'resource.type="cloud_run_revision"', 10)
+    except RuntimeError as exc:
+        assert "permission_denied" in str(exc)
+    else:
+        raise AssertionError("permission errors must fail without retry")
+    assert len(attempts) == 1
+
+
+def test_heartbeat_activity_label_identifies_no_trade_and_rebalance():
+    assert heartbeat._report_activity_label(
+        {"summary": {"execution_status": "no_action", "action_done": False, "broker_submission_done": False}}
+    ) == "no trade"
+    assert heartbeat._report_activity_label(
+        {"summary": {"action_done": True, "broker_submission_done": True}}
+    ) == "rebalance action recorded"
+
+
+def test_heartbeat_normal_summary_is_opt_in(monkeypatch):
+    sent = []
+    monkeypatch.setattr(heartbeat, "_send_telegram", lambda message: sent.append(message) or True)
+    monkeypatch.delenv("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", raising=False)
+
+    heartbeat._notify_normal_heartbeat("LongBridge SG", "no trade")
+    assert sent == []
+
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", "true")
+    heartbeat._notify_normal_heartbeat("LongBridge SG", "no trade")
+    assert sent == ["[Execution Report Heartbeat] LongBridge SG\nStatus: normal\nno trade"]
 
 
 def test_cloud_run_log_since_uses_latest_ready_revision(monkeypatch):

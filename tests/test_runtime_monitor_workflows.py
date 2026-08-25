@@ -26,6 +26,14 @@ def test_runtime_monitor_workflows_retry_gcp_authentication() -> None:
         assert "steps.gcp_auth_primary.outcome == 'failure'" in workflow
 
 
+def test_cloud_run_deployment_requires_manual_dispatch() -> None:
+    workflow = (ROOT / ".github/workflows/sync-cloud-run-env.yml").read_text()
+
+    assert "workflow_run:" not in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "if: github.event_name == 'workflow_dispatch'" in workflow
+
+
 def test_heartbeat_script_does_not_import_project_runtime_dependencies() -> None:
     script = (ROOT / "scripts/execution_report_heartbeat.py").read_text()
 
