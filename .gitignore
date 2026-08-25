@@ -2,6 +2,11 @@ __pycache__/
 *.py[cod]
 .venv/
 
+# Local credentials and runtime overrides. Keep the documented template tracked.
+.env
+.env.*
+!.env.example
+
 backtest_output/
 backtest_output_*/
 backtest_research/
