@@ -475,6 +475,8 @@ class RequestHandlingTests(unittest.TestCase):
                     execution_command_store="command-store",
                     runtime_release_receipt={"attestation_state": "self_attested"},
                     expected_strategy_release={"release_id": "release-1"},
+                    execution_state_account_scope="paper-command-verify",
+                    strategy_profile=module.STRATEGY_PROFILE,
                 )
 
             def build_reporting_adapters(self):
@@ -510,6 +512,14 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(observed["consumer"]["store"], "command-store")
         self.assertEqual(observed["consumer"]["portfolio"], "portfolio-snapshot")
         self.assertEqual(observed["consumer"]["market_data_port"], "market-data-port")
+        self.assertEqual(
+            observed["consumer"]["expected_command_binding"],
+            {
+                "platform": "longbridge",
+                "account_scope": "paper-command-verify",
+                "strategy_profile": module.STRATEGY_PROFILE,
+            },
+        )
 
     def test_handle_probe_checks_account_snapshot_without_success_notification(self):
         module = load_module()
