@@ -1027,6 +1027,11 @@ def run_paper_execution_command_consumer() -> bool:
             market_data_port=composer.broker_adapters.build_market_data_port(quote_context),
             runtime_release_receipt=config.runtime_release_receipt,
             expected_strategy_release=config.expected_strategy_release,
+            expected_command_binding={
+                "platform": "longbridge",
+                "account_scope": str(config.execution_state_account_scope or "unknown"),
+                "strategy_profile": str(config.strategy_profile or "unknown"),
+            },
         )
         report_status = "ok" if result.get("status") == "ok" else "skipped"
         finalize_runtime_report(

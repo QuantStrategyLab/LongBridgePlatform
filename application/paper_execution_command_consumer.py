@@ -213,6 +213,7 @@ def consume_due_paper_execution_commands(
     market_data_port: Any,
     runtime_release_receipt: Mapping[str, Any] | None,
     expected_strategy_release: StrategyReleaseIdentity | Mapping[str, object] | None,
+    expected_command_binding: Mapping[str, object] | None,
 ) -> dict[str, object]:
     """Claim and simulate due paper commands through the shared lifecycle."""
 
@@ -227,4 +228,5 @@ def consume_due_paper_execution_commands(
         ),
         runtime_release_receipt=runtime_release_receipt,
         expected_strategy_release=expected_strategy_release,
+        expected_command_binding=expected_command_binding,
     )

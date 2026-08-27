@@ -104,6 +104,14 @@ def _portfolio(*, include_unmanaged: bool = False) -> PortfolioSnapshot:
     )
 
 
+def _command_binding() -> dict[str, str]:
+    return {
+        "platform": "longbridge",
+        "account_scope": "paper",
+        "strategy_profile": "soxl_soxx_trend_income",
+    }
+
+
 def test_paper_consumer_simulates_reconciled_orders_and_never_calls_an_execution_port(tmp_path: Path) -> None:
     store = ExecutionCommandStore(local_dir=tmp_path)
     command = _command()
@@ -118,6 +126,7 @@ def test_paper_consumer_simulates_reconciled_orders_and_never_calls_an_execution
         market_data_port=_MarketDataPort(),
         runtime_release_receipt=build_runtime_loaded_receipt(strategy_release=release),
         expected_strategy_release=release,
+        expected_command_binding=_command_binding(),
     )
 
     assert result["status"] == "ok"
@@ -169,6 +178,7 @@ def test_paper_consumer_requires_runtime_release_before_claiming(tmp_path: Path)
         market_data_port=_MarketDataPort(),
         runtime_release_receipt=None,
         expected_strategy_release=_release_identity(),
+        expected_command_binding=_command_binding(),
     )
 
     assert result["status"] == "blocked"
@@ -190,6 +200,7 @@ def test_paper_consumer_rejects_unbound_or_unreconciled_commands(tmp_path: Path)
         market_data_port=_MarketDataPort(),
         runtime_release_receipt=build_runtime_loaded_receipt(strategy_release=release),
         expected_strategy_release=release,
+        expected_command_binding=_command_binding(),
     )
 
     assert result["commands"][0]["status"] == "rejected"
@@ -217,6 +228,7 @@ def test_paper_consumer_rejects_risk_receipt_bound_to_another_decision(tmp_path:
         market_data_port=_MarketDataPort(),
         runtime_release_receipt=build_runtime_loaded_receipt(strategy_release=release),
         expected_strategy_release=release,
+        expected_command_binding=_command_binding(),
     )
 
     assert result["commands"][0]["status"] == "rejected"
