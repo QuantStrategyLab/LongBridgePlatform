@@ -16,30 +16,20 @@ from typing import Any
 
 from quant_platform_kit.common.execution_commands import (
     ExecutionCommand,
-    ExecutionCommandState,
     ExecutionCommandStore,
-    validate_execution_command_release_binding,
 )
-from quant_platform_kit.common.paper_execution_admission import evaluate_paper_execution_admission
+from quant_platform_kit.common.paper_execution_command_consumer import (
+    PaperExecutionProposal,
+    PaperExecutionReconciliation,
+    consume_due_paper_execution_commands as consume_shared_paper_execution_commands,
+)
 from quant_platform_kit.common.runtime_command_gate import (
-    RuntimeCommandAction,
     RuntimeCommandExposureEffect,
-    RuntimeCommandGateEnforcement,
-    RuntimeCommandGatePolicy,
-    evaluate_runtime_command_gate,
 )
-from quant_platform_kit.common.strategy_release import (
-    StrategyReleaseIdentity,
-    build_strategy_release_identity,
-    validate_runtime_loaded_receipt,
-)
+from quant_platform_kit.common.strategy_release import StrategyReleaseIdentity
 
-PAPER_COMMAND_CONSUMER_SCHEMA_VERSION = "longbridge.paper-execution-command-consumer.v1"
 PAPER_EXECUTION_INTENT_SCHEMA_VERSION = "longbridge.paper-execution-intent.v1"
 _NOTIONAL_TOLERANCE = 0.01
-_PAPER_COMMAND_GATE_POLICY = RuntimeCommandGatePolicy(
-    enforcement=RuntimeCommandGateEnforcement.ENFORCE,
-)
 
 
 def _normalized_symbol(value: object) -> str:
@@ -184,53 +174,34 @@ def _build_reconciled_order_proposals(
     return tuple(proposals), tuple(dict.fromkeys(findings))
 
 
-def _append_or_raise(
-    store: ExecutionCommandStore,
+def _reconcile_command(
     command: ExecutionCommand,
     *,
-    next_state: ExecutionCommandState,
-    expected_previous_state: ExecutionCommandState,
-    details: Mapping[str, object],
-) -> None:
-    event = store.append_event(
+    portfolio: Any,
+    market_data_port: Any,
+) -> PaperExecutionReconciliation:
+    """Adapt LongBridge's value-target evidence to the shared paper contract."""
+
+    proposals, integrity_findings = _build_reconciled_order_proposals(
         command,
-        next_state=next_state,
-        expected_previous_state=expected_previous_state,
-        details=details,
+        portfolio=portfolio,
+        market_data_port=market_data_port,
     )
-    if event is None:
-        raise RuntimeError(f"failed to persist paper command event {next_state.value}")
-
-
-def _attempt_reconciliation_required(
-    store: ExecutionCommandStore,
-    command: ExecutionCommand,
-    *,
-    error: Exception,
-) -> None:
-    try:
-        state = store.current_state(command)
-        if state not in {
-            ExecutionCommandState.CLAIMED,
-            ExecutionCommandState.SUBMITTED,
-            ExecutionCommandState.ACCEPTED,
-            ExecutionCommandState.PARTIALLY_FILLED,
-        }:
-            return
-        store.append_event(
-            command,
-            next_state=ExecutionCommandState.RECONCILIATION_REQUIRED,
-            expected_previous_state=state,
-            details={
-                "paper_simulation": True,
-                "reason": "consumer_exception_requires_manual_reconciliation",
-                "error_type": type(error).__name__,
-            },
-        )
-    except Exception:
-        # The original error is already captured by the caller's result.  Do
-        # not risk masking it with a second storage failure.
-        return
+    return PaperExecutionReconciliation(
+        proposals=tuple(
+            PaperExecutionProposal(
+                symbol=str(proposal["symbol"]),
+                exposure_effect=str(proposal["exposure_effect"]),
+                details={
+                    key: value
+                    for key, value in proposal.items()
+                    if key not in {"symbol", "exposure_effect"}
+                },
+            )
+            for proposal in proposals
+        ),
+        integrity_findings=integrity_findings,
+    )
 
 
 def consume_due_paper_execution_commands(
@@ -243,164 +214,17 @@ def consume_due_paper_execution_commands(
     runtime_release_receipt: Mapping[str, Any] | None,
     expected_strategy_release: StrategyReleaseIdentity | Mapping[str, object] | None,
 ) -> dict[str, object]:
-    """Claim and simulate due paper commands; never submit a broker order."""
-    if store is None or (not store.cloud_prefix_uri and not store.local_dir):
-        raise RuntimeError("paper durable execution command store is required")
-    try:
-        expected_release = build_strategy_release_identity(expected_strategy_release)
-    except ValueError:
-        return {
-            "schema_version": PAPER_COMMAND_CONSUMER_SCHEMA_VERSION,
-            "status": "blocked",
-            "reason": "release_identity_invalid",
-            "commands": [],
-        }
-    release_preflight = validate_runtime_loaded_receipt(
-        runtime_release_receipt,
-        expected_strategy_release=expected_release,
+    """Claim and simulate due paper commands through the shared lifecycle."""
+
+    return consume_shared_paper_execution_commands(
+        store=store,
+        as_of_session=as_of_session,
+        claimant=claimant,
+        reconcile_command=lambda command: _reconcile_command(
+            command,
+            portfolio=portfolio,
+            market_data_port=market_data_port,
+        ),
+        runtime_release_receipt=runtime_release_receipt,
+        expected_strategy_release=expected_strategy_release,
     )
-    if not release_preflight.is_valid:
-        return {
-            "schema_version": PAPER_COMMAND_CONSUMER_SCHEMA_VERSION,
-            "status": "blocked",
-            "reason": release_preflight.findings[0],
-            "commands": [],
-        }
-
-    as_of_date = str(as_of_session)[:10]
-    commands: list[dict[str, object]] = []
-    for command in store.list_due(as_of_date):
-        if store.current_state(command) is not ExecutionCommandState.QUEUED:
-            continue
-        claim = store.claim_due(command, as_of_date=as_of_date, claimant=claimant)
-        if claim is None:
-            continue
-        try:
-            admission = evaluate_paper_execution_admission(
-                command=command,
-                expected_strategy_release=expected_release,
-            )
-            integrity_findings = list(admission.integrity_findings)
-            integrity_findings.extend(
-                validate_execution_command_release_binding(
-                    command,
-                    expected_strategy_release=expected_release,
-                ).findings
-            )
-            if command.execution_mode != "paper":
-                integrity_findings.append("durable_event_history_invalid")
-            proposals, reconciliation_findings = _build_reconciled_order_proposals(
-                command,
-                portfolio=portfolio,
-                market_data_port=market_data_port,
-            )
-            integrity_findings.extend(reconciliation_findings)
-            integrity_findings = list(dict.fromkeys(integrity_findings))
-            receipts: list[dict[str, object]] = []
-            for proposal in proposals:
-                decision = evaluate_runtime_command_gate(
-                    action=RuntimeCommandAction.SUBMIT,
-                    exposure_effect=proposal["exposure_effect"],
-                    command=command,
-                    command_state=ExecutionCommandState.CLAIMED,
-                    as_of_session=as_of_date,
-                    runtime_release_receipt=runtime_release_receipt,
-                    expected_strategy_release=expected_release,
-                    integrity_findings=integrity_findings,
-                    policy=_PAPER_COMMAND_GATE_POLICY,
-                )
-                receipts.append(decision.to_receipt())
-
-            # A no-op command still has to pass the command-level release and
-            # timing checks before it can be closed as paper-filled.
-            if not proposals:
-                decision = evaluate_runtime_command_gate(
-                    action=RuntimeCommandAction.SUBMIT,
-                    exposure_effect=RuntimeCommandExposureEffect.NEUTRAL,
-                    command=command,
-                    command_state=ExecutionCommandState.CLAIMED,
-                    as_of_session=as_of_date,
-                    runtime_release_receipt=runtime_release_receipt,
-                    expected_strategy_release=expected_release,
-                    integrity_findings=integrity_findings,
-                    policy=_PAPER_COMMAND_GATE_POLICY,
-                )
-                receipts.append(decision.to_receipt())
-
-            details = {
-                "paper_simulation": True,
-                "claimant": claimant,
-                "paper_execution_admission": {
-                    "disposition": admission.disposition.value,
-                    "receipt_sha256": admission.receipt_sha256,
-                },
-                "integrity_findings": integrity_findings,
-                "proposals": list(proposals),
-                "runtime_command_gate_receipts": receipts,
-            }
-            if any(not bool(receipt["policy_allows"]) for receipt in receipts):
-                _append_or_raise(
-                    store,
-                    command,
-                    next_state=ExecutionCommandState.REJECTED,
-                    expected_previous_state=ExecutionCommandState.CLAIMED,
-                    details={
-                        **details,
-                        "reason": "paper_command_gate_would_block",
-                    },
-                )
-                commands.append(
-                    {
-                        "command_id": command.command_id,
-                        "status": ExecutionCommandState.REJECTED.value,
-                        "proposals_count": len(proposals),
-                        "would_block": True,
-                    }
-                )
-                continue
-
-            _append_or_raise(
-                store,
-                command,
-                next_state=ExecutionCommandState.SUBMITTED,
-                expected_previous_state=ExecutionCommandState.CLAIMED,
-                details=details,
-            )
-            _append_or_raise(
-                store,
-                command,
-                next_state=ExecutionCommandState.ACCEPTED,
-                expected_previous_state=ExecutionCommandState.SUBMITTED,
-                details={"paper_simulation": True, "proposals_count": len(proposals)},
-            )
-            _append_or_raise(
-                store,
-                command,
-                next_state=ExecutionCommandState.FILLED,
-                expected_previous_state=ExecutionCommandState.ACCEPTED,
-                details={"paper_simulation": True, "simulated_fill_count": len(proposals)},
-            )
-            commands.append(
-                {
-                    "command_id": command.command_id,
-                    "status": ExecutionCommandState.FILLED.value,
-                    "proposals_count": len(proposals),
-                    "would_block": False,
-                }
-            )
-        except Exception as exc:
-            _attempt_reconciliation_required(store, command, error=exc)
-            commands.append(
-                {
-                    "command_id": command.command_id,
-                    "status": ExecutionCommandState.RECONCILIATION_REQUIRED.value,
-                    "error_type": type(exc).__name__,
-                }
-            )
-
-    return {
-        "schema_version": PAPER_COMMAND_CONSUMER_SCHEMA_VERSION,
-        "status": "ok",
-        "as_of_session": as_of_date,
-        "commands": commands,
-    }

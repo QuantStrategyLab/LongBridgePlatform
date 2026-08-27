@@ -139,6 +139,15 @@ def test_paper_consumer_simulates_reconciled_orders_and_never_calls_an_execution
     ]
     proposals = events[1].details["proposals"]
     assert [proposal["exposure_effect"] for proposal in proposals] == ["increases", "reduces"]
+    assert proposals[0]["details"] == {
+        "side": "buy",
+        "quantity": 10.0,
+        "reference_price": 10.0,
+        "current_value": 0.0,
+        "target_value": 100.0,
+        "target_notional_delta": 100.0,
+        "current_quantity": 0.0,
+    }
     receipts = events[1].details["runtime_command_gate_receipts"]
     assert {receipt["enforcement"] for receipt in receipts} == {"enforce"}
     assert all(receipt["broker_write_allowed"] is True for receipt in receipts)
