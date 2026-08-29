@@ -8,6 +8,7 @@ from datetime import datetime
 from application.execution_service import ExecutionCycleResult, execute_rebalance_cycle
 from application.execution_state import build_execution_marker_key
 from application.durable_execution_commands import enqueue_paper_execution_command
+from application.paper_strategy_risk_state import record_paper_strategy_risk_state_transition
 from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
 from quant_platform_kit.common.account_identity import (
     AccountIdentityGuardedExecutionPort,
@@ -382,6 +383,16 @@ def run_strategy(
     if account_identity_blocked:
         execution["account_identity_blocked"] = True
         execution["account_identity_block_reason"] = "account_identity_verification_failed"
+    paper_strategy_risk_state_observation = record_paper_strategy_risk_state_transition(
+        enabled=bool(getattr(config, "strategy_risk_state_paper_enabled", False)),
+        dry_run_only=bool(getattr(config, "dry_run_only", False)),
+        store=getattr(config, "strategy_risk_state_store", None),
+        transition_payload=execution.get("strategy_risk_state_transition"),
+        expected_strategy_profile=str(getattr(config, "strategy_profile", "") or "unknown"),
+        expected_account_scope=str(getattr(config, "execution_state_account_scope", "") or "unknown"),
+    )
+    if paper_strategy_risk_state_observation is not None:
+        execution["strategy_risk_state"] = paper_strategy_risk_state_observation
     paper_command_observation = enqueue_paper_execution_command(
         enabled=bool(getattr(config, "durable_execution_command_paper_enabled", False)),
         dry_run_only=bool(getattr(config, "dry_run_only", False)),

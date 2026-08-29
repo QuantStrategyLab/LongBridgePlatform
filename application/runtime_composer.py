@@ -17,6 +17,10 @@ from application.durable_execution_commands import (
     build_execution_command_store_from_env,
     resolve_paper_execution_command_producer_enabled,
 )
+from application.paper_strategy_risk_state import (
+    build_strategy_risk_state_store_from_env,
+    resolve_paper_strategy_risk_state_enabled,
+)
 from application.runtime_notification_adapters import build_runtime_notification_adapters
 from application.runtime_reporting_adapters import build_runtime_reporting_adapters
 from quant_platform_kit.common.port_adapters import CallableNotificationPort
@@ -294,6 +298,14 @@ class LongBridgeRuntimeComposer:
                 dry_run_only=self.dry_run_only,
             ),
             execution_command_store=build_execution_command_store_from_env(
+                env_reader=self.env_reader,
+                gcp_project_id=self.project_id,
+            ),
+            strategy_risk_state_paper_enabled=resolve_paper_strategy_risk_state_enabled(
+                env_reader=self.env_reader,
+                dry_run_only=self.dry_run_only,
+            ),
+            strategy_risk_state_store=build_strategy_risk_state_store_from_env(
                 env_reader=self.env_reader,
                 gcp_project_id=self.project_id,
             ),
