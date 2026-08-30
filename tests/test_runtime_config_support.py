@@ -280,6 +280,36 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
         self.assertFalse(settings.runtime_target_enabled)
 
+    def test_live_continuity_paused_state_disables_standard_execution(self):
+        runtime_target = {
+            "platform_id": "longbridge",
+            "strategy_profile": SAMPLE_STRATEGY_PROFILE,
+            "dry_run_only": False,
+            "execution_mode": "live",
+            "live_continuity": {
+                "state": "PAUSED",
+                "baseline_kind": "legacy_authorized",
+                "baseline_id": "soxl-longbridge-lkg-20260830",
+                "baseline_target_sha256": "a" * 64,
+                "captured_at": "2026-08-30",
+            },
+        }
+        from quant_platform_kit.common.live_continuity import runtime_target_fingerprint
+
+        runtime_target["live_continuity"]["baseline_target_sha256"] = runtime_target_fingerprint(runtime_target)
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": json.dumps(runtime_target),
+                "LONGBRIDGE_DRY_RUN_ONLY": "false",
+                "RUNTIME_TARGET_ENABLED": "true",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+        self.assertFalse(settings.runtime_target_enabled)
+
     def test_invalid_runtime_target_enabled_is_rejected(self):
         with patch.dict(
             os.environ,

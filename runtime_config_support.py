@@ -25,6 +25,7 @@ from quant_platform_kit.common.runtime_target import (
     RuntimeTarget,
     resolve_runtime_target_from_env,
 )
+from quant_platform_kit.common.live_continuity import runtime_target_permits_standard_execution
 try:
     from quant_platform_kit.common.broker_costs import (
         BrokerCostProfile,
@@ -333,7 +334,10 @@ def load_platform_runtime_settings(
         feishu_webhook_url=os.getenv("NOTIFICATION_FEISHU_WEBHOOK_URL"),
         serverchan_webhook_url=os.getenv("NOTIFICATION_SERVERCHAN_WEBHOOK_URL"),
         dry_run_only=resolve_dry_run_env(os.environ, "LONGBRIDGE_DRY_RUN_ONLY"),
-        runtime_target_enabled=_runtime_target_enabled_env(),
+        runtime_target_enabled=(
+            _runtime_target_enabled_env()
+            and runtime_target_permits_standard_execution(runtime_target)
+        ),
         reserved_cash_floor_usd=_resolve_non_negative_float_env(
             "LONGBRIDGE_MIN_RESERVED_CASH_USD",
             default=DEFAULT_RESERVED_CASH_FLOOR_USD,
