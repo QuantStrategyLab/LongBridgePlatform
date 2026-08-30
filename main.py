@@ -15,6 +15,10 @@ from flask import Flask
 import google.auth
 import requests
 from application.monitor_dispatcher import dispatch_due_monitors, load_monitor_targets
+from application.execution_receipt_adapter import (
+    attach_cycle_execution_receipt,
+    attach_terminal_fallback_execution_receipt,
+)
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_composer import build_runtime_composer
 from application.rebalance_service import run_strategy as run_rebalance_cycle
@@ -811,6 +815,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 message="Strategy signal snapshot",
                 **signal_snapshot,
             )
+        attach_cycle_execution_receipt(report, cycle_result)
         finalize_runtime_report(
             report,
             status="ok",
@@ -876,6 +881,13 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         )
         return False
     finally:
+        if "execution_receipt" not in report:
+            try:
+                attach_terminal_fallback_execution_receipt(report)
+            except ValueError:
+                # Legacy targets remain evidence-missing; receipt metadata
+                # cannot affect strategy execution or error handling.
+                pass
         try:
             report_path = reporting_adapters.persist_execution_report(report)
             print(f"execution_report {report_path}", flush=True)
