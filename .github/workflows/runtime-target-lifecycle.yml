@@ -1,0 +1,260 @@
+name: Runtime Target Lifecycle
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Runtime target to inspect and publish. This workflow never enables a target or submits an order."
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - paper
+          - hk
+          - sg
+  schedule:
+    - cron: "17 * * * *"
+
+env:
+  GCP_PROJECT_ID: longbridgequant
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  lifecycle:
+    name: Publish ${{ matrix.target.label }} target lifecycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - id: paper
+            label: PAPER
+            environment: longbridge-paper
+            account_scope: PAPER
+            service: longbridge-quant-paper-service
+            region: asia-east1
+          - id: hk
+            label: HK
+            environment: longbridge-hk
+            account_scope: HK
+            service: longbridge-quant-hk-service
+            region: asia-east2
+          - id: sg
+            label: SG
+            environment: longbridge-sg
+            account_scope: SG
+            service: longbridge-quant-sg-service
+            region: asia-southeast1
+    permissions:
+      contents: read
+      id-token: write
+    environment: ${{ matrix.target.environment }}
+    env:
+      RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
+      RUNTIME_TARGET_JSON: ${{ secrets.RUNTIME_TARGET_JSON }}
+      LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}
+      RUNTIME_GUARD_LOOKBACK_MINUTES: ${{ vars.RUNTIME_GUARD_LOOKBACK_MINUTES || '180' }}
+      RUNTIME_GUARD_REQUIRE_SUCCESS: ${{ vars.RUNTIME_GUARD_REQUIRE_SUCCESS || 'false' }}
+      RUNTIME_GUARD_SCHEDULER_JOB_PATTERN: ${{ matrix.target.service }}
+      RUNTIME_HEARTBEAT_GCS_URIS: ${{ vars.RUNTIME_HEARTBEAT_GCS_URIS || vars.EXECUTION_REPORT_GCS_URI }}
+      RUNTIME_HEARTBEAT_LOOKBACK_HOURS: ${{ vars.RUNTIME_HEARTBEAT_LOOKBACK_HOURS || '36' }}
+      RUNTIME_HEARTBEAT_ACCEPT_STATUSES: ${{ vars.RUNTIME_HEARTBEAT_ACCEPT_STATUSES }}
+      RUNTIME_HEARTBEAT_REJECT_STATUSES: ${{ vars.RUNTIME_HEARTBEAT_REJECT_STATUSES }}
+      RUNTIME_HEARTBEAT_MARKET_AWARE: ${{ vars.RUNTIME_HEARTBEAT_MARKET_AWARE || 'true' }}
+      RUNTIME_HEARTBEAT_MARKET_CALENDAR: ${{ vars.LONGBRIDGE_MARKET_CALENDAR }}
+      RUNTIME_HEARTBEAT_MARKET_TIMEZONE: ${{ vars.LONGBRIDGE_MARKET_TIMEZONE }}
+      RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES: ${{ vars.RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES || '30' }}
+      RUNTIME_HEARTBEAT_SCHEDULER_AWARE: ${{ vars.RUNTIME_HEARTBEAT_SCHEDULER_AWARE || 'true' }}
+      RUNTIME_HEARTBEAT_SCHEDULER_LOCATION: ${{ vars.RUNTIME_HEARTBEAT_SCHEDULER_LOCATION || matrix.target.region }}
+      RUNTIME_HEARTBEAT_EXPECTED_DAY_OF_MONTH: ${{ vars.RUNTIME_HEARTBEAT_EXPECTED_DAY_OF_MONTH }}
+      RUNTIME_HEARTBEAT_EXPECTED_TIMEZONE: ${{ vars.RUNTIME_HEARTBEAT_EXPECTED_TIMEZONE }}
+      EXECUTION_EVIDENCE_SYNC_URL: ${{ vars.EXECUTION_EVIDENCE_SYNC_URL }}
+    steps:
+      - name: Select requested target
+        id: selection
+        env:
+          REQUESTED_TARGET: ${{ inputs.target || 'all' }}
+          TARGET_ID: ${{ matrix.target.id }}
+        run: |
+          set -euo pipefail
+          case "$REQUESTED_TARGET" in
+            all|"$TARGET_ID") echo "selected=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "selected=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Checkout repository
+        if: ${{ steps.selection.outputs.selected == 'true' }}
+        uses: actions/checkout@v6
+
+      - name: Resolve declared no-order target state
+        if: ${{ steps.selection.outputs.selected == 'true' }}
+        id: target_state
+        env:
+          FALLBACK_MODE: ${{ matrix.target.id == 'paper' && 'paper' || 'live' }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+
+          enabled = (os.environ.get("RUNTIME_TARGET_ENABLED") or "true").strip().lower()
+          if enabled not in {"true", "false"}:
+              raise SystemExit("RUNTIME_TARGET_ENABLED must be true or false")
+
+          mode = ""
+          raw_target = (os.environ.get("RUNTIME_TARGET_JSON") or "").strip()
+          if raw_target:
+              try:
+                  target = json.loads(raw_target)
+              except json.JSONDecodeError as error:
+                  raise SystemExit(f"RUNTIME_TARGET_JSON is invalid: {error}") from error
+              if isinstance(target, dict):
+                  mode = str(target.get("execution_mode") or "").strip()
+
+          if mode not in {"dry_run", "paper", "live"}:
+              dry_run_only = (os.environ.get("LONGBRIDGE_DRY_RUN_ONLY") or "").strip().lower()
+              mode = "dry_run" if dry_run_only == "true" else os.environ["FALLBACK_MODE"]
+
+          print(f"configured_state={'enabled' if enabled == 'true' else 'disabled'}")
+          print(f"execution_mode={mode}")
+          PY
+
+      - name: Authenticate to Google Cloud
+        if: ${{ steps.selection.outputs.selected == 'true' }}
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        if: ${{ steps.selection.outputs.selected == 'true' }}
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Check Cloud Run runtime without notification side effects
+        if: ${{ steps.selection.outputs.selected == 'true' }}
+        id: runtime_guard
+        env:
+          RUNTIME_GUARD_NAME: LongBridgePlatform ${{ matrix.target.label }} lifecycle
+          RUNTIME_GUARD_CLOUD_RUN_SERVICES: ${{ matrix.target.service }}
+          CLOUD_RUN_SERVICE: ${{ matrix.target.service }}
+          CLOUD_RUN_REGION: ${{ matrix.target.region }}
+          RUNTIME_GUARD_FAIL_WORKFLOW_ON_ALERT: "true"
+          RUNTIME_GUARD_CHECK_SCHEDULER: "true"
+        run: |
+          set -uo pipefail
+          python scripts/cloud_run_runtime_guard.py > runtime-guard.log 2>&1
+          exit_code=$?
+          cat runtime-guard.log
+          if [ "$exit_code" -eq 0 ]; then
+            status=pass
+          elif grep -Eqi 'log query failed|internal error|network|timed out|unable to list' runtime-guard.log; then
+            status=unavailable
+          else
+            status=attention
+          fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Install market calendar for enabled heartbeat
+        if: ${{ steps.selection.outputs.selected == 'true' && steps.target_state.outputs.configured_state == 'enabled' }}
+        run: >-
+          python -m pip install --disable-pip-version-check
+          --retries 3 --timeout 30 "pandas-market-calendars==5.4.0"
+
+      - name: Check enabled execution heartbeat without notification side effects
+        if: ${{ steps.selection.outputs.selected == 'true' }}
+        id: execution_heartbeat
+        env:
+          RUNTIME_HEARTBEAT_NAME: LongBridgePlatform ${{ matrix.target.label }} lifecycle
+          RUNTIME_HEARTBEAT_REPORT_PLATFORM: longbridge
+          RUNTIME_HEARTBEAT_ACCOUNT_SCOPE: ${{ matrix.target.account_scope }}
+          RUNTIME_HEARTBEAT_REQUIRED_SERVICES: ${{ matrix.target.service }}
+          RUNTIME_HEARTBEAT_FAIL_WORKFLOW_ON_ALERT: "true"
+          CLOUD_RUN_SERVICE: ${{ matrix.target.service }}
+          CLOUD_RUN_REGION: ${{ matrix.target.region }}
+        run: |
+          set -uo pipefail
+          if [ "${{ steps.target_state.outputs.configured_state }}" = "disabled" ]; then
+            echo "status=not_applicable" >> "$GITHUB_OUTPUT"
+            echo "Execution heartbeat is not applicable because this target is deliberately disabled."
+            exit 0
+          fi
+
+          python scripts/execution_report_heartbeat.py > execution-heartbeat.log 2>&1
+          exit_code=$?
+          cat execution-heartbeat.log
+          if [ "$exit_code" -eq 0 ] && grep -qi 'heartbeat skipped' execution-heartbeat.log; then
+            status=not_due
+          elif [ "$exit_code" -eq 0 ]; then
+            status=pass
+          elif grep -Eqi 'gcloud|storage|network|timed out|internal error|unable to list' execution-heartbeat.log; then
+            status=unavailable
+          else
+            status=attention
+          fi
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Detect unified control-plane ingress
+        if: ${{ steps.selection.outputs.selected == 'true' }}
+        id: lifecycle_ingress
+        env:
+          EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${EXECUTION_EVIDENCE_SYNC_URL:-}" ] && [ -n "${EXECUTION_EVIDENCE_SYNC_TOKEN:-}" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish lifecycle to the unified control plane
+        if: ${{ steps.selection.outputs.selected == 'true' && steps.lifecycle_ingress.outputs.enabled == 'true' }}
+        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-target-lifecycle@6d71e785dbf21bac6c829a1fc72f3a4492d36f54
+        with:
+          source-id: longbridge.${{ matrix.target.id }}
+          target-id: longbridge.${{ matrix.target.id }}
+          platform: longbridge
+          configured-state: ${{ steps.target_state.outputs.configured_state }}
+          execution-mode: ${{ steps.target_state.outputs.execution_mode }}
+          runtime-guard: ${{ steps.runtime_guard.outputs.status }}
+          execution-heartbeat: ${{ steps.execution_heartbeat.outputs.status }}
+          sync-url: ${{ env.EXECUTION_EVIDENCE_SYNC_URL }}
+        env:
+          EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+
+      - name: Explain missing lifecycle ingress configuration
+        if: ${{ steps.selection.outputs.selected == 'true' && steps.lifecycle_ingress.outputs.enabled != 'true' }}
+        run: |
+          echo "Lifecycle was checked but not centrally published: configure EXECUTION_EVIDENCE_SYNC_URL and EXECUTION_EVIDENCE_SYNC_TOKEN on this GitHub Environment." >&2
+          {
+            echo "## Runtime target lifecycle"
+            echo
+            echo "Checks completed locally, but the unified control-plane ingress is not configured for this environment."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summarize no-order lifecycle
+        if: ${{ steps.selection.outputs.selected == 'true' }}
+        run: |
+          {
+            echo "## Runtime target lifecycle"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Target | longbridge.${{ matrix.target.id }} |"
+            echo "| Configured state | ${{ steps.target_state.outputs.configured_state }} |"
+            echo "| Intended lane | ${{ steps.target_state.outputs.execution_mode }} |"
+            echo "| Runtime guard | ${{ steps.runtime_guard.outputs.status }} |"
+            echo "| Execution heartbeat | ${{ steps.execution_heartbeat.outputs.status }} |"
+            echo
+            echo "This workflow is read-only: it cannot enable a target, alter its lane, or submit an order."
+          } >> "$GITHUB_STEP_SUMMARY"
