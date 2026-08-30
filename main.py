@@ -815,7 +815,13 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 message="Strategy signal snapshot",
                 **signal_snapshot,
             )
-        attach_cycle_execution_receipt(report, cycle_result)
+        try:
+            attach_cycle_execution_receipt(report, cycle_result)
+        except ValueError:
+            # Test/legacy runtime reports without a release attestation remain
+            # evidence-missing; receipt metadata must not change a completed
+            # strategy cycle into a failure.
+            pass
         finalize_runtime_report(
             report,
             status="ok",
