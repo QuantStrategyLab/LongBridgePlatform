@@ -312,3 +312,55 @@ def test_current_service_uses_environment_runtime_enabled_state():
     by_service = {target["service_name"]: target for target in plan["targets"]}
     assert by_service["longbridge-quant-sg-service"]["env"]["RUNTIME_TARGET_ENABLED"] == "false"
     assert by_service["longbridge-quant-paper-service"]["env"]["RUNTIME_TARGET_ENABLED"] == "true"
+
+
+def test_current_service_prefers_environment_runtime_target_over_legacy_inventory():
+    service = "longbridge-quant-sg-service"
+    payload = {
+        "defaults": {
+            "GLOBAL_TELEGRAM_CHAT_ID": "5992562050",
+            "NOTIFY_LANG": "zh",
+            "LONGBRIDGE_MARKET": "US",
+        },
+        "targets": [
+            {
+                "service": service,
+                "account_prefix": "SG",
+                "runtime_target": json.loads(
+                    runtime_target_json(
+                        "tqqq_growth_income",
+                        dry_run_only=True,
+                        deployment_selector="SG",
+                        account_scope="SG",
+                        service_name=service,
+                    )
+                ),
+            }
+        ],
+    }
+    env = {
+        **os.environ,
+        "CLOUD_RUN_SERVICE_TARGETS_JSON": json.dumps(payload),
+        "CLOUD_RUN_SERVICE": service,
+        "RUNTIME_TARGET_JSON": runtime_target_json(
+            "tqqq_growth_income",
+            dry_run_only=False,
+            deployment_selector="SG",
+            account_scope="SG",
+            service_name=service,
+        ),
+    }
+
+    result = subprocess.run(
+        [sys.executable, str(SYNC_PLAN_SCRIPT_PATH), "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    target = json.loads(result.stdout)["targets"][0]
+    runtime_target = json.loads(target["env"]["RUNTIME_TARGET_JSON"])
+    assert runtime_target["dry_run_only"] is False
+    assert runtime_target["execution_mode"] == "live"
+    assert target["env"]["LONGBRIDGE_DRY_RUN_ONLY"] == "false"
