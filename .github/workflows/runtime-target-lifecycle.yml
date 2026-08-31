@@ -223,7 +223,7 @@ jobs:
 
       - name: Publish lifecycle to the unified control plane
         if: ${{ steps.selection.outputs.selected == 'true' && steps.lifecycle_ingress.outputs.enabled == 'true' }}
-        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-target-lifecycle@6d71e785dbf21bac6c829a1fc72f3a4492d36f54
+        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-target-lifecycle@303c2f58a14177cecc7bc418e1a1a4281d45b36b
         with:
           source-id: longbridge.${{ matrix.target.id }}
           target-id: longbridge.${{ matrix.target.id }}
