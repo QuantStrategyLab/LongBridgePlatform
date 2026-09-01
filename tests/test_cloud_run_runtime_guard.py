@@ -9,6 +9,12 @@ from scripts import cloud_run_runtime_guard as guard
 from scripts import execution_report_heartbeat as heartbeat
 
 
+def test_runtime_guard_notification_language_is_configurable(monkeypatch):
+    monkeypatch.setenv("NOTIFY_LANG", "zh-CN")
+
+    assert guard._notice("runtime_guard_scheduler_log_query_failed") == "Cloud Scheduler 日志查询失败"
+
+
 def _clear_runtime_guard_env(monkeypatch):
     for name in (
         "RUNTIME_GUARD_CLOUD_RUN_SERVICES",
@@ -173,6 +179,10 @@ def test_heartbeat_normal_summary_is_opt_in(monkeypatch):
     monkeypatch.setenv("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", "true")
     heartbeat._notify_normal_heartbeat("LongBridge SG", "no trade")
     assert sent == ["[Execution Report Heartbeat] LongBridge SG\nStatus: normal\nno trade"]
+
+    monkeypatch.setenv("NOTIFY_LANG", "zh-CN")
+    heartbeat._notify_normal_heartbeat("LongBridge SG", "no trade@2026-09-01T00:00:00Z")
+    assert sent[-1] == "[执行回执心跳] LongBridge SG\n状态：正常\n无交易@2026-09-01T00:00:00Z"
 
 
 def test_cloud_run_log_since_uses_latest_ready_revision(monkeypatch):
