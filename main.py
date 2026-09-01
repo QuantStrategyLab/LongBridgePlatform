@@ -10,7 +10,7 @@ import time
 import traceback
 from datetime import datetime
 
-from flask import Flask
+from flask import Flask, request
 
 import google.auth
 import requests
@@ -1090,13 +1090,15 @@ def run_paper_execution_command_consumer() -> bool:
             print(f"failed to persist execution report: {persist_exc}", flush=True)
 
 
-@app.route("/run", methods=["POST", "GET"])
+@app.route("/run", methods=["POST"])
 def handle_trigger():
     """Entrypoint for Cloud Run / scheduler: run strategy and return 200."""
+    if request_method() != "POST":
+        return "Method Not Allowed", 405
     return _route_with_runtime_error_fallback(
         run_strategy,
         success_body="OK",
-        route_label="POST /",
+        route_label="POST /run",
     )
 
 
@@ -1125,9 +1127,11 @@ def handle_dry_run():
     )
 
 
-@app.route("/probe", methods=["POST", "GET"])
+@app.route("/probe", methods=["POST"])
 def handle_probe():
     """Post-open broker/account health probe; notify only on failure."""
+    if request_method() != "POST":
+        return "Method Not Allowed", 405
     return _route_with_runtime_error_fallback(
         run_probe,
         success_body="Probe OK",
@@ -1158,8 +1162,6 @@ def handle_monitor_dispatch():
 
 def request_method() -> str:
     try:
-        from flask import request
-
         return request.method
     except Exception:
         return "GET"
