@@ -9,6 +9,12 @@ from scripts import cloud_run_runtime_guard as guard
 from scripts import execution_report_heartbeat as heartbeat
 
 
+def test_runtime_guard_notification_language_is_configurable(monkeypatch):
+    monkeypatch.setenv("NOTIFY_LANG", "zh-CN")
+
+    assert guard._notice("runtime_guard_scheduler_log_query_failed") == "Cloud Scheduler 日志查询失败"
+
+
 def _clear_runtime_guard_env(monkeypatch):
     for name in (
         "RUNTIME_GUARD_CLOUD_RUN_SERVICES",
