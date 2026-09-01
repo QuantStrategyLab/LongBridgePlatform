@@ -47,6 +47,7 @@ def install_stub_modules():
             return None
 
     flask_module.Flask = Flask
+    flask_module.request = types.SimpleNamespace(method="GET")
 
     requests_module = types.ModuleType("requests")
     requests_module.post = lambda *args, **kwargs: None
