@@ -730,6 +730,12 @@ jobs:
             "LONGBRIDGE_FRACTIONAL_SHARES_ENABLED"
             "LONGBRIDGE_ORDER_QUANTITY_STEP"
             "LONGBRIDGE_MIN_ORDER_NOTIONAL_USD"
+            # The shared durable-command consumer is paper-only.  These stale
+            # variables must never remain on a normal live service: a legacy
+            # deployment otherwise attempts to enable a paper producer and
+            # blocks the whole live rebalance before it reaches the broker.
+            "LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_ENABLED"
+            "LONGBRIDGE_EXECUTION_COMMAND_CLOUD_URI"
             "CRISIS_ALERT_GOOGLE_VOICE_TO"
             "CRISIS_ALERT_GOOGLE_VOICE_GATEWAY"
             "CRISIS_ALERT_GOOGLE_VOICE_GMAIL_USER"
