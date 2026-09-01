@@ -20,6 +20,7 @@ from quant_platform_kit.common.runtime_target import build_runtime_target
 @contextmanager
 def install_stub_modules(*, notify_lang="en"):
     flask_module = types.ModuleType("flask")
+    request = types.SimpleNamespace(method="GET")
 
     class Flask:
         def __init__(self, _name):
@@ -33,11 +34,16 @@ def install_stub_modules(*, notify_lang="en"):
             return decorator
 
         def test_request_context(self, *_args, **_kwargs):
+            method = _kwargs.get("method", "GET")
+
             class _Context:
                 def __enter__(self_inner):
+                    self_inner.previous_method = request.method
+                    request.method = method
                     return self_inner
 
                 def __exit__(self_inner, exc_type, exc, tb):
+                    request.method = self_inner.previous_method
                     return False
 
             return _Context()
@@ -46,6 +52,7 @@ def install_stub_modules(*, notify_lang="en"):
             return None
 
     flask_module.Flask = Flask
+    flask_module.request = request
 
     requests_module = types.ModuleType("requests")
     requests_module.post = lambda *args, **kwargs: None
@@ -239,7 +246,7 @@ class RequestHandlingTests(unittest.TestCase):
     def test_cloud_run_route_contracts_are_registered(self):
         module = load_module()
 
-        self.assertIs(module.app._routes[("/run", ("POST", "GET"))], module.handle_trigger)
+        self.assertIs(module.app._routes[("/run", ("POST",))], module.handle_trigger)
         self.assertIs(
             module.app._routes[("/backfill", ("POST", "GET"))],
             module.handle_backfill,
@@ -249,7 +256,7 @@ class RequestHandlingTests(unittest.TestCase):
             module.handle_dry_run,
         )
         self.assertIs(
-            module.app._routes[("/probe", ("POST", "GET"))],
+            module.app._routes[("/probe", ("POST",))],
             module.handle_probe,
         )
         self.assertIs(
@@ -376,7 +383,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertIn("服务:", text)
         self.assertIn("错误: RuntimeError: boom", text)
 
-    def test_handle_trigger_allows_get(self):
+    def test_handle_trigger_rejects_get_without_running_strategy(self):
         module = load_module()
         observed = {"called": False}
 
@@ -388,9 +395,9 @@ class RequestHandlingTests(unittest.TestCase):
         with module.app.test_request_context("/run", method="GET"):
             body, status = module.handle_trigger()
 
-        self.assertEqual(status, 200)
-        self.assertEqual(body, "OK")
-        self.assertTrue(observed["called"])
+        self.assertEqual(status, 405)
+        self.assertEqual(body, "Method Not Allowed")
+        self.assertFalse(observed["called"])
 
     def test_handle_backfill_forces_strategy_run(self):
         module = load_module()
@@ -579,6 +586,22 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(observed["report"]["summary"]["buying_power"], 123.0)
         self.assertEqual(observed["report"]["summary"]["total_equity"], 456.0)
         self.assertEqual(observed["report"]["summary"]["positions_count"], 1)
+
+    def test_handle_probe_rejects_get_without_running_broker_probe(self):
+        module = load_module()
+        observed = {"called": False}
+
+        def fake_run_probe():
+            observed["called"] = True
+
+        module.run_probe = fake_run_probe
+
+        with module.app.test_request_context("/probe", method="GET"):
+            body, status = module.handle_probe()
+
+        self.assertEqual(status, 405)
+        self.assertEqual(body, "Method Not Allowed")
+        self.assertFalse(observed["called"])
 
     def test_handle_probe_failure_sends_notification(self):
         module = load_module()

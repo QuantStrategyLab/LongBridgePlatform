@@ -38,3 +38,33 @@ def test_existing_scheduler_cron_rejects_ambiguous_day_fields() -> None:
 
     assert 'if current_fields[2] != "*" and current_fields[4] != "*":' in workflow
     assert "cannot constrain both day-of-month and day-of-week" in workflow
+
+
+def test_main_scheduler_update_and_create_use_post_oidc() -> None:
+    workflow = Path(".github/workflows/sync-cloud-run-env.yml").read_text(encoding="utf-8")
+    scheduler_section = workflow[workflow.index('scheduler_uri="${service_url}/run"') :]
+    scheduler_section = scheduler_section[: scheduler_section.index('probe_job_name=')]
+
+    for command in (
+        'gcloud scheduler jobs update http "${job_name}"',
+        'gcloud scheduler jobs create http "${job_name}"',
+    ):
+        command_section = scheduler_section[scheduler_section.index(command) :]
+        command_section = command_section[: command_section.index("--quiet")]
+        assert "--http-method=POST" in command_section
+        assert '--oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}"' in command_section
+        assert '--oidc-token-audience="${service_url}"' in command_section
+
+
+def test_cloud_run_deploy_stays_private_and_serial() -> None:
+    workflow = Path(".github/workflows/sync-cloud-run-env.yml").read_text(encoding="utf-8")
+    deploy_section = workflow[workflow.index('gcloud run deploy "${CLOUD_RUN_SERVICE}"') :]
+    deploy_section = deploy_section[: deploy_section.index("--quiet")]
+
+    for option in (
+        "--no-allow-unauthenticated",
+        "--ingress=internal",
+        "--max-instances=1",
+        "--concurrency=1",
+    ):
+        assert option in deploy_section
