@@ -13,7 +13,8 @@ def test_execution_report_heartbeat_has_market_neutral_daily_schedule() -> None:
     assert "RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES:" in workflow
     assert "RUNTIME_HEARTBEAT_SCHEDULER_LOCATION:" in workflow
     assert "CLOUD_SCHEDULER_MAIN_TIME:" in workflow
-    assert "pandas-market-calendars==5.4.0" in workflow
+    assert "pandas-market-calendars" in (ROOT / "pyproject.toml").read_text()
+    assert "pandas-market-calendars" in (ROOT / "uv.lock").read_text()
 
 
 def test_runtime_monitor_workflows_retry_gcp_authentication() -> None:
@@ -24,6 +25,38 @@ def test_runtime_monitor_workflows_retry_gcp_authentication() -> None:
         assert "id: gcp_auth_primary" in workflow
         assert "continue-on-error: true" in workflow
         assert "steps.gcp_auth_primary.outcome == 'failure'" in workflow
+
+
+def test_runtime_monitor_workflows_use_frozen_runtime_environment() -> None:
+    setup_uv = "uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
+    workflows = {
+        "execution-report-heartbeat.yml": (
+            "uv run --no-sync python scripts/execution_report_heartbeat.py",
+        ),
+        "runtime-guard.yml": (
+            "uv run --no-sync python scripts/cloud_run_runtime_guard.py",
+        ),
+        "runtime-target-lifecycle.yml": (
+            "uv run --no-sync python scripts/cloud_run_runtime_guard.py",
+            "uv run --no-sync python scripts/execution_report_heartbeat.py",
+        ),
+    }
+
+    for name, commands in workflows.items():
+        workflow = (ROOT / ".github/workflows" / name).read_text()
+
+        assert "uses: actions/setup-python@" not in workflow
+        assert workflow.count("uses: astral-sh/setup-uv@") == 1
+        assert setup_uv in workflow
+        assert "pip install" not in workflow
+        assert workflow.count("uv sync --frozen --no-dev") == 1
+        assert workflow.index(setup_uv) < workflow.index("uv sync --frozen --no-dev")
+        for command in commands:
+            assert command in workflow
+            assert workflow.index("uv sync --frozen --no-dev") < workflow.index(command)
+
+    lifecycle = (ROOT / ".github/workflows/runtime-target-lifecycle.yml").read_text()
+    assert "traceback|importerror|modulenotfounderror" in lifecycle.lower()
 
 
 def test_cloud_run_deployment_requires_manual_dispatch() -> None:
