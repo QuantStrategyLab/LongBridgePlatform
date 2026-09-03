@@ -23,6 +23,7 @@ def _runtime_target():
         platform_id="longbridge",
         strategy_profile="soxl_soxx_trend_income",
         account_scope="PAPER",
+        execution_mode="paper",
         live_continuity=SimpleNamespace(
             state="RECONCILE_ONLY",
             baseline_id="longbridge-paper-baseline",
@@ -262,3 +263,31 @@ def test_observations_use_exact_decimal_strings_and_exclude_dynamic_valuation_fi
             ]
         },
     )
+
+
+def test_paper_runtime_target_reads_paper_execution_ledger(monkeypatch):
+    context, _calls = _read_only_trade_context()
+    observations = reconciliation.collect_read_only_reconciliation_observations(
+        object(), context, account_scope="PAPER"
+    )
+    observed_kwargs = {}
+
+    class MarkerStore:
+        def calculate_recent_ledger_digest(self, **kwargs):
+            observed_kwargs.update(kwargs)
+            return "2" * 64, 0
+
+    monkeypatch.setattr(
+        reconciliation,
+        "build_execution_marker_store_from_env",
+        lambda **_kwargs: MarkerStore(),
+    )
+
+    reconciliation.build_reconciliation_candidate(
+        observations=observations,
+        runtime_target=_runtime_target(),
+        project_id=None,
+        env_reader=lambda *_args: "",
+    )
+
+    assert observed_kwargs["execution_mode"] == "paper"
