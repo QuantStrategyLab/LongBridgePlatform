@@ -17,9 +17,6 @@ if str(PLATFORM_KIT_SRC) not in sys.path:
     sys.path.insert(0, str(PLATFORM_KIT_SRC))
 
 from quant_platform_kit.common.runtime_target import build_runtime_target
-from quant_platform_kit.common.broker_reconciliation import (
-    build_broker_reconciliation_evidence,
-)
 
 
 @contextmanager

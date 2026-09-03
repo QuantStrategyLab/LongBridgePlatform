@@ -182,3 +182,83 @@ def test_read_only_candidate_without_trusted_baseline_is_blocked(monkeypatch):
     blocker_names = {finding.value for finding in candidate.recovery_blockers}
     assert "broker_reconciliation_account_identity_mismatch" in blocker_names
     assert "broker_reconciliation_positions_mismatch" in blocker_names
+
+
+def test_wrong_platform_target_is_rejected_before_context_building():
+    target = _runtime_target()
+    target.platform_id = "firstrade"
+
+    payload, status = reconciliation.run_read_only_broker_reconciliation(
+        enabled=True,
+        account_scope="PAPER",
+        runtime_target=target,
+        strategy_profile="soxl_soxx_trend_income",
+        project_id=None,
+        build_read_only_contexts=lambda: pytest.fail("wrong platform must not build contexts"),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+    )
+
+    assert status == 503
+    assert payload["reason"] == "broker_reconciliation_runtime_target_unavailable"
+
+
+def test_observations_use_exact_decimal_strings_and_exclude_dynamic_valuation_fields():
+    large_quantity = "9007199254740993"
+    context, _calls = _read_only_trade_context()
+    context.stock_positions = lambda: SimpleNamespace(
+        channels=[
+            SimpleNamespace(
+                account_channel="Cash",
+                positions=[
+                    SimpleNamespace(
+                        symbol="SOXL.US",
+                        quantity=large_quantity,
+                        available_quantity=large_quantity,
+                        currency="USD",
+                        cost_price="12.34",
+                    )
+                ],
+            )
+        ]
+    )
+    context.account_balance = lambda: [
+        SimpleNamespace(
+            currency="USD",
+            total_cash="10",
+            net_assets="999999",
+            buy_power="888888",
+            cash_infos=[
+                SimpleNamespace(
+                    currency="USD",
+                    available_cash="10.000",
+                    frozen_cash="0.00",
+                    settling_cash="0.0000",
+                )
+            ],
+        )
+    ]
+
+    observations = reconciliation.collect_read_only_reconciliation_observations(
+        object(), context, account_scope="PAPER"
+    )
+
+    assert observations.positions == (
+        {
+            "account_channel": "cash",
+            "symbol": "SOXL.US",
+            "currency": "USD",
+            "quantity": large_quantity,
+        },
+    )
+    assert observations.cash == (
+        {
+            "cash_infos": [
+                {
+                    "currency": "USD",
+                    "available_cash": "10",
+                    "frozen_cash": "0",
+                    "settling_cash": "0",
+                }
+            ]
+        },
+    )

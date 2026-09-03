@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-import math
 import os
+from decimal import Decimal, InvalidOperation
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -60,18 +60,21 @@ def _text(value: object) -> str:
     return str(value or "").strip()
 
 
-def _number(value: object, *, field_name: str) -> float:
+def _decimal_text(value: object, *, field_name: str) -> str:
     try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
+        number = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
         raise LongBridgeReconciliationReadError(
             f"LongBridge reconciliation is missing {field_name}."
         ) from exc
-    if not math.isfinite(number):
+    if not number.is_finite():
         raise LongBridgeReconciliationReadError(
             f"LongBridge reconciliation has non-finite {field_name}."
         )
-    return number
+    normalized = format(number.normalize(), "f")
+    if "." in normalized:
+        normalized = normalized.rstrip("0").rstrip(".")
+    return normalized or "0"
 
 
 def _enum_name(value: object) -> str:
@@ -110,18 +113,15 @@ def _normalize_position(position: Any, *, account_channel: str) -> dict[str, obj
         "account_channel": account_channel,
         "symbol": symbol,
         "currency": currency,
-        "quantity": _number(getattr(position, "quantity", None), field_name="position quantity"),
-        "available_quantity": _number(
-            getattr(position, "available_quantity", None), field_name="position available quantity"
+        "quantity": _decimal_text(
+            getattr(position, "quantity", None), field_name="position quantity"
         ),
-        "cost_price": _number(getattr(position, "cost_price", None), field_name="position cost price"),
     }
 
 
 def _normalize_cash(balance: Any) -> dict[str, object]:
-    currency = _text(getattr(balance, "currency", "")).upper()
     cash_infos = getattr(balance, "cash_infos", None)
-    if not currency or not isinstance(cash_infos, (list, tuple)) or not cash_infos:
+    if not isinstance(cash_infos, (list, tuple)) or not cash_infos:
         raise LongBridgeReconciliationReadError("LongBridge reconciliation received incomplete cash data.")
     cash_detail = []
     for cash_info in cash_infos:
@@ -131,22 +131,18 @@ def _normalize_cash(balance: Any) -> dict[str, object]:
         cash_detail.append(
             {
                 "currency": cash_currency,
-                "available_cash": _number(
+                "available_cash": _decimal_text(
                     getattr(cash_info, "available_cash", None), field_name="available cash"
                 ),
-                "frozen_cash": _number(getattr(cash_info, "frozen_cash", None), field_name="frozen cash"),
-                "settling_cash": _number(
+                "frozen_cash": _decimal_text(
+                    getattr(cash_info, "frozen_cash", None), field_name="frozen cash"
+                ),
+                "settling_cash": _decimal_text(
                     getattr(cash_info, "settling_cash", None), field_name="settling cash"
                 ),
             }
         )
-    return {
-        "currency": currency,
-        "total_cash": _number(getattr(balance, "total_cash", None), field_name="total cash"),
-        "net_assets": _number(getattr(balance, "net_assets", None), field_name="net assets"),
-        "buy_power": _number(getattr(balance, "buy_power", None), field_name="buy power"),
-        "cash_infos": list(_canonical_records(cash_detail)),
-    }
+    return {"cash_infos": list(_canonical_records(cash_detail))}
 
 
 def _normalize_order(order: Any) -> dict[str, object]:
@@ -163,8 +159,8 @@ def _normalize_order(order: Any) -> dict[str, object]:
         "currency": currency,
         "side": _enum_name(getattr(order, "side", "")),
         "order_type": _enum_name(getattr(order, "order_type", "")),
-        "quantity": _number(getattr(order, "quantity", None), field_name="order quantity"),
-        "executed_quantity": _number(
+        "quantity": _decimal_text(getattr(order, "quantity", None), field_name="order quantity"),
+        "executed_quantity": _decimal_text(
             getattr(order, "executed_quantity", None), field_name="order executed quantity"
         ),
         "submitted_at": _text(getattr(order, "submitted_at", "")),
@@ -183,8 +179,10 @@ def _normalize_execution(execution: Any) -> dict[str, object]:
         "trade_id": trade_id,
         "symbol": symbol,
         "trade_done_at": _text(getattr(execution, "trade_done_at", "")),
-        "quantity": _number(getattr(execution, "quantity", None), field_name="execution quantity"),
-        "price": _number(getattr(execution, "price", None), field_name="execution price"),
+        "quantity": _decimal_text(
+            getattr(execution, "quantity", None), field_name="execution quantity"
+        ),
+        "price": _decimal_text(getattr(execution, "price", None), field_name="execution price"),
     }
 
 
@@ -449,9 +447,11 @@ def run_read_only_broker_reconciliation(
         return {"status": "blocked", "reason": "broker_reconciliation_context_builder_unavailable"}, 503
     if runtime_target is None:
         return {"status": "blocked", "reason": "broker_reconciliation_runtime_target_unavailable"}, 503
-    if _text(getattr(runtime_target, "account_scope", "")).upper() != scope or _text(
-        getattr(runtime_target, "strategy_profile", "")
-    ) != _text(strategy_profile):
+    if (
+        _text(getattr(runtime_target, "platform_id", "")).lower() != "longbridge"
+        or _text(getattr(runtime_target, "account_scope", "")).upper() != scope
+        or _text(getattr(runtime_target, "strategy_profile", "")) != _text(strategy_profile)
+    ):
         return {"status": "blocked", "reason": "broker_reconciliation_runtime_target_unavailable"}, 503
     try:
         _continuity_fields(runtime_target)
