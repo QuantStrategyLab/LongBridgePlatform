@@ -357,7 +357,7 @@ def build_reconciliation_candidate(
         platform=platform_id,
         strategy_profile=strategy_profile,
         account_scope=account_scope,
-        execution_mode="live",
+        execution_mode=_text(getattr(runtime_target, "execution_mode", "")),
     )
     digests["local_execution_ledger_sha256"] = ledger_digest
     timestamp = observed_at or datetime.now(timezone.utc)
