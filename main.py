@@ -16,6 +16,7 @@ import google.auth
 import requests
 from application.monitor_dispatcher import dispatch_due_monitors, load_monitor_targets
 from application.broker_reconciliation import (
+    collect_read_only_reconciliation_observations,
     reconciliation_enabled,
     run_read_only_broker_reconciliation,
 )
@@ -72,9 +73,9 @@ from decision_mapper import map_strategy_decision_to_plan
 
 app = Flask(__name__)
 
-# A later bounded slice must provide the LongBridge-specific five-part reader.
-# Keeping this absent makes the endpoint fail before any broker context exists.
-READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = None
+# This collector is limited to documented LongPort read endpoints and is
+# independently fail-closed for incomplete account identity/order coverage.
+READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = collect_read_only_reconciliation_observations
 
 # ---------------------------------------------------------------------------
 # Config and constants (GCP project, Telegram, execution and strategy params)
@@ -1104,6 +1105,9 @@ def run_broker_reconciliation():
     return run_read_only_broker_reconciliation(
         enabled=reconciliation_enabled(os.getenv),
         account_scope=getattr(RUNTIME_SETTINGS, "account_region", None),
+        runtime_target=getattr(RUNTIME_SETTINGS, "runtime_target", None),
+        strategy_profile=STRATEGY_PROFILE,
+        project_id=PROJECT_ID,
         build_read_only_contexts=lambda: build_composer().build_read_only_broker_contexts(),
         collect_evidence=READ_ONLY_BROKER_RECONCILIATION_COLLECTOR,
     )

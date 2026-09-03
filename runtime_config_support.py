@@ -105,7 +105,7 @@ class PlatformRuntimeSettings:
     dingtalk_webhook_url: str | None = None
     feishu_webhook_url: str | None = None
     serverchan_webhook_url: str | None = None
-    runtime_target_enabled: bool = True
+    runtime_target_enabled: bool = False
     market: str = DEFAULT_MARKET
     market_calendar: str = DEFAULT_MARKET_CALENDAR
     market_timezone: str = DEFAULT_MARKET_TIMEZONE
@@ -515,7 +515,7 @@ def _qqqi_income_ratio_env() -> float | None:
 
 
 def _runtime_target_enabled_env() -> bool:
-    return resolve_optional_bool_env("RUNTIME_TARGET_ENABLED", default=True)
+    return resolve_optional_bool_env("RUNTIME_TARGET_ENABLED", default=False)
 
 
 def _optional_bool_env(name: str) -> bool | None:

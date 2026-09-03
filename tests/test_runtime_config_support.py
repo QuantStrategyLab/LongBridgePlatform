@@ -163,7 +163,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.runtime_target.platform_id, "longbridge")
         self.assertEqual(settings.runtime_target.execution_mode, "live")
         self.assertIsNotNone(settings.strategy_metadata)
-        self.assertTrue(settings.runtime_target_enabled)
+        self.assertFalse(settings.runtime_target_enabled)
         self.assertIsNone(settings.income_threshold_usd)
         self.assertIsNone(settings.qqqi_income_ratio)
         self.assertIsNone(settings.feature_snapshot_path)
