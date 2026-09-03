@@ -1,9 +1,11 @@
 import importlib
+import json
 import os
 import sys
 import types
 import unittest
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +17,9 @@ if str(PLATFORM_KIT_SRC) not in sys.path:
     sys.path.insert(0, str(PLATFORM_KIT_SRC))
 
 from quant_platform_kit.common.runtime_target import build_runtime_target
+from quant_platform_kit.common.broker_reconciliation import (
+    build_broker_reconciliation_evidence,
+)
 
 
 @contextmanager
@@ -262,6 +267,10 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertIs(
             module.app._routes[("/paper-command-consumer", ("POST",))],
             module.handle_paper_execution_command_consumer,
+        )
+        self.assertIs(
+            module.app._routes[("/reconcile", ("POST",))],
+            module.handle_broker_reconciliation,
         )
         self.assertIs(
             module.app._routes[("/monitor-dispatch", ("POST", "GET"))],
@@ -527,6 +536,101 @@ class RequestHandlingTests(unittest.TestCase):
                 "strategy_profile": module.STRATEGY_PROFILE,
             },
         )
+
+    def test_broker_reconciliation_is_disabled_before_building_contexts(self):
+        module = load_module()
+        module.build_composer = lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("disabled reconciliation must not build broker contexts")
+        )
+
+        with patch.dict(
+            os.environ,
+            {"LONGBRIDGE_BROKER_RECONCILIATION_ENABLED": ""},
+            clear=False,
+        ):
+            with module.app.test_request_context("/reconcile", method="POST"):
+                body, status, _headers = module.handle_broker_reconciliation()
+
+        self.assertEqual(status, 503)
+        self.assertEqual(json.loads(body)["reason"], "broker_reconciliation_disabled")
+
+    def test_broker_reconciliation_all_scopes_require_a_collector_before_contexts(self):
+        module = load_module()
+        module.READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = None
+        module.build_composer = lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("missing collector must fail before broker contexts")
+        )
+
+        with patch.dict(
+            os.environ,
+            {"LONGBRIDGE_BROKER_RECONCILIATION_ENABLED": "true"},
+            clear=False,
+        ):
+            for account_region in ("PAPER", "HK", "SG"):
+                module.RUNTIME_SETTINGS = types.SimpleNamespace(account_region=account_region)
+                with self.subTest(account_region=account_region):
+                    with module.app.test_request_context("/reconcile", method="POST"):
+                        body, status, _headers = module.handle_broker_reconciliation()
+                    self.assertEqual(status, 503)
+                    self.assertEqual(
+                        json.loads(body)["reason"],
+                        "broker_reconciliation_collector_unavailable",
+                    )
+
+    def test_broker_reconciliation_uses_only_read_only_context_builder(self):
+        module = load_module()
+        observed = {}
+
+        class FakeComposer:
+            def build_read_only_broker_contexts(self):
+                observed["read_only_contexts_called"] = True
+                return "quote-context", "trade-context"
+
+        module.RUNTIME_SETTINGS = types.SimpleNamespace(account_region="PAPER")
+        module.build_composer = lambda **_kwargs: FakeComposer()
+        module.READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = (
+            lambda quote_context, trade_context, *, account_scope: (
+                observed.update(
+                    contexts=(quote_context, trade_context),
+                    account_scope=account_scope,
+                )
+                or build_broker_reconciliation_evidence(
+                    platform_id="longbridge",
+                    strategy_profile="soxl_soxx_trend_income",
+                    account_scope_sha256="1" * 64,
+                    baseline_id="longbridge-paper-baseline",
+                    baseline_target_sha256="2" * 64,
+                    runtime_target_sha256="2" * 64,
+                    observed_at=datetime.now(timezone.utc),
+                    broker_connected=True,
+                    account_identity_match=True,
+                    positions_match=True,
+                    cash_match=True,
+                    open_orders_match=True,
+                    recent_executions_match=True,
+                    local_execution_ledger_match=True,
+                    positions_sha256="3" * 64,
+                    cash_sha256="4" * 64,
+                    open_orders_sha256="5" * 64,
+                    recent_executions_sha256="6" * 64,
+                    local_execution_ledger_sha256="7" * 64,
+                )
+            )
+        )
+
+        with patch.dict(
+            os.environ,
+            {"LONGBRIDGE_BROKER_RECONCILIATION_ENABLED": "true"},
+            clear=False,
+        ):
+            with module.app.test_request_context("/reconcile", method="POST"):
+                body, status, _headers = module.handle_broker_reconciliation()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["schema_version"], "broker_reconciliation_evidence.v1")
+        self.assertTrue(observed["read_only_contexts_called"])
+        self.assertEqual(observed["contexts"], ("quote-context", "trade-context"))
+        self.assertEqual(observed["account_scope"], "PAPER")
 
     def test_handle_probe_checks_account_snapshot_without_success_notification(self):
         module = load_module()
