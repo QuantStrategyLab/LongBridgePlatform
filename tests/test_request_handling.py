@@ -17,9 +17,6 @@ if str(PLATFORM_KIT_SRC) not in sys.path:
     sys.path.insert(0, str(PLATFORM_KIT_SRC))
 
 from quant_platform_kit.common.runtime_target import build_runtime_target
-from quant_platform_kit.common.broker_reconciliation import (
-    build_broker_reconciliation_evidence,
-)
 
 
 @contextmanager
@@ -579,6 +576,8 @@ class RequestHandlingTests(unittest.TestCase):
 
     def test_broker_reconciliation_uses_only_read_only_context_builder(self):
         module = load_module()
+        from application import broker_reconciliation as reconciliation_module
+
         observed = {}
 
         class FakeComposer:
@@ -586,48 +585,61 @@ class RequestHandlingTests(unittest.TestCase):
                 observed["read_only_contexts_called"] = True
                 return "quote-context", "trade-context"
 
-        module.RUNTIME_SETTINGS = types.SimpleNamespace(account_region="PAPER")
+        module.RUNTIME_SETTINGS = types.SimpleNamespace(
+            account_region="PAPER",
+            runtime_target=types.SimpleNamespace(
+                platform_id="longbridge",
+                strategy_profile=module.STRATEGY_PROFILE,
+                account_scope="PAPER",
+                live_continuity=types.SimpleNamespace(
+                    state="RECONCILE_ONLY",
+                    baseline_id="longbridge-paper-baseline",
+                    baseline_target_sha256="2" * 64,
+                ),
+            ),
+        )
         module.build_composer = lambda **_kwargs: FakeComposer()
+        observations = reconciliation_module.LongBridgeReconciliationObservations(
+            account_scope={"configured_scope": "PAPER", "account_channels": ["cash"]},
+            account_identity_match=False,
+            positions=(),
+            cash=(),
+            open_orders=(),
+            recent_executions=(),
+            positions_complete=True,
+            cash_complete=True,
+            open_orders_complete=False,
+            recent_executions_complete=True,
+        )
+
+        class MarkerStore:
+            def calculate_recent_ledger_digest(self, **_kwargs):
+                return "7" * 64, 0
+
         module.READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = (
             lambda quote_context, trade_context, *, account_scope: (
                 observed.update(
                     contexts=(quote_context, trade_context),
                     account_scope=account_scope,
                 )
-                or build_broker_reconciliation_evidence(
-                    platform_id="longbridge",
-                    strategy_profile="soxl_soxx_trend_income",
-                    account_scope_sha256="1" * 64,
-                    baseline_id="longbridge-paper-baseline",
-                    baseline_target_sha256="2" * 64,
-                    runtime_target_sha256="2" * 64,
-                    observed_at=datetime.now(timezone.utc),
-                    broker_connected=True,
-                    account_identity_match=True,
-                    positions_match=True,
-                    cash_match=True,
-                    open_orders_match=True,
-                    recent_executions_match=True,
-                    local_execution_ledger_match=True,
-                    positions_sha256="3" * 64,
-                    cash_sha256="4" * 64,
-                    open_orders_sha256="5" * 64,
-                    recent_executions_sha256="6" * 64,
-                    local_execution_ledger_sha256="7" * 64,
-                )
+                or observations
             )
         )
 
-        with patch.dict(
-            os.environ,
-            {"LONGBRIDGE_BROKER_RECONCILIATION_ENABLED": "true"},
-            clear=False,
+        with patch.object(
+            reconciliation_module,
+            "build_execution_marker_store_from_env",
+            lambda **_kwargs: MarkerStore(),
+        ), patch.dict(
+            os.environ, {"LONGBRIDGE_BROKER_RECONCILIATION_ENABLED": "true"}, clear=False
         ):
             with module.app.test_request_context("/reconcile", method="POST"):
                 body, status, _headers = module.handle_broker_reconciliation()
 
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(body)["schema_version"], "broker_reconciliation_evidence.v1")
+        self.assertEqual(
+            json.loads(body)["schema_version"], "longbridge_reconciliation_candidate.v1"
+        )
         self.assertTrue(observed["read_only_contexts_called"])
         self.assertEqual(observed["contexts"], ("quote-context", "trade-context"))
         self.assertEqual(observed["account_scope"], "PAPER")
