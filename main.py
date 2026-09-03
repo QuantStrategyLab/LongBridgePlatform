@@ -15,6 +15,10 @@ from flask import Flask, request
 import google.auth
 import requests
 from application.monitor_dispatcher import dispatch_due_monitors, load_monitor_targets
+from application.broker_reconciliation import (
+    reconciliation_enabled,
+    run_read_only_broker_reconciliation,
+)
 from application.execution_receipt_adapter import (
     attach_cycle_execution_receipt,
     attach_terminal_fallback_execution_receipt,
@@ -67,6 +71,10 @@ from strategy_runtime import load_strategy_runtime
 from decision_mapper import map_strategy_decision_to_plan
 
 app = Flask(__name__)
+
+# A later bounded slice must provide the LongBridge-specific five-part reader.
+# Keeping this absent makes the endpoint fail before any broker context exists.
+READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = None
 
 # ---------------------------------------------------------------------------
 # Config and constants (GCP project, Telegram, execution and strategy params)
@@ -1090,6 +1098,17 @@ def run_paper_execution_command_consumer() -> bool:
             print(f"failed to persist execution report: {persist_exc}", flush=True)
 
 
+def run_broker_reconciliation():
+    """Run the explicitly enabled, order-port-free reconciliation boundary."""
+
+    return run_read_only_broker_reconciliation(
+        enabled=reconciliation_enabled(os.getenv),
+        account_scope=getattr(RUNTIME_SETTINGS, "account_region", None),
+        build_read_only_contexts=lambda: build_composer().build_read_only_broker_contexts(),
+        collect_evidence=READ_ONLY_BROKER_RECONCILIATION_COLLECTOR,
+    )
+
+
 @app.route("/run", methods=["POST"])
 def handle_trigger():
     """Entrypoint for Cloud Run / scheduler: run strategy and return 200."""
@@ -1147,6 +1166,16 @@ def handle_paper_execution_command_consumer():
         success_body="Paper command consumer OK",
         route_label="POST /paper-command-consumer",
     )
+
+
+@app.route("/reconcile", methods=["POST"])
+def handle_broker_reconciliation():
+    """Return only redacted QPK E3 evidence; never invoke normal execution."""
+
+    if request_method() != "POST":
+        return "Method Not Allowed", 405
+    payload, status = run_broker_reconciliation()
+    return json.dumps(payload, ensure_ascii=True), status, {"Content-Type": "application/json"}
 
 
 @app.route("/monitor-dispatch", methods=["POST", "GET"])
