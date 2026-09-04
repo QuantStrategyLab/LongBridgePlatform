@@ -1,7 +1,9 @@
 import sys
 import unittest
+from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +27,7 @@ sys.modules["requests"] = requests_stub
 try:
     from application import rebalance_service
     from application.execution_service import execute_rebalance_cycle
+    from application.execution_state import ExecutionMarkerStore
     from application.longbridge_execution import submit_order
     from application.longbridge_portfolio import fetch_strategy_account_state
     from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
@@ -1189,6 +1192,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             ),
             config=LongBridgeRebalanceConfig(
                 limit_sell_discount=0.995,
+                execution_dedup_enabled=True,
+                execution_state_store=ExecutionMarkerStore(local_dir=self.enterContext(TemporaryDirectory())),
                 limit_buy_premium=1.005,
                 separator="━━━━━━━━━━━━━━━━━━",
                 translator=build_translator("zh"),
@@ -1803,6 +1808,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             ),
             config=LongBridgeRebalanceConfig(
                 limit_sell_discount=0.995,
+                execution_dedup_enabled=True,
+                execution_state_store=ExecutionMarkerStore(local_dir=self.enterContext(TemporaryDirectory())),
                 limit_buy_premium=1.005,
                 separator="━━━━━━━━━━━━━━━━━━",
                 translator=build_translator("zh"),
@@ -2301,6 +2308,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             ),
             config=LongBridgeRebalanceConfig(
                 limit_sell_discount=0.995,
+                execution_dedup_enabled=True,
+                execution_state_store=ExecutionMarkerStore(local_dir=self.enterContext(TemporaryDirectory())),
                 limit_buy_premium=1.005,
                 separator="━━━━━━━━━━━━━━━━━━",
                 translator=build_translator("zh"),
@@ -3178,6 +3187,181 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertNotIn("📊 市场状态: ", sent_messages[0])
         self.assertNotIn("💼 交易层风险仓位: ", sent_messages[0])
         self.assertNotIn("🏦 收入层锁定占比: ", sent_messages[0])
+
+
+class RequiredExecutionClaimTests(unittest.TestCase):
+    def setUp(self):
+        self.orders = []
+        self.issues = []
+        self.store_dir = self.enterContext(TemporaryDirectory())
+        self.store = ExecutionMarkerStore(local_dir=self.store_dir)
+        self.plan = _build_plan(
+            strategy_symbols=("SOXL",), risk_symbols=("SOXL",),
+            targets={"SOXL": 400.0}, market_values={"SOXL": 0.0},
+            quantities={"SOXL": 0}, sellable_quantities={"SOXL": 0},
+            current_min_trade=10.0, trade_threshold_value=10.0,
+            investable_cash=500.0, available_cash=500.0, total_strategy_equity=500.0,
+            market_status="Risk on", deploy_ratio_text="70.0%",
+            income_ratio_text="0.0%", income_locked_ratio_text="0.0%",
+            signal_message="Synthetic target", portfolio_rows=(("SOXL",),),
+        )
+        self.config = LongBridgeRebalanceConfig(
+            limit_sell_discount=0.995, limit_buy_premium=1.0, separator="-",
+            translator=build_translator("en"), with_prefix=lambda message: message,
+            strategy_profile="soxl_soxx_trend_income", execution_state_account_scope="PAPER",
+            notify_no_trade_cycles=False,
+        )
+        self.runtime = LongBridgeRebalanceRuntime(
+            bootstrap=lambda: (None, None, {}),
+            resolve_rebalance_plan=lambda **_kwargs: self.plan,
+            market_data_port_factory=lambda _context: CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol, as_of="2026-04-21", last_price=100.0,
+                )
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 5,
+            notifications=CallableNotificationPort(lambda _message: None),
+            notify_issue=lambda title, detail: self.issues.append((title, detail)),
+            portfolio_port_factory=lambda *_contexts: CallablePortfolioPort(
+                lambda: _build_snapshot(self.plan)
+            ),
+            execution_port_factory=lambda _context: CallableExecutionPort(self._submit),
+        )
+
+    def _submit(self, intent):
+        self.orders.append(intent)
+        return ExecutionReport(
+            symbol=intent.symbol, side=intent.side, quantity=intent.quantity,
+            status="submitted", broker_order_id="synthetic-order",
+        )
+
+    def _run(self, **overrides):
+        return rebalance_service.run_strategy(
+            runtime=self.runtime, config=replace(self.config, **overrides),
+        )
+
+    def test_missing_claim_prerequisites_never_submit(self):
+        cases = (
+            {},
+            {"execution_dedup_enabled": False, "execution_state_store": self.store},
+            {"execution_dedup_enabled": True},
+        )
+        for side in ("buy", "sell"):
+            if side == "sell":
+                self.plan["allocation"]["targets"] = {"SOXL": 0.0}
+                self.plan["portfolio"]["market_values"] = {"SOXL": 400.0}
+                self.plan["portfolio"]["quantities"] = {"SOXL": 4}
+                self.plan["portfolio"]["sellable_quantities"] = {"SOXL": 4}
+            for overrides in cases:
+                with self.subTest(side=side, overrides=tuple(overrides)):
+                    result = self._run(**overrides)
+                    self.assertFalse(result.action_done)
+                    self.assertEqual(self.orders, [])
+
+    def test_empty_marker_key_never_submits(self):
+        self.plan["execution"].update(signal_date="", effective_date="")
+        result = self._run(execution_dedup_enabled=True, execution_state_store=self.store)
+        self.assertFalse(result.action_done)
+        self.assertEqual(self.orders, [])
+
+    def test_false_or_failed_claim_is_not_retried_and_never_submits(self):
+        # Two executable intents exercise the latch after execution_service catches a failure.
+        self.plan["allocation"]["strategy_symbols"] = ("SOXL", "SOXX")
+        self.plan["allocation"]["risk_symbols"] = ("SOXL", "SOXX")
+        self.plan["allocation"]["targets"] = {"SOXL": 200.0, "SOXX": 200.0}
+        for field in ("market_values", "quantities", "sellable_quantities"):
+            self.plan["portfolio"][field]["SOXX"] = 0
+        for outcome in (False, RuntimeError("synthetic claim failure")):
+            with self.subTest(outcome=type(outcome).__name__):
+                self.issues.clear()
+                store = Mock(spec=("has_marker", "claim_marker", "record_marker"))
+                store.has_marker.return_value = False
+                store.claim_marker.side_effect = [outcome, True]
+                result = self._run(execution_dedup_enabled=True, execution_state_store=store)
+                self.assertFalse(result.action_done)
+                self.assertEqual(self.orders, [])
+                self.assertEqual(store.claim_marker.call_count, 1)
+                self.assertEqual([title for title, _detail in self.issues], ["Order submit failed"] * 2)
+                store.record_marker.assert_not_called()
+                self.assertNotIn("synthetic claim failure", str(self.issues))
+
+    def test_paper_broker_non_dry_run_claims_before_single_submission(self):
+        key = rebalance_service._build_execution_marker_key(
+            config=replace(self.config, execution_dedup_enabled=True), execution=self.plan["execution"],
+        )
+        submit = self._submit
+
+        def checked_submit(intent):
+            self.assertTrue(ExecutionMarkerStore(local_dir=self.store_dir).has_marker(key))
+            return submit(intent)
+
+        self.runtime = replace(self.runtime, execution_port_factory=lambda _context: CallableExecutionPort(checked_submit))
+        self.assertTrue(self._run(execution_dedup_enabled=True, execution_state_store=self.store).action_done)
+        self.assertFalse(self._run(execution_dedup_enabled=True, execution_state_store=self.store).action_done)
+        self.assertEqual(len(self.orders), 1)
+        self.assertEqual((self.orders[0].symbol, self.orders[0].side, self.orders[0].quantity), ("SOXL.US", "buy", 4))
+
+    def test_accepted_then_timeout_retains_local_claim_across_store_reopen(self):
+        def accepted_then_timeout(intent):
+            self.orders.append(intent)
+            raise TimeoutError("synthetic uncertain submission")
+
+        self.runtime = replace(self.runtime, execution_port_factory=lambda _context: CallableExecutionPort(accepted_then_timeout))
+        self.assertFalse(self._run(execution_dedup_enabled=True, execution_state_store=self.store).action_done)
+        reopened = ExecutionMarkerStore(local_dir=self.store_dir)
+        key = rebalance_service._build_execution_marker_key(
+            config=replace(self.config, execution_dedup_enabled=True), execution=self.plan["execution"],
+        )
+        self.assertTrue(reopened.has_marker(key))
+        self.assertFalse(reopened.claim_marker(key))
+        self.assertFalse(self._run(execution_dedup_enabled=True, execution_state_store=reopened).action_done)
+        self.assertEqual(len(self.orders), 1)
+
+    def test_dry_run_preview_does_not_require_claim(self):
+        result = self._run(dry_run_only=True)
+        self.assertTrue(result.dry_run_orders)
+        self.assertEqual(self.orders, [])
+        self.assertEqual(self.issues, [])
+
+    def test_noop_does_not_attempt_claim_even_if_store_is_unavailable(self):
+        self.plan["allocation"]["targets"] = {"SOXL": 0.0}
+        store = Mock(spec=("has_marker", "claim_marker", "record_marker"))
+        store.has_marker.return_value = False
+        store.claim_marker.side_effect = RuntimeError("unavailable")
+        for overrides in ({}, {"execution_dedup_enabled": True, "execution_state_store": store}):
+            result = self._run(**overrides)
+            self.assertFalse(result.action_done)
+        store.claim_marker.assert_not_called()
+        self.assertEqual(self.orders, [])
+        self.assertEqual(self.issues, [])
+
+    def test_existing_account_rejection_does_not_read_or_claim_marker(self):
+        self.runtime = replace(self.runtime, account_identity_observer=lambda _context: BrokerAccountIdentity(
+            platform_id="longbridge", account_types=("margin",),
+        ))
+        store = Mock(spec=("has_marker", "claim_marker", "record_marker"))
+        store.has_marker.return_value = False
+        result = self._run(
+            execution_dedup_enabled=True, execution_state_store=store,
+            account_identity_policy={"enforcement": "enforce", "expected_account_types": ["cash"]},
+        )
+        self.assertFalse(result.action_done)
+        self.assertTrue(result.execution["account_identity_blocked"])
+        self.assertEqual(self.orders, [])
+        store.has_marker.assert_not_called()
+        store.claim_marker.assert_not_called()
+        self.assertEqual([title for title, _detail in self.issues], ["Account identity gate blocked broker orders"])
+
+    def test_direct_live_routing_block_does_not_attempt_claim(self):
+        self.plan["execution"]["effective_date"] = "2026-04-22"
+        store = Mock(spec=("has_marker", "claim_marker", "record_marker"))
+        result = self._run(execution_dedup_enabled=True, execution_state_store=store)
+        self.assertFalse(result.action_done)
+        self.assertTrue(result.execution["direct_live_routing_blocked"])
+        self.assertEqual(self.orders, [])
+        store.has_marker.assert_not_called()
+        store.claim_marker.assert_not_called()
+        self.assertEqual([title for title, _detail in self.issues], ["Next-session execution blocked"])
 
 
 if __name__ == "__main__":
