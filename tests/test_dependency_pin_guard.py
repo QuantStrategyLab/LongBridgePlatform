@@ -63,3 +63,16 @@ def test_dependency_pin_guard_is_blocking_in_ci() -> None:
 
     assert "check_qpk_pin_consistency.py" in step
     assert "continue-on-error" not in step
+
+
+def test_ci_editable_shared_checkouts_use_locked_refs() -> None:
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "name: Read locked shared dependency refs" in workflow
+    assert "steps.locked-shared-refs.outputs.quant_platform_kit" in workflow
+    assert "steps.locked-shared-refs.outputs.us_equity_strategies" in workflow
+    assert "git -C external/QuantPlatformKit rev-parse HEAD" in workflow
+    assert "git -C external/UsEquityStrategies rev-parse HEAD" in workflow
+    assert workflow.index("name: Install editable shared repositories") < workflow.index(
+        "name: Smoke import pinned shared packages"
+    )
