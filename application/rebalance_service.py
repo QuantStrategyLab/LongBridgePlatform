@@ -15,6 +15,7 @@ from quant_platform_kit.common.account_identity import (
     AccountIdentityPolicy,
     evaluate_account_identity,
 )
+from quant_platform_kit.common.port_adapters import CallableExecutionPort
 from quant_platform_kit.longbridge.market_data import fetch_lot_sizes
 from application.signal_snapshot import build_signal_snapshot
 from notifications.events import NotificationPublisher
@@ -419,8 +420,7 @@ def run_strategy(
         execution["direct_live_routing_blocked"] = True
         execution["direct_live_routing_block_reason"] = "durable_execution_command_required"
     execution_already_recorded = direct_live_routing_blocked or account_identity_blocked
-    execution_claim_acquired = False
-    if not direct_live_routing_blocked and execution_marker_key and execution_state_store:
+    if not execution_already_recorded and execution_marker_key and execution_state_store:
         try:
             execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
         except Exception as exc:
@@ -445,25 +445,6 @@ def run_strategy(
                     "Execution report dedup read failed",
                     f"Marker: {execution_marker_key}\n{type(exc).__name__}: {exc}",
                 )
-
-    if (
-        not direct_live_routing_blocked
-        and not execution_already_recorded
-        and execution_marker_key
-        and execution_state_store
-        and bool(getattr(config, "execution_dedup_enabled", False))
-        and not bool(getattr(config, "dry_run_only", False))
-    ):
-        try:
-            execution_claim_acquired = bool(execution_state_store.claim_marker(
-                execution_marker_key,
-                metadata={"platform": "longbridge", "strategy_profile": getattr(config, "strategy_profile", "")},
-            ))
-            execution_already_recorded = not execution_claim_acquired
-        except Exception as exc:
-            raise RuntimeError(
-                f"LongBridge execution claim unavailable; refusing broker submission: {type(exc).__name__}"
-            ) from exc
 
     if execution_already_recorded:
         if account_identity_blocked:
@@ -492,6 +473,29 @@ def run_strategy(
             action_done=False,
         )
     else:
+        if not config.dry_run_only:
+            delegate = execution_port
+            execution_claim_attempted = False
+            execution_claim_acquired = False
+
+            def submit_claimed_order(order_intent):
+                nonlocal execution_claim_attempted, execution_claim_acquired
+                # Claim only when an order is ready; failed claims are never retried in this cycle.
+                if not execution_claim_attempted:
+                    execution_claim_attempted = True
+                    if config.execution_dedup_enabled and execution_marker_key and execution_state_store is not None:
+                        try:
+                            execution_claim_acquired = bool(execution_state_store.claim_marker(
+                                execution_marker_key,
+                                metadata={"platform": "longbridge", "strategy_profile": config.strategy_profile},
+                            ))
+                        except Exception:
+                            raise RuntimeError("LongBridge execution claim unavailable; refusing broker submission") from None
+                if not execution_claim_acquired:
+                    raise RuntimeError("LongBridge execution claim required; refusing broker submission")
+                return delegate.submit_order(order_intent)
+
+            execution_port = CallableExecutionPort(submit_claimed_order)
         # Fetch per-symbol board-lot sizes for HK stocks so quantity
         # flooring uses the correct lot_size (e.g. 100, 200) instead of 1.
         _lot_sizes: dict[str, int] = {}
