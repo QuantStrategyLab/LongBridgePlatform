@@ -57,7 +57,7 @@ from quant_platform_kit.notifications.strategy_plugin_alerts import (
     build_strategy_plugin_alert_context_label as build_alert_context_label,
     publish_strategy_plugin_alerts as dispatch_strategy_plugin_alerts,
 )
-from quant_platform_kit.strategy_contracts import build_strategy_evaluation_inputs
+from quant_platform_kit.common.runtime_inputs import build_strategy_evaluation_inputs
 from runtime_logging import build_run_id, emit_runtime_log
 from quant_platform_kit.longbridge import (
     build_contexts,
