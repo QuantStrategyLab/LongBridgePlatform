@@ -16,7 +16,7 @@ from quant_platform_kit.common.port_adapters import (
     CallablePortfolioPort,
 )
 from quant_platform_kit.common.ports import ExecutionPort, MarketDataPort, PortfolioPort
-from quant_platform_kit.strategy_contracts import (
+from quant_platform_kit.common.runtime_inputs import (
     build_account_state_from_portfolio_snapshot,
     build_portfolio_snapshot_from_account_state,
 )

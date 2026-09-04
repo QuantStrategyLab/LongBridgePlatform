@@ -4,11 +4,13 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
-from quant_platform_kit.strategy_contracts import (
+from quant_platform_kit.common.strategy_contracts import (
     PositionTarget,
     StrategyDecision,
     ValueTargetExecutionAnnotations,
     build_value_target_execution_annotations,
+)
+from quant_platform_kit.common.execution_translation import (
     build_value_target_portfolio_inputs_from_account_state,
     build_value_target_runtime_plan,
     resolve_decision_target_mode,
