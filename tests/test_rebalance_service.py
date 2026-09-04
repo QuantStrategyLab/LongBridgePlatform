@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,8 @@ sys.modules["requests"] = requests_stub
 try:
     from application import rebalance_service
     from application.execution_service import execute_rebalance_cycle
+    from application.longbridge_execution import submit_order
+    from application.longbridge_portfolio import fetch_strategy_account_state
     from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
     from quant_platform_kit.common.account_identity import BrokerAccountIdentity
     from notifications.telegram import build_translator
@@ -1200,6 +1203,150 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(observed_post_submit, [("trade-context", "SOXX.US", "lb-order-1")])
         self.assertEqual(len(sent_messages), 1)
         self.assertIn("【订单待券商最终确认】", sent_messages[0])
+
+    def test_run_strategy_does_not_submit_with_incomplete_position_valuation(self):
+        submitted_orders = []
+
+        class QuoteContext:
+            def quote(self, _symbols):
+                return []
+
+        class TradeContext:
+            def account_balance(self):
+                return []
+
+            def stock_positions(self):
+                return types.SimpleNamespace(
+                    channels=[types.SimpleNamespace(positions=[types.SimpleNamespace(
+                        symbol="SOXL.US",
+                        quantity=3,
+                        available_quantity=3,
+                    )])]
+                )
+
+        runtime = LongBridgeRebalanceRuntime(
+            bootstrap=lambda: (QuoteContext(), TradeContext(), {"trend": "ok"}),
+            resolve_rebalance_plan=lambda **_kwargs: (_ for _ in ()).throw(
+                AssertionError("incomplete portfolio must not reach planning")
+            ),
+            market_data_port_factory=lambda _quote_context: CallableMarketDataPort(
+                quote_loader=lambda _symbol: (_ for _ in ()).throw(AssertionError("quote should not load"))
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("buy estimate should not run")
+            ),
+            notifications=CallableNotificationPort(lambda _message: None),
+            notify_issue=lambda _title, _detail: None,
+            portfolio_port_factory=lambda quote_context, trade_context: CallablePortfolioPort(
+                lambda: fetch_strategy_account_state(quote_context, trade_context, ["SOXL"])
+            ),
+            execution_port_factory=lambda _trade_context: CallableExecutionPort(
+                lambda order_intent: submitted_orders.append(order_intent)
+            ),
+        )
+        config = LongBridgeRebalanceConfig(
+            limit_sell_discount=0.995,
+            limit_buy_premium=1.0,
+            separator="-",
+            translator=build_translator("en"),
+            with_prefix=lambda message: message,
+            notify_no_trade_cycles=False,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "position valuation incomplete"):
+            rebalance_service.run_strategy(runtime=runtime, config=config)
+
+        self.assertEqual(submitted_orders, [])
+
+    def test_unknown_submission_error_keeps_execution_claim_and_does_not_retry(self):
+        broker_attempts = []
+        claims = set()
+        plan = _build_plan(
+            strategy_symbols=("SOXL",),
+            risk_symbols=("SOXL",),
+            targets={"SOXL": 400.0},
+            market_values={"SOXL": 0.0},
+            sellable_quantities={"SOXL": 0},
+            quantities={"SOXL": 0},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=500.0,
+            market_status="Risk on",
+            deploy_ratio_text="70.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="SOXL target",
+            available_cash=500.0,
+            total_strategy_equity=500.0,
+            portfolio_rows=(("SOXL",),),
+        )
+
+        class FakeStore:
+            def has_marker(self, marker_key):
+                return marker_key in claims
+
+            def claim_marker(self, marker_key, **_kwargs):
+                if marker_key in claims:
+                    return False
+                claims.add(marker_key)
+                return True
+
+            def record_marker(self, *_args, **_kwargs):
+                raise AssertionError("unknown submission must retain its original claim")
+
+        def fake_submit_order(*_args, **_kwargs):
+            broker_attempts.append("possibly_accepted")
+            error = RuntimeError("internal server error")
+            error.code = 603203
+            raise error
+
+        runtime = LongBridgeRebalanceRuntime(
+            bootstrap=lambda: ("quote-context", "trade-context", {"trend": "ok"}),
+            resolve_rebalance_plan=lambda *, indicators, snapshot=None: plan,
+            market_data_port_factory=lambda _quote_context: CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-04-21",
+                    last_price=100.0,
+                )
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 5,
+            notifications=CallableNotificationPort(lambda _message: None),
+            notify_issue=lambda _title, _detail: None,
+            portfolio_port_factory=lambda _quote_context, _trade_context: CallablePortfolioPort(
+                lambda: _build_snapshot(plan)
+            ),
+            execution_port_factory=lambda trade_context: CallableExecutionPort(
+                lambda order_intent: submit_order(
+                    trade_context,
+                    order_intent.symbol,
+                    order_kind=order_intent.order_type,
+                    side=order_intent.side,
+                    quantity=order_intent.quantity,
+                    submitted_price=order_intent.limit_price,
+                )
+            ),
+        )
+        config = LongBridgeRebalanceConfig(
+            limit_sell_discount=0.995,
+            limit_buy_premium=1.0,
+            separator="-",
+            translator=build_translator("en"),
+            with_prefix=lambda message: message,
+            strategy_profile="soxl_soxx_trend_income",
+            execution_dedup_enabled=True,
+            execution_state_store=FakeStore(),
+            execution_state_account_scope="PAPER",
+            notify_no_trade_cycles=False,
+        )
+
+        with patch("application.longbridge_execution._qpk_submit_order", fake_submit_order):
+            result = rebalance_service.run_strategy(runtime=runtime, config=config)
+            rebalance_service.run_strategy(runtime=runtime, config=config)
+
+        self.assertFalse(result.action_done)
+        self.assertEqual(broker_attempts, ["possibly_accepted"])
+        self.assertEqual(len(claims), 1)
 
     def test_run_strategy_blocks_live_next_session_decision_without_routing(self):
         alerts = []

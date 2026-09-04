@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+import math
 from typing import Any
 
 
@@ -29,9 +30,11 @@ def _fetch_last_prices(q_ctx: Any, symbols: list[str]) -> dict[str, float]:
         if last_done is None:
             continue
         try:
-            prices[quoted_symbol] = float(last_done)
+            price = float(last_done)
         except (TypeError, ValueError):
             continue
+        if math.isfinite(price) and price > 0.0:
+            prices[quoted_symbol] = price
     return prices
 
 
@@ -56,15 +59,20 @@ def fetch_strategy_account_state(
     except Exception as exc:
         warn(
             "[longbridge_account_balance_failed] "
-            f"error_type={type(exc).__name__} error={exc}"
+            f"error_type={type(exc).__name__}"
         )
-        account_balance = ()
+        raise RuntimeError("LongBridge account balance unavailable") from exc
     for account in account_balance:
         for cash_info in getattr(account, "cash_infos", []):
             currency = str(getattr(cash_info, "currency", "") or "").strip().upper()
             if not currency:
                 continue
-            cash_amount = float(getattr(cash_info, "available_cash", 0.0))
+            try:
+                cash_amount = float(getattr(cash_info, "available_cash", 0.0))
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("LongBridge account balance invalid") from exc
+            if not math.isfinite(cash_amount):
+                raise RuntimeError("LongBridge account balance invalid")
             cash_by_currency[currency] = cash_by_currency.get(currency, 0.0) + cash_amount
             if currency == trading_currency:
                 available_cash += cash_amount
@@ -81,47 +89,55 @@ def fetch_strategy_account_state(
     except Exception as exc:
         warn(
             "[longbridge_stock_positions_failed] "
-            f"error_type={type(exc).__name__} error={exc}"
+            f"error_type={type(exc).__name__}"
         )
-        positions_response = None
-    if positions_response and hasattr(positions_response, "channels"):
-        for channel in positions_response.channels:
-            for position in getattr(channel, "positions", []):
-                full_symbol = str(getattr(position, "symbol", "") or "").strip().upper()
-                if not full_symbol:
-                    continue
-                root_symbol = full_symbol.split(".")[0].strip().upper()
-                if filter_enabled and root_symbol not in market_values:
-                    continue
-                if root_symbol not in market_values:
-                    market_values[root_symbol] = 0.0
-                    quantities[root_symbol] = 0.0
-                    sellable_quantities[root_symbol] = 0.0
+        raise RuntimeError("LongBridge stock positions unavailable") from exc
+    if not hasattr(positions_response, "channels") or positions_response.channels is None:
+        raise RuntimeError("LongBridge stock positions unavailable")
+    for channel in positions_response.channels:
+        for position in getattr(channel, "positions", []):
+            full_symbol = str(getattr(position, "symbol", "") or "").strip().upper()
+            if not full_symbol:
+                raise RuntimeError("LongBridge position symbol missing")
+            root_symbol = full_symbol.split(".")[0].strip().upper()
+            if not root_symbol:
+                raise RuntimeError("LongBridge position symbol missing")
+            if filter_enabled and root_symbol not in market_values:
+                continue
+            if root_symbol not in market_values:
+                market_values[root_symbol] = 0.0
+                quantities[root_symbol] = 0.0
+                sellable_quantities[root_symbol] = 0.0
 
-                raw_quantity = getattr(position, "quantity", 0)
-                raw_available_quantity = getattr(position, "available_quantity", raw_quantity)
-                if raw_quantity is None:
-                    raw_quantity = 0
-                if raw_available_quantity is None:
-                    raw_available_quantity = raw_quantity
-                if position_log_fn is not None:
-                    position_log_fn(
-                        "[position_snapshot] raw "
-                        f"symbol={root_symbol} full_symbol={full_symbol} "
-                        f"quantity={raw_quantity} available_quantity={raw_available_quantity}"
-                    )
+            raw_quantity = getattr(position, "quantity", None)
+            raw_available_quantity = getattr(position, "available_quantity", raw_quantity)
+            if raw_quantity is None:
+                raise RuntimeError("LongBridge position quantity missing")
+            if raw_available_quantity is None:
+                raw_available_quantity = raw_quantity
+            if position_log_fn is not None:
+                position_log_fn(
+                    "[position_snapshot] raw "
+                    f"symbol={root_symbol} full_symbol={full_symbol} "
+                    f"quantity={raw_quantity} available_quantity={raw_available_quantity}"
+                )
 
-                position_rows.append((root_symbol, full_symbol, raw_quantity, raw_available_quantity))
+            position_rows.append((root_symbol, full_symbol, raw_quantity, raw_available_quantity))
 
     prices = _fetch_last_prices(q_ctx, [full_symbol for _root_symbol, full_symbol, _quantity, _available in position_rows])
     for root_symbol, full_symbol, raw_quantity, raw_available_quantity in position_rows:
-        last_price = prices.get(full_symbol)
-        if last_price is None:
-            continue
-
-        quantity = float(raw_quantity)
-        available_quantity = float(raw_available_quantity)
-        market_values[root_symbol] += quantity * last_price
+        try:
+            quantity = float(raw_quantity)
+            available_quantity = float(raw_available_quantity)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("LongBridge position quantity invalid") from exc
+        if not math.isfinite(quantity) or not math.isfinite(available_quantity):
+            raise RuntimeError("LongBridge position quantity invalid")
+        if quantity != 0.0:
+            last_price = prices.get(full_symbol)
+            if last_price is None:
+                raise RuntimeError("LongBridge position valuation incomplete")
+            market_values[root_symbol] += quantity * last_price
         quantities[root_symbol] += quantity
         sellable_quantities[root_symbol] += available_quantity
 
