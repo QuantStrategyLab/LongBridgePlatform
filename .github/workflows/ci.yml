@@ -45,7 +45,7 @@ jobs:
               if match:
                   refs[name] = match.group(1)
           if set(refs) != required:
-              raise SystemExit("uv.lock lacks a full SHA for an editable shared dependency")
+              raise SystemExit("uv.lock lacks a full SHA for a shared dependency")
           for name in sorted(refs):
               print(f"{name.replace('-', '_')}={refs[name]}")
           PY
@@ -74,12 +74,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip uv
           uv sync --frozen --extra test
-      - name: Install editable shared repositories
-        run: |
-          set -euo pipefail
-          uv pip install --no-deps -e external/QuantPlatformKit -e external/UsEquityStrategies
-
-      - name: Verify editable shared repository refs
+      - name: Verify shared repository refs
         run: |
           set -euo pipefail
           test "$(git -C external/QuantPlatformKit rev-parse HEAD)" = "${{ steps.locked-shared-refs.outputs.quant_platform_kit }}"
@@ -89,17 +84,25 @@ jobs:
         run: |
           set -euo pipefail
           uv run --no-sync python - <<'PY'
+          import importlib.metadata
+          import json
+          import tomllib
           from pathlib import Path
 
-          import quant_platform_kit
-          import us_equity_strategies
+          lock = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))
+          for package in lock["package"]:
+              if package["name"] not in {"quant-platform-kit", "us-equity-strategies"}:
+                  continue
+              expected = package["source"]["git"].rsplit("#", 1)[1]
+              installed = json.loads(importlib.metadata.distribution(package["name"]).read_text("direct_url.json") or "{}")
+              assert installed.get("vcs_info", {}).get("commit_id") == expected, package["name"]
+          PY
+          uv run --no-sync python - <<'PY'
           from quant_platform_kit.common.port_adapters import CallableNotificationPort, CallablePortfolioPort
           from quant_platform_kit.strategy_lifecycle.live_equity import stamp_consecutive_losses_on_snapshot
           from hk_equity_strategies import resolve_canonical_profile as resolve_hk_canonical_profile
           from us_equity_strategies import resolve_canonical_profile
 
-          assert Path(quant_platform_kit.__file__).resolve().is_relative_to(Path("external/QuantPlatformKit/src").resolve())
-          assert Path(us_equity_strategies.__file__).resolve().is_relative_to(Path("external/UsEquityStrategies/src").resolve())
           assert CallableNotificationPort
           assert CallablePortfolioPort
           assert stamp_consecutive_losses_on_snapshot

@@ -65,7 +65,7 @@ def test_dependency_pin_guard_is_blocking_in_ci() -> None:
     assert "continue-on-error" not in step
 
 
-def test_ci_editable_shared_checkouts_use_locked_refs() -> None:
+def test_ci_shared_checkouts_use_locked_refs() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
     assert "name: Read locked shared dependency refs" in workflow
@@ -73,6 +73,53 @@ def test_ci_editable_shared_checkouts_use_locked_refs() -> None:
     assert "steps.locked-shared-refs.outputs.us_equity_strategies" in workflow
     assert "git -C external/QuantPlatformKit rev-parse HEAD" in workflow
     assert "git -C external/UsEquityStrategies rev-parse HEAD" in workflow
-    assert workflow.index("name: Install editable shared repositories") < workflow.index(
+    assert workflow.index("name: Verify shared repository refs") < workflow.index(
         "name: Smoke import pinned shared packages"
     )
+
+
+def test_ci_uses_frozen_packages_without_editable_overrides() -> None:
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    assert "uv pip install --no-deps -e" not in workflow
+    assert "uv sync --frozen --extra test" in workflow
+    assert "uv lock --check" in workflow
+
+
+def test_ci_installed_shared_identity_matches_lock(monkeypatch) -> None:
+    import importlib.metadata
+    import json
+    import textwrap
+    import tomllib
+
+    import pytest
+
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    smoke = workflow.split("name: Smoke import pinned shared packages", 1)[1]
+    code = textwrap.dedent(smoke.split("<<'PY'\n", 1)[1].split("\n          PY", 1)[0])
+    packages = tomllib.loads(Path("uv.lock").read_text(encoding="utf-8"))["package"]
+    refs = {
+        package["name"]: package["source"]["git"].rsplit("#", 1)[1]
+        for package in packages
+        if package["name"] in {"quant-platform-kit", "us-equity-strategies"}
+    }
+    identities = {name: {"vcs_info": {"commit_id": ref}} for name, ref in refs.items()}
+
+    class Distribution:
+        def __init__(self, name):
+            self.name = name
+
+        def read_text(self, filename):
+            assert filename == "direct_url.json"
+            return json.dumps(identities[self.name])
+
+    monkeypatch.setattr(importlib.metadata, "distribution", Distribution)
+    exec(code, {})
+    for name in refs:
+        with monkeypatch.context() as context:
+            context.setitem(identities, name, {"vcs_info": {"commit_id": "0" * 40}})
+            with pytest.raises(AssertionError):
+                exec(code, {})
+        with monkeypatch.context() as context:
+            context.setitem(identities, name, {"dir_info": {"editable": True}})
+            with pytest.raises(AssertionError):
+                exec(code, {})
