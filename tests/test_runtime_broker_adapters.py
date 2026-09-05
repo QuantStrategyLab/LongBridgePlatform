@@ -15,6 +15,26 @@ from application.runtime_broker_adapters import build_runtime_broker_adapters
 from quant_platform_kit.common.models import ExecutionReport, OrderIntent
 
 
+def test_broker_capital_survives_portfolio_mapping_without_replacing_sizing_equity():
+    capital = {"net_assets": 5000.0, "currency": "HKD", "observed_at": datetime.now(timezone.utc)}
+    adapters = build_runtime_broker_adapters(
+        strategy_symbols=("00700",), account_hash="account-scope",
+        fetch_last_price_fn=lambda *_args: None,
+        fetch_strategy_account_state_fn=lambda *_args: {
+            "available_cash": 100.0, "total_strategy_equity": 200.0,
+            "market_values": {"00700": 100.0}, "quantities": {"00700": 1},
+            "broker_capital": capital,
+        },
+        submit_order_fn=lambda *_args: None, currency="HKD", symbol_suffix=".HK",
+    )
+    snapshot = adapters.build_portfolio_port(None, None).get_portfolio_snapshot()
+    assert snapshot.total_equity == 200.0
+    assert snapshot.buying_power == 100.0
+    assert snapshot.positions[0].quantity == 1
+    assert snapshot.metadata["broker_capital"] == capital
+    assert snapshot.metadata["account_hash"] == "account-scope"
+
+
 def test_build_market_data_port_normalizes_symbols_and_caches_quotes():
     observed = {"quotes": [], "history": []}
     openapi_module = types.ModuleType("longport.openapi")

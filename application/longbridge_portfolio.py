@@ -1,8 +1,33 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from datetime import datetime, timezone
 import math
 from typing import Any
+
+from quant_platform_kit.common.broker_reconciliation import calculate_broker_observation_sha256
+
+
+def _broker_capital(account_balance, currency: str, observed_at: datetime) -> dict | None:
+    balances = [account for account in account_balance if getattr(account, "currency", None) == currency]
+    if len(balances) != 1:
+        return None
+    raw_equity = getattr(balances[0], "net_assets", None)
+    if isinstance(raw_equity, bool):
+        return None
+    try:
+        equity = float(raw_equity)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(equity) or equity <= 0.0:
+        return None
+    # This is a request observation time, not a broker valuation timestamp.
+    source = {"net_assets": equity, "currency": currency, "observed_at": observed_at.isoformat()}
+    return {
+        **source,
+        "observed_at": observed_at,
+        "source_digest_sha256": calculate_broker_observation_sha256(source),
+    }
 
 
 def _normalize_symbol(symbol: str) -> str:
@@ -54,6 +79,7 @@ def fetch_strategy_account_state(
     trading_currency = str(cash_currency or "USD").strip().upper()
     available_cash = 0.0
     cash_by_currency: dict[str, float] = {}
+    observed_at = datetime.now(timezone.utc)
     try:
         account_balance = t_ctx.account_balance()
     except Exception as exc:
@@ -151,6 +177,7 @@ def fetch_strategy_account_state(
             )
 
     return {
+        "broker_capital": _broker_capital(account_balance, trading_currency, observed_at),
         "available_cash": available_cash,
         "cash_by_currency": cash_by_currency,
         "market_values": market_values,
