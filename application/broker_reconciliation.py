@@ -266,6 +266,24 @@ def collect_read_only_reconciliation_observations(
         start_at=reference_now - lookback,
         end_at=reference_now,
     )
+    # The history endpoint excludes today's trades; the SDK hides has_more.
+    today_executions = _read_collection(trade_context, "today_executions")
+    normalized_executions: dict[str, dict[str, object]] = {}
+    for execution in (*executions, *today_executions):
+        traded_at = getattr(execution, "trade_done_at", None)
+        if not isinstance(traded_at, datetime):
+            raise LongBridgeReconciliationReadError("LongBridge reconciliation received an invalid execution time.")
+        # longport 3.0.23 converts Unix timestamps to local naive datetimes.
+        traded_at = traded_at.astimezone(timezone.utc)
+        if not reference_now - lookback <= traded_at <= reference_now:
+            continue
+        record = _normalize_execution(execution)
+        record["trade_done_at"] = traded_at.isoformat()
+        trade_id = str(record["trade_id"])
+        previous = normalized_executions.get(trade_id)
+        if previous is not None and previous != record:
+            raise LongBridgeReconciliationReadError("LongBridge reconciliation received conflicting executions.")
+        normalized_executions[trade_id] = record
     account_channels: list[str] = []
     normalized_positions: list[dict[str, object]] = []
     for channel in channels:
@@ -286,12 +304,12 @@ def collect_read_only_reconciliation_observations(
         positions=_canonical_records(normalized_positions),
         cash=_canonical_records([_normalize_cash(balance) for balance in balances]),
         open_orders=_canonical_records(open_orders),
-        recent_executions=_canonical_records([_normalize_execution(execution) for execution in executions]),
+        recent_executions=_canonical_records(list(normalized_executions.values())),
         positions_complete=True,
         cash_complete=True,
         # A bounded history query cannot prove every long-lived active order is present.
         open_orders_complete=False,
-        recent_executions_complete=True,
+        recent_executions_complete=len(executions) < 1000,
     )
 
 
