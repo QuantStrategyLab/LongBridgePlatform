@@ -361,7 +361,8 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(len(observed["payloads"]), 1)
         self.assertEqual(observed["payloads"][0][0]["chat_id"], "chat-1")
         self.assertIn("LongBridge strategy run failed", observed["payloads"][0][0]["text"])
-        self.assertIn("RuntimeError: boom", observed["payloads"][0][0]["text"])
+        self.assertIn("RuntimeError", observed["payloads"][0][0]["text"])
+        self.assertNotIn("boom", observed["payloads"][0][0]["text"])
 
     def test_handle_trigger_runtime_error_fallback_uses_chinese_copy(self):
         module = load_module(notify_lang="zh")
@@ -387,7 +388,8 @@ class RequestHandlingTests(unittest.TestCase):
         text = observed["payloads"][0][0]["text"]
         self.assertIn("LongBridge 策略运行失败", text)
         self.assertIn("服务:", text)
-        self.assertIn("错误: RuntimeError: boom", text)
+        self.assertIn("错误: RuntimeError", text)
+        self.assertNotIn("boom", text)
 
     def test_handle_trigger_rejects_get_without_running_strategy(self):
         module = load_module()
@@ -766,10 +768,11 @@ class RequestHandlingTests(unittest.TestCase):
         )
         self.assertEqual(len(observed["notifications"]), 1)
         notification = observed["notifications"][0]
-        self.assertIn("probe failed", notification["detailed_text"])
-        self.assertIn("Traceback", notification["detailed_text"])
+        self.assertNotIn("probe failed", notification["detailed_text"])
+        self.assertNotIn("Traceback", notification["detailed_text"])
         self.assertNotIn("Traceback", notification["compact_text"])
-        self.assertIn("RuntimeError: probe failed", notification["compact_text"])
+        self.assertIn("RuntimeError", notification["compact_text"])
+        self.assertNotIn("probe failed", notification["compact_text"])
         self.assertLessEqual(len(notification["compact_text"]), 3500)
 
     def test_run_strategy_emits_structured_runtime_events(self):
@@ -864,9 +867,10 @@ class RequestHandlingTests(unittest.TestCase):
         )
 
         self.assertFalse(module.run_strategy())
-        self.assertIn("Traceback", observed["detailed_text"])
+        self.assertNotIn("Traceback", observed["detailed_text"])
         self.assertNotIn("Traceback", observed["compact_text"])
-        self.assertIn("RuntimeError:", observed["compact_text"])
+        self.assertIn("RuntimeError", observed["compact_text"])
+        self.assertNotIn("x" * 100, repr(observed))
         self.assertLessEqual(len(observed["compact_text"]), 3500)
         delivery_summary = observed["report"]["summary"][
             "notification_delivery_summary"
@@ -1222,3 +1226,87 @@ class RequestHandlingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SanitizedRuntimeErrorTests(unittest.TestCase):
+    marker = "SYNTHETIC_SECRET_DO_NOT_EMIT"
+
+    def _raise_sensitive(self, *args, **kwargs):
+        raise RuntimeError(self.marker)
+
+    def _assert_sanitized(self, output):
+        self.assertNotIn(self.marker, output)
+        self.assertNotIn("Traceback", output)
+        self.assertIn("RuntimeError", output)
+
+    def test_compact_and_route_failure_omit_exception_body(self):
+        import io
+        from contextlib import redirect_stdout, redirect_stderr
+        for language in ("en", "zh"):
+            with self.subTest(language=language):
+                module = load_module(notify_lang=language)
+                sent = []
+                module.TG_TOKEN, module.TG_CHAT_ID = "fake-token", "fake-chat"
+                module.requests.post = lambda *args, **kwargs: sent.append(kwargs["json"])
+                module.run_strategy = self._raise_sensitive
+                output = io.StringIO()
+                with redirect_stdout(output), redirect_stderr(output):
+                    with module.app.test_request_context("/run", method="POST"):
+                        result = module.handle_trigger()
+                self.assertEqual(result, ("Error", 500))
+                self._assert_sanitized(output.getvalue() + repr(sent))
+                self._assert_sanitized(module._compact_error_notification(RuntimeError(self.marker)))
+
+    def test_strategy_and_probe_failures_sanitize_all_output_sinks(self):
+        import io
+        from contextlib import redirect_stdout, redirect_stderr
+        for probe in (False, True):
+            for persist_failure in (False, True):
+                with self.subTest(probe=probe, persist_failure=persist_failure):
+                    module = load_module()
+                    events, notifications, reports = [], [], []
+                    report = {"status": "pending", "dry_run": True}
+                    def persist(payload):
+                        reports.append(dict(payload))
+                        if persist_failure:
+                            self._raise_sensitive()
+                        return "/tmp/synthetic-report.json"
+                    reporting = types.SimpleNamespace(
+                        start_run=lambda: (types.SimpleNamespace(run_id="synthetic-run"), report),
+                        log_event=lambda *args, **kwargs: events.append(kwargs),
+                        persist_execution_report=persist,
+                    )
+                    composer = types.SimpleNamespace(
+                        build_reporting_adapters=lambda: reporting,
+                        build_notification_adapters=lambda **kwargs: types.SimpleNamespace(
+                            publish_cycle_notification=lambda **payload: notifications.append(payload)),
+                        load_strategy_plugin_signals=lambda *args: ((), None),
+                        attach_strategy_plugin_report=lambda *args, **kwargs: None,
+                        with_prefix=lambda text: text,
+                        build_rebalance_runtime=lambda **kwargs: types.SimpleNamespace(bootstrap=self._raise_sensitive),
+                        build_rebalance_config=lambda **kwargs: types.SimpleNamespace(),
+                    )
+                    module.build_composer = lambda **kwargs: composer
+                    module.is_market_open_now = lambda **kwargs: True
+                    module.dca_execution_unsupported_reason = lambda *args, **kwargs: None
+                    module.run_rebalance_cycle = self._raise_sensitive
+                    output = io.StringIO()
+                    with patch.object(module, "submit_order") as submit, redirect_stdout(output), redirect_stderr(output):
+                        result = module.run_probe() if probe else module.run_strategy(force_run=True, validation_only=True)
+                    self.assertEqual(result, ("Error", 500) if probe else False)
+                    submit.assert_not_called()
+                    self.assertEqual(report["status"], "error")
+                    self.assertEqual(report["errors"][0]["stage"], "health_probe" if probe else "strategy_cycle")
+                    self.assertTrue(notifications)
+                    self.assertEqual(len(reports), 1)
+                    self._assert_sanitized(output.getvalue() + repr(events) + repr(notifications) + repr(reports))
+
+    def test_probe_setup_failure_without_composer_is_sanitized(self):
+        import io
+        from contextlib import redirect_stdout, redirect_stderr
+        module = load_module()
+        module.build_composer = self._raise_sensitive
+        output = io.StringIO()
+        with redirect_stdout(output), redirect_stderr(output):
+            self.assertEqual(module.run_probe(), ("Error", 500))
+        self._assert_sanitized(output.getvalue())
