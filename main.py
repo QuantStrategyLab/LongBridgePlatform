@@ -7,7 +7,6 @@ import json
 import importlib
 import os
 import time
-import traceback
 from datetime import datetime
 
 from flask import Flask, request
@@ -265,10 +264,7 @@ def _compact_error_notification(
     title: str | None = None,
     prefix: str = "",
 ) -> str:
-    detail = " ".join(str(exc).split())
     error_text = type(exc).__name__
-    if detail:
-        error_text = f"{error_text}: {detail}"
     message = f"{title or t('error_title')}\n{prefix}{error_text}"
     if len(message) <= COMPACT_ERROR_NOTIFICATION_MAX_CHARS:
         return message
@@ -553,9 +549,7 @@ def _runtime_error_notification_targets() -> tuple[tuple[str, str], ...]:
 
 
 def _runtime_error_notification_message(exc: Exception, *, route_label: str) -> str:
-    error_text = f"{type(exc).__name__}: {exc}"
-    if len(error_text) > 1200:
-        error_text = error_text[:1197] + "..."
+    error_text = type(exc).__name__
     if str(NOTIFY_LANG or "").strip().lower().startswith("zh"):
         return "\n".join(
             (
@@ -612,8 +606,7 @@ def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
 
 
 def _handle_route_runtime_error(exc: Exception, *, route_label: str):
-    print(f"LongBridge route failed before strategy-cycle handling: {type(exc).__name__}: {exc}", flush=True)
-    traceback.print_exc()
+    print(f"LongBridge route failed before strategy-cycle handling: {type(exc).__name__}", flush=True)
     _notify_runtime_error(exc, route_label=route_label)
     return "Error", 500
 
@@ -848,7 +841,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         append_runtime_report_error(
             report,
             stage="strategy_cycle",
-            message=str(exc),
+            message="strategy_cycle_failed",
             error_type=type(exc).__name__,
         )
         reporting_adapters.log_event(
@@ -857,12 +850,11 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             message="Strategy execution failed",
             severity="ERROR",
             error_type=type(exc).__name__,
-            error_message=str(exc),
+            error_message="strategy_cycle_failed",
         )
-        err = traceback.format_exc()
         try:
             notification_adapters.publish_cycle_notification(
-                detailed_text=f"Strategy error:\n{err}",
+                detailed_text=f"Strategy error: {type(exc).__name__}",
                 compact_text=_compact_error_notification(exc),
             )
         except Exception as notification_exc:
@@ -907,7 +899,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             report_path = reporting_adapters.persist_execution_report(report)
             print(f"execution_report {report_path}", flush=True)
         except Exception as persist_exc:
-            print(f"failed to persist execution report: {persist_exc}", flush=True)
+            print(f"failed to persist execution report: {type(persist_exc).__name__}", flush=True)
 
 
 def run_probe(*, response_body: str = "Probe OK"):
@@ -958,7 +950,7 @@ def run_probe(*, response_body: str = "Probe OK"):
             append_runtime_report_error(
                 report,
                 stage="health_probe",
-                message=str(exc),
+                message="health_probe_failed",
                 error_type=type(exc).__name__,
             )
             finalize_runtime_report(report, status="error")
@@ -970,9 +962,11 @@ def run_probe(*, response_body: str = "Probe OK"):
                 severity="ERROR",
                 execution_window="probe",
                 error_type=type(exc).__name__,
-                error_message=str(exc),
+                error_message="health_probe_failed",
             )
-        err = f"{t('health_probe_title')}\n{t('health_probe_error_prefix')}{traceback.format_exc()}"
+        err = _compact_error_notification(
+            exc, title=t("health_probe_title"), prefix=t("health_probe_error_prefix"),
+        )
         if composer is not None:
             composer.build_notification_adapters().publish_cycle_notification(
                 detailed_text=err,
@@ -991,7 +985,7 @@ def run_probe(*, response_body: str = "Probe OK"):
                 report_path = reporting_adapters.persist_execution_report(report)
                 print(f"execution_report {report_path}", flush=True)
         except Exception as persist_exc:
-            print(f"failed to persist execution report: {persist_exc}", flush=True)
+            print(f"failed to persist execution report: {type(persist_exc).__name__}", flush=True)
 
 
 def _paper_command_consumer_session_date() -> str:
