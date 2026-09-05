@@ -48,6 +48,47 @@ class FakePositionsResponse:
 
 
 class LongBridgeLocalHelpersTests(unittest.TestCase):
+    def test_broker_capital_uses_one_balance_read_without_changing_strategy_equity(self):
+        from datetime import datetime, timezone
+
+        observed = datetime(2026, 9, 5, tzinfo=timezone.utc)
+        balance = types.SimpleNamespace(
+            currency="USD", net_assets="2500.50", buy_power="99999",
+            max_finance_amount="99999", remaining_finance_amount="99999",
+            cash_infos=[types.SimpleNamespace(currency="USD", available_cash=100.0)],
+        )
+        trade = types.SimpleNamespace(
+            account_balance=unittest.mock.Mock(return_value=[balance]),
+            stock_positions=lambda: FakePositionsResponse(),
+        )
+        with patch("application.longbridge_portfolio.datetime", create=True) as clock:
+            clock.now.return_value = observed
+            state = fetch_strategy_account_state(FakeQuoteContext(), trade, ["SOXL"])
+        trade.account_balance.assert_called_once_with()
+        self.assertEqual(state["total_strategy_equity"], 250.0)
+        self.assertEqual(state["broker_capital"]["net_assets"], 2500.50)
+        self.assertEqual(state["broker_capital"]["currency"], "USD")
+        self.assertEqual(state["broker_capital"]["observed_at"], observed)
+        self.assertEqual(len(state["broker_capital"]["source_digest_sha256"]), 64)
+
+    def test_broker_capital_withholds_missing_ambiguous_or_invalid_denominator(self):
+        for balances in (
+            [],
+            [types.SimpleNamespace(currency="HKD", net_assets=1000)],
+            [types.SimpleNamespace(net_assets=1000)],
+            [types.SimpleNamespace(currency="USD")],
+            [types.SimpleNamespace(currency="USD", net_assets=1000)] * 2,
+            *([types.SimpleNamespace(currency="USD", net_assets=value)]
+              for value in (None, True, "bad", "NaN", "Infinity", "-Infinity", 0, -1)),
+        ):
+            with self.subTest(balances=balances):
+                trade = types.SimpleNamespace(
+                    account_balance=lambda: balances,
+                    stock_positions=lambda: types.SimpleNamespace(channels=[]),
+                )
+                state = fetch_strategy_account_state(FakeQuoteContext(), trade, [])
+                self.assertIsNone(state["broker_capital"])
+
     def test_fetch_strategy_account_state_rejects_account_balance_failure(self):
         class BalanceFailingTradeContext:
             def account_balance(self):

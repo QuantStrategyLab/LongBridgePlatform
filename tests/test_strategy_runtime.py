@@ -1,5 +1,7 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import strategy_runtime as strategy_runtime_module
@@ -175,6 +177,142 @@ def _build_runtime_settings(
 
 
 class StrategyRuntimeTests(unittest.TestCase):
+    def _capital_runtime(self, *, currency="USD", entrypoint=None):
+        entrypoint = entrypoint or _SemiconductorEntrypoint()
+        settings = replace(
+            _build_runtime_settings(entrypoint.manifest.profile),
+            trading_currency=currency,
+            runtime_target=SimpleNamespace(
+                platform_id="longbridge", account_scope="HK",
+                strategy_profile=entrypoint.manifest.profile,
+                service_name="test-runtime", deployment_selector=None,
+            ),
+        )
+        return strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            runtime_settings=settings,
+        )
+
+    def _capital_snapshot(self, **overrides):
+        capital = {
+            "net_assets": 2000.0, "currency": "USD", "observed_at": datetime.now(timezone.utc),
+            "source_digest_sha256": "a" * 64,
+            **overrides,
+        }
+        return PortfolioSnapshot(
+            as_of=datetime.now(timezone.utc), total_equity=200.0,
+            buying_power=100.0, cash_balance=100.0,
+            metadata={"account_hash": "HK", "broker_capital": capital},
+        )
+
+    def test_capital_context_uses_broker_denominator_and_real_qpk_gate(self):
+        from quant_platform_kit.common.strategy_contracts import PositionTarget
+        from quant_platform_kit.risk.gate import apply_risk_gate
+
+        class Entrypoint(_SemiconductorEntrypoint):
+            def evaluate(self, ctx):
+                self.ctx = ctx
+                return apply_risk_gate(
+                    StrategyDecision(positions=(PositionTarget(symbol="SPY", target_value=50.0),)),
+                    portfolio_snapshot=ctx.portfolio, product_leverage_factors={"SPY": 1},
+                    enforce_value_target_exposure=True, **ctx.capabilities,
+                )
+
+        entrypoint = Entrypoint()
+        runtime = self._capital_runtime(entrypoint=entrypoint)
+        with patch.object(runtime.__class__, "_stamp_portfolio_risk_metadata", side_effect=lambda inputs: dict(inputs)):
+            result = runtime.evaluate(translator=str, derived_indicators={}, portfolio_snapshot=self._capital_snapshot())
+        self.assertEqual(result.decision.diagnostics["risk_gate"], "APPROVE")
+        self.assertEqual(entrypoint.ctx.capabilities["capital_base"].reported_equity, 2000.0)
+        self.assertEqual(entrypoint.ctx.portfolio.total_equity, 200.0)
+
+    def test_capital_context_withholds_stale_future_wrong_currency_or_account(self):
+        from quant_platform_kit.common.capital_base import validate_capital_base
+
+        runtime = self._capital_runtime()
+        self.assertFalse(runtime._build_capital_base_capabilities({}))
+        self.assertFalse(runtime._build_capital_base_capabilities({"portfolio_snapshot": replace(self._capital_snapshot(), metadata={})}))
+        for overrides in (
+            {"currency": "HKD"}, {"net_assets": float("nan")}, {"net_assets": 0},
+            {"source_digest_sha256": ""}, {"observed_at": None},
+            {"observed_at": datetime.now(timezone.utc) - timedelta(seconds=301)},
+            {"observed_at": datetime.now(timezone.utc) + timedelta(seconds=30)},
+        ):
+            with self.subTest(overrides=overrides):
+                caps = runtime._build_capital_base_capabilities({"portfolio_snapshot": self._capital_snapshot(**overrides)})
+                self.assertFalse(caps)
+        snapshot = self._capital_snapshot()
+        snapshot = replace(snapshot, metadata={**snapshot.metadata, "account_hash": "different"})
+        self.assertFalse(runtime._build_capital_base_capabilities({"portfolio_snapshot": snapshot}))
+        caps = runtime._build_capital_base_capabilities({"portfolio_snapshot": self._capital_snapshot()})
+        self.assertTrue(validate_capital_base(caps["capital_base"], binding=caps["capital_base_binding"]).is_valid)
+        for change in ({"account_scope": "other"}, {"runtime_scope": "other"}, {"strategy_scope": "other"}):
+            self.assertFalse(validate_capital_base(caps["capital_base"], binding=replace(caps["capital_base_binding"], **change)).is_valid)
+
+    def test_capital_context_supports_other_currency_and_feature_snapshot_profile(self):
+        entrypoint = _TechEntrypoint()
+        runtime = self._capital_runtime(currency="HKD", entrypoint=entrypoint)
+        snapshot = self._capital_snapshot(currency="HKD")
+        request = SimpleNamespace(
+            entrypoint=entrypoint, runtime_adapter=runtime.runtime_adapter,
+            as_of=datetime.now(timezone.utc),
+            available_inputs={"feature_snapshot": [], "portfolio_snapshot": snapshot},
+            runtime_config={},
+        )
+        ctx = runtime._build_feature_snapshot_context(request)
+        self.assertEqual(ctx.capabilities["capital_base_binding"].target_currency, "HKD")
+        self.assertEqual(ctx.capabilities["capital_base_binding"].strategy_scope, entrypoint.manifest.profile)
+        self.assertEqual(ctx.capabilities["capital_base"].fx_rate_to_target, 1.0)
+        self.assertIs(ctx.portfolio, snapshot)
+
+    def test_actual_pinned_soxl_keeps_risk_rejection_after_capital_wiring(self):
+        from application.longbridge_portfolio import fetch_strategy_account_state
+        from application.runtime_broker_adapters import build_runtime_broker_adapters
+        from us_equity_strategies import get_strategy_entrypoint
+
+        runtime = self._capital_runtime(entrypoint=get_strategy_entrypoint("soxl_soxx_trend_income"))
+        indicators = {
+            "soxl": {"price": 80.0, "ma_trend": 75.0},
+            "soxx": {
+                "price": 80.0, "ma_trend": 75.0, "realized_volatility_10": 0.20,
+                "realized_volatility_10_dynamic_threshold": 0.50,
+                "realized_volatility_10_dynamic_sample_count": 252.0,
+            },
+        }
+        trade = SimpleNamespace(
+            account_balance=lambda: [SimpleNamespace(
+                currency="USD", net_assets=2000.0,
+                cash_infos=[SimpleNamespace(currency="USD", available_cash=200.0, frozen_cash=1800.0)],
+            )],
+            stock_positions=lambda: SimpleNamespace(channels=[]),
+        )
+        adapters = build_runtime_broker_adapters(
+            strategy_symbols=("SOXL", "SOXX", "BOXX"), account_hash="HK",
+            fetch_last_price_fn=lambda *_args: None,
+            fetch_strategy_account_state_fn=lambda quote, broker: fetch_strategy_account_state(
+                quote, broker, ["SOXL", "SOXX", "BOXX"],
+            ),
+            submit_order_fn=lambda *_args: self.fail("synthetic risk test must not submit"),
+        )
+        snapshot = adapters.build_portfolio_port(None, trade).get_portfolio_snapshot()
+        with (
+            patch.object(runtime.__class__, "_stamp_portfolio_risk_metadata", side_effect=lambda inputs: dict(inputs)),
+            patch("us_equity_strategies.entrypoints.record_strategy_decision"),
+        ):
+            missing = runtime.evaluate(
+                translator=lambda key, **kwargs: key, derived_indicators=indicators,
+                portfolio_snapshot=replace(snapshot, metadata={}),
+            ).decision
+            connected = runtime.evaluate(
+                translator=lambda key, **kwargs: key, derived_indicators=indicators, portfolio_snapshot=snapshot,
+            ).decision
+        self.assertEqual(missing.risk_flags, ("rejected:capital_base",))
+        self.assertNotIn("rejected:capital_base", connected.risk_flags)
+        self.assertEqual(connected.diagnostics["value_target_exposure_policy"], "enforced")
+        self.assertEqual(connected.diagnostics["risk_gate"], "REJECT")
+        self.assertEqual(connected.positions, ())
+
     def test_market_history_runtime_loads_loader_into_context(self):
         class _FixedDatetime:
             @classmethod

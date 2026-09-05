@@ -5,6 +5,14 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
 from quant_platform_kit.common.feature_snapshot import load_feature_snapshot_guarded
+from quant_platform_kit.common.capital_base import (
+    CapitalBaseBinding,
+    CapitalScope,
+    CapitalValuationBasis,
+    build_capital_base_snapshot,
+    validate_capital_base,
+)
+from quant_platform_kit.common.models import PortfolioSnapshot
 from quant_platform_kit.common.feature_snapshot_runtime import (
     FeatureSnapshotRuntimeSettings,
     evaluate_feature_snapshot_strategy,
@@ -73,6 +81,63 @@ class LoadedStrategyRuntime:
         )
         return resolved
 
+    def _build_capital_base_capabilities(self, available_inputs: Mapping[str, Any]) -> dict[str, Any]:
+        snapshot = available_inputs.get("portfolio_snapshot")
+        target = self.runtime_settings.runtime_target
+        metadata = getattr(snapshot, "metadata", None)
+        if target is None or not isinstance(metadata, Mapping):
+            return {}
+        source = metadata.get("broker_capital")
+        if not isinstance(source, Mapping):
+            return {}
+        settings = self.runtime_settings
+        if (
+            target.platform_id != "longbridge"
+            or target.account_scope != settings.account_region
+            or target.strategy_profile != self.profile
+            or metadata.get("account_hash") != (settings.account_prefix or settings.account_region)
+            or source.get("currency") != settings.trading_currency
+        ):
+            return {}
+        try:
+            binding = CapitalBaseBinding(
+                account_scope=target.account_scope,
+                runtime_scope=target.service_name or target.deployment_selector,
+                strategy_scope=self.profile,
+                target_currency=settings.trading_currency,
+                capital_scope=CapitalScope.ACCOUNT,
+                valuation_basis=CapitalValuationBasis.BROKER_ACCOUNT_NET_LIQUIDATION,
+            )
+            # Keep the managed portfolio/sizing equity unchanged. Only the risk
+            # denominator uses the broker's independently reported net assets.
+            capital = build_capital_base_snapshot(
+                PortfolioSnapshot(as_of=source.get("observed_at"), total_equity=source.get("net_assets")),
+                account_scope=binding.account_scope,
+                runtime_scope=binding.runtime_scope,
+                strategy_scope=binding.strategy_scope,
+                reported_currency=source.get("currency"),
+                target_currency=binding.target_currency,
+                fx_rate_to_target=1.0,
+                source_digest_sha256=source.get("source_digest_sha256"),
+                capital_scope=binding.capital_scope,
+                valuation_basis=binding.valuation_basis,
+            )
+            if not validate_capital_base(capital, binding=binding).is_valid:
+                return {}
+        except (TypeError, ValueError, AttributeError):
+            return {}
+        return {"capital_base": capital, "capital_base_binding": binding}
+
+    def _build_feature_snapshot_context(self, request):
+        return build_strategy_context_from_available_inputs(
+            entrypoint=request.entrypoint,
+            runtime_adapter=request.runtime_adapter,
+            as_of=request.as_of,
+            available_inputs=request.available_inputs,
+            runtime_config=request.runtime_config,
+            capabilities=self._build_capital_base_capabilities(request.available_inputs),
+        )
+
     def evaluate(
         self,
         *,
@@ -110,6 +175,7 @@ class LoadedStrategyRuntime:
             as_of=as_of,
             available_inputs=resolved_available_inputs,
             runtime_config=runtime_config,
+            capabilities=self._build_capital_base_capabilities(resolved_available_inputs),
         )
         decision = self.entrypoint.evaluate(ctx)
         return StrategyEvaluationResult(
@@ -156,6 +222,7 @@ class LoadedStrategyRuntime:
             include_strategy_display_name=True,
             set_run_as_of=True,
             snapshot_loader=load_feature_snapshot_guarded,
+            context_builder=self._build_feature_snapshot_context,
         )
         return StrategyEvaluationResult(
             decision=result.decision,

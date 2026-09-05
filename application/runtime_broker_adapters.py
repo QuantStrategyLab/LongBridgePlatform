@@ -182,7 +182,10 @@ class LongBridgeBrokerAdapters:
         return build_portfolio_snapshot_from_account_state(
             account_state,
             strategy_symbols=self.strategy_symbols,
-            metadata={"account_hash": self.account_hash},
+            metadata={
+                "account_hash": self.account_hash,
+                "broker_capital": account_state.get("broker_capital"),
+            },
         )
 
     def build_account_state_from_snapshot(self, snapshot):
