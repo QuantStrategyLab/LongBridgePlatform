@@ -59,12 +59,27 @@ def test_runtime_monitor_workflows_use_frozen_runtime_environment() -> None:
     assert "traceback|importerror|modulenotfounderror" in lifecycle.lower()
 
 
-def test_cloud_run_deployment_requires_manual_dispatch() -> None:
-    workflow = (ROOT / ".github/workflows/sync-cloud-run-env.yml").read_text()
+def test_cloud_run_deployment_requires_manual_dispatch_and_lifecycle_observes_completed_sync() -> None:
+    deploy = (ROOT / ".github/workflows/sync-cloud-run-env.yml").read_text()
+    lifecycle = (ROOT / ".github/workflows/runtime-target-lifecycle.yml").read_text()
 
-    assert "workflow_run:" not in workflow
-    assert "workflow_dispatch:" in workflow
-    assert "if: github.event_name == 'workflow_dispatch'" in workflow
+    assert "workflow_run:" not in deploy
+    assert "workflow_dispatch:" in deploy
+    assert "if: github.event_name == 'workflow_dispatch'" in deploy
+
+    assert "workflow_run:" in lifecycle
+    assert 'workflows: ["Deploy Cloud Run"]' in lifecycle
+    assert "types: [completed]" in lifecycle
+    assert "github.event.workflow_run.conclusion" not in lifecycle
+    assert 'observe-gcp: "true"' in lifecycle
+    assert "gcp-project: ${{ env.GCP_PROJECT_ID }}" in lifecycle
+    assert "cloud-run-region: ${{ matrix.target.region }}" in lifecycle
+    assert "cloud-run-service: ${{ matrix.target.service }}" in lifecycle
+    assert "scheduler-location: ${{ matrix.target.region }}" in lifecycle
+    assert "gh workflow run" not in lifecycle
+    assert "gcloud run deploy" not in lifecycle
+    assert "gcloud run services update" not in lifecycle
+    assert "gcloud scheduler jobs update" not in lifecycle
 
 
 def test_heartbeat_script_does_not_import_project_runtime_dependencies() -> None:
