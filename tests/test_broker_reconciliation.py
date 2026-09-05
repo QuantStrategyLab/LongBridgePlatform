@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -85,6 +86,7 @@ def _read_only_trade_context(*, fail_surface: str | None = None):
         ),
         history_orders=read("history_orders", []),
         history_executions=read("history_executions", []),
+        today_executions=read("today_executions", []),
         submit_order=lambda *_args, **_kwargs: pytest.fail("must not submit orders"),
         cancel_order=lambda *_args, **_kwargs: pytest.fail("must not cancel orders"),
         replace_order=lambda *_args, **_kwargs: pytest.fail("must not replace orders"),
@@ -150,6 +152,7 @@ def test_read_only_observations_keep_partial_identity_and_open_order_scope_block
         "stock_positions",
         "history_orders",
         "history_executions",
+        "today_executions",
     ]
     assert observations.account_identity_match is False
     assert observations.open_orders_complete is False
@@ -291,3 +294,110 @@ def test_paper_runtime_target_reads_paper_execution_ledger(monkeypatch):
     )
 
     assert observed_kwargs["execution_mode"] == "paper"
+
+
+def _execution(trade_id, when, *, quantity="1"):
+    return SimpleNamespace(
+        order_id="test-order", trade_id=trade_id, symbol="SOXL.US",
+        trade_done_at=when, quantity=quantity, price="10",
+    )
+
+
+def test_recent_executions_include_today_and_deduplicate_window_overlap():
+    context, _calls = _read_only_trade_context()
+    now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+    old = _execution("old", now - timedelta(days=1))
+    current = _execution("current", now - timedelta(hours=1))
+    context.history_executions = lambda **_kwargs: [old, current]
+    context.today_executions = lambda: [current, _execution("future", now + timedelta(seconds=1))]
+
+    observations = reconciliation.collect_read_only_reconciliation_observations(
+        object(), context, account_scope="SG", now=now,
+    )
+
+    assert {row["trade_id"] for row in observations.recent_executions} == {"old", "current"}
+    assert len(observations.recent_executions) == 2
+    assert observations.recent_executions_complete is True
+    assert observations.account_identity_match is False
+    assert observations.open_orders_complete is False
+
+
+def test_today_only_execution_is_not_silently_omitted():
+    context, _calls = _read_only_trade_context()
+    now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+    context.today_executions = lambda: [_execution("today-only", now)]
+
+    observations = reconciliation.collect_read_only_reconciliation_observations(
+        object(), context, account_scope="PAPER", now=now,
+    )
+
+    assert [row["trade_id"] for row in observations.recent_executions] == ["today-only"]
+
+
+def test_result_at_sdk_limit_cannot_claim_complete_executions():
+    context, _calls = _read_only_trade_context()
+    now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+    context.history_executions = lambda **_kwargs: [_execution(str(i), now) for i in range(1000)]
+
+    observations = reconciliation.collect_read_only_reconciliation_observations(
+        object(), context, account_scope="SG", now=now,
+    )
+
+    assert observations.recent_executions_complete is False
+
+
+@pytest.mark.parametrize("bad_time", [None, "private-invalid-time"])
+def test_missing_or_ambiguous_execution_time_is_rejected(bad_time):
+    context, _calls = _read_only_trade_context()
+    context.history_executions = lambda **_kwargs: [_execution("bad-time", bad_time)]
+    with pytest.raises(reconciliation.LongBridgeReconciliationReadError):
+        reconciliation.collect_read_only_reconciliation_observations(object(), context, account_scope="SG")
+
+
+def test_conflicting_duplicate_execution_is_rejected():
+    context, _calls = _read_only_trade_context()
+    now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+    context.history_executions = lambda **_kwargs: [_execution("duplicate", now)]
+    context.today_executions = lambda: [_execution("duplicate", now, quantity="2")]
+    with pytest.raises(reconciliation.LongBridgeReconciliationReadError):
+        reconciliation.collect_read_only_reconciliation_observations(object(), context, account_scope="SG", now=now)
+
+
+def test_today_execution_failure_has_no_history_only_fallback():
+    context, _calls = _read_only_trade_context(fail_surface="today_executions")
+    with pytest.raises(reconciliation.LongBridgeReconciliationReadError):
+        reconciliation.collect_read_only_reconciliation_observations(object(), context, account_scope="SG")
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="requires POSIX local timezone switching")
+def test_sdk_local_naive_times_preserve_dst_fold(monkeypatch):
+    try:
+        with monkeypatch.context() as patch:
+            patch.setenv("TZ", "America/New_York")
+            time.tzset()
+            context, _calls = _read_only_trade_context()
+            instants = [datetime(2026, 11, 1, hour, 30, tzinfo=timezone.utc) for hour in (5, 6)]
+            context.today_executions = lambda: [
+                _execution(str(i), datetime.fromtimestamp(instant.timestamp()))
+                for i, instant in enumerate(instants)
+            ]
+            observations = reconciliation.collect_read_only_reconciliation_observations(
+                object(), context, account_scope="SG", now=instants[-1],
+            )
+            assert {row["trade_done_at"] for row in observations.recent_executions} == {
+                instant.isoformat() for instant in instants
+            }
+    finally:
+        time.tzset()
+
+
+def test_duplicate_execution_with_different_offset_has_one_utc_identity():
+    context, _calls = _read_only_trade_context()
+    now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+    context.history_executions = lambda **_kwargs: [_execution("same", now)]
+    context.today_executions = lambda: [_execution("same", now.astimezone(timezone(timedelta(hours=8))))]
+    observations = reconciliation.collect_read_only_reconciliation_observations(
+        object(), context, account_scope="SG", now=now,
+    )
+    assert len(observations.recent_executions) == 1
+    assert observations.recent_executions[0]["trade_done_at"] == now.isoformat()
