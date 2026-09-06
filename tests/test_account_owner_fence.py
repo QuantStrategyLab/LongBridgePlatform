@@ -62,5 +62,40 @@ class AccountOwnerFenceTests(unittest.TestCase):
             self.assertTrue(second.contested)
 
 
+
+class ConfiguredPhysicalAccountIdTests(unittest.TestCase):
+    def test_prefers_explicit_env_and_falls_back_to_longport_secret(self):
+        from application.runtime_composer import _resolve_configured_physical_account_id
+
+        def reader(name, default=""):
+            values = {
+                "LONGBRIDGE_PHYSICAL_ACCOUNT_ID": "lb:explicit-acct",
+                "LONGPORT_SECRET_NAME": "longport_token_sg",
+            }
+            return values.get(name, default)
+
+        self.assertEqual(
+            _resolve_configured_physical_account_id(env_reader=reader),
+            "lb:explicit-acct",
+        )
+
+        def reader_fallback(name, default=""):
+            values = {"LONGPORT_SECRET_NAME": "longport_token_sg"}
+            return values.get(name, default)
+
+        self.assertEqual(
+            _resolve_configured_physical_account_id(env_reader=reader_fallback),
+            "lb:longport_token_sg",
+        )
+
+        def reader_empty(name, default=""):
+            return default
+
+        self.assertEqual(
+            _resolve_configured_physical_account_id(env_reader=reader_empty),
+            "",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
