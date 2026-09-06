@@ -71,6 +71,10 @@ SHARED_TARGET_FALLBACK_ENV = frozenset(
         # silently remove a configured plugin mount merely because a
         # per-service target omits a duplicate copy of it.
         "LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON",
+        # Account-owner fence id is environment-scoped (hk/paper/sg). Allow the
+        # GitHub Environment variable to apply even in per-service target mode,
+        # otherwise Deploy sync treats it as unset and deletes the Cloud Run env.
+        "LONGBRIDGE_PHYSICAL_ACCOUNT_ID",
     }
 )
 REQUIRED_ENV = (
@@ -428,8 +432,29 @@ def _build_target_plan(
         if name == "RUNTIME_TARGET_ENABLED" and value is None:
             value = "true"
 
+        if name == "LONGBRIDGE_PHYSICAL_ACCOUNT_ID" and value is None:
+            # Match runtime fallback: lb:<LONGPORT_SECRET_NAME> is the durable
+            # credential-binding identity when no explicit account id is set.
+            secret_name = _first_non_empty(
+                env_values.get("LONGPORT_SECRET_NAME"),
+                _target_env_value(
+                    target,
+                    defaults,
+                    env,
+                    "LONGPORT_SECRET_NAME",
+                    per_service_mode=per_service_mode,
+                    allow_shared_fallback=True,
+                ),
+                env.get("LONGPORT_SECRET_NAME"),
+            )
+            if secret_name:
+                value = f"lb:{secret_name}"
+
         if value is None:
-            remove_env_vars.append(name)
+            # Do not delete LONGBRIDGE_PHYSICAL_ACCOUNT_ID from Cloud Run when
+            # unset in the plan — wiping it re-opens the account-owner fence.
+            if name != "LONGBRIDGE_PHYSICAL_ACCOUNT_ID":
+                remove_env_vars.append(name)
         else:
             env_values[name] = value
 
