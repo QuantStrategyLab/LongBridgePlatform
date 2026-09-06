@@ -380,6 +380,29 @@ def _positive_target_total(targets: dict) -> float:
     return total
 
 
+
+def _execution_is_blocked(*, plan, execution, allocation) -> bool:
+    payloads = (
+        dict(execution or {}),
+        dict((plan or {}).get("execution") or {}),
+        dict(allocation or {}),
+    )
+    for payload in payloads:
+        if bool(payload.get("no_execute")):
+            return True
+        if str(payload.get("risk_gate") or "").strip().upper() == "REJECT":
+            return True
+        flags = payload.get("risk_flags") or ()
+        if isinstance(flags, str):
+            flags = (flags,)
+        flag_set = {str(flag) for flag in flags}
+        if "no_execute" in flag_set:
+            return True
+        if any(str(flag).startswith("rejected:") for flag in flag_set):
+            return True
+    return False
+
+
 def _apply_safe_haven_cash_substitution(
     *,
     plan,
@@ -1042,6 +1065,19 @@ def execute_rebalance_cycle(
     allocation_drift_base_market_values = dict(market_values)
     allocation_drift_base_quantities = dict(quantities)
     allocation_drift_base_cash = float(portfolio.get("liquid_cash", 0.0) or 0.0)
+    if _execution_is_blocked(plan=plan, execution=execution, allocation=allocation):
+        blocked_execution = dict(execution or {})
+        blocked_execution["no_execute"] = True
+        return ExecutionCycleResult(
+            plan=dict(plan or {}),
+            portfolio=dict(portfolio or {}),
+            execution=blocked_execution,
+            allocation=dict(allocation or {}),
+            logs=tuple(logs),
+            skip_logs=tuple(skip_logs),
+            note_logs=tuple(note_logs),
+            action_done=False,
+        )
     plan, allocation = _apply_safe_haven_cash_substitution(
         plan=plan,
         portfolio=portfolio,

@@ -383,6 +383,60 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["execution"]["portfolio_total_equity"], 500.0)
         self.assertEqual(plan["execution"]["min_recommended_equity_usd"], 1000.0)
 
+
+    def test_risk_gate_reject_preserves_no_execute_semantics_instead_of_clean_hold(self):
+        decision = StrategyDecision(
+            positions=(),
+            risk_flags=("rejected:capital_base",),
+            diagnostics={"risk_gate": "REJECT", "reason": "capital_base"},
+        )
+        snapshot = PortfolioSnapshot(
+            as_of=datetime.now(timezone.utc),
+            total_equity=5000.0,
+            buying_power=4200.0,
+            positions=(Position(symbol="BOXX", quantity=5, market_value=750.0),),
+            metadata={"account_hash": "longbridge-reject"},
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            snapshot=snapshot,
+            strategy_profile="soxl_soxx_trend_income",
+        )
+
+        self.assertTrue(plan["execution"].get("no_execute"))
+        self.assertEqual(plan["execution"].get("risk_gate"), "REJECT")
+        self.assertIn("no_execute", plan["execution"].get("risk_flags", ()))
+        self.assertTrue(
+            any(str(flag).startswith("rejected:") for flag in plan["execution"].get("risk_flags", ()))
+        )
+
+    def test_approved_empty_target_clear_remains_executable_zero_targets(self):
+        decision = StrategyDecision(
+            positions=(PositionTarget(symbol="BOXX", target_value=0.0, role="safe_haven"),),
+            diagnostics={
+                "risk_gate": "APPROVE",
+                "execution_annotations": {"trade_threshold_value": 100.0},
+            },
+        )
+        snapshot = PortfolioSnapshot(
+            as_of=datetime.now(timezone.utc),
+            total_equity=5000.0,
+            buying_power=4200.0,
+            positions=(Position(symbol="BOXX", quantity=5, market_value=750.0),),
+            metadata={"account_hash": "longbridge-approve-clear"},
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            snapshot=snapshot,
+            strategy_profile="soxl_soxx_trend_income",
+        )
+
+        self.assertEqual(plan["allocation"]["targets"].get("BOXX"), 0.0)
+        self.assertFalse(bool(plan["execution"].get("no_execute")))
+        self.assertNotEqual(str(plan["execution"].get("risk_gate") or "").upper(), "REJECT")
+
     def test_platform_reserved_cash_policy_does_not_lower_strategy_reserve(self):
         decision = StrategyDecision(
             positions=(PositionTarget(symbol="TQQQ", target_value=5000.0),),
