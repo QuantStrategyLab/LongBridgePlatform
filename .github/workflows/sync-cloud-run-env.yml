@@ -1028,6 +1028,9 @@ jobs:
             remove_env_vars+=("STRATEGY_PLUGIN_ALERT_TELEGRAM_BODY_MAX_CHARS")
           fi
 
+          # gcloud rejects duplicate names in --remove-env-vars.
+          mapfile -t remove_env_vars < <(printf '%s\n' "${remove_env_vars[@]}" | awk 'NF && !seen[$0]++')
+
           gcloud_args=(
             run services update "${CLOUD_RUN_SERVICE}"
             --region "${CLOUD_RUN_REGION}"
