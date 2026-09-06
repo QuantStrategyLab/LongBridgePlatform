@@ -364,3 +364,70 @@ def test_current_service_prefers_environment_runtime_target_over_legacy_inventor
     assert runtime_target["dry_run_only"] is False
     assert runtime_target["execution_mode"] == "live"
     assert target["env"]["LONGBRIDGE_DRY_RUN_ONLY"] == "false"
+
+
+def test_build_cloud_run_env_sync_plan_derives_physical_account_id_and_keeps_github_env():
+    payload = {
+        "defaults": {
+            "GLOBAL_TELEGRAM_CHAT_ID": "5992562050",
+            "NOTIFY_LANG": "zh",
+            "LONGBRIDGE_MARKET": "US",
+            "LONGBRIDGE_MARKET_CALENDAR": "NYSE",
+            "LONGBRIDGE_MARKET_TIMEZONE": "America/New_York",
+            "LONGBRIDGE_SYMBOL_SUFFIX": ".US",
+            "LONGBRIDGE_TRADING_CURRENCY": "USD",
+            "cloud_scheduler_main_time": "45 15",
+            "cloud_scheduler_probe_time": "40 9,15",
+            "EXECUTION_REPORT_GCS_URI": "gs://runtime/execution-reports",
+        },
+        "targets": [
+            {
+                "service": "longbridge-quant-live-mega-service",
+                "account_prefix": "SG",
+                "LONGPORT_SECRET_NAME": "longport_token_sg",
+                "longbridge_feature_snapshot_path": "gs://runtime/mega/snapshot.csv",
+                "longbridge_feature_snapshot_manifest_path": "gs://runtime/mega/snapshot.csv.manifest.json",
+                "runtime_target": json.loads(
+                    runtime_target_json(
+                        "russell_top50_leader_rotation",
+                        deployment_selector="SG",
+                        account_scope="SG",
+                        service_name="longbridge-quant-live-mega-service",
+                    )
+                ),
+            }
+        ],
+    }
+    env = {
+        **os.environ,
+        "CLOUD_RUN_SERVICE_TARGETS_JSON": json.dumps(payload),
+        "LONGBRIDGE_PHYSICAL_ACCOUNT_ID": "lb:from-github-env",
+        "LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON": (
+            '{"strategy_plugins":[{"strategy":"russell_top50_leader_rotation",'
+            '"plugin":"market_regime_control","enabled":true}]}'
+        ),
+    }
+    result = subprocess.run(
+        [sys.executable, str(SYNC_PLAN_SCRIPT_PATH), "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    plan = json.loads(result.stdout)
+    target = plan["targets"][0]
+    assert target["env"]["LONGBRIDGE_PHYSICAL_ACCOUNT_ID"] == "lb:from-github-env"
+    assert "LONGBRIDGE_PHYSICAL_ACCOUNT_ID" not in target["remove_env_vars"]
+
+    env.pop("LONGBRIDGE_PHYSICAL_ACCOUNT_ID", None)
+    result = subprocess.run(
+        [sys.executable, str(SYNC_PLAN_SCRIPT_PATH), "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    plan = json.loads(result.stdout)
+    target = plan["targets"][0]
+    assert target["env"]["LONGBRIDGE_PHYSICAL_ACCOUNT_ID"] == "lb:longport_token_sg"
+    assert "LONGBRIDGE_PHYSICAL_ACCOUNT_ID" not in target["remove_env_vars"]
