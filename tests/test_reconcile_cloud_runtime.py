@@ -51,50 +51,34 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
             ],
         )
 
-    def test_ensure_latest_traffic_updates_to_latest_ready_revision_and_checks_commit(self) -> None:
+    def test_ensure_latest_traffic_updates_to_commit_revision_and_checks_identity(self) -> None:
         calls: list[tuple[tuple[str, ...], bool, bool]] = []
         describe_calls = 0
+        target = "longbridge-quant-paper-service-00002"
 
         def fake_run(args, *, json_output=False, dry_run=False):
             nonlocal describe_calls
             calls.append((tuple(args), json_output, dry_run))
             if args[1:4] == ["run", "services", "describe"]:
                 describe_calls += 1
-                if describe_calls == 1:
-                    return {
-                        "status": {
-                            "latestReadyRevisionName": "longbridge-quant-paper-service-00002",
-                            "traffic": [
-                                {
-                                    "revisionName": "longbridge-quant-paper-service-00001",
-                                    "percent": 100,
-                                }
-                            ],
-                        }
-                    }
+                traffic_rev = "longbridge-quant-paper-service-00001" if describe_calls == 1 else target
                 return {
                     "status": {
-                        "latestReadyRevisionName": "longbridge-quant-paper-service-00002",
-                        "traffic": [
-                            {
-                                "revisionName": "longbridge-quant-paper-service-00002",
-                                "percent": 100,
-                                "latestRevision": True,
-                            }
-                        ],
+                        "latestReadyRevisionName": "longbridge-quant-paper-service-00001",
+                        "traffic": [{"revisionName": traffic_rev, "percent": 100}],
                     }
                 }
-            if args[1:4] == ["run", "revisions", "describe"]:
-                self.assertEqual(args[4], "longbridge-quant-paper-service-00002")
-                return {
-                    "metadata": {
-                        "labels": {
-                            "commit-sha": "abc123",
-                            "release-set": "release-1",
-                        }
-                    },
-                    "spec": {"containers": [{"image": "gcr.io/example/app@sha256:abc"}]},
-                }
+            if args[1:4] == ["run", "revisions", "list"]:
+                return [
+                    {
+                        "metadata": {
+                            "name": target,
+                            "labels": {"commit-sha": "abc123", "release-set": "release-1"},
+                        },
+                        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                        "spec": {"containers": [{"image": "gcr.io/example/app@sha256:abc"}]},
+                    }
+                ]
             if args[1:4] == ["run", "services", "update-traffic"]:
                 return {}
             self.fail(f"unexpected command: {args!r}")
@@ -110,20 +94,26 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
                 dry_run=False,
             )
 
-        self.assertTrue(
-            any(
-                args[1:4] == ("run", "services", "update-traffic")
-                for args, _, _ in calls
-            )
-        )
+        traffic_cmds = [args for args, _, _ in calls if args[1:4] == ("run", "services", "update-traffic")]
+        self.assertEqual(len(traffic_cmds), 1)
+        self.assertIn(f"--to-revisions={target}=100", traffic_cmds[0])
         self.assertEqual(describe_calls, 2)
 
     def test_ensure_latest_traffic_rejects_stale_release_set_even_when_revision_is_healthy(self) -> None:
         def fake_run(args, *, json_output=False, dry_run=False):
             if args[1:4] == ["run", "services", "describe"]:
                 return {"status": {"latestReadyRevisionName": "service-00002", "traffic": []}}
-            if args[1:4] == ["run", "revisions", "describe"]:
-                return {"metadata": {"labels": {"commit-sha": "abc123", "release-set": "old"}}, "spec": {"containers": [{"image": "img@sha256:x"}]}}
+            if args[1:4] == ["run", "revisions", "list"]:
+                return [
+                    {
+                        "metadata": {
+                            "name": "service-00002",
+                            "labels": {"commit-sha": "abc123", "release-set": "old"},
+                        },
+                        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                        "spec": {"containers": [{"image": "img@sha256:x"}]},
+                    }
+                ]
             self.fail(f"unexpected command: {args!r}")
 
         with patch.object(reconcile, "_run", side_effect=fake_run):
@@ -134,19 +124,27 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
                     expected_commit="abc123", expected_release_set="new", dry_run=False,
                 )
 
-    def test_ensure_latest_traffic_requires_latest_ready_revision(self) -> None:
+    def test_ensure_latest_traffic_requires_matching_commit_revision(self) -> None:
         def fake_run(args, *, json_output=False, dry_run=False):
             if args[1:4] == ["run", "services", "describe"]:
                 return {
                     "status": {
                         "latestCreatedRevisionName": "longbridge-quant-paper-service-00003",
-                        "traffic": [],
+                        "latestReadyRevisionName": "longbridge-quant-paper-service-00001",
+                        "traffic": [
+                            {
+                                "revisionName": "longbridge-quant-paper-service-00001",
+                                "percent": 100,
+                            }
+                        ],
                     }
                 }
+            if args[1:4] == ["run", "revisions", "list"]:
+                return []
             self.fail(f"unexpected command: {args!r}")
 
         with patch.object(reconcile, "_run", side_effect=fake_run):
-            with self.assertRaises(reconcile.ReconcileError):
+            with self.assertRaisesRegex(reconcile.ReconcileError, "No Ready revision"):
                 reconcile.ensure_latest_traffic(
                     project="longbridgequant",
                     region="asia-east1",
@@ -154,6 +152,63 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
                     expected_commit="abc123",
                     dry_run=False,
                 )
+
+    def test_ensure_latest_traffic_routes_to_commit_revision_when_latest_ready_is_stale(self) -> None:
+        calls: list[tuple[str, ...]] = []
+        stale = "longbridge-quant-paper-service-00001"
+        target = "longbridge-quant-paper-service-00003"
+
+        def fake_run(args, *, json_output=False, dry_run=False):
+            calls.append(tuple(args))
+            if args[1:4] == ["run", "services", "describe"]:
+                traffic_rev = stale
+                if any(cmd[1:4] == ("run", "services", "update-traffic") for cmd in calls[:-1]):
+                    traffic_rev = target
+                return {
+                    "status": {
+                        "latestReadyRevisionName": stale,
+                        "latestCreatedRevisionName": target,
+                        "traffic": [{"revisionName": traffic_rev, "percent": 100}],
+                    }
+                }
+            if args[1:4] == ["run", "revisions", "list"]:
+                return [
+                    {
+                        "metadata": {
+                            "name": target,
+                            "labels": {"commit-sha": "abc123", "release-set": "release-1"},
+                        },
+                        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                        "spec": {"containers": [{"image": "gcr.io/example/app@sha256:abc"}]},
+                    },
+                    {
+                        "metadata": {
+                            "name": stale,
+                            "labels": {"commit-sha": "old999", "release-set": "release-0"},
+                        },
+                        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                        "spec": {"containers": [{"image": "gcr.io/example/app@sha256:old"}]},
+                    },
+                ]
+            if args[1:4] == ["run", "services", "update-traffic"]:
+                return {}
+            self.fail(f"unexpected command: {args!r}")
+
+        with patch.object(reconcile, "_run", side_effect=fake_run):
+            reconcile.ensure_latest_traffic(
+                project="longbridgequant",
+                region="asia-east1",
+                targets=[reconcile.RuntimeTarget(service_name="longbridge-quant-paper-service")],
+                expected_commit="abc123",
+                expected_release_set="release-1",
+                expected_image_digest="gcr.io/example/app@sha256:abc",
+                dry_run=False,
+            )
+
+        traffic_cmds = [cmd for cmd in calls if cmd[1:4] == ("run", "services", "update-traffic")]
+        self.assertEqual(len(traffic_cmds), 1)
+        self.assertIn(f"--to-revisions={target}=100", traffic_cmds[0])
+        self.assertNotIn("--to-latest", traffic_cmds[0])
 
     def test_delete_legacy_schedulers_targets_only_whitelisted_jobs(self) -> None:
         env = {
