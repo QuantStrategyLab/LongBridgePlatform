@@ -6,6 +6,14 @@ import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from application.account_new_risk_gate_support import (
+    build_snapshot_from_portfolio,
+    evaluate_portfolio_new_risk_admission,
+    is_account_new_risk_gate_enabled,
+    new_risk_buy_prohibited,
+    set_cycle_snapshot,
+)
+
 try:
     from quant_platform_kit.common.cash_sweep import (
         estimate_cash_sweep_sale_quantity_to_fund_buy,
@@ -1078,6 +1086,15 @@ def execute_rebalance_cycle(
             note_logs=tuple(note_logs),
             action_done=False,
         )
+    account_new_risk_buy_blocked = False
+    account_new_risk_reason_codes: tuple[str, ...] = ()
+    if is_account_new_risk_gate_enabled():
+        admission = evaluate_portfolio_new_risk_admission(portfolio, execution=execution)
+        account_new_risk_buy_blocked = new_risk_buy_prohibited(admission)
+        account_new_risk_reason_codes = tuple(admission.reason_codes)
+        set_cycle_snapshot(build_snapshot_from_portfolio(portfolio, execution=execution))
+    else:
+        set_cycle_snapshot(None)
     plan, allocation = _apply_safe_haven_cash_substitution(
         plan=plan,
         portfolio=portfolio,
@@ -1380,7 +1397,7 @@ def execute_rebalance_cycle(
         for symbol in buy_candidates
         if symbol != cash_sweep_symbol
     ]
-    if small_account_buy_blocked:
+    if small_account_buy_blocked or account_new_risk_buy_blocked:
         funding_buy_candidates = []
     if (
         not sell_submitted
@@ -1573,6 +1590,16 @@ def execute_rebalance_cycle(
             "buy_deferred_small_account",
             portfolio_equity=_format_optional_equity(small_account_portfolio_equity),
             min_recommended_equity=_format_optional_equity(small_account_min_equity),
+        )
+        note_logs.append(message)
+        print(with_prefix(message), flush=True)
+        buy_candidates = []
+    elif account_new_risk_buy_blocked and buy_candidates:
+        buys_blocked_reason = "account_new_risk_gate"
+        reason_text = ", ".join(account_new_risk_reason_codes) or "NEW_RISK_PROHIBITED"
+        message = translator(
+            "buy_deferred",
+            detail=f"[Account new-risk gate] {reason_text}",
         )
         note_logs.append(message)
         print(with_prefix(message), flush=True)
@@ -1896,6 +1923,7 @@ def execute_rebalance_cycle(
         )
     )
 
+    set_cycle_snapshot(None)
     return ExecutionCycleResult(
         plan=dict(plan or {}),
         portfolio=dict(portfolio or {}),

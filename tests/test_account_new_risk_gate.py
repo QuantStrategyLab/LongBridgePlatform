@@ -1,0 +1,307 @@
+import os
+import sys
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
+if (QPK_SRC / "quant_platform_kit").exists() and str(QPK_SRC) not in sys.path:
+    sys.path.insert(0, str(QPK_SRC))
+
+from application.account_new_risk_gate_support import (
+    ACCOUNT_NEW_RISK_GATE_ENV,
+    build_snapshot_from_portfolio,
+    evaluate_portfolio_new_risk_admission,
+    new_risk_buy_prohibited,
+    set_cycle_snapshot,
+)
+from application.execution_service import execute_rebalance_cycle
+from application.longbridge_execution import submit_order
+from notifications.telegram import build_translator
+from quant_platform_kit.common.models import ExecutionReport, QuoteSnapshot
+from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort
+from quant_platform_kit.risk.account_new_risk_gate import NewRiskDisposition
+
+
+class AccountNewRiskGateSupportTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        set_cycle_snapshot(None)
+        os.environ.pop(ACCOUNT_NEW_RISK_GATE_ENV, None)
+
+    def test_missing_equity_prohibits_fail_closed(self) -> None:
+        portfolio = {"market_values": {"SOXL": 0.0}, "liquid_cash": 100.0}
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertTrue(new_risk_buy_prohibited(result))
+        self.assertIn("EQUITY_UNKNOWN_FAIL_CLOSED", result.reason_codes)
+
+    def test_drawdown_brake_prohibits_new_risk(self) -> None:
+        portfolio = {
+            "total_strategy_equity": 85_000.0,
+            "account_new_risk_snapshot": {
+                "peak_equity_usd": 100_000.0,
+            },
+        }
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertTrue(new_risk_buy_prohibited(result))
+        self.assertIn("DRAWDOWN_BRAKE_TRIPPED", result.reason_codes)
+
+    def test_healthy_equity_allows_new_risk(self) -> None:
+        portfolio = {"total_strategy_equity": 50_000.0}
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
+        self.assertFalse(result.live_authority_granted)
+
+    def test_submit_order_blocks_buy_when_equity_missing(self) -> None:
+        set_cycle_snapshot(build_snapshot_from_portfolio({}))
+        attempts = {"count": 0}
+
+        def fake_submit(*_args, **_kwargs):
+            attempts["count"] += 1
+            return ExecutionReport(symbol="SOXL", side="buy", quantity=1.0, status="submitted")
+
+        with patch("application.longbridge_execution._qpk_submit_order", fake_submit):
+            report = submit_order(
+                object(),
+                "SOXL.US",
+                order_kind="market",
+                side="buy",
+                quantity=1.0,
+            )
+
+        self.assertEqual(attempts["count"], 0)
+        self.assertEqual(report.status, "rejected")
+        self.assertEqual(report.raw_payload.get("detail"), "account_new_risk_gate")
+
+    def test_submit_order_allows_sell_when_buy_prohibited(self) -> None:
+        set_cycle_snapshot(build_snapshot_from_portfolio({}))
+        attempts = {"count": 0}
+
+        def fake_submit(*_args, **_kwargs):
+            attempts["count"] += 1
+            return ExecutionReport(symbol="SOXL", side="sell", quantity=1.0, status="submitted")
+
+        with patch("application.longbridge_execution._qpk_submit_order", fake_submit):
+            report = submit_order(
+                object(),
+                "SOXL.US",
+                order_kind="market",
+                side="sell",
+                quantity=1.0,
+            )
+
+        self.assertEqual(attempts["count"], 1)
+        self.assertEqual(report.status, "submitted")
+
+    def test_submit_order_allows_buy_when_healthy(self) -> None:
+        set_cycle_snapshot(build_snapshot_from_portfolio({"total_strategy_equity": 50_000.0}))
+        attempts = {"count": 0}
+
+        def fake_submit(*_args, **_kwargs):
+            attempts["count"] += 1
+            return ExecutionReport(symbol="SOXL", side="buy", quantity=1.0, status="submitted")
+
+        with patch("application.longbridge_execution._qpk_submit_order", fake_submit):
+            report = submit_order(
+                object(),
+                "SOXL.US",
+                order_kind="market",
+                side="buy",
+                quantity=1.0,
+            )
+
+        self.assertEqual(attempts["count"], 1)
+        self.assertEqual(report.status, "submitted")
+
+    def test_gate_disabled_via_env_skips_buy_block(self) -> None:
+        os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "0"
+        set_cycle_snapshot(build_snapshot_from_portfolio({}))
+        attempts = {"count": 0}
+
+        def fake_submit(*_args, **_kwargs):
+            attempts["count"] += 1
+            return ExecutionReport(symbol="SOXL", side="buy", quantity=1.0, status="submitted")
+
+        with patch("application.longbridge_execution._qpk_submit_order", fake_submit):
+            report = submit_order(
+                object(),
+                "SOXL.US",
+                order_kind="market",
+                side="buy",
+                quantity=1.0,
+            )
+
+        self.assertEqual(attempts["count"], 1)
+        self.assertEqual(report.status, "submitted")
+
+
+class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        set_cycle_snapshot(None)
+        os.environ.pop(ACCOUNT_NEW_RISK_GATE_ENV, None)
+
+    def _execution_port(self, submitted_orders):
+        def _submit(order_intent):
+            submitted_orders.append(order_intent)
+            return ExecutionReport(
+                symbol=order_intent.symbol,
+                side=order_intent.side,
+                quantity=order_intent.quantity,
+                status="submitted",
+                broker_order_id="lb-order-pending",
+            )
+
+        return CallableExecutionPort(_submit)
+
+    def _run_buy_cycle(self, *, portfolio_overrides=None, execution_overrides=None):
+        submitted_orders = []
+        plan = {
+            "strategy_profile": "soxl_soxx_trend_income",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("SOXL",),
+                "risk_symbols": ("SOXL",),
+                "income_symbols": (),
+                "safe_haven_symbols": (),
+                "targets": {"SOXL": 400.0},
+            },
+            "portfolio": {
+                "strategy_symbols": ("SOXL",),
+                "portfolio_rows": (("SOXL",),),
+                "market_values": {"SOXL": 0.0},
+                "quantities": {"SOXL": 0},
+                "sellable_quantities": {"SOXL": 0},
+                "total_equity": 50_000.0,
+                "total_strategy_equity": 50_000.0,
+                "liquid_cash": 500.0,
+                "cash_sweep_symbol": None,
+                "cash_by_currency": {},
+            },
+            "execution": {
+                "current_min_trade": 10.0,
+                "trade_threshold_value": 10.0,
+                "investable_cash": 500.0,
+                "signal_date": "2026-04-21",
+                "effective_date": "2026-04-21",
+            },
+        }
+        if portfolio_overrides:
+            plan["portfolio"].update(portfolio_overrides)
+        if execution_overrides:
+            plan["execution"].update(execution_overrides)
+
+        result = execute_rebalance_cycle(
+            trade_context=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_replanned_state=lambda: (
+                plan,
+                plan["portfolio"],
+                plan["execution"],
+                plan["allocation"],
+            ),
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-08-24",
+                    last_price=100.0,
+                )
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 5,
+            execution_port=self._execution_port(submitted_orders),
+            notify_issue=lambda _title, _detail: None,
+            translator=build_translator("en"),
+            with_prefix=lambda message: message,
+            limit_sell_discount=0.995,
+            limit_buy_premium=1.0,
+        )
+        return result, submitted_orders
+
+    def test_execution_cycle_blocks_buys_when_equity_missing(self) -> None:
+        result, submitted_orders = self._run_buy_cycle(
+            portfolio_overrides={
+                "total_equity": None,
+                "total_strategy_equity": None,
+            }
+        )
+        self.assertFalse(result.action_done)
+        self.assertEqual(submitted_orders, [])
+        self.assertTrue(any("Account new-risk gate" in note for note in result.note_logs))
+
+    def test_execution_cycle_allows_buys_when_healthy(self) -> None:
+        result, submitted_orders = self._run_buy_cycle()
+        self.assertTrue(result.action_done)
+        self.assertEqual(len(submitted_orders), 1)
+        self.assertEqual(str(getattr(submitted_orders[0], "side", "")).lower(), "buy")
+
+    def test_execution_cycle_allows_sell_when_buy_prohibited(self) -> None:
+        submitted_orders = []
+        plan = {
+            "strategy_profile": "soxl_soxx_trend_income",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("SOXL",),
+                "risk_symbols": ("SOXL",),
+                "income_symbols": (),
+                "safe_haven_symbols": (),
+                "targets": {"SOXL": 0.0},
+            },
+            "portfolio": {
+                "strategy_symbols": ("SOXL",),
+                "portfolio_rows": (("SOXL",),),
+                "market_values": {"SOXL": 400.0},
+                "quantities": {"SOXL": 4},
+                "sellable_quantities": {"SOXL": 4},
+                "total_equity": None,
+                "total_strategy_equity": None,
+                "liquid_cash": 100.0,
+                "cash_sweep_symbol": None,
+                "cash_by_currency": {},
+            },
+            "execution": {
+                "current_min_trade": 10.0,
+                "trade_threshold_value": 10.0,
+                "investable_cash": 100.0,
+                "signal_date": "2026-04-21",
+                "effective_date": "2026-04-21",
+            },
+        }
+        result = execute_rebalance_cycle(
+            trade_context=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_replanned_state=lambda: (
+                plan,
+                plan["portfolio"],
+                plan["execution"],
+                plan["allocation"],
+            ),
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-08-24",
+                    last_price=100.0,
+                )
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 5,
+            execution_port=self._execution_port(submitted_orders),
+            notify_issue=lambda _title, _detail: None,
+            translator=build_translator("en"),
+            with_prefix=lambda message: message,
+            limit_sell_discount=0.995,
+            limit_buy_premium=1.0,
+        )
+        self.assertTrue(result.action_done)
+        self.assertEqual(len(submitted_orders), 1)
+        self.assertEqual(str(getattr(submitted_orders[0], "side", "")).lower(), "sell")
+
+
+if __name__ == "__main__":
+    unittest.main()
