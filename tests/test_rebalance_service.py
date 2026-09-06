@@ -383,6 +383,77 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(submitted_orders, [])
         self.assertEqual(result.allocation["targets"]["BOXX"], 0.0)
 
+
+    def test_risk_reject_no_execute_skips_cash_substitution_and_submit(self):
+        submitted_orders = []
+        plan = _build_plan(
+            strategy_symbols=("BOXX",),
+            safe_haven_symbols=("BOXX",),
+            targets={"BOXX": 750.0},
+            market_values={"BOXX": 750.0},
+            sellable_quantities={"BOXX": 5},
+            quantities={"BOXX": 5},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=0.0,
+            market_status="Risk rejected",
+            deploy_ratio_text="0.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="Rejected by risk gate",
+            available_cash=0.0,
+            total_strategy_equity=750.0,
+            portfolio_rows=(("BOXX",),),
+        )
+        plan["execution"]["risk_gate"] = "REJECT"
+        plan["execution"]["risk_flags"] = ("rejected:capital_base", "no_execute")
+        plan["execution"]["no_execute"] = True
+
+        result = execute_rebalance_cycle(
+            trade_context=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_replanned_state=lambda: (
+                plan,
+                plan["portfolio"],
+                plan["execution"],
+                plan["allocation"],
+            ),
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-04-21",
+                    last_price=150.0,
+                )
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 10,
+            execution_port=CallableExecutionPort(
+                lambda order_intent: (
+                    submitted_orders.append(order_intent),
+                    ExecutionReport(
+                        symbol=order_intent.symbol,
+                        side=order_intent.side,
+                        quantity=order_intent.quantity,
+                        status="submitted",
+                        broker_order_id="reject-should-not-submit",
+                    ),
+                )[-1]
+            ),
+            notify_issue=lambda _title, _detail: None,
+            translator=build_translator("zh"),
+            with_prefix=lambda message: message,
+            limit_sell_discount=0.995,
+            limit_buy_premium=1.0,
+            safe_haven_cash_substitute_threshold_usd=1000.0,
+        )
+
+        self.assertFalse(result.action_done)
+        self.assertEqual(submitted_orders, [])
+        self.assertEqual(result.allocation["targets"]["BOXX"], 750.0)
+        self.assertTrue(result.execution.get("no_execute"))
+
     def test_min_order_notional_skips_small_buy(self):
         submitted_orders = []
         plan = _build_plan(

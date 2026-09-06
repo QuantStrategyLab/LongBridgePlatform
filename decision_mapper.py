@@ -230,6 +230,25 @@ def _resolve_platform_reserved_cash(
     return max(reserved_cash_floor_usd, max(0.0, float(total_equity)) * reserved_cash_ratio)
 
 
+
+def _attach_execution_block_fields(
+    plan: dict[str, Any],
+    *,
+    decision: StrategyDecision,
+) -> None:
+    execution = plan.get("execution")
+    if not isinstance(execution, dict):
+        return
+    risk_flags = tuple(str(flag) for flag in decision.risk_flags)
+    if risk_flags:
+        execution["risk_flags"] = risk_flags
+    risk_gate = decision.diagnostics.get("risk_gate")
+    if risk_gate is not None and str(risk_gate) != "":
+        execution["risk_gate"] = risk_gate
+    if _decision_blocks_execution(decision):
+        execution["no_execute"] = True
+
+
 def _attach_snapshot_diagnostics(
     plan: dict[str, Any],
     *,
@@ -438,7 +457,21 @@ def _build_weight_translation_annotations(
     )
 
 
-def _build_hold_current_value_decision(portfolio_inputs) -> StrategyDecision:
+def _decision_blocks_execution(decision: StrategyDecision) -> bool:
+    flags = {str(flag) for flag in decision.risk_flags}
+    if "no_execute" in flags:
+        return True
+    if any(str(flag).startswith("rejected:") for flag in decision.risk_flags):
+        return True
+    risk_gate = str(decision.diagnostics.get("risk_gate") or "").strip().upper()
+    return risk_gate == "REJECT"
+
+
+def _build_hold_current_value_decision(
+    portfolio_inputs,
+    *,
+    source_decision: StrategyDecision | None = None,
+) -> StrategyDecision:
     positions: list[PositionTarget] = []
     for symbol, market_value in sorted(portfolio_inputs.market_values.items()):
         positions.append(
@@ -448,7 +481,14 @@ def _build_hold_current_value_decision(portfolio_inputs) -> StrategyDecision:
                 role=_symbol_role(str(symbol)),
             )
         )
-    return StrategyDecision(positions=tuple(positions))
+    if source_decision is None:
+        return StrategyDecision(positions=tuple(positions))
+    return StrategyDecision(
+        positions=tuple(positions),
+        budgets=source_decision.budgets,
+        risk_flags=tuple(dict.fromkeys((*source_decision.risk_flags, "no_execute"))),
+        diagnostics=dict(source_decision.diagnostics),
+    )
 
 
 def _build_zero_equity_value_decision(decision: StrategyDecision) -> StrategyDecision:
@@ -481,12 +521,35 @@ def _normalize_to_value_target_decision(
     cash_only_execution: bool = True,
 ) -> tuple[StrategyDecision, ValueTargetExecutionAnnotations | None]:
     target_mode = resolve_decision_target_mode(decision)
-    no_execute = "no_execute" in set(decision.risk_flags)
+    blocked = _decision_blocks_execution(decision)
 
-    if target_mode == "value" and not no_execute:
+    if blocked:
+        if target_mode == "value":
+            return (
+                StrategyDecision(
+                    positions=decision.positions,
+                    budgets=decision.budgets,
+                    risk_flags=tuple(dict.fromkeys((*decision.risk_flags, "no_execute"))),
+                    diagnostics=dict(decision.diagnostics),
+                ),
+                None,
+            )
+        synthetic = _build_hold_current_value_decision(
+            portfolio_inputs,
+            source_decision=decision,
+        )
+        synthetic_annotations = _build_weight_translation_annotations(
+            decision,
+            total_equity=float(portfolio_inputs.total_equity),
+            liquid_cash=float(portfolio_inputs.liquid_cash),
+            runtime_metadata=runtime_metadata,
+        )
+        return synthetic, synthetic_annotations
+
+    if target_mode == "value":
         return decision, None
 
-    if target_mode == "weight" and not no_execute:
+    if target_mode == "weight":
         from us_equity_strategies.cash_only_equity import (
             resolve_weight_translation_equity,
         )
@@ -781,5 +844,9 @@ def map_strategy_decision_to_plan(
         plan,
         decision=normalized_decision,
         runtime_metadata=runtime_metadata,
+    )
+    _attach_execution_block_fields(
+        plan,
+        decision=normalized_decision,
     )
     return plan
