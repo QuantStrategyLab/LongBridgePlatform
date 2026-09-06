@@ -179,6 +179,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             ),
         )
         config = LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
             limit_sell_discount=1.0,
             limit_buy_premium=1.0,
             separator="-",
@@ -1181,6 +1182,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 limit_buy_premium=1.005,
                 separator="━━━━━━━━━━━━━━━━━━",
@@ -1262,6 +1264,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 execution_dedup_enabled=True,
                 execution_state_store=ExecutionMarkerStore(local_dir=self.enterContext(TemporaryDirectory())),
@@ -1321,6 +1324,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             ),
         )
         config = LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
             limit_sell_discount=0.995,
             limit_buy_premium=1.0,
             separator="-",
@@ -1337,6 +1341,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
     def test_unknown_submission_error_keeps_execution_claim_and_does_not_retry(self):
         broker_attempts = []
         claims = set()
+        payloads = {}
         plan = _build_plan(
             strategy_symbols=("SOXL",),
             risk_symbols=("SOXL",),
@@ -1361,11 +1366,16 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             def has_marker(self, marker_key):
                 return marker_key in claims
 
-            def claim_marker(self, marker_key, **_kwargs):
+            def claim_marker(self, marker_key, **kwargs):
                 if marker_key in claims:
                     return False
                 claims.add(marker_key)
+                metadata = dict(kwargs.get("metadata") or {})
+                payloads[marker_key] = {"metadata": metadata}
                 return True
+
+            def read_marker(self, marker_key):
+                return payloads.get(marker_key)
 
             def record_marker(self, *_args, **_kwargs):
                 raise AssertionError("unknown submission must retain its original claim")
@@ -1404,6 +1414,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             ),
         )
         config = LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
             limit_sell_discount=0.995,
             limit_buy_premium=1.0,
             separator="-",
@@ -1422,7 +1433,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
         self.assertFalse(result.action_done)
         self.assertEqual(broker_attempts, ["possibly_accepted"])
-        self.assertEqual(len(claims), 1)
+        # account-owner fence + execution claim
+        self.assertEqual(len(claims), 2)
 
     def test_run_strategy_blocks_live_next_session_decision_without_routing(self):
         alerts = []
@@ -1467,6 +1479,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 limit_buy_premium=1.005,
                 separator="━━━━━━━━━━━━━━━━━━",
@@ -1540,6 +1553,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 limit_buy_premium=1.005,
                 separator="━━━━━━━━━━━━━━━━━━",
@@ -1617,6 +1631,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 limit_buy_premium=1.005,
                 separator="━━━━━━━━━━━━━━━━━━",
@@ -1701,6 +1716,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 limit_buy_premium=1.0,
                 separator="━━━━━━━━━━━━━━━━━━",
@@ -1878,6 +1894,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 execution_dedup_enabled=True,
                 execution_state_store=ExecutionMarkerStore(local_dir=self.enterContext(TemporaryDirectory())),
@@ -2378,6 +2395,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 execution_dedup_enabled=True,
                 execution_state_store=ExecutionMarkerStore(local_dir=self.enterContext(TemporaryDirectory())),
@@ -3280,6 +3298,7 @@ class RequiredExecutionClaimTests(unittest.TestCase):
             limit_sell_discount=0.995, limit_buy_premium=1.0, separator="-",
             translator=build_translator("en"), with_prefix=lambda message: message,
             strategy_profile="soxl_soxx_trend_income", execution_state_account_scope="PAPER",
+            physical_account_id="lb-paper-001",
             notify_no_trade_cycles=False,
         )
         self.runtime = LongBridgeRebalanceRuntime(
@@ -3345,13 +3364,14 @@ class RequiredExecutionClaimTests(unittest.TestCase):
         for outcome in (False, RuntimeError("synthetic claim failure")):
             with self.subTest(outcome=type(outcome).__name__):
                 self.issues.clear()
-                store = Mock(spec=("has_marker", "claim_marker", "record_marker"))
+                store = Mock(spec=("has_marker", "claim_marker", "record_marker", "read_marker"))
                 store.has_marker.return_value = False
-                store.claim_marker.side_effect = [outcome, True]
+                # First claim_marker is account-owner fence; second is execution claim.
+                store.claim_marker.side_effect = [True, outcome, True]
                 result = self._run(execution_dedup_enabled=True, execution_state_store=store)
                 self.assertFalse(result.action_done)
                 self.assertEqual(self.orders, [])
-                self.assertEqual(store.claim_marker.call_count, 1)
+                self.assertEqual(store.claim_marker.call_count, 2)
                 self.assertEqual([title for title, _detail in self.issues], ["Order submit failed"] * 2)
                 store.record_marker.assert_not_called()
                 self.assertNotIn("synthetic claim failure", str(self.issues))
@@ -3396,7 +3416,7 @@ class RequiredExecutionClaimTests(unittest.TestCase):
 
     def test_noop_does_not_attempt_claim_even_if_store_is_unavailable(self):
         self.plan["allocation"]["targets"] = {"SOXL": 0.0}
-        store = Mock(spec=("has_marker", "claim_marker", "record_marker"))
+        store = Mock(spec=("has_marker", "claim_marker", "record_marker", "read_marker"))
         store.has_marker.return_value = False
         store.claim_marker.side_effect = RuntimeError("unavailable")
         for overrides in ({}, {"execution_dedup_enabled": True, "execution_state_store": store}):
@@ -3410,7 +3430,7 @@ class RequiredExecutionClaimTests(unittest.TestCase):
         self.runtime = replace(self.runtime, account_identity_observer=lambda _context: BrokerAccountIdentity(
             platform_id="longbridge", account_types=("margin",),
         ))
-        store = Mock(spec=("has_marker", "claim_marker", "record_marker"))
+        store = Mock(spec=("has_marker", "claim_marker", "record_marker", "read_marker"))
         store.has_marker.return_value = False
         result = self._run(
             execution_dedup_enabled=True, execution_state_store=store,
@@ -3425,7 +3445,7 @@ class RequiredExecutionClaimTests(unittest.TestCase):
 
     def test_direct_live_routing_block_does_not_attempt_claim(self):
         self.plan["execution"]["effective_date"] = "2026-04-22"
-        store = Mock(spec=("has_marker", "claim_marker", "record_marker"))
+        store = Mock(spec=("has_marker", "claim_marker", "record_marker", "read_marker"))
         result = self._run(execution_dedup_enabled=True, execution_state_store=store)
         self.assertFalse(result.action_done)
         self.assertTrue(result.execution["direct_live_routing_blocked"])

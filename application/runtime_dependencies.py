@@ -37,6 +37,7 @@ class LongBridgeRebalanceConfig:
     execution_dedup_enabled: bool = False
     execution_state_store: Any = None
     execution_state_account_scope: str = ""
+    physical_account_id: str = ""
     durable_execution_command_paper_enabled: bool = False
     execution_command_store: Any = None
     strategy_risk_state_paper_enabled: bool = False

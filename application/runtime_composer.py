@@ -34,6 +34,23 @@ from quant_platform_kit.notifications.cycle_channel import build_cycle_sender
 from runtime_execution_policy import FRACTIONAL_BUY_QUANTITY_STEP, dca_compat_mode_enabled, fractional_buy_execution_enabled
 
 
+def _resolve_configured_physical_account_id(*, env_reader) -> str:
+    """Resolve the durable LongBridge account-owner fence id.
+
+    Prefer an explicit ``LONGBRIDGE_PHYSICAL_ACCOUNT_ID``. When unset, fall back
+    to ``lb:<LONGPORT_SECRET_NAME>`` — each live/paper/HK/SG service already
+    binds one LongPort token secret to one physical broker account, so the
+    secret name is a stable account-binding identity (not a region/channel label).
+    """
+    explicit = str(env_reader("LONGBRIDGE_PHYSICAL_ACCOUNT_ID", "") or "").strip()
+    if explicit:
+        return explicit
+    secret_name = str(env_reader("LONGPORT_SECRET_NAME", "") or "").strip()
+    if secret_name:
+        return f"lb:{secret_name}"
+    return ""
+
+
 @dataclass(frozen=True)
 class LongBridgeRuntimeComposer:
     project_id: str | None
@@ -293,6 +310,9 @@ class LongBridgeRuntimeComposer:
                 gcp_project_id=self.project_id,
             ),
             execution_state_account_scope=self.account_region,
+            physical_account_id=_resolve_configured_physical_account_id(
+                env_reader=self.env_reader
+            ),
             durable_execution_command_paper_enabled=resolve_paper_execution_command_producer_enabled(
                 env_reader=self.env_reader,
                 dry_run_only=self.dry_run_only,

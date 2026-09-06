@@ -82,6 +82,7 @@ REQUIRED_ENV = (
 # Platform-generic vars: always sourced from GitHub variables / target config.
 PLATFORM_GENERIC_ENV = (
     "LONGBRIDGE_DRY_RUN_ONLY",
+    "LONGBRIDGE_PHYSICAL_ACCOUNT_ID",
     "LONGBRIDGE_MARKET",
     "LONGBRIDGE_MARKET_CALENDAR",
     "LONGBRIDGE_MARKET_TIMEZONE",
