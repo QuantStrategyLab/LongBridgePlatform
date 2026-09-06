@@ -179,6 +179,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             ),
         )
         config = LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
             limit_sell_discount=1.0,
             limit_buy_premium=1.0,
             separator="-",
@@ -1181,6 +1182,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 limit_buy_premium=1.005,
                 separator="━━━━━━━━━━━━━━━━━━",
@@ -1262,6 +1264,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 execution_dedup_enabled=True,
                 execution_state_store=ExecutionMarkerStore(local_dir=self.enterContext(TemporaryDirectory())),
@@ -1321,6 +1324,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             ),
         )
         config = LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
             limit_sell_discount=0.995,
             limit_buy_premium=1.0,
             separator="-",
@@ -1337,6 +1341,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
     def test_unknown_submission_error_keeps_execution_claim_and_does_not_retry(self):
         broker_attempts = []
         claims = set()
+        payloads = {}
         plan = _build_plan(
             strategy_symbols=("SOXL",),
             risk_symbols=("SOXL",),
@@ -1361,11 +1366,16 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             def has_marker(self, marker_key):
                 return marker_key in claims
 
-            def claim_marker(self, marker_key, **_kwargs):
+            def claim_marker(self, marker_key, **kwargs):
                 if marker_key in claims:
                     return False
                 claims.add(marker_key)
+                metadata = dict(kwargs.get("metadata") or {})
+                payloads[marker_key] = {"metadata": metadata}
                 return True
+
+            def read_marker(self, marker_key):
+                return payloads.get(marker_key)
 
             def record_marker(self, *_args, **_kwargs):
                 raise AssertionError("unknown submission must retain its original claim")
@@ -1404,6 +1414,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             ),
         )
         config = LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
             limit_sell_discount=0.995,
             limit_buy_premium=1.0,
             separator="-",
@@ -1422,7 +1433,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
         self.assertFalse(result.action_done)
         self.assertEqual(broker_attempts, ["possibly_accepted"])
-        self.assertEqual(len(claims), 1)
+        # account-owner fence + execution claim
+        self.assertEqual(len(claims), 2)
 
     def test_run_strategy_blocks_live_next_session_decision_without_routing(self):
         alerts = []
@@ -1467,6 +1479,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 limit_buy_premium=1.005,
                 separator="━━━━━━━━━━━━━━━━━━",
@@ -1540,6 +1553,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 limit_buy_premium=1.005,
                 separator="━━━━━━━━━━━━━━━━━━",
@@ -1617,6 +1631,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 limit_buy_premium=1.005,
                 separator="━━━━━━━━━━━━━━━━━━",
@@ -1701,6 +1716,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 limit_buy_premium=1.0,
                 separator="━━━━━━━━━━━━━━━━━━",
@@ -1878,6 +1894,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 execution_dedup_enabled=True,
                 execution_state_store=ExecutionMarkerStore(local_dir=self.enterContext(TemporaryDirectory())),
@@ -2378,6 +2395,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 ),
             ),
             config=LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001",
                 limit_sell_discount=0.995,
                 execution_dedup_enabled=True,
                 execution_state_store=ExecutionMarkerStore(local_dir=self.enterContext(TemporaryDirectory())),
