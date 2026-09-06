@@ -293,6 +293,9 @@ class LongBridgeRuntimeComposer:
                 gcp_project_id=self.project_id,
             ),
             execution_state_account_scope=self.account_region,
+            physical_account_id=str(
+                (self.env_reader("LONGBRIDGE_PHYSICAL_ACCOUNT_ID", "") or "")
+            ).strip(),
             durable_execution_command_paper_enabled=resolve_paper_execution_command_producer_enabled(
                 env_reader=self.env_reader,
                 dry_run_only=self.dry_run_only,

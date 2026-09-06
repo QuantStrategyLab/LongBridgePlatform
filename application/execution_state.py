@@ -7,6 +7,7 @@ from typing import Any
 from quant_platform_kit.common.execution_state import (
     ExecutionMarkerStore,
     build_execution_marker_key,
+    claim_account_owner,
 )
 from quant_platform_kit.common.execution_state import (
     build_execution_marker_store_from_env as _build_execution_marker_store_from_env,
@@ -16,6 +17,7 @@ from quant_platform_kit.common.execution_state import (
 __all__ = [
     "ExecutionMarkerStore",
     "build_execution_marker_key",
+    "claim_account_owner",
     "build_execution_marker_store_from_env",
     "resolve_execution_dedup_enabled",
 ]

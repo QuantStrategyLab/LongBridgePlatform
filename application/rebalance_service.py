@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 
 from application.execution_service import ExecutionCycleResult, execute_rebalance_cycle
-from application.execution_state import build_execution_marker_key
+from application.execution_state import build_execution_marker_key, claim_account_owner
 from application.durable_execution_commands import enqueue_paper_execution_command
 from application.paper_strategy_risk_state import record_paper_strategy_risk_state_transition
 from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
@@ -194,6 +194,45 @@ def _append_strategy_line(lines, *, strategy_display_name, translator):
 _localize_notification_text = notification_renderers._localize_notification_text
 _format_dashboard_text = notification_renderers._format_dashboard_text
 _append_status_lines = notification_renderers._append_status_lines
+
+
+
+_FORBIDDEN_LB_ACCOUNT_OWNER_LABELS = frozenset(
+    {
+        "PAPER",
+        "LIVE",
+        "HK",
+        "SG",
+        "US",
+        "CN",
+        "DEFAULT",
+        "CASH",
+        "MARGIN",
+        "LONGBRIDGE",
+    }
+)
+
+
+def _resolve_physical_account_id(*, config) -> str:
+    """Resolve an explicit LongBridge physical account id for the account-owner fence.
+
+    LongBridge public APIs do not expose a stable account number, so ownership
+    fencing requires an explicit configured id. Region/channel labels are rejected.
+    """
+    account_id = str(getattr(config, "physical_account_id", "") or "").strip()
+    if not account_id:
+        raise RuntimeError(
+            "LongBridge account owner fence requires LONGBRIDGE_PHYSICAL_ACCOUNT_ID "
+            "(refusing region/channel labels as substitutes)"
+        )
+    upper = account_id.upper()
+    scope = str(getattr(config, "execution_state_account_scope", "") or "").strip().upper()
+    if upper in _FORBIDDEN_LB_ACCOUNT_OWNER_LABELS or (scope and upper == scope):
+        raise RuntimeError(
+            "LongBridge account owner fence requires a physical account id; "
+            f"refusing label={account_id!r}"
+        )
+    return account_id
 
 
 def _build_execution_marker_key(*, config: LongBridgeRebalanceConfig, execution: dict) -> str:
@@ -484,6 +523,30 @@ def run_strategy(
                 if not execution_claim_attempted:
                     execution_claim_attempted = True
                     if config.execution_dedup_enabled and execution_marker_key and execution_state_store is not None:
+                        account_id = _resolve_physical_account_id(config=config)
+                        owner_id = str(getattr(config, "strategy_profile", "") or "").strip() or "unknown"
+                        try:
+                            owner_claim = claim_account_owner(
+                                execution_state_store,
+                                broker="longbridge",
+                                account_id=account_id,
+                                owner_id=owner_id,
+                                metadata={
+                                    "platform": "longbridge",
+                                    "strategy_profile": owner_id,
+                                    "dry_run_only": bool(getattr(config, "dry_run_only", False)),
+                                },
+                            )
+                        except Exception:
+                            raise RuntimeError(
+                                "LongBridge account owner fence unavailable; refusing broker submission"
+                            ) from None
+                        if not owner_claim.allowed:
+                            raise RuntimeError(
+                                "LongBridge account owner fence contested for "
+                                f"account={account_id}; owner={owner_claim.owner_id!r} "
+                                f"contested_by={owner_id!r}"
+                            )
                         try:
                             execution_claim_acquired = bool(execution_state_store.claim_marker(
                                 execution_marker_key,
