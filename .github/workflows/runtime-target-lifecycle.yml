@@ -30,6 +30,7 @@ concurrency:
 
 jobs:
   lifecycle:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.display_title != 'Image-only no-traffic staging'
     name: Publish ${{ matrix.target.label }} target lifecycle
     runs-on: ubuntu-latest
     timeout-minutes: 15

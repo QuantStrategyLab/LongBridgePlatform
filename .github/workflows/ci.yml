@@ -126,6 +126,9 @@ jobs:
       - name: Ensure uv.lock matches pyproject.toml
         run: uv lock --check
 
+      - name: Test bounded deployment workflow
+        run: bash tests/test_sync_cloud_run_env_workflow.sh
+
       - name: Run unit tests
         run: |
           set -euo pipefail

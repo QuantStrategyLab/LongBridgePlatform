@@ -1,10 +1,27 @@
 name: Deploy Cloud Run
+run-name: ${{ inputs.deployment_mode == 'image-only-no-traffic' && 'Image-only no-traffic staging' || 'Deploy Cloud Run' }}
 
 on:
   workflow_dispatch:
     inputs:
+      deployment_mode:
+        description: "Legacy deployment or explicit single-target image-only staging without traffic."
+        required: true
+        type: choice
+        default: legacy
+        options:
+          - legacy
+          - image-only-no-traffic
+      approved_ref:
+        description: "Exact workflow branch/tag name approved for image-only staging."
+        required: false
+        type: string
+      source_commit:
+        description: "Full approved source SHA; must equal the dispatched workflow SHA."
+        required: false
+        type: string
       target:
-        description: "Deployment target to run. Use hk-verify for an isolated HK dry-run Cloud Run service."
+        description: "Legacy: configured or isolated verify targets. Image-only: exactly PAPER, HK, or SG."
         required: true
         type: choice
         default: configured
@@ -12,6 +29,9 @@ on:
           - configured
           - hk-verify
           - paper-command-verify
+          - PAPER
+          - HK
+          - SG
       cloud_run_region:
         description: "Cloud Run region for hk-verify. Leave blank to use the longbridge-hk Environment value."
         required: false
@@ -93,10 +113,106 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  image-only-no-traffic:
+    name: Stage ${{ inputs.target }} image without traffic
+    if: github.event_name == 'workflow_dispatch' && inputs.deployment_mode == 'image-only-no-traffic'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    environment: ${{ inputs.target == 'PAPER' && 'longbridge-paper' || inputs.target == 'HK' && 'longbridge-hk' || inputs.target == 'SG' && 'longbridge-sg' || '' }}
+    env:
+      DEPLOYMENT_MODE: ${{ inputs.deployment_mode }}
+      WORKFLOW_TARGET: ${{ inputs.target }}
+      APPROVED_REF: ${{ inputs.approved_ref }}
+      SOURCE_COMMIT: ${{ inputs.source_commit }}
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+      GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
+    steps:
+      - name: Validate image-only dispatch
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ] || [ "${DEPLOYMENT_MODE:-}" != "image-only-no-traffic" ]; then
+            echo "Explicit image-only dispatch required." >&2
+            exit 1
+          fi
+          case "${WORKFLOW_TARGET:-}" in
+            PAPER|HK|SG) ;;
+            *) echo "Image-only staging requires exactly one configured target." >&2; exit 1 ;;
+          esac
+          if [ -z "${APPROVED_REF:-}" ] || [ "${APPROVED_REF}" != "${GITHUB_REF_NAME:-}" ] \
+            || [[ ! "${SOURCE_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]] || [ "${SOURCE_COMMIT}" != "${GITHUB_SHA:-}" ] \
+            || [ "${SOURCE_COMMIT}" != "${GITHUB_WORKFLOW_SHA:-}" ] \
+            || [ "${GITHUB_WORKFLOW_REF:-}" != "${GITHUB_REPOSITORY}/.github/workflows/sync-cloud-run-env.yml@${GITHUB_REF}" ]; then
+            echo "Approved workflow ref and source SHA must match the dispatch." >&2
+            exit 1
+          fi
+          if [ -z "${CLOUD_RUN_SERVICE:-}" ] || [ -z "${CLOUD_RUN_REGION:-}" ]; then
+            echo "Configured service and region are required." >&2
+            exit 1
+          fi
+
+      - name: Checkout exact image-only source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact image-only source
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse HEAD)" != "${SOURCE_COMMIT}" ]; then
+            echo "Checked-out source does not match the approved SHA." >&2
+            exit 1
+          fi
+
+      - name: Authenticate selected image-only target
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud for image-only staging
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          version: ">= 416.0.0"
+
+      - name: Build and stage image without traffic
+        run: |
+          set -euo pipefail
+          # Updating, rather than deploying, requires an existing configured service.
+          existing_service="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+            --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" --format='value(metadata.name)')"
+          if [ "${existing_service}" != "${CLOUD_RUN_SERVICE}" ]; then
+            echo "Configured service readback did not match." >&2
+            exit 1
+          fi
+          artifact_registry_hostname="${GCP_ARTIFACT_REGISTRY_HOSTNAME:-${CLOUD_RUN_REGION}-docker.pkg.dev}"
+          image_repo="${artifact_registry_hostname}/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY_REPOSITORY}/longbridgeplatform/${CLOUD_RUN_SERVICE}"
+          image="${image_repo}:${SOURCE_COMMIT}-${GITHUB_RUN_ID}"
+          gcloud auth configure-docker "${artifact_registry_hostname}" --quiet
+          # Auth writes temporary credentials into the workspace; build tracked source only.
+          git archive HEAD | docker build --pull -t "${image}" -
+          docker push "${image}"
+          digest="$(gcloud artifacts docker images describe "${image}" --format='value(image_summary.digest)')"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Published image did not resolve to an immutable digest." >&2
+            exit 1
+          fi
+          # Preserve existing configuration and serving revisions. --no-traffic
+          # pins an existing LATEST selector to its current revision, without moving traffic.
+          gcloud run services update "${CLOUD_RUN_SERVICE}" \
+            --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
+            --image="${image_repo}@${digest}" --no-traffic \
+            --update-labels="commit-sha=${SOURCE_COMMIT},github-run-id=${GITHUB_RUN_ID}" --quiet
+
   sync:
     name: Deploy / Sync ${{ matrix.target.label }} Cloud Run
     # Production deployment and environment sync require an explicit operator dispatch.
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.deployment_mode != 'image-only-no-traffic'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -256,6 +372,11 @@ jobs:
           write_github_output() {
             printf '%s\n' "$@" >> "$GITHUB_OUTPUT"
           }
+
+          case "${WORKFLOW_TARGET:-configured}" in
+            configured|hk-verify|paper-command-verify) ;;
+            *) echo "Explicit configured targets require image-only-no-traffic mode." >&2; exit 1 ;;
+          esac
 
           deploy_enabled=false
           env_sync_enabled=false
@@ -1440,7 +1561,7 @@ jobs:
   cleanup-shared-monitor:
     name: Retire shared monitor dispatcher
     needs: sync
-    if: needs.sync.result == 'success' && inputs.target == 'configured'
+    if: needs.sync.result == 'success' && inputs.target == 'configured' && inputs.deployment_mode != 'image-only-no-traffic'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: longbridge-sg
