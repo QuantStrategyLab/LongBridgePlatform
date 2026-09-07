@@ -109,6 +109,11 @@ def _build_plan(
             "targets": dict(targets),
         },
         "portfolio": {
+            "account_new_risk_snapshot": {
+                "observation_status": "COMPLETE",
+                "reconciliation_status": "VERIFIED",
+                "circuit_breaker_state": "CLOSED",
+            },
             "strategy_symbols": tuple(strategy_symbols),
             "portfolio_rows": tuple(portfolio_rows),
             "market_values": dict(market_values),
