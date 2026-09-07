@@ -1043,6 +1043,7 @@ def execute_rebalance_cycle(
     small_account_bootstrap_note_keys: set[str] = set()
     action_done = False
     sell_submitted = False
+    submission_halted = False
     pending_sell_release_symbols: list[str] = []
     threshold_value = float(execution["trade_threshold_value"])
     limit_order_symbols = set(
@@ -1206,7 +1207,16 @@ def execute_rebalance_cycle(
             suffix = f"[order_id={order_id_text}]"
         return f"{log_message} {suffix}"
 
+    def notify_submission_issue(title, detail):
+        try:
+            notify_issue(title, detail)
+        except Exception:
+            print("order_notification_failed", flush=True)
+
     def submit_order_via_port(symbol, order_type, side, quantity, log_message, *, submitted_price=None):
+        nonlocal submission_halted
+        if submission_halted:
+            return False
         if fractional_buy_execution and side == "buy":
             normalized_quantity = _normalize_buy_quantity(
                 quantity,
@@ -1235,59 +1245,52 @@ def execute_rebalance_cycle(
         try:
             report = execution_port.submit_order(order_intent)
         except Exception:
-            notify_issue(
-                "Order submit failed",
-                (
-                    f"Symbol: {symbol} Side: {side_text} Qty: {quantity} "
-                    f"Type: {order_type} Price: {submitted_price if submitted_price is not None else 'MO'}\n"
-                    f"{traceback.format_exc()}"
-                ),
-            )
+            report = None
+        status = str(getattr(report, "status", "") or "").strip().lower()
+        if status == "rejected":
+            notify_submission_issue("Order submit failed", "order_rejected")
             return False
 
-        status = str(report.status or "").strip().lower()
-        if status not in {"submitted", "accepted"}:
-            detail = report.raw_payload.get("detail", report.status) if isinstance(report.raw_payload, Mapping) else report.status
-            notify_issue(
-                "Order submit failed",
-                (
-                    f"Symbol: {symbol} Side: {side_text} Qty: {quantity} "
-                    f"Type: {order_type} Price: {submitted_price if submitted_price is not None else 'MO'}\n"
-                    f"Status: {detail}"
-                ),
-            )
-            return False
-
-        log_with_order_id = append_order_id_suffix(log_message, report.broker_order_id)
-        pending_log = translator("order_pending_confirmation", detail=log_with_order_id)
-        print(with_prefix(pending_log), flush=True)
-        logs.append(pending_log)
+        known_submission = status in {"submitted", "accepted", "filled", "partially_filled"}
+        if not known_submission:
+            submission_halted = True
         order_payload = {
             "symbol": str(symbol or "").strip().upper(),
             "side": str(side or "").strip().lower(),
             "quantity": float(order_intent.quantity or 0.0),
             "order_type": str(order_type or "").strip().lower(),
-            "status": "pending_reconciliation",
-            "submission_status": report.status,
+            "status": "pending_reconciliation" if known_submission else "unknown",
+            "submission_status": status if known_submission else "unknown",
         }
         if submitted_price is not None:
             order_payload["price"] = round(float(submitted_price), 4)
             if order_type == "limit":
                 order_payload["limit_price"] = round(float(submitted_price), 4)
-        if report.broker_order_id:
-            order_payload["broker_order_id"] = report.broker_order_id
-        submitted_orders.append(order_payload)
+        broker_order_id = getattr(report, "broker_order_id", None)
+        if broker_order_id:
+            order_payload["broker_order_id"] = broker_order_id
+        if known_submission:
+            order_payload["filled_quantity"] = report.filled_quantity
+            if report.average_fill_price is not None:
+                order_payload["average_fill_price"] = report.average_fill_price
+        # Preserve the broker fact before notifications or other fallible post-submit work.
         pending_orders.append(order_payload)
+        if not known_submission:
+            notify_submission_issue("Order submit failed", "broker_outcome_unknown_reconciliation_required")
+            return False
+        submitted_orders.append(order_payload)
         if str(side or "").strip().lower() == "sell":
             submitted_sell_orders.append(order_payload)
-        if post_submit_order is not None:
-            try:
+        try:
+            log_with_order_id = append_order_id_suffix(log_message, broker_order_id)
+            pending_log = translator("order_pending_confirmation", detail=log_with_order_id)
+            logs.append(pending_log)
+            print(with_prefix(pending_log), flush=True)
+            if post_submit_order is not None:
                 post_submit_order(trade_context, order_intent, report)
-            except Exception:
-                notify_issue(
-                    "Order post-submit hook failed",
-                    f"Symbol: {symbol} Side: {side_text} Qty: {quantity}\n{traceback.format_exc()}",
-                )
+        except Exception:
+            submission_halted = True
+            notify_submission_issue("Order post-submit hook failed", "post_submit_processing_failed_reconciliation_required")
         return True
 
     def record_dry_run(symbol, side, quantity, price, *, order_type):
@@ -1319,6 +1322,8 @@ def execute_rebalance_cycle(
         return True
 
     for symbol in strategy_assets:
+        if submission_halted:
+            break
         if _sell_delta_exceeds_floor(
             current_value=market_values[symbol],
             target_value=target_values[symbol],
@@ -1381,6 +1386,8 @@ def execute_rebalance_cycle(
                             translator("market_sell", symbol=symbol, qty=quantity_text, price=round(price, 2)),
                         )
 
+                if submission_halted and not submitted:
+                    break
                 if submitted:
                     action_done = True
                     sell_submitted = True
@@ -1428,7 +1435,8 @@ def execute_rebalance_cycle(
     if small_account_buy_blocked or account_new_risk_buy_blocked:
         funding_buy_candidates = []
     if (
-        not sell_submitted
+        not submission_halted
+        and not sell_submitted
         and funding_buy_candidates
         and cash_sweep_symbol
         and sellable_quantities.get(cash_sweep_symbol, 0.0) > 0.0
@@ -1494,7 +1502,7 @@ def execute_rebalance_cycle(
                     sell_submitted = True
                     cash_sweep_sold_this_cycle = True
 
-    if sell_submitted:
+    if sell_submitted and not submission_halted:
         if dry_run_only and dry_run_sale_proceeds > 0.0:
             simulated_cash = float(dry_run_sale_proceeds)
             available_cash = max(0.0, available_cash + simulated_cash)
@@ -1611,6 +1619,8 @@ def execute_rebalance_cycle(
         if (target_values[symbol] - market_values[symbol]) > threshold_value
         and abs(target_values[symbol] - market_values[symbol]) > current_min_trade
     ]
+    if submission_halted:
+        buy_candidates = []
     buys_blocked_reason: str | None = None
     if small_account_buy_blocked and buy_candidates:
         buys_blocked_reason = "small_account_below_recommended_equity"
@@ -1690,6 +1700,8 @@ def execute_rebalance_cycle(
         buy_candidates = []
 
     for symbol in buy_candidates:
+        if submission_halted:
+            break
         diff = target_values[symbol] - market_values[symbol]
         price = safe_quote_last_price(
             market_symbol(symbol),
@@ -1837,7 +1849,8 @@ def execute_rebalance_cycle(
         allocation.get("small_account_safe_haven_cash_substituted_symbols")
     )
     if (
-        not cash_sweep_sold_this_cycle
+        not submission_halted
+        and not cash_sweep_sold_this_cycle
         and cash_sweep_symbol
         and cash_sweep_symbol in strategy_assets
         and not small_account_buy_blocked

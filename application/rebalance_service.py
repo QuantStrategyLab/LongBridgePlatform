@@ -16,6 +16,7 @@ from quant_platform_kit.common.account_identity import (
     AccountIdentityPolicy,
     evaluate_account_identity,
 )
+from quant_platform_kit.common.models import ExecutionReport
 from quant_platform_kit.common.port_adapters import CallableExecutionPort
 from quant_platform_kit.longbridge.market_data import fetch_lot_sizes
 from application.signal_snapshot import build_signal_snapshot
@@ -339,7 +340,7 @@ def _should_record_execution_marker(*, result: ExecutionCycleResult, config: Lon
         return False
     if bool(getattr(config, "dry_run_only", False)) and tuple(getattr(result, "dry_run_orders", ()) or ()):
         return True
-    return bool(getattr(result, "action_done", False))
+    return bool(getattr(result, "action_done", False) or getattr(result, "pending_orders", ()))
 
 
 def _record_execution_marker(
@@ -353,7 +354,8 @@ def _record_execution_marker(
     if not store or not marker_key:
         return
     try:
-        store.record_marker(
+        record = store.record_outcome if result.pending_orders else store.record_marker
+        record(
             marker_key,
             metadata={
                 "strategy_profile": getattr(config, "strategy_profile", ""),
@@ -362,15 +364,16 @@ def _record_execution_marker(
                 "action_done": bool(getattr(result, "action_done", False)),
                 "dry_run_orders_count": len(tuple(getattr(result, "dry_run_orders", ()) or ())),
                 "pending_orders_count": len(tuple(getattr(result, "pending_orders", ()) or ())),
+                "pending_orders": list(result.pending_orders),
                 "signal_date": str(dict(getattr(result, "execution", {}) or {}).get("signal_date") or ""),
                 "effective_date": str(dict(getattr(result, "execution", {}) or {}).get("effective_date") or ""),
             },
         )
-    except Exception as exc:
-        notify_issue(
-            "Execution marker write failed",
-            f"Marker: {marker_key}\n{type(exc).__name__}: {exc}",
-        )
+    except Exception:
+        try:
+            notify_issue("Execution marker write failed", "execution_outcome_persistence_failed")
+        except Exception:
+            print("order_notification_failed", flush=True)
 
 
 
@@ -545,6 +548,10 @@ def run_strategy(
 
             def submit_claimed_order(order_intent):
                 nonlocal execution_claim_attempted, execution_claim_acquired
+                rejected = ExecutionReport(
+                    symbol=order_intent.symbol, side=order_intent.side,
+                    quantity=order_intent.quantity, status="rejected",
+                )
                 # Claim only when an order is ready; failed claims are never retried in this cycle.
                 if not execution_claim_attempted:
                     execution_claim_attempted = True
@@ -564,24 +571,25 @@ def run_strategy(
                                 },
                             )
                         except Exception:
-                            raise RuntimeError(
-                                "LongBridge account owner fence unavailable; refusing broker submission"
-                            ) from None
+                            return rejected
                         if not owner_claim.allowed:
-                            raise RuntimeError(
-                                "LongBridge account owner fence contested for "
-                                f"account={account_id}; owner={owner_claim.owner_id!r} "
-                                f"contested_by={owner_id!r}"
-                            )
+                            return rejected
                         try:
                             execution_claim_acquired = bool(execution_state_store.claim_marker(
                                 execution_marker_key,
-                                metadata={"platform": "longbridge", "strategy_profile": config.strategy_profile},
+                                metadata={
+                                    "platform": "longbridge", "strategy_profile": config.strategy_profile,
+                                    "order_intent": {
+                                        "symbol": order_intent.symbol, "side": order_intent.side,
+                                        "quantity": order_intent.quantity, "order_type": order_intent.order_type,
+                                        "limit_price": order_intent.limit_price,
+                                    },
+                                },
                             ))
                         except Exception:
-                            raise RuntimeError("LongBridge execution claim unavailable; refusing broker submission") from None
+                            return rejected
                 if not execution_claim_acquired:
-                    raise RuntimeError("LongBridge execution claim required; refusing broker submission")
+                    return rejected
                 return delegate.submit_order(order_intent)
 
             execution_port = CallableExecutionPort(submit_claimed_order)
@@ -678,20 +686,23 @@ def run_strategy(
     pending_orders = tuple(getattr(execution_result, "pending_orders", ()) or ())
 
     if pending_orders:
-        notification_publisher.publish(
-            notification_renderers.render_rebalance_notification(
-                execution=execution,
-                logs=logs,
-                skip_logs=skip_logs,
-                note_logs=note_logs,
-                translator=config.translator,
-                separator=config.separator,
-                strategy_display_name=config.strategy_display_name,
-                dry_run_only=config.dry_run_only,
-                extra_notification_lines=config.extra_notification_lines,
-                title_key="pending_order_title",
+        try:
+            notification_publisher.publish(
+                notification_renderers.render_rebalance_notification(
+                    execution=execution,
+                    logs=logs,
+                    skip_logs=skip_logs,
+                    note_logs=note_logs,
+                    translator=config.translator,
+                    separator=config.separator,
+                    strategy_display_name=config.strategy_display_name,
+                    dry_run_only=config.dry_run_only,
+                    extra_notification_lines=config.extra_notification_lines,
+                    title_key="pending_order_title",
+                )
             )
-        )
+        except Exception:
+            print("pending_order_notification_failed", flush=True)
     elif action_done:
         notification_publisher.publish(
             notification_renderers.render_rebalance_notification(
