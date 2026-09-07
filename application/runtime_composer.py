@@ -276,6 +276,14 @@ class LongBridgeRuntimeComposer:
         plugin_error_lines = tuple(build_plugin_error_lines(strategy_plugin_error))
         fractional_buy_execution = fractional_buy_execution_enabled(self.strategy_profile)
         notional_buy_compat_mode = dca_compat_mode_enabled(self.strategy_profile)
+        execution_state_store = build_execution_marker_store_from_env(
+            env_reader=self.env_reader,
+            gcp_project_id=self.project_id,
+        )
+        if not self.dry_run_only and not str(execution_state_store.cloud_prefix_uri or "").startswith("gs://"):
+            raise RuntimeError(
+                "LongBridge live execution requires a gs:// execution state URI for atomic claims"
+            )
         return LongBridgeRebalanceConfig(
             limit_sell_discount=self.limit_sell_discount,
             limit_buy_premium=self.limit_buy_premium,
@@ -305,10 +313,7 @@ class LongBridgeRuntimeComposer:
                 dry_run_only=self.dry_run_only,
                 account_scope=self.account_region,
             ),
-            execution_state_store=build_execution_marker_store_from_env(
-                env_reader=self.env_reader,
-                gcp_project_id=self.project_id,
-            ),
+            execution_state_store=execution_state_store,
             execution_state_account_scope=self.account_region,
             physical_account_id=_resolve_configured_physical_account_id(
                 env_reader=self.env_reader
