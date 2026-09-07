@@ -269,7 +269,7 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
 
         return CallableExecutionPort(_submit)
 
-    def _run_buy_cycle(self, *, portfolio_overrides=None, execution_overrides=None):
+    def _run_buy_cycle(self, *, portfolio_overrides=None, execution_overrides=None, dry_run_only=False):
         submitted_orders = []
         plan = {
             "strategy_profile": "soxl_soxx_trend_income",
@@ -332,6 +332,7 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
             with_prefix=lambda message: message,
             limit_sell_discount=0.995,
             limit_buy_premium=1.0,
+            dry_run_only=dry_run_only,
         )
         return result, submitted_orders
 
@@ -439,6 +440,31 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         self.assertTrue(result.action_done)
         self.assertEqual(len(submitted_orders), 1)
         self.assertEqual(str(getattr(submitted_orders[0], "side", "")).lower(), "sell")
+
+    def test_dry_run_emits_gate_axes_even_when_no_execute(self) -> None:
+        result, submitted_orders = self._run_buy_cycle(
+            portfolio_overrides={
+                "account_new_risk_snapshot": {
+                    "observation_status": "COMPLETE",
+                    "reconciliation_status": "VERIFIED",
+                    "circuit_breaker_state": "CLOSED",
+                },
+            },
+            execution_overrides={"no_execute": True, "risk_flags": ("no_execute",)},
+            dry_run_only=True,
+        )
+        self.assertFalse(result.action_done)
+        self.assertEqual(submitted_orders, [])
+        self.assertTrue(result.execution.get("no_execute"))
+        self.assertTrue(
+            any(
+                "disposition=ALLOW_NEW_RISK" in note
+                and "observation=COMPLETE" in note
+                and "reconciliation=VERIFIED" in note
+                and "breaker=CLOSED" in note
+                for note in result.note_logs
+            )
+        )
 
 
 if __name__ == "__main__":
