@@ -745,7 +745,7 @@ jobs:
           deployment_label="$(printf '%s' "${DEPLOYMENT_LABEL}" | tr '[:upper:]' '[:lower:]')"
 
           gcloud auth configure-docker "${artifact_registry_hostname}" --quiet
-          docker build --pull -t "${image}" .
+          git archive HEAD | docker build --pull -t "${image}" -
           docker push "${image}"
 
           gcloud run deploy "${CLOUD_RUN_SERVICE}" \
