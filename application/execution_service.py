@@ -1080,19 +1080,8 @@ def execute_rebalance_cycle(
     allocation_drift_base_market_values = dict(market_values)
     allocation_drift_base_quantities = dict(quantities)
     allocation_drift_base_cash = float(portfolio.get("liquid_cash", 0.0) or 0.0)
-    if _execution_is_blocked(plan=plan, execution=execution, allocation=allocation):
-        blocked_execution = dict(execution or {})
-        blocked_execution["no_execute"] = True
-        return ExecutionCycleResult(
-            plan=dict(plan or {}),
-            portfolio=dict(portfolio or {}),
-            execution=blocked_execution,
-            allocation=dict(allocation or {}),
-            logs=tuple(logs),
-            skip_logs=tuple(skip_logs),
-            note_logs=tuple(note_logs),
-            action_done=False,
-        )
+    # Evaluate new-risk axes before no_execute short-circuit so dry-run/Cloud Logging
+    # still observe COMPLETE/VERIFIED/CLOSED (or the fail-closed disposition).
     account_new_risk_buy_blocked = False
     account_new_risk_reason_codes: tuple[str, ...] = ()
     if is_account_new_risk_gate_enabled():
@@ -1121,6 +1110,19 @@ def execute_rebalance_cycle(
             note_logs.append(gate_diagnostic_message)
     else:
         set_cycle_snapshot(None)
+    if _execution_is_blocked(plan=plan, execution=execution, allocation=allocation):
+        blocked_execution = dict(execution or {})
+        blocked_execution["no_execute"] = True
+        return ExecutionCycleResult(
+            plan=dict(plan or {}),
+            portfolio=dict(portfolio or {}),
+            execution=blocked_execution,
+            allocation=dict(allocation or {}),
+            logs=tuple(logs),
+            skip_logs=tuple(skip_logs),
+            note_logs=tuple(note_logs),
+            action_done=False,
+        )
     plan, allocation = _apply_safe_haven_cash_substitution(
         plan=plan,
         portfolio=portfolio,
