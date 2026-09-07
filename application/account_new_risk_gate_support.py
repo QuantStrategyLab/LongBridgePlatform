@@ -15,6 +15,10 @@ from quant_platform_kit.risk.account_new_risk_gate import (
     NewRiskDisposition,
     evaluate_new_risk_admission,
 )
+from quant_platform_kit.risk.cycle_new_risk_health import (
+    CycleNewRiskHealthEvidence,
+    apply_cycle_new_risk_health_axes,
+)
 
 ACCOUNT_NEW_RISK_GATE_ENV = "ACCOUNT_NEW_RISK_GATE"
 
@@ -55,18 +59,63 @@ def _resolve_equity_usd(portfolio: Mapping[str, Any], execution: Mapping[str, An
     return None
 
 
+def _portfolio_metadata(portfolio: Mapping[str, Any]) -> Mapping[str, Any]:
+    metadata = portfolio.get("metadata")
+    return metadata if isinstance(metadata, Mapping) else {}
+
+
+def _resolve_unknown_pending(portfolio: Mapping[str, Any], projection: Mapping[str, Any]) -> bool:
+    """LB local_admission uses ``unknown_pending_orders``; honor it from either surface."""
+    if "unknown_pending_orders" in projection:
+        return bool(projection.get("unknown_pending_orders"))
+    if portfolio.get("unknown_pending_orders") is not None:
+        return bool(portfolio.get("unknown_pending_orders"))
+    return bool(_portfolio_metadata(portfolio).get("unknown_pending_orders"))
+
+
+def _resolve_durable_breaker_open(portfolio: Mapping[str, Any], projection: Mapping[str, Any]) -> bool:
+    """Only an explicit durable OPEN state trips the breaker; absence is not OPEN."""
+    for source in (projection, portfolio, _portfolio_metadata(portfolio)):
+        value = source.get("durable_circuit_breaker_state")
+        if value is not None:
+            return str(value) == "OPEN"
+    return False
+
+
+def _resolve_digest_flag(portfolio: Mapping[str, Any], projection: Mapping[str, Any], key: str) -> bool:
+    for source in (projection, _portfolio_metadata(portfolio)):
+        if key in source:
+            return bool(source.get(key))
+    return False
+
+
 def build_account_new_risk_snapshot(
     portfolio: Mapping[str, Any],
     *,
     execution: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build an explicit fail-closed projection from evidence available this cycle."""
+    """Build a cycle-health projection from evidence available this cycle.
+
+    Health axes are derived from real cycle evidence (resolved equity,
+    ``unknown_pending_orders``, an explicit durable breaker state, and any
+    configured reconciliation digests) rather than a blanket unhealthy
+    default. Explicit keys already present on an injected
+    ``account_new_risk_snapshot`` projection always win.
+    """
     projection = dict(portfolio.get("account_new_risk_snapshot") or {})
-    projection.setdefault("observation_status", "UNAVAILABLE")
-    projection.setdefault("reconciliation_status", "UNVERIFIED")
-    projection.setdefault("circuit_breaker_state", "OPEN")
-    if "equity_usd" not in projection:
-        projection["equity_usd"] = _resolve_equity_usd(portfolio, execution)
+    equity_usd = _coerce_optional_float(projection.get("equity_usd"))
+    if equity_usd is None:
+        equity_usd = _resolve_equity_usd(portfolio, execution)
+
+    evidence = CycleNewRiskHealthEvidence(
+        observation_ok=equity_usd is not None,
+        unknown_pending=_resolve_unknown_pending(portfolio, projection),
+        digests_configured=_resolve_digest_flag(portfolio, projection, "digests_configured"),
+        digests_verified=_resolve_digest_flag(portfolio, projection, "digests_verified"),
+        durable_breaker_open=_resolve_durable_breaker_open(portfolio, projection),
+    )
+    projection = apply_cycle_new_risk_health_axes(projection, evidence)
+    projection["equity_usd"] = equity_usd
     return projection
 
 
