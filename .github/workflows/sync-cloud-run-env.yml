@@ -232,6 +232,7 @@ jobs:
       RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
       EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI }}
+      LIFECYCLE_PERFORMANCE_BUCKET: ${{ vars.LIFECYCLE_PERFORMANCE_BUCKET }}
       LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}
       LONGBRIDGE_PHYSICAL_ACCOUNT_ID: ${{ vars.LONGBRIDGE_PHYSICAL_ACCOUNT_ID }}
       # Paper-only durable-command staging. These are intentionally opt-in;
@@ -495,6 +496,8 @@ jobs:
           uv sync --frozen --no-dev
       - name: Resolve Cloud Run sync targets
         id: strategy_requirements
+        env:
+          GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT || env.GCP_PROJECT_ID }}
         if: steps.config.outputs.env_sync_enabled == 'true'
         run: |
           set -euo pipefail
