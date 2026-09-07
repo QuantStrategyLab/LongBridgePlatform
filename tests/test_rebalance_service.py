@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import unittest
@@ -3421,6 +3422,160 @@ class RequiredExecutionClaimTests(unittest.TestCase):
         return rebalance_service.run_strategy(
             runtime=self.runtime, config=replace(self.config, **overrides),
         )
+
+    def _add_second_buy_target(self):
+        self.plan["allocation"]["strategy_symbols"] = ("SOXL", "SOXX")
+        self.plan["allocation"]["risk_symbols"] = ("SOXL", "SOXX")
+        self.plan["allocation"]["targets"] = {"SOXL": 200.0, "SOXX": 200.0}
+        self.plan["portfolio"]["market_values"]["SOXX"] = 0.0
+        self.plan["portfolio"]["quantities"]["SOXX"] = 0
+        self.plan["portfolio"]["sellable_quantities"]["SOXX"] = 0
+
+    def test_unknown_submission_stops_cycle_and_retains_intent_and_claim(self):
+        self._add_second_buy_target()
+        for outcome in ("timeout", "unknown_report", "missing_report"):
+            with self.subTest(outcome=outcome), TemporaryDirectory() as directory:
+                self.orders.clear()
+                self.issues.clear()
+                store = ExecutionMarkerStore(local_dir=directory)
+
+                def uncertain_submit(intent):
+                    self.orders.append(intent)
+                    if outcome == "timeout":
+                        raise TimeoutError("synthetic-private-provider-detail")
+                    if outcome == "missing_report":
+                        return None
+                    return ExecutionReport(
+                        symbol=intent.symbol, side=intent.side, quantity=intent.quantity,
+                        status="unknown", broker_order_id="synthetic-unknown-order",
+                    )
+
+                self.runtime = replace(self.runtime, execution_port_factory=lambda _context: CallableExecutionPort(uncertain_submit))
+                result = self._run(execution_dedup_enabled=True, execution_state_store=store)
+                self.assertEqual(len(self.orders), 1)
+                self.assertFalse(result.action_done)
+                self.assertEqual(len(result.pending_orders), 1)
+                order = result.pending_orders[0]
+                intent = self.orders[0]
+                self.assertEqual((order["symbol"], order["side"], order["quantity"]), (intent.symbol, intent.side, intent.quantity))
+                self.assertEqual(order["status"], "unknown")
+                self.assertEqual(order["submission_status"], "unknown")
+                from application.execution_receipt_adapter import attach_cycle_execution_receipt
+                report = {
+                    "platform": "longbridge", "strategy_profile": self.config.strategy_profile,
+                    "dry_run": False, "runtime_target": {"execution_mode": "paper"},
+                    "runtime_release_receipt": {
+                        "attestation_state": "self_attested", "strategy_release": {"strategy_revision": "a" * 40},
+                    },
+                }
+                attach_cycle_execution_receipt(report, result)
+                self.assertEqual(report["execution_receipt"]["outcome"], "reconciliation_required")
+                if outcome == "unknown_report":
+                    self.assertEqual(order["broker_order_id"], "synthetic-unknown-order")
+                self.assertNotIn("synthetic-private-provider-detail", str(self.issues))
+                key = rebalance_service._build_execution_marker_key(config=replace(self.config, execution_dedup_enabled=True), execution=self.plan["execution"])
+                original_claim = store.read_marker(key)
+                self.assertEqual(original_claim["state"], "claimed")
+                self.assertEqual(original_claim["metadata"]["order_intent"]["symbol"], intent.symbol)
+                outcome_payload = json.loads(store._outcome_local_path(key).read_text())
+                self.assertEqual(outcome_payload["metadata"]["pending_orders"], list(result.pending_orders))
+                self._run(execution_dedup_enabled=True, execution_state_store=store)
+                self.assertEqual(len(self.orders), 1)
+                self.assertEqual(store.read_marker(key), original_claim)
+
+    def test_unknown_sell_stops_remaining_sells_buys_and_refresh(self):
+        self._add_second_buy_target()
+        self.plan["allocation"]["targets"] = {"SOXL": 0.0, "SOXX": 200.0}
+        self.plan["portfolio"]["market_values"]["SOXL"] = 400.0
+        self.plan["portfolio"]["quantities"]["SOXL"] = 4
+        self.plan["portfolio"]["sellable_quantities"]["SOXL"] = 4
+        resolve_plan = Mock(return_value=self.plan)
+
+        def submit(intent):
+            self.orders.append(intent)
+            raise TimeoutError("synthetic-private-provider-detail")
+
+        self.runtime = replace(
+            self.runtime, execution_port_factory=lambda _context: CallableExecutionPort(submit),
+            resolve_rebalance_plan=resolve_plan,
+        )
+        result = self._run(execution_dedup_enabled=True, execution_state_store=self.store)
+        self.assertEqual([(order.symbol, order.side) for order in self.orders], [("SOXL.US", "sell")])
+        self.assertEqual(result.pending_orders[0]["status"], "unknown")
+        self.assertEqual(resolve_plan.call_count, 1)
+
+    def test_filled_order_and_claim_survive_outcome_store_failure(self):
+        self._add_second_buy_target()
+
+        def submit(intent):
+            self.orders.append(intent)
+            return ExecutionReport(
+                symbol=intent.symbol, side=intent.side, quantity=intent.quantity,
+                status="filled", broker_order_id="synthetic-filled-order",
+                filled_quantity=intent.quantity, average_fill_price=100.0,
+            )
+
+        self.runtime = replace(
+            self.runtime, execution_port_factory=lambda _context: CallableExecutionPort(submit),
+            post_submit_order=Mock(side_effect=RuntimeError("synthetic-private-hook-detail")),
+        )
+        with patch.object(ExecutionMarkerStore, "record_outcome", side_effect=RuntimeError("synthetic-private-store-detail")):
+            result = self._run(execution_dedup_enabled=True, execution_state_store=self.store)
+        self.assertEqual(len(self.orders), 1)
+        self.assertTrue(result.action_done)
+        self.assertEqual(result.pending_orders[0]["submission_status"], "filled")
+        self.assertEqual(result.pending_orders[0]["filled_quantity"], self.orders[0].quantity)
+        self.assertEqual(result.pending_orders[0]["average_fill_price"], 100.0)
+        key = rebalance_service._build_execution_marker_key(
+            config=replace(self.config, execution_dedup_enabled=True), execution=self.plan["execution"],
+        )
+        self.assertEqual(self.store.read_marker(key)["state"], "claimed")
+        self.assertNotIn("synthetic-private", str(self.issues))
+        self._run(execution_dedup_enabled=True, execution_state_store=self.store)
+        self.assertEqual(len(self.orders), 1)
+
+    def test_definite_rejection_is_not_unknown_and_allows_next_intent(self):
+        self._add_second_buy_target()
+
+        def submit(intent):
+            self.orders.append(intent)
+            return ExecutionReport(
+                symbol=intent.symbol, side=intent.side, quantity=intent.quantity,
+                status="rejected" if len(self.orders) == 1 else "submitted",
+                broker_order_id=None if len(self.orders) == 1 else "synthetic-accepted",
+            )
+
+        self.runtime = replace(self.runtime, execution_port_factory=lambda _context: CallableExecutionPort(submit))
+        result = self._run(execution_dedup_enabled=True, execution_state_store=self.store)
+        self.assertEqual(len(self.orders), 2)
+        self.assertEqual(len(result.pending_orders), 1)
+        self.assertEqual(result.pending_orders[0]["broker_order_id"], "synthetic-accepted")
+
+    def test_acknowledged_order_hook_failure_stops_new_submits_without_losing_ack(self):
+        self._add_second_buy_target()
+        self.runtime = replace(self.runtime, post_submit_order=Mock(side_effect=RuntimeError("synthetic-private-hook-detail")))
+        result = self._run(execution_dedup_enabled=True, execution_state_store=self.store)
+        self.assertEqual(len(self.orders), 1)
+        self.assertTrue(result.action_done)
+        self.assertEqual(result.pending_orders[0]["submission_status"], "submitted")
+        self.assertEqual(result.pending_orders[0]["broker_order_id"], "synthetic-order")
+        self.assertNotIn("synthetic-private-hook-detail", str(self.issues))
+
+    def test_unknown_order_survives_notification_failure(self):
+        self._add_second_buy_target()
+
+        def submit(intent):
+            self.orders.append(intent)
+            raise TimeoutError("synthetic uncertain submission")
+
+        self.runtime = replace(
+            self.runtime, execution_port_factory=lambda _context: CallableExecutionPort(submit),
+            notify_issue=Mock(side_effect=RuntimeError("synthetic notification failed")),
+            notifications=CallableNotificationPort(Mock(side_effect=RuntimeError("synthetic notification failed"))),
+        )
+        result = self._run(execution_dedup_enabled=True, execution_state_store=self.store)
+        self.assertEqual(len(self.orders), 1)
+        self.assertEqual(result.pending_orders[0]["status"], "unknown")
 
     def test_missing_claim_prerequisites_never_submit(self):
         cases = (
