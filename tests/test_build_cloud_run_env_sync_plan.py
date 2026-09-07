@@ -6,9 +6,66 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SYNC_PLAN_SCRIPT_PATH = ROOT / "scripts" / "build_cloud_run_env_sync_plan.py"
+
+def test_workflow_exports_lifecycle_store_settings():
+    workflow = (ROOT / ".github/workflows/sync-cloud-run-env.yml").read_text()
+    assert "      LIFECYCLE_PERFORMANCE_BUCKET: ${{ vars.LIFECYCLE_PERFORMANCE_BUCKET }}" in workflow
+    plan_step = workflow.split("id: strategy_requirements", 1)[1].split("\n      - name:", 1)[0]
+    assert "          GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT || env.GCP_PROJECT_ID }}" in plan_step
+
+
+@pytest.mark.parametrize("source", ["missing", "shared", "defaults", "target"])
+def test_lifecycle_store_per_service_precedence(source):
+    defaults = {"GLOBAL_TELEGRAM_CHAT_ID": "test-chat", "NOTIFY_LANG": "en"}
+    target = {
+        "service": "unit-service",
+        "account_prefix": "HK",
+        "runtime_target": json.loads(runtime_target_json(
+            "tqqq_growth_income",
+            deployment_selector="HK",
+            account_scope="HK",
+            service_name="unit-service",
+        )),
+    }
+    env = {
+        name: value for name, value in os.environ.items()
+        if name in {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"}
+    }
+    env["PLATFORM_CONFIG_JSON"] = "{}"
+    values = {"LIFECYCLE_PERFORMANCE_BUCKET": "gs://unit-test-lifecycle"}
+    values["GOOGLE_CLOUD_PROJECT"] = "unit-test-project"
+    expected = {}
+    for layer in ("shared", "defaults", "target"):
+        if source == "missing":
+            break
+        destination = env if layer == "shared" else defaults if layer == "defaults" else target
+        expected = {name: value + "-" + layer for name, value in values.items()}
+        destination.update(expected)
+        if source == layer:
+            break
+    env["CLOUD_RUN_SERVICE_TARGETS_JSON"] = json.dumps(
+        {"defaults": defaults, "targets": [target]}
+    )
+    result = subprocess.run(
+        [sys.executable, str(SYNC_PLAN_SCRIPT_PATH), "--json"],
+        check=True, capture_output=True, text=True, env=env, timeout=30,
+    )
+    plan = json.loads(result.stdout)
+    assert plan["mode"] == "per_service"
+    actual = plan["targets"][0]
+    for name in values:
+        if source == "missing":
+            assert name not in actual["env"]
+            assert name in actual["remove_env_vars"]
+        else:
+            assert actual["env"][name] == expected[name]
+            assert name not in actual["remove_env_vars"]
+
 
 
 def runtime_target_json(
@@ -54,6 +111,8 @@ def test_build_cloud_run_env_sync_plan_legacy_mode_uses_shared_env():
         "LONGBRIDGE_MARKET": "US",
         "LONGBRIDGE_MARKET_TIMEZONE": "America/New_York",
         "EXECUTION_REPORT_GCS_URI": "gs://runtime/execution-reports",
+        "LIFECYCLE_PERFORMANCE_BUCKET": "gs://qsl-runtime-logs-shared/strategy-lifecycle/v1",
+        "GOOGLE_CLOUD_PROJECT": "unit-test-project",
         "LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_ENABLED": "true",
         "LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_CONSUMER_ENABLED": "true",
         "LONGBRIDGE_EXECUTION_COMMAND_CLOUD_URI": "gs://runtime/execution-commands/paper",
@@ -77,6 +136,10 @@ def test_build_cloud_run_env_sync_plan_legacy_mode_uses_shared_env():
     assert target["env"]["GLOBAL_TELEGRAM_CHAT_ID"] == "5992562050"
     assert target["env"]["LONGBRIDGE_MARKET"] == "US"
     assert target["env"]["EXECUTION_REPORT_GCS_URI"] == "gs://runtime/execution-reports"
+    assert target["env"]["GOOGLE_CLOUD_PROJECT"] == "unit-test-project"
+    assert target["env"]["LIFECYCLE_PERFORMANCE_BUCKET"] == (
+        "gs://qsl-runtime-logs-shared/strategy-lifecycle/v1"
+    )
     assert target["env"]["LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_ENABLED"] == "true"
     assert target["env"]["LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_CONSUMER_ENABLED"] == "true"
     assert target["env"]["LONGBRIDGE_EXECUTION_COMMAND_CLOUD_URI"] == "gs://runtime/execution-commands/paper"
