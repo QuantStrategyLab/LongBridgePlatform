@@ -33,7 +33,7 @@ grep -Fq 'CLOUD_SCHEDULER_LOCATION: ${{ vars.CLOUD_SCHEDULER_LOCATION }}' "$work
 grep -Fq 'CLOUD_SCHEDULER_MAIN_TIME: ${{ vars.CLOUD_SCHEDULER_MAIN_TIME }}' "$workflow_file"
 grep -Fq 'CLOUD_SCHEDULER_PROBE_TIME: ${{ vars.CLOUD_SCHEDULER_PROBE_TIME }}' "$workflow_file"
 grep -Fq 'CLOUD_SCHEDULER_PRECHECK_TIME: ${{ vars.CLOUD_SCHEDULER_PRECHECK_TIME }}' "$workflow_file"
-grep -Fq 'CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON }}' "$workflow_file"
+grep -Fq 'CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}' "$workflow_file"
 grep -Fq 'GCP_SCHEDULER_SERVICE_ACCOUNT: longbridge-platform-scheduler@longbridgequant.iam.gserviceaccount.com' "$workflow_file"
 grep -Fq 'Skipping Cloud Run commit wait because CLOUD_RUN_ENV_SYNC_WAIT_FOR_COMMIT is disabled.' "$workflow_file"
 grep -Fq 'permissions:' "$workflow_file"
@@ -62,7 +62,7 @@ grep -Fq "gcloud run services describe \"\${CLOUD_RUN_SERVICE}\" --region \"\${C
 grep -Fq 'Timed out waiting for Cloud Run service ${CLOUD_RUN_SERVICE} to deploy commit ${target_sha}. Last seen commit: ${deployed_sha:-<none>}' "$workflow_file"
 grep -Fq 'ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}' "$workflow_file"
 grep -Fq 'ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION: ${{ vars.ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION }}' "$workflow_file"
-grep -Fq 'GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}' "$workflow_file"
+grep -Fq 'GLOBAL_TELEGRAM_CHAT_ID: ${{ secrets.GLOBAL_TELEGRAM_CHAT_ID }}' "$workflow_file"
 grep -Fq 'TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}' "$workflow_file"
 grep -Fq 'STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD: ${{ secrets.STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD }}' "$workflow_file"
 grep -Fq 'STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN: ${{ secrets.STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN }}' "$workflow_file"
@@ -133,7 +133,7 @@ grep -Fq 'GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT || env.GCP_PROJECT
 grep -Fq 'LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_ENABLED: ${{ vars.LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_ENABLED }}' "$workflow_file"
 grep -Fq 'LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_CONSUMER_ENABLED: ${{ vars.LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_CONSUMER_ENABLED }}' "$workflow_file"
 grep -Fq 'LONGBRIDGE_EXECUTION_COMMAND_CLOUD_URI: ${{ vars.LONGBRIDGE_EXECUTION_COMMAND_CLOUD_URI }}' "$workflow_file"
-grep -Fq 'RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON }}' "$workflow_file"
+grep -Fq 'RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}' "$workflow_file"
 grep -Fq 'ACCOUNT_REGION: ${{ vars.ACCOUNT_REGION || matrix.target.default_account_region }}' "$workflow_file"
 grep -Fq 'write_github_output "enabled=false"' "$workflow_file"
 grep -Fq 'Skipping ${DEPLOYMENT_LABEL} Cloud Run automation because ENABLE_GITHUB_CLOUD_RUN_DEPLOY and ENABLE_GITHUB_ENV_SYNC are not true.' "$workflow_file"
@@ -322,3 +322,157 @@ if grep -Fq 'LONGPORT_APP_SECRET: ${{ secrets.LONGPORT_APP_SECRET }}' "$workflow
   echo "unexpected GitHub secret fallback for LONGPORT_APP_SECRET still present" >&2
   exit 1
 fi
+
+# Execute the workflow's actual shell blocks with local command stubs only.
+python3 - "$workflow_file" <<'PY'
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import textwrap
+
+workflow = Path(sys.argv[1]).read_text()
+lifecycle = Path(sys.argv[1]).with_name("runtime-target-lifecycle.yml").read_text()
+run_name = re.search(r"^run-name: \$\{\{ (.+) \}\}$", workflow, re.MULTILINE)
+assert run_name, "image-only staging must identify downstream lifecycle exclusion"
+lifecycle_job = lifecycle.split("  lifecycle:\n", 1)[1]
+lifecycle_if = re.search(r"^    if: (.+)$", lifecycle_job, re.MULTILINE)
+assert lifecycle_if, "lifecycle must skip image-only completions before matrix authentication"
+# Evaluate the actual two comparison/boolean expressions for dispatch and follow-up events.
+for mode in ("legacy", "image-only-no-traffic"):
+    title = eval(run_name[1].replace("inputs.deployment_mode", "mode").replace("&&", "and").replace("||", "or"),
+                 {"__builtins__": {}}, {"mode": mode})
+    for event in ("workflow_run", "workflow_dispatch", "schedule"):
+        condition = lifecycle_if[1].replace("github.event_name", "event").replace(
+            "github.event.workflow_run.display_title", "title").replace("||", "or")
+        allowed = eval(condition, {"__builtins__": {}}, {"event": event, "title": title})
+        assert allowed == (event != "workflow_run" or mode == "legacy"), (mode, event)
+print("lifecycle event condition cases: 6 passed")
+assert "  image-only-no-traffic:\n" in workflow, "missing explicit no-traffic job"
+job = workflow.split("  image-only-no-traffic:\n", 1)[1].split("\n  sync:\n", 1)[0]
+assert "matrix" not in job, "image-only mode must select exactly one environment"
+assert "inputs.deployment_mode == 'image-only-no-traffic'" in job
+assert "inputs.target == 'PAPER'" in job and "inputs.target == 'HK'" in job and "inputs.target == 'SG'" in job
+assert "ref: ${{ github.sha }}" in job
+legacy = workflow.split("\n  sync:\n", 1)[1].split("\n  cleanup-shared-monitor:\n", 1)[0]
+cleanup = workflow.split("\n  cleanup-shared-monitor:\n", 1)[1]
+for section in (legacy, cleanup):
+    assert "inputs.deployment_mode != 'image-only-no-traffic'" in section.split("    steps:", 1)[0]
+assert job.index("name: Validate image-only dispatch") < job.index("uses: google-github-actions/auth@")
+assert job.index("name: Verify exact image-only source") < job.index("uses: google-github-actions/auth@")
+# The isolated job cannot bind broker/runtime credentials or run legacy helpers.
+assert re.findall(r"secrets\.([A-Z_]+)", job) == ["CLOUD_RUN_SERVICE"]
+for forbidden in ("scripts/", "sync_plan", "scheduler", "cleanup", "retire", "update-traffic"):
+    assert forbidden not in job.lower(), forbidden
+
+
+def run_block(name):
+    step = job.split(f"      - name: {name}\n", 1)[1].split("\n      - ", 1)[0]
+    return textwrap.dedent(step.split("        run: |\n", 1)[1])
+
+
+blocks = [run_block(name) for name in (
+    "Validate image-only dispatch", "Verify exact image-only source", "Build and stage image without traffic",
+)]
+
+with tempfile.TemporaryDirectory(prefix="lb-no-traffic-test-") as directory:
+    root = Path(directory)
+    log = root / "calls.jsonl"
+    stub = "#!" + sys.executable + "\n" + '''
+import json, os, sys
+from pathlib import Path
+command = Path(sys.argv[0]).name
+args = sys.argv[1:]
+with open(os.environ["STUB_LOG"], "a") as stream:
+    stream.write(json.dumps([command, *args]) + "\\n")
+if command == "git" and args == ["rev-parse", "HEAD"]:
+    print(os.environ["CHECKOUT_SHA"])
+elif command == "git" and args == ["archive", "HEAD"]:
+    print("synthetic tracked source archive")
+elif command == "docker" and args[0] in ("build", "push"):
+    pass
+elif command == "gcloud" and args[:3] == ["run", "services", "describe"]:
+    if os.environ.get("SERVICE_MISSING") == "1":
+        sys.exit(1)
+    print(os.environ["CLOUD_RUN_SERVICE"])
+elif command == "gcloud" and args[:2] == ["auth", "configure-docker"]:
+    pass
+elif command == "gcloud" and args[:4] == ["artifacts", "docker", "images", "describe"]:
+    print(os.environ["IMAGE_DIGEST"])
+elif command == "gcloud" and args[:3] == ["run", "services", "update"]:
+    if os.environ.get("UPDATE_FAIL") == "1":
+        sys.exit(1)
+else:
+    raise SystemExit("unexpected command in image-only workflow")
+'''
+    for command in ("git", "docker", "gcloud"):
+        path = root / command
+        path.write_text(stub)
+        path.chmod(0o700)
+    base = {
+        "PATH": f"{root}:/usr/bin:/bin", "HOME": str(root), "STUB_LOG": str(log),
+        "DEPLOYMENT_MODE": "image-only-no-traffic", "WORKFLOW_TARGET": "PAPER",
+        "APPROVED_REF": "main", "SOURCE_COMMIT": "a" * 40,
+        "GITHUB_REF_NAME": "main", "GITHUB_SHA": "a" * 40, "CHECKOUT_SHA": "a" * 40,
+        "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_RUN_ID": "123",
+        "GITHUB_REPOSITORY": "synthetic/repository", "GITHUB_REF": "refs/heads/main",
+        "GITHUB_WORKFLOW_SHA": "a" * 40,
+        "GITHUB_WORKFLOW_REF": "synthetic/repository/.github/workflows/sync-cloud-run-env.yml@refs/heads/main",
+        "CLOUD_RUN_SERVICE": "synthetic-paper", "CLOUD_RUN_REGION": "synthetic-region",
+        "GCP_PROJECT_ID": "synthetic-project", "GCP_ARTIFACT_REGISTRY_HOSTNAME": "registry.invalid",
+        "GCP_ARTIFACT_REGISTRY_REPOSITORY": "synthetic-images", "IMAGE_DIGEST": "sha256:" + "b" * 64,
+    }
+
+    def execute(**overrides):
+        log.write_text("")
+        result = subprocess.run(
+            ["bash", "-c", "\n".join(blocks)], env={**base, **overrides},
+            text=True, capture_output=True, cwd=root,
+        )
+        return result.returncode, [json.loads(line) for line in log.read_text().splitlines()]
+
+    cases = 0
+    for label in ("PAPER", "HK", "SG"):
+        code, calls = execute(WORKFLOW_TARGET=label, CLOUD_RUN_SERVICE=f"synthetic-{label.lower()}")
+        assert code == 0, label
+        updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
+        assert len(updates) == 1
+        service = f"synthetic-{label.lower()}"
+        image_repo = f"registry.invalid/synthetic-project/synthetic-images/longbridgeplatform/{service}"
+        assert updates[0] == [
+            "gcloud", "run", "services", "update", service,
+            "--project=synthetic-project", "--region=synthetic-region",
+            f"--image={image_repo}@{base['IMAGE_DIGEST']}", "--no-traffic",
+            f"--update-labels=commit-sha={base['SOURCE_COMMIT']},github-run-id=123", "--quiet",
+        ]
+        assert sum(call[:2] == ["docker", "push"] for call in calls) == 1
+        assert [call for call in calls if call[:2] == ["docker", "build"]] == [
+            ["docker", "build", "--pull", "-t", f"{image_repo}:{base['SOURCE_COMMIT']}-123", "-"],
+        ]
+        assert ["git", "archive", "HEAD"] in calls
+        cases += 1
+    for overrides in (
+        {"WORKFLOW_TARGET": "configured"}, {"WORKFLOW_TARGET": "hk-verify"},
+        {"WORKFLOW_TARGET": "paper-command-verify"}, {"WORKFLOW_TARGET": ""},
+        {"DEPLOYMENT_MODE": "legacy"}, {"GITHUB_EVENT_NAME": "push"},
+        {"APPROVED_REF": "other"}, {"APPROVED_REF": ""},
+        {"SOURCE_COMMIT": "main"}, {"SOURCE_COMMIT": "c" * 40},
+        {"GITHUB_WORKFLOW_SHA": "c" * 40}, {"GITHUB_WORKFLOW_REF": "other-workflow"},
+        {"CLOUD_RUN_SERVICE": ""}, {"CLOUD_RUN_REGION": ""},
+    ):
+        code, calls = execute(**overrides)
+        assert code != 0 and calls == [], overrides
+        cases += 1
+    for overrides in ({"CHECKOUT_SHA": "c" * 40}, {"SERVICE_MISSING": "1"}, {"IMAGE_DIGEST": "not-a-digest"}):
+        code, calls = execute(**overrides)
+        assert code != 0, overrides
+        assert not any(call[:4] == ["gcloud", "run", "services", "update"] for call in calls)
+        cases += 1
+    code, calls = execute(UPDATE_FAIL="1")
+    assert code != 0
+    assert sum(call[:4] == ["gcloud", "run", "services", "update"] for call in calls) == 1
+    cases += 1
+    print(f"image-only no-traffic shell cases: {cases} passed")
+PY
