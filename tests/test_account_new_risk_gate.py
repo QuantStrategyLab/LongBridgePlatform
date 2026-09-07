@@ -14,6 +14,7 @@ if (QPK_SRC / "quant_platform_kit").exists() and str(QPK_SRC) not in sys.path:
 
 from application.account_new_risk_gate_support import (
     ACCOUNT_NEW_RISK_GATE_ENV,
+    apply_combined_scale,
     build_snapshot_from_portfolio,
     evaluate_portfolio_new_risk_admission,
     new_risk_buy_prohibited,
@@ -67,6 +68,9 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
         self.assertFalse(result.live_authority_granted)
 
+    def test_missing_combined_scale_is_no_op(self) -> None:
+        self.assertEqual(apply_combined_scale(4.0, None), 4.0)
+
     def test_submit_order_blocks_buy_when_equity_missing(self) -> None:
         set_cycle_snapshot(build_snapshot_from_portfolio({}))
         attempts = {"count": 0}
@@ -88,13 +92,44 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         self.assertEqual(report.status, "rejected")
         self.assertEqual(report.raw_payload.get("detail"), "account_new_risk_gate")
 
+    def test_submit_order_halves_buy_quantity_for_half_scale(self) -> None:
+        set_cycle_snapshot(
+            build_snapshot_from_portfolio(
+                {
+                    "total_strategy_equity": 40_000.0,
+                    "account_new_risk_snapshot": {
+                        "observation_status": "COMPLETE",
+                        "reconciliation_status": "VERIFIED",
+                        "circuit_breaker_state": "CLOSED",
+                        "drawdown_from_peak": 0.075,
+                    },
+                }
+            )
+        )
+        submitted = {}
+
+        def fake_submit(*_args, **kwargs):
+            submitted.update(kwargs)
+            return ExecutionReport(symbol="SOXL", side="buy", quantity=kwargs["quantity"], status="submitted")
+
+        with patch("application.longbridge_execution._qpk_submit_order", fake_submit):
+            submit_order(
+                object(),
+                "SOXL.US",
+                order_kind="market",
+                side="buy",
+                quantity=4.0,
+            )
+
+        self.assertEqual(submitted["quantity"], 2.0)
+
     def test_submit_order_allows_sell_when_buy_prohibited(self) -> None:
         set_cycle_snapshot(build_snapshot_from_portfolio({}))
-        attempts = {"count": 0}
+        submitted = {}
 
-        def fake_submit(*_args, **_kwargs):
-            attempts["count"] += 1
-            return ExecutionReport(symbol="SOXL", side="sell", quantity=1.0, status="submitted")
+        def fake_submit(*_args, **kwargs):
+            submitted.update(kwargs)
+            return ExecutionReport(symbol="SOXL", side="sell", quantity=kwargs["quantity"], status="submitted")
 
         with patch("application.longbridge_execution._qpk_submit_order", fake_submit):
             report = submit_order(
@@ -105,7 +140,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
                 quantity=1.0,
             )
 
-        self.assertEqual(attempts["count"], 1)
+        self.assertEqual(submitted["quantity"], 1.0)
         self.assertEqual(report.status, "submitted")
 
     def test_submit_order_allows_buy_when_healthy(self) -> None:
