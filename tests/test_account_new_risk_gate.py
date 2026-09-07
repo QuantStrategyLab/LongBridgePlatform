@@ -49,8 +49,20 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         self.assertTrue(new_risk_buy_prohibited(result))
         self.assertIn("DRAWDOWN_BRAKE_TRIPPED", result.reason_codes)
 
-    def test_healthy_equity_allows_new_risk(self) -> None:
+    def test_equity_without_snapshot_prohibits_new_risk(self) -> None:
         portfolio = {"total_strategy_equity": 50_000.0}
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+
+    def test_explicit_healthy_snapshot_allows_new_risk(self) -> None:
+        portfolio = {
+            "total_strategy_equity": 50_000.0,
+            "account_new_risk_snapshot": {
+                "observation_status": "COMPLETE",
+                "reconciliation_status": "VERIFIED",
+                "circuit_breaker_state": "CLOSED",
+            },
+        }
         result = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
         self.assertFalse(result.live_authority_granted)
@@ -97,7 +109,18 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         self.assertEqual(report.status, "submitted")
 
     def test_submit_order_allows_buy_when_healthy(self) -> None:
-        set_cycle_snapshot(build_snapshot_from_portfolio({"total_strategy_equity": 50_000.0}))
+        set_cycle_snapshot(
+            build_snapshot_from_portfolio(
+                {
+                    "total_strategy_equity": 50_000.0,
+                    "account_new_risk_snapshot": {
+                        "observation_status": "COMPLETE",
+                        "reconciliation_status": "VERIFIED",
+                        "circuit_breaker_state": "CLOSED",
+                    },
+                }
+            )
+        )
         attempts = {"count": 0}
 
         def fake_submit(*_args, **_kwargs):
@@ -233,8 +256,21 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         self.assertEqual(submitted_orders, [])
         self.assertTrue(any("Account new-risk gate" in note for note in result.note_logs))
 
-    def test_execution_cycle_allows_buys_when_healthy(self) -> None:
+    def test_execution_cycle_blocks_buys_without_snapshot(self) -> None:
         result, submitted_orders = self._run_buy_cycle()
+        self.assertFalse(result.action_done)
+        self.assertEqual(submitted_orders, [])
+
+    def test_execution_cycle_allows_buys_when_healthy(self) -> None:
+        result, submitted_orders = self._run_buy_cycle(
+            portfolio_overrides={
+                "account_new_risk_snapshot": {
+                    "observation_status": "COMPLETE",
+                    "reconciliation_status": "VERIFIED",
+                    "circuit_breaker_state": "CLOSED",
+                },
+            }
+        )
         self.assertTrue(result.action_done)
         self.assertEqual(len(submitted_orders), 1)
         self.assertEqual(str(getattr(submitted_orders[0], "side", "")).lower(), "buy")
