@@ -9,11 +9,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 REPO_ROOT = ROOT.parent.parent if ROOT.parent.name == ".worktrees" else ROOT
+QPK_PIN_WORKTREE_SRC = (
+    REPO_ROOT.parent / "QuantPlatformKit" / ".worktrees" / "pin-d51bb79" / "src"
+)
 QPK_DRIFT_WORKTREE_SRC = (
     REPO_ROOT.parent / "QuantPlatformKit" / ".worktrees" / "drift-to-new-risk-a" / "src"
 )
 QPK_SRC = REPO_ROOT.parent / "QuantPlatformKit" / "src"
-for qpk_src in (QPK_DRIFT_WORKTREE_SRC, QPK_SRC):
+for qpk_src in (QPK_DRIFT_WORKTREE_SRC, QPK_SRC, QPK_PIN_WORKTREE_SRC):
     if (qpk_src / "quant_platform_kit").exists() and str(qpk_src) not in sys.path:
         sys.path.insert(0, str(qpk_src))
 
@@ -23,6 +26,7 @@ from application.account_new_risk_gate_support import (
     build_account_new_risk_snapshot,
     build_snapshot_from_portfolio,
     evaluate_portfolio_new_risk_admission,
+    maybe_inject_production_drift_status,
     new_risk_buy_prohibited,
     set_cycle_snapshot,
 )
@@ -100,6 +104,73 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         portfolio = {"total_strategy_equity": 50_000.0}
         result = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
+
+    def test_maybe_inject_fills_production_drift_from_store_resolver(self) -> None:
+        portfolio = {"total_strategy_equity": 50_000.0}
+        with patch(
+            "quant_platform_kit.risk.production_drift_new_risk.resolve_production_drift_status_from_store",
+            return_value="review",
+        ):
+            injected = maybe_inject_production_drift_status(
+                portfolio,
+                strategy_profile="demo_profile",
+                domain="us_equity",
+            )
+        self.assertEqual(
+            injected["account_new_risk_snapshot"]["production_drift_status"],
+            "review",
+        )
+        result = evaluate_portfolio_new_risk_admission(injected)
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("PRODUCTION_DRIFT_REVIEW", result.reason_codes)
+
+    def test_maybe_inject_does_not_overwrite_explicit_status(self) -> None:
+        portfolio = {
+            "total_strategy_equity": 50_000.0,
+            "account_new_risk_snapshot": {"production_drift_status": "critical"},
+        }
+        with patch(
+            "quant_platform_kit.risk.production_drift_new_risk.resolve_production_drift_status_from_store",
+            return_value="review",
+        ) as resolve:
+            injected = maybe_inject_production_drift_status(
+                portfolio,
+                strategy_profile="demo_profile",
+                domain="us_equity",
+            )
+        resolve.assert_not_called()
+        self.assertEqual(
+            injected["account_new_risk_snapshot"]["production_drift_status"],
+            "critical",
+        )
+
+    def test_maybe_inject_leaves_absent_when_resolver_returns_none(self) -> None:
+        portfolio = {"total_strategy_equity": 50_000.0}
+        with patch(
+            "quant_platform_kit.risk.production_drift_new_risk.resolve_production_drift_status_from_store",
+            return_value=None,
+        ):
+            injected = maybe_inject_production_drift_status(
+                portfolio,
+                strategy_profile="demo_profile",
+                domain="us_equity",
+            )
+        self.assertNotIn("account_new_risk_snapshot", injected)
+        result = evaluate_portfolio_new_risk_admission(injected)
+        self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
+
+    def test_maybe_inject_leaves_absent_when_resolver_raises(self) -> None:
+        portfolio = {"total_strategy_equity": 50_000.0}
+        with patch(
+            "quant_platform_kit.risk.production_drift_new_risk.resolve_production_drift_status_from_store",
+            side_effect=RuntimeError("store unavailable"),
+        ):
+            injected = maybe_inject_production_drift_status(
+                portfolio,
+                strategy_profile="demo_profile",
+                domain="us_equity",
+            )
+        self.assertNotIn("account_new_risk_snapshot", injected)
 
     def test_unknown_pending_orders_prohibits_new_risk(self) -> None:
         portfolio = {"total_strategy_equity": 50_000.0, "unknown_pending_orders": True}
