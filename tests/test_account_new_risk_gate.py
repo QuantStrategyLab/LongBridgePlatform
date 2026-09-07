@@ -8,9 +8,14 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
-if (QPK_SRC / "quant_platform_kit").exists() and str(QPK_SRC) not in sys.path:
-    sys.path.insert(0, str(QPK_SRC))
+REPO_ROOT = ROOT.parent.parent if ROOT.parent.name == ".worktrees" else ROOT
+QPK_DRIFT_WORKTREE_SRC = (
+    REPO_ROOT.parent / "QuantPlatformKit" / ".worktrees" / "drift-to-new-risk-a" / "src"
+)
+QPK_SRC = REPO_ROOT.parent / "QuantPlatformKit" / "src"
+for qpk_src in (QPK_DRIFT_WORKTREE_SRC, QPK_SRC):
+    if (qpk_src / "quant_platform_kit").exists() and str(qpk_src) not in sys.path:
+        sys.path.insert(0, str(qpk_src))
 
 from application.account_new_risk_gate_support import (
     ACCOUNT_NEW_RISK_GATE_ENV,
@@ -61,6 +66,38 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
                 "equity_usd": 50_000.0,
             },
         )
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
+
+    def test_snapshot_maps_production_drift_status_from_account_new_risk_snapshot(self) -> None:
+        snapshot = build_snapshot_from_portfolio(
+            {
+                "total_strategy_equity": 10_000.0,
+                "account_new_risk_snapshot": {"production_drift_status": "review"},
+            }
+        )
+        self.assertEqual(snapshot.production_drift_status, "review")
+
+    def test_production_drift_review_prohibits_new_risk(self) -> None:
+        portfolio = {
+            "total_strategy_equity": 50_000.0,
+            "account_new_risk_snapshot": {"production_drift_status": "review"},
+        }
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("PRODUCTION_DRIFT_REVIEW", result.reason_codes)
+
+    def test_production_drift_critical_prohibits_new_risk(self) -> None:
+        portfolio = {
+            "total_strategy_equity": 50_000.0,
+            "account_new_risk_snapshot": {"production_drift_status": "critical"},
+        }
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("PRODUCTION_DRIFT_CRITICAL", result.reason_codes)
+
+    def test_absent_production_drift_status_still_allows_when_healthy(self) -> None:
+        portfolio = {"total_strategy_equity": 50_000.0}
         result = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
 
