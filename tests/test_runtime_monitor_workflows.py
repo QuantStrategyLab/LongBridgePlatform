@@ -57,6 +57,9 @@ def test_runtime_monitor_workflows_use_frozen_runtime_environment() -> None:
 
     lifecycle = (ROOT / ".github/workflows/runtime-target-lifecycle.yml").read_text()
     assert "traceback|importerror|modulenotfounderror" in lifecycle.lower()
+    assert "scripts/production_drift_health_observe.py" in lifecycle
+    assert "id: production_drift" in lifecycle
+    assert "| Production drift |" in lifecycle
 
 
 def test_cloud_run_deployment_requires_manual_dispatch_and_lifecycle_observes_completed_sync() -> None:
