@@ -1104,7 +1104,21 @@ def execute_rebalance_cycle(
         admission = evaluate_portfolio_new_risk_admission(portfolio, execution=execution)
         account_new_risk_buy_blocked = new_risk_buy_prohibited(admission)
         account_new_risk_reason_codes = tuple(admission.reason_codes)
-        set_cycle_snapshot(build_snapshot_from_portfolio(portfolio, execution=execution))
+        account_new_risk_cycle_snapshot = build_snapshot_from_portfolio(portfolio, execution=execution)
+        set_cycle_snapshot(account_new_risk_cycle_snapshot)
+        gate_diagnostic_message = (
+            "[Account new-risk gate] "
+            f"disposition={admission.disposition.value} "
+            f"observation={account_new_risk_cycle_snapshot.observation_status} "
+            f"reconciliation={account_new_risk_cycle_snapshot.reconciliation_status} "
+            f"breaker={account_new_risk_cycle_snapshot.circuit_breaker_state} "
+            f"reasons={','.join(account_new_risk_reason_codes) or 'NONE'}"
+        )
+        print(with_prefix(gate_diagnostic_message), flush=True)
+        if dry_run_only:
+            # Dry-run verification reports need this axis proof; live heartbeat/
+            # trade notifications stay unchanged (console diagnostic above still fires).
+            note_logs.append(gate_diagnostic_message)
     else:
         set_cycle_snapshot(None)
     plan, allocation = _apply_safe_haven_cash_substitution(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime
 
@@ -28,6 +29,22 @@ from quant_platform_kit.common.strategy_plugins import attach_strategy_plugin_me
 from quant_platform_kit.strategy_lifecycle.performance_monitor import try_record_platform_execution
 
 _DETAIL_FIELD_SPLIT_RE = re.compile(r"\s+(?=[^\s=:：]+[=:：])")
+DRY_RUN_BYPASS_EXECUTION_MARKER_ENV = "DRY_RUN_BYPASS_EXECUTION_MARKER"
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return str(os.environ.get(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _dry_run_bypasses_execution_marker(config: LongBridgeRebalanceConfig) -> bool:
+    """Allow dry-run verification to skip same-day marker/report dedup.
+
+    Live ``/run`` is never affected. When enabled, dry-run also skips claiming or
+    writing execution markers so verification does not pollute dedup state.
+    """
+    return bool(getattr(config, "dry_run_only", False)) and _env_flag_enabled(
+        DRY_RUN_BYPASS_EXECUTION_MARKER_ENV
+    )
 
 
 def _record_platform_execution_telemetry(
@@ -459,7 +476,16 @@ def run_strategy(
         execution["direct_live_routing_blocked"] = True
         execution["direct_live_routing_block_reason"] = "durable_execution_command_required"
     execution_already_recorded = direct_live_routing_blocked or account_identity_blocked
-    if not execution_already_recorded and execution_marker_key and execution_state_store:
+    dry_run_bypass_marker = _dry_run_bypasses_execution_marker(config)
+    if dry_run_bypass_marker:
+        print(
+            config.with_prefix(
+                "Dry-run bypassing execution marker "
+                f"({DRY_RUN_BYPASS_EXECUTION_MARKER_ENV}=true); no marker claim/write this cycle"
+            ),
+            flush=True,
+        )
+    elif not execution_already_recorded and execution_marker_key and execution_state_store:
         try:
             execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
         except Exception as exc:
@@ -604,7 +630,7 @@ def run_strategy(
             lot_sizes=_lot_sizes or None,
             notional_buy_compat_mode=config.notional_buy_compat_mode,
         )
-        if _should_record_execution_marker(result=execution_result, config=config):
+        if not dry_run_bypass_marker and _should_record_execution_marker(result=execution_result, config=config):
             _record_execution_marker(
                 config=config,
                 marker_key=execution_marker_key,
