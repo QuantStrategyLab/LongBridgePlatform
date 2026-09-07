@@ -1,3 +1,4 @@
+import os
 import sys
 import unittest
 from dataclasses import replace
@@ -1579,6 +1580,88 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("已跳过重复执行", sent_messages[0])
         self.assertIn("2026-06-01", sent_messages[0])
         self.assertNotIn("限价买入", sent_messages[0])
+
+    def test_run_strategy_dry_run_bypasses_execution_marker_when_env_enabled(self):
+        os.environ[rebalance_service.DRY_RUN_BYPASS_EXECUTION_MARKER_ENV] = "true"
+        self.addCleanup(os.environ.pop, rebalance_service.DRY_RUN_BYPASS_EXECUTION_MARKER_ENV, None)
+
+        sent_messages = []
+        checked_keys = []
+        recorded_markers = []
+        plan = _build_plan(
+            strategy_symbols=("SOXX",),
+            risk_symbols=("SOXX",),
+            targets={"SOXX": 500.0},
+            market_values={"SOXX": 0.0},
+            sellable_quantities={"SOXX": 0},
+            quantities={"SOXX": 0},
+            current_min_trade=10.0,
+            trade_threshold_value=10.0,
+            investable_cash=600.0,
+            market_status="Risk on",
+            deploy_ratio_text="100.0%",
+            income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%",
+            signal_message="duplicate signal",
+            available_cash=600.0,
+            total_strategy_equity=600.0,
+            portfolio_rows=(("SOXX",),),
+            signal_date="2026-06-01",
+            effective_date="2026-06-02",
+        )
+
+        class FakeStore:
+            def has_marker(self, marker_key):
+                checked_keys.append(marker_key)
+                return True
+
+            def record_marker(self, *args, **kwargs):
+                recorded_markers.append((args, kwargs))
+
+        rebalance_service.run_strategy(
+            runtime=LongBridgeRebalanceRuntime(
+                bootstrap=lambda: ("quote-context", "trade-context", {"trend": "ok"}),
+                resolve_rebalance_plan=lambda *, indicators, snapshot=None, account_state=None: plan,
+                market_data_port_factory=lambda _quote_context: CallableMarketDataPort(
+                    quote_loader=lambda symbol: QuoteSnapshot(
+                        symbol=symbol,
+                        as_of="2026-06-01",
+                        last_price=100.0,
+                    )
+                ),
+                estimate_max_purchase_quantity=lambda *args, **kwargs: 10,
+                notifications=CallableNotificationPort(sent_messages.append),
+                notify_issue=lambda title, detail: sent_messages.append(f"{title}\n{detail}"),
+                portfolio_port_factory=lambda _quote_context, _trade_context: CallablePortfolioPort(
+                    lambda: _build_snapshot(plan)
+                ),
+                execution_port_factory=lambda _trade_context: CallableExecutionPort(
+                    lambda _order_intent: (_ for _ in ()).throw(AssertionError("dry-run should not submit"))
+                ),
+            ),
+            config=LongBridgeRebalanceConfig(
+                physical_account_id="lb-test-001",
+                limit_sell_discount=0.995,
+                limit_buy_premium=1.005,
+                separator="━━━━━━━━━━━━━━━━━━",
+                translator=build_translator("zh"),
+                with_prefix=lambda message: f"[PAPER/LongBridgeQuant] {message}",
+                strategy_profile="soxl_soxx_trend_income",
+                strategy_display_name="SOXL/SOXX 半导体趋势收益",
+                dry_run_only=True,
+                execution_dedup_enabled=True,
+                execution_state_store=FakeStore(),
+                execution_state_account_scope="PAPER",
+            ),
+        )
+
+        # Bypass must skip the has_marker dedup read entirely and must not
+        # write a marker for this dry-run cycle, even though the store would
+        # report an existing marker.
+        self.assertEqual(checked_keys, [])
+        self.assertEqual(recorded_markers, [])
+        self.assertEqual(len(sent_messages), 1)
+        self.assertNotIn("已跳过重复执行", sent_messages[0])
 
     def test_run_strategy_skips_when_prior_report_matches_execution_signal(self):
         sent_messages = []
@@ -3275,7 +3358,11 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("SPYI: $0.00 / 0股", sent_messages[0])
         self.assertNotIn("📈 QQQ 基准\n  - QQQ: 588.50\n  - MA200: 595.25\n  - 退出线: 573.00", sent_messages[0])
         self.assertNotIn("🎯 信号:", sent_messages[0])
-        self.assertIn("✅ 无需调仓", sent_messages[0])
+        # Dry-run cycles now surface the account new-risk gate diagnostic note so
+        # verification reports can prove cycle-health axes; no-op heartbeats with
+        # this note fall into the "no executable orders" branch instead of the
+        # plain "no rebalance needed" branch.
+        self.assertIn("[Account new-risk gate]", sent_messages[0])
         self.assertNotIn("账户现金: $0.00 | 可投资现金", sent_messages[0])
         self.assertNotIn("TQQQ: $0.00  BOXX", sent_messages[0])
         self.assertNotIn("📊 市场状态: ", sent_messages[0])
