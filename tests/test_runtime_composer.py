@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+from dataclasses import replace
 from types import SimpleNamespace
 
 
@@ -157,3 +158,65 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders(monkeypa
     assert config.execution_state_account_scope == "HK"
     assert config.execution_state_store.cloud_prefix_uri == "gs://bucket/runtime-reports"
     assert config.account_identity_policy.is_configured is False
+
+
+def test_runtime_composer_parks_live_without_durable_execution_claim_backend():
+    class MinimalComposer(LongBridgeRuntimeComposer):
+        pass
+
+    fields = {
+        "project_id": "project-1",
+        "secret_name": "secret-1",
+        "token_refresh_threshold_days": 30,
+        "account_prefix": "HK",
+        "account_region": "HK",
+        "strategy_profile": "profile",
+        "strategy_display_name": "Profile",
+        "strategy_display_name_localized": "Profile",
+        "strategy_domain": "us_equity",
+        "notify_lang": "en",
+        "tg_token": None,
+        "tg_chat_id": None,
+        "managed_symbols": (),
+        "benchmark_symbol": "QQQ",
+        "signal_effective_after_trading_days": 1,
+        "separator": "-",
+        "limit_sell_discount": 0.99,
+        "limit_buy_premium": 1.01,
+        "order_poll_interval_sec": 1,
+        "order_poll_max_attempts": 1,
+        "safe_haven_cash_substitute_threshold_usd": 0.0,
+        "min_order_notional_usd": 1.0,
+        "dry_run_only": False,
+        "broker_adapters": SimpleNamespace(),
+        "strategy_adapters": SimpleNamespace(
+            translator=lambda key, **_kwargs: key,
+            build_strategy_plugin_notification_lines=lambda _signals: (),
+            build_strategy_plugin_error_notification_lines=lambda _error: (),
+        ),
+        "estimate_max_purchase_quantity_fn": lambda *_a, **_k: 0.0,
+        "fetch_order_status_fn": lambda *_a, **_k: None,
+        "fetch_token_from_secret_fn": lambda *_a, **_k: "",
+        "refresh_token_if_needed_fn": lambda *_a, **_k: "",
+        "build_contexts_fn": lambda *_a, **_k: (None, None),
+        "run_id_builder": lambda: "run",
+        "event_logger": lambda *_a, **_k: {},
+        "report_builder": lambda *_a, **_k: None,
+        "report_persister": lambda *_a, **_k: None,
+        "translator": lambda key, **_kwargs: key,
+        "env_reader": lambda _name, default="": default,
+        "sleeper": lambda _seconds: None,
+    }
+    composer = MinimalComposer(**fields)
+
+    try:
+        composer.build_rebalance_config()
+    except RuntimeError as exc:
+        assert "requires a gs:// execution state URI" in str(exc)
+    else:
+        raise AssertionError("live execution must fail closed without durable atomic claims")
+
+    dry = replace(composer, dry_run_only=True)
+    dry_config = dry.build_rebalance_config()
+    assert dry_config.dry_run_only is True
+    assert not str(dry_config.execution_state_store.cloud_prefix_uri or "").startswith("gs://")
