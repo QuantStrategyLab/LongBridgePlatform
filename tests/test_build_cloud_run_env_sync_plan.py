@@ -54,6 +54,7 @@ def test_build_cloud_run_env_sync_plan_legacy_mode_uses_shared_env():
         "LONGBRIDGE_MARKET": "US",
         "LONGBRIDGE_MARKET_TIMEZONE": "America/New_York",
         "EXECUTION_REPORT_GCS_URI": "gs://runtime/execution-reports",
+        "LIFECYCLE_PERFORMANCE_BUCKET": "gs://qsl-runtime-logs-shared/strategy-lifecycle/v1",
         "LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_ENABLED": "true",
         "LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_CONSUMER_ENABLED": "true",
         "LONGBRIDGE_EXECUTION_COMMAND_CLOUD_URI": "gs://runtime/execution-commands/paper",
@@ -77,6 +78,9 @@ def test_build_cloud_run_env_sync_plan_legacy_mode_uses_shared_env():
     assert target["env"]["GLOBAL_TELEGRAM_CHAT_ID"] == "5992562050"
     assert target["env"]["LONGBRIDGE_MARKET"] == "US"
     assert target["env"]["EXECUTION_REPORT_GCS_URI"] == "gs://runtime/execution-reports"
+    assert target["env"]["LIFECYCLE_PERFORMANCE_BUCKET"] == (
+        "gs://qsl-runtime-logs-shared/strategy-lifecycle/v1"
+    )
     assert target["env"]["LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_ENABLED"] == "true"
     assert target["env"]["LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_CONSUMER_ENABLED"] == "true"
     assert target["env"]["LONGBRIDGE_EXECUTION_COMMAND_CLOUD_URI"] == "gs://runtime/execution-commands/paper"
