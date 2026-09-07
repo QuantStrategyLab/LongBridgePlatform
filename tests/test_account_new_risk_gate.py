@@ -41,13 +41,57 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             {
                 "observation_status": "UNAVAILABLE",
                 "reconciliation_status": "UNVERIFIED",
-                "circuit_breaker_state": "OPEN",
+                "circuit_breaker_state": "CLOSED",
                 "equity_usd": None,
             },
         )
         result = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertTrue(new_risk_buy_prohibited(result))
         self.assertIn("EQUITY_UNKNOWN_FAIL_CLOSED", result.reason_codes)
+
+    def test_healthy_equity_without_explicit_snapshot_allows_new_risk(self) -> None:
+        """Cycle-health axes derive from resolved equity; no injected snapshot required."""
+        portfolio = {"total_strategy_equity": 50_000.0}
+        self.assertEqual(
+            build_account_new_risk_snapshot(portfolio),
+            {
+                "observation_status": "COMPLETE",
+                "reconciliation_status": "VERIFIED",
+                "circuit_breaker_state": "CLOSED",
+                "equity_usd": 50_000.0,
+            },
+        )
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
+
+    def test_unknown_pending_orders_prohibits_new_risk(self) -> None:
+        portfolio = {"total_strategy_equity": 50_000.0, "unknown_pending_orders": True}
+        snapshot = build_account_new_risk_snapshot(portfolio)
+        self.assertEqual(snapshot["reconciliation_status"], "UNVERIFIED")
+        self.assertEqual(snapshot["circuit_breaker_state"], "OPEN")
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertTrue(new_risk_buy_prohibited(result))
+
+    def test_unknown_pending_orders_from_metadata_prohibits_new_risk(self) -> None:
+        portfolio = {
+            "total_strategy_equity": 50_000.0,
+            "metadata": {"unknown_pending_orders": True},
+        }
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertTrue(new_risk_buy_prohibited(result))
+
+    def test_durable_breaker_open_prohibits_new_risk(self) -> None:
+        portfolio = {
+            "total_strategy_equity": 50_000.0,
+            "durable_circuit_breaker_state": "OPEN",
+        }
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertTrue(new_risk_buy_prohibited(result))
+
+    def test_durable_breaker_absent_does_not_trip_breaker(self) -> None:
+        portfolio = {"total_strategy_equity": 50_000.0}
+        snapshot = build_account_new_risk_snapshot(portfolio)
+        self.assertEqual(snapshot["circuit_breaker_state"], "CLOSED")
 
     def test_drawdown_brake_prohibits_new_risk(self) -> None:
         portfolio = {
@@ -60,10 +104,11 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         self.assertTrue(new_risk_buy_prohibited(result))
         self.assertIn("DRAWDOWN_BRAKE_TRIPPED", result.reason_codes)
 
-    def test_equity_without_snapshot_prohibits_new_risk(self) -> None:
+    def test_equity_without_snapshot_allows_new_risk(self) -> None:
+        """Healthy resolved equity alone now derives cycle-health axes (ALLOW)."""
         portfolio = {"total_strategy_equity": 50_000.0}
         result = evaluate_portfolio_new_risk_admission(portfolio)
-        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
 
     def test_explicit_healthy_snapshot_allows_new_risk(self) -> None:
         portfolio = {
@@ -305,8 +350,16 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         )
         self.assertTrue(any("Account new-risk gate" in note for note in result.note_logs))
 
-    def test_execution_cycle_blocks_buys_without_snapshot(self) -> None:
+    def test_execution_cycle_allows_buys_without_explicit_snapshot(self) -> None:
+        """Healthy resolved equity alone now derives cycle-health axes (ALLOW)."""
         result, submitted_orders = self._run_buy_cycle()
+        self.assertTrue(result.action_done)
+        self.assertEqual(len(submitted_orders), 1)
+
+    def test_execution_cycle_blocks_buys_when_unknown_pending_orders(self) -> None:
+        result, submitted_orders = self._run_buy_cycle(
+            portfolio_overrides={"unknown_pending_orders": True},
+        )
         self.assertFalse(result.action_done)
         self.assertEqual(submitted_orders, [])
 
