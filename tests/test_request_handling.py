@@ -775,6 +775,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertNotIn("probe failed", notification["compact_text"])
         self.assertLessEqual(len(notification["compact_text"]), 3500)
 
+    @patch.dict(os.environ, {"LONGBRIDGE_EXECUTION_STATE_CLOUD_URI": "gs://unit-test-execution/claims"})
     def test_run_strategy_emits_structured_runtime_events(self):
         module = load_module()
         observed = []
@@ -792,6 +793,7 @@ class RequestHandlingTests(unittest.TestCase):
         )
         self.assertTrue(all(run_id == "run-001" for run_id, _event, _fields in observed))
 
+    @patch.dict(os.environ, {"LONGBRIDGE_EXECUTION_STATE_CLOUD_URI": "gs://unit-test-execution/claims"})
     def test_run_strategy_market_hours_tuple_without_error_does_not_warn(self):
         module = load_module()
         observed = []
@@ -807,6 +809,20 @@ class RequestHandlingTests(unittest.TestCase):
             "market_hours_check_failed",
             [event for event, _fields in observed],
         )
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_run_strategy_without_durable_claim_store_never_enters_cycle(self):
+        module = load_module()
+        cycles = []
+        events = []
+        module.is_market_open_now = lambda **_kwargs: True
+        module.run_rebalance_cycle = lambda **_kwargs: cycles.append("called")
+        module.emit_runtime_log = lambda _context, event, **_kwargs: events.append(event)
+
+        self.assertFalse(module.run_strategy())
+        self.assertEqual(cycles, [])
+        self.assertIn("strategy_cycle_failed", events)
+        self.assertNotIn("strategy_cycle_completed", events)
 
     def test_run_strategy_error_notification_is_compact_and_bounded(self):
         module = load_module()
@@ -942,6 +958,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertIs(observed["alerts"][0][1]["notification_settings"], module.RUNTIME_SETTINGS)
         self.assertIsNotNone(observed["alerts"][0][1]["state_settings"])
 
+    @patch.dict(os.environ, {"LONGBRIDGE_EXECUTION_STATE_CLOUD_URI": "gs://unit-test-execution/claims"})
     def test_run_strategy_force_runs_when_market_closed(self):
         module = load_module()
         observed = []
@@ -1055,6 +1072,7 @@ class RequestHandlingTests(unittest.TestCase):
 
         self.assertEqual(observed["notification_title_key"], "dry_run_title")
 
+    @patch.dict(os.environ, {"LONGBRIDGE_EXECUTION_STATE_CLOUD_URI": "gs://unit-test-execution/claims"})
     def test_run_strategy_persists_machine_readable_report(self):
         module = load_module()
         observed_reports = []
