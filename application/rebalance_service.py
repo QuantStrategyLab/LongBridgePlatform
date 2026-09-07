@@ -599,6 +599,29 @@ def run_strategy(
                     _lot_sizes = fetch_lot_sizes(quote_context, _candidates)
                 except Exception:
                     _lot_sizes = {}
+        from application.account_new_risk_gate_support import maybe_inject_production_drift_status
+        from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
+
+        domain = ""
+        metadata = portfolio.get("metadata") if isinstance(portfolio, dict) else None
+        if isinstance(metadata, dict):
+            domain = str(metadata.get("strategy_domain") or "").strip()
+        if not domain:
+            try:
+                domain = str(
+                    resolve_strategy_definition(
+                        getattr(config, "strategy_profile", None),
+                        platform_id=LONGBRIDGE_PLATFORM,
+                    ).domain
+                    or ""
+                )
+            except Exception:
+                domain = ""
+        portfolio = maybe_inject_production_drift_status(
+            portfolio,
+            strategy_profile=getattr(config, "strategy_profile", None),
+            domain=domain or None,
+        )
         execution_result = execute_rebalance_cycle(
             trade_context=trade_context,
             plan=plan,
