@@ -742,6 +742,9 @@ def test_target_profile_uses_deployed_canonical_runtime_target(monkeypatch):
 def test_main_skips_when_all_configured_targets_are_disabled(monkeypatch, capsys):
     _clear_runtime_env(monkeypatch)
     monkeypatch.setenv("RUNTIME_HEARTBEAT_NAME", "LongBridge disabled targets")
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", "true")
+    messages = []
+    monkeypatch.setattr(heartbeat, "_send_telegram", lambda message: messages.append(message))
     monkeypatch.setenv(
         "CLOUD_RUN_SERVICE_TARGETS_JSON",
         json.dumps(
@@ -761,3 +764,4 @@ def test_main_skips_when_all_configured_targets_are_disabled(monkeypatch, capsys
         now=dt.datetime(2026, 6, 20, 23, 10, tzinfo=dt.timezone.utc)
     ) == 0
     assert "no enabled runtime target matches this heartbeat" in capsys.readouterr().out
+    assert messages == []

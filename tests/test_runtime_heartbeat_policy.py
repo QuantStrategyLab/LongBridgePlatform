@@ -3,15 +3,61 @@ from __future__ import annotations
 import datetime as dt
 import json
 
+import pytest
+
 from scripts.runtime_heartbeat_policy import (
     filter_due_targets,
     load_runtime_targets,
     match_payload_target,
     runtime_target_configuration_present,
+    runtime_target_configuration_has_enabled_targets,
     target_key,
     target_latest_due_at,
 )
 from scripts import execution_report_heartbeat as heartbeat
+
+
+@pytest.mark.parametrize("legacy_inventory", [
+    [{"service": "old-sg", "account_scope": "SG", "runtime_target_enabled": False}],
+    [{"service": "old-paper", "account_scope": "PAPER"}],
+])
+def test_scoped_current_target_precedes_legacy_inventory(legacy_inventory):
+    environ = {
+        "RUNTIME_HEARTBEAT_ACCOUNT_SCOPE": "SG",
+        "RUNTIME_TARGET_JSON": json.dumps({
+            "service_name": "current-sg",
+            "strategy_profile": "soxl_soxx_trend_income",
+            "account_scope": "SG",
+            "live_continuity": {"state": "ACTIVE_LKG"},
+        }),
+        "CLOUD_RUN_SERVICE_TARGETS_JSON": json.dumps(legacy_inventory),
+    }
+
+    assert runtime_target_configuration_has_enabled_targets(environ)
+    targets = load_runtime_targets(environ)
+    assert [target["service"] for target in targets] == ["current-sg"]
+    assert targets[0]["strategy_profile"] == "soxl_soxx_trend_income"
+
+
+def test_unscoped_heartbeat_keeps_multi_target_inventory():
+    environ = {
+        "RUNTIME_TARGET_JSON": json.dumps({"service_name": "single"}),
+        "CLOUD_RUN_SERVICE_TARGETS_JSON": json.dumps([
+            {"service": "first"}, {"service": "second"},
+        ]),
+    }
+    assert [target["service"] for target in load_runtime_targets(environ)] == [
+        "first", "second",
+    ]
+
+
+def test_invalid_scoped_target_does_not_fall_back_to_legacy_inventory():
+    with pytest.raises(ValueError, match="RUNTIME_TARGET_JSON"):
+        load_runtime_targets({
+            "RUNTIME_HEARTBEAT_ACCOUNT_SCOPE": "SG",
+            "RUNTIME_TARGET_JSON": "invalid",
+            "CLOUD_RUN_SERVICE_TARGETS_JSON": json.dumps([{"service": "old-sg"}]),
+        })
 
 
 def _target(
