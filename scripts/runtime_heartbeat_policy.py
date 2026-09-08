@@ -249,7 +249,12 @@ def _normalize_target(
 def _load_runtime_target_items(
     environ: Mapping[str, str],
 ) -> tuple[list[Mapping[str, Any]], Mapping[str, Any]]:
+    raw_runtime_target = str(environ.get("RUNTIME_TARGET_JSON") or "").strip()
     raw_targets = str(environ.get("CLOUD_RUN_SERVICE_TARGETS_JSON") or "").strip()
+    if raw_runtime_target and str(environ.get("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE") or "").strip():
+        # A scoped environment's current target takes precedence over the
+        # repository's legacy multi-target inventory.
+        raw_targets = ""
     items: list[Mapping[str, Any]] = []
     defaults: Mapping[str, Any] = {}
     if raw_targets:
@@ -270,7 +275,6 @@ def _load_runtime_target_items(
             )
 
     if not items:
-        raw_runtime_target = str(environ.get("RUNTIME_TARGET_JSON") or "").strip()
         if raw_runtime_target:
             try:
                 runtime_target = json.loads(raw_runtime_target)

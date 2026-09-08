@@ -1187,7 +1187,8 @@ def main(now: dt.datetime | None = None) -> int:
             f"Execution report heartbeat skipped for {name}: "
             "no enabled runtime target matches this heartbeat"
         )
-        _notify_normal_heartbeat(name, "No enabled runtime target matches this heartbeat; no order was submitted.")
+        # No report was checked, so this branch cannot claim normal execution
+        # or the absence of submitted orders.
         return 0
     lookback_hours = float(os.environ.get("RUNTIME_HEARTBEAT_LOOKBACK_HOURS") or "36")
     max_reports = int(os.environ.get("RUNTIME_HEARTBEAT_MAX_REPORTS_TO_READ") or "20")
