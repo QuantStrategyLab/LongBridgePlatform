@@ -258,14 +258,34 @@ def t(key, **kwargs):
     return build_translator(NOTIFY_LANG)(key, **kwargs)
 
 
+def _runtime_failure_reason(exc: Exception) -> str:
+    # Match only fixed platform errors; never publish arbitrary provider text.
+    if isinstance(exc, RuntimeError) and str(exc) in {
+        "durable execution command producer is paper-only and cannot be enabled live",
+        "durable execution command consumer is paper-only and cannot be enabled live",
+        "strategy risk state persistence is paper-only and cannot be enabled live",
+    }:
+        return "paper_live_conflict"
+    return "unknown"
+
+
 def _compact_error_notification(
     exc: Exception,
     *,
     title: str | None = None,
     prefix: str = "",
+    phase: str = "strategy_cycle",
 ) -> str:
     error_text = type(exc).__name__
-    message = f"{title or t('error_title')}\n{prefix}{error_text}"
+    known_phases = {"market_hours", "runtime_configuration", "strategy_cycle", "reporting", "health_probe"}
+    safe_phase = phase if phase in known_phases else "strategy_cycle"
+    reason = _runtime_failure_reason(exc)
+    message = "\n".join((
+        title or t("error_title"),
+        t("failure_phase", phase=t(f"failure_phase_{safe_phase}")),
+        t(f"failure_reason_{reason}"),
+        f"{prefix}{error_text}",
+    ))
     if len(message) <= COMPACT_ERROR_NOTIFICATION_MAX_CHARS:
         return message
     return message[: COMPACT_ERROR_NOTIFICATION_MAX_CHARS - 1].rstrip() + "…"
@@ -662,6 +682,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         signals=strategy_plugin_signals,
         error=strategy_plugin_error,
     )
+    failure_phase = "market_hours"
     try:
         reporting_adapters.log_event(
             log_context,
@@ -747,6 +768,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             return True
         if not validation_only:
             publish_strategy_plugin_alerts(strategy_plugin_signals, report=report)
+        failure_phase = "runtime_configuration"
         try:
             rebalance_runtime = composer.build_rebalance_runtime(
                 silent_cycle_notifications=validation_only,
@@ -758,19 +780,19 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             rebalance_runtime = composer.build_rebalance_runtime(
                 silent_cycle_notifications=validation_only,
             )
-        cycle_result = run_rebalance_cycle(
-            runtime=rebalance_runtime,
-            config=composer.build_rebalance_config(
-                strategy_plugin_signals=strategy_plugin_signals,
-                strategy_plugin_error=strategy_plugin_error,
-                notification_title_key=(
-                    "dry_run_title"
-                    if validation_only and validation_label == "dry_run"
-                    else ""
-                ),
-                cash_only_execution=CASH_ONLY_EXECUTION,
+        rebalance_config = composer.build_rebalance_config(
+            strategy_plugin_signals=strategy_plugin_signals,
+            strategy_plugin_error=strategy_plugin_error,
+            notification_title_key=(
+                "dry_run_title"
+                if validation_only and validation_label == "dry_run"
+                else ""
             ),
+            cash_only_execution=CASH_ONLY_EXECUTION,
         )
+        failure_phase = "strategy_cycle"
+        cycle_result = run_rebalance_cycle(runtime=rebalance_runtime, config=rebalance_config)
+        failure_phase = "reporting"
         signal_snapshot = {}
         if cycle_result is not None:
             execution = dict(getattr(cycle_result, "execution", {}) or {})
@@ -822,6 +844,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         return True
 
     except Exception as exc:
+        failure_reason = _runtime_failure_reason(exc)
         append_runtime_report_error(
             report,
             stage="strategy_cycle",
@@ -835,11 +858,13 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             severity="ERROR",
             error_type=type(exc).__name__,
             error_message="strategy_cycle_failed",
+            failure_phase=failure_phase,
+            failure_reason=failure_reason,
         )
         try:
             notification_adapters.publish_cycle_notification(
-                detailed_text=f"Strategy error: {type(exc).__name__}",
-                compact_text=_compact_error_notification(exc),
+                detailed_text=_compact_error_notification(exc, phase=failure_phase),
+                compact_text=_compact_error_notification(exc, phase=failure_phase),
             )
         except Exception as notification_exc:
             notification_delivery_events.append(
@@ -869,6 +894,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             report,
             status="error",
             summary=error_summary or None,
+            diagnostics={"failure_phase": failure_phase, "failure_reason": failure_reason},
         )
         return False
     finally:
@@ -949,7 +975,7 @@ def run_probe(*, response_body: str = "Probe OK"):
                 error_message="health_probe_failed",
             )
         err = _compact_error_notification(
-            exc, title=t("health_probe_title"), prefix=t("health_probe_error_prefix"),
+            exc, title=t("health_probe_title"), prefix=t("health_probe_error_prefix"), phase="health_probe",
         )
         if composer is not None:
             composer.build_notification_adapters().publish_cycle_notification(
@@ -958,6 +984,7 @@ def run_probe(*, response_body: str = "Probe OK"):
                     exc,
                     title=t("health_probe_title"),
                     prefix=t("health_probe_error_prefix"),
+                    phase="health_probe",
                 ),
             )
         else:
