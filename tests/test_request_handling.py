@@ -1249,6 +1249,52 @@ if __name__ == "__main__":
 class SanitizedRuntimeErrorTests(unittest.TestCase):
     marker = "SYNTHETIC_SECRET_DO_NOT_EMIT"
 
+    def test_paper_only_live_conflict_reports_configuration_phase_without_running_cycle(self):
+        from application.durable_execution_commands import resolve_paper_execution_command_producer_enabled
+
+        for language in ("zh-CN", "en"):
+            with self.subTest(language=language):
+                module = load_module(notify_lang=language)
+                report, events, notifications = {"status": "pending"}, [], []
+                reporting = types.SimpleNamespace(
+                    start_run=lambda: (types.SimpleNamespace(run_id="synthetic-run"), report),
+                    log_event=lambda *args, **kwargs: events.append(kwargs),
+                    persist_execution_report=lambda payload: "/tmp/synthetic-report.json",
+                )
+                composer = types.SimpleNamespace(
+                    build_reporting_adapters=lambda: reporting,
+                    build_notification_adapters=lambda **kwargs: types.SimpleNamespace(
+                        publish_cycle_notification=lambda **payload: notifications.append(payload)),
+                    load_strategy_plugin_signals=lambda *args: ((), None),
+                    attach_strategy_plugin_report=lambda *args, **kwargs: None,
+                    with_prefix=lambda text: text,
+                    build_rebalance_runtime=lambda **kwargs: types.SimpleNamespace(),
+                    build_rebalance_config=lambda **kwargs: resolve_paper_execution_command_producer_enabled(
+                        env_reader=lambda name, default="": "true", dry_run_only=False),
+                )
+                module.build_composer = lambda **kwargs: composer
+                module.is_market_open_now = lambda **kwargs: True
+                module.dca_execution_unsupported_reason = lambda *args: None
+                with patch.object(module, "run_rebalance_cycle") as cycle:
+                    self.assertFalse(module.run_strategy())
+                cycle.assert_not_called()
+                self.assertEqual(report["diagnostics"]["failure_phase"], "runtime_configuration")
+                self.assertEqual(report["diagnostics"]["failure_reason"], "paper_live_conflict")
+                failure = next(event for event in events if event.get("failure_reason"))
+                self.assertEqual(failure["failure_reason"], "paper_live_conflict")
+                text = notifications[0]["compact_text"]
+                self.assertIn("模拟专用" if language.startswith("zh") else "paper-only", text)
+                self.assertIn("配置检查" if language.startswith("zh") else "configuration", text)
+                self.assertNotIn("Traceback", text)
+
+    def test_unknown_failure_text_is_not_used_as_a_diagnostic_reason(self):
+        module = load_module(notify_lang="zh-CN")
+        exc = RuntimeError(self.marker)
+        self.assertEqual(module._runtime_failure_reason(exc), "unknown")
+        text = module._compact_error_notification(exc, phase="strategy_cycle")
+        self.assertIn("策略执行", text)
+        self._assert_sanitized(text)
+
     def _raise_sensitive(self, *args, **kwargs):
         raise RuntimeError(self.marker)
 
