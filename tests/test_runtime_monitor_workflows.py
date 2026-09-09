@@ -71,7 +71,7 @@ def test_cloud_run_deployment_requires_manual_dispatch_and_lifecycle_observes_co
     assert "if: github.event_name == 'workflow_dispatch'" in deploy
 
     assert "workflow_run:" in lifecycle
-    assert 'workflows: ["Deploy Cloud Run"]' in lifecycle
+    assert 'workflows: ["Deploy Cloud Run", "Stop HK Runtime"]' in lifecycle
     assert "types: [completed]" in lifecycle
     assert "github.event.workflow_run.conclusion" not in lifecycle
     assert 'observe-gcp: "true"' in lifecycle
