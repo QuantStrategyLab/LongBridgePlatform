@@ -1,0 +1,56 @@
+name: Stop HK Runtime
+
+on:
+  workflow_dispatch:
+    inputs:
+      stop_request:
+        description: "Exact existing HK identity from the settings console; no configuration or credentials."
+        required: true
+        type: string
+      confirm:
+        description: "STOP_ONLY: disable execution and pause its schedules; no cancellation or liquidation."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Serialize with the platform's existing deployment writer, across both workflows.
+concurrency:
+  group: Deploy Cloud Run-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  stop:
+    if: github.repository == 'QuantStrategyLab/LongBridgePlatform' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.confirm == 'STOP_ONLY'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: longbridge-hk
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
+      RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+    steps:
+      - name: Checkout exact workflow source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Authenticate existing HK deployment identity
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
+          service_account: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+      - name: Set up cloud client
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: longbridgequant
+          version: ">= 416.0.0"
+      - name: Apply stop and verify service and Scheduler
+        run: python3 scripts/stop_hk_runtime.py
+      - name: Explain stop boundary
+        if: always()
+        run: |
+          echo 'This operation only disables the existing HK runtime and pauses its schedules. A successful run verifies these controls; in-flight requests, broker orders and account retirement remain unverified. Do not retry an uncertain write.' >> "$GITHUB_STEP_SUMMARY"

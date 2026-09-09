@@ -2,7 +2,7 @@ name: Runtime Target Lifecycle
 
 on:
   workflow_run:
-    workflows: ["Deploy Cloud Run"]
+    workflows: ["Deploy Cloud Run", "Stop HK Runtime"]
     types: [completed]
   workflow_dispatch:
     inputs:
