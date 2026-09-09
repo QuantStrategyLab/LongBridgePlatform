@@ -13,6 +13,9 @@ from quant_platform_kit.common.strategy_plugins import (
     should_alert_strategy_plugin_signal,
     translate_strategy_plugin_value,
 )
+from quant_platform_kit.common.strategy_contracts import PositionTarget, StrategyDecision
+from quant_platform_kit.risk.gate import apply_risk_gate, enrich_decision_risk_diagnostics
+from quant_platform_kit.risk.portfolio_diagnostics import extract_portfolio_risk_diagnostics
 
 
 def _get_direct_market_history_profiles() -> frozenset[str]:
@@ -194,6 +197,59 @@ class LongBridgeRuntimeStrategyAdapters:
             evaluation.decision,
             account_state=resolved_account_state if "account_state" in available_inputs else None,
             snapshot=resolved_snapshot,
+            strategy_profile=self.strategy_profile,
+            runtime_metadata=runtime_metadata,
+        )
+
+    def resolve_frozen_rebalance_plan(self, *, allocation, execution, snapshot):
+        """Re-map one stored target decision against a fresh broker snapshot."""
+        snapshot = self.strategy_runtime._stamp_portfolio_risk_metadata(  # noqa: SLF001
+            {"portfolio_snapshot": snapshot}
+        )["portfolio_snapshot"]
+        targets = dict(allocation.get("targets") or {})
+        roles = {}
+        for field, role in (
+            ("risk_symbols", "risk"),
+            ("income_symbols", "income"),
+            ("safe_haven_symbols", "safe_haven"),
+        ):
+            for symbol in allocation.get(field, ()) or ():
+                roles[str(symbol).strip().upper()] = role
+        decision = StrategyDecision(
+            positions=tuple(
+                PositionTarget(
+                    symbol=str(symbol).strip().upper(),
+                    target_value=float(target),
+                    role=roles.get(str(symbol).strip().upper()),
+                )
+                for symbol, target in sorted(targets.items())
+            ),
+            diagnostics={"execution_annotations": dict(execution)},
+        )
+        # Preserve the same portfolio diagnostics enrichment as the UES gate.
+        diagnostics = extract_portfolio_risk_diagnostics(snapshot)
+        decision = enrich_decision_risk_diagnostics(
+            decision,
+            unrealized_pnl_pct=diagnostics.get("unrealized_pnl_pct"),
+            consecutive_losses=diagnostics.get("consecutive_losses"),
+        )
+        capabilities = self.strategy_runtime._build_capital_base_capabilities(  # noqa: SLF001
+            {"portfolio_snapshot": snapshot}
+        )
+        decision = apply_risk_gate(
+            decision,
+            portfolio_snapshot=snapshot,
+            max_single_weight=0.20,
+            enforce_value_target_exposure=True,
+            **capabilities,
+        )
+        runtime_metadata = {"execution_annotations": dict(execution)}
+        if self.execution_policy is not None:
+            runtime_metadata["longbridge_execution_policy"] = dict(self.execution_policy)
+        return self.map_strategy_decision_to_plan_fn(
+            decision,
+            snapshot=snapshot,
+            account_state=None,
             strategy_profile=self.strategy_profile,
             runtime_metadata=runtime_metadata,
         )

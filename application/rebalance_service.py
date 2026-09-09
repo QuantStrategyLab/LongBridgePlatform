@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from datetime import datetime
 
 from application.execution_service import ExecutionCycleResult, execute_rebalance_cycle
 from application.execution_state import build_execution_marker_key, claim_account_owner
-from application.durable_execution_commands import enqueue_paper_execution_command
+from application.durable_execution_commands import (
+    enqueue_live_execution_command,
+    enqueue_paper_execution_command,
+    list_live_execution_commands,
+)
 from application.paper_strategy_risk_state import record_paper_strategy_risk_state_transition
 from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
 from quant_platform_kit.common.account_identity import (
@@ -17,6 +22,7 @@ from quant_platform_kit.common.account_identity import (
     evaluate_account_identity,
 )
 from quant_platform_kit.common.models import ExecutionReport
+from quant_platform_kit.common.execution_commands import ExecutionCommandState
 from quant_platform_kit.common.port_adapters import CallableExecutionPort
 from quant_platform_kit.longbridge.market_data import fetch_lot_sizes
 from application.signal_snapshot import build_signal_snapshot
@@ -87,6 +93,153 @@ def _plan_allocation(plan):
 
 def _noop_sleep(_seconds):
     return None
+
+
+def _snapshot_session_date(snapshot) -> str:
+    value = getattr(snapshot, "as_of", "")
+    if hasattr(value, "date"):
+        return value.date().isoformat()
+    return str(value or "")[:10]
+
+
+def _physical_account_digest(config: LongBridgeRebalanceConfig) -> str:
+    return hashlib.sha256(_resolve_physical_account_id(config=config).encode("utf-8")).hexdigest()
+
+
+def _matching_live_commands(*, config):
+    store = getattr(config, "execution_command_store", None)
+    if store is None:
+        raise RuntimeError("durable live execution command store is required")
+    return tuple(
+        command
+        for command in list_live_execution_commands(store)
+        if command.platform == "longbridge"
+        and command.account_scope == str(config.execution_state_account_scope or "unknown").lower()
+        and command.strategy_profile == str(config.strategy_profile or "unknown").lower()
+        and command.execution_mode == "live"
+    )
+
+
+def _validate_live_command_binding(*, command, config) -> tuple[dict, dict]:
+    intent = command.intent
+    if intent.get("kind") != "longbridge_next_session_live":
+        raise ValueError("invalid live execution command")
+    if intent.get("physical_account_digest") != _physical_account_digest(config):
+        raise ValueError("invalid live execution command")
+    if intent.get("runtime_identity_digest") != str(
+        config.durable_execution_runtime_identity_digest or ""
+    ):
+        raise ValueError("invalid live execution command")
+    execution = intent.get("execution")
+    allocation = intent.get("allocation")
+    if not isinstance(execution, dict) or not isinstance(allocation, dict):
+        raise ValueError("invalid live execution command")
+    if (
+        str(execution.get("signal_date") or "") != command.signal_date
+        or str(execution.get("effective_date") or "") != command.effective_date
+        or str(execution.get("execution_timing_contract") or "")
+        != command.execution_timing_contract
+        or allocation.get("target_mode") != "value"
+    ):
+        raise ValueError("invalid live execution command")
+    return dict(execution), dict(allocation)
+
+
+def _record_live_command_outcome(*, command, store, result) -> None:
+    pending = tuple(getattr(result, "pending_orders", ()) or ())
+    orders = tuple(
+        {
+            "broker_order_id": str(item.get("broker_order_id") or ""),
+            "symbol": str(item.get("symbol") or ""),
+            "side": str(item.get("side") or ""),
+            "quantity": float(item.get("quantity") or 0.0),
+            "submission_status": str(item.get("submission_status") or "").lower(),
+        }
+        for item in pending
+    )
+    details = {
+        "action_done": bool(getattr(result, "action_done", False)),
+        "orders_count": len(pending),
+        "orders": orders,
+    }
+    if pending and all(str(item.get("submission_status") or "").lower() == "filled" for item in pending):
+        for state in (
+            ExecutionCommandState.SUBMITTED,
+            ExecutionCommandState.ACCEPTED,
+            ExecutionCommandState.FILLED,
+        ):
+            if store.append_event(command, next_state=state, details=details) is None:
+                return
+        return
+    statuses = {item["submission_status"] for item in orders}
+    if pending and statuses and statuses <= {"submitted", "accepted"} and all(
+        item["broker_order_id"] for item in orders
+    ):
+        if store.append_event(
+            command,
+            next_state=ExecutionCommandState.SUBMITTED,
+            details=details,
+        ) is None:
+            return
+        if statuses == {"accepted"}:
+            store.append_event(
+                command,
+                next_state=ExecutionCommandState.ACCEPTED,
+                details=details,
+            )
+        return
+    next_state = (
+        ExecutionCommandState.RECONCILIATION_REQUIRED
+        if pending or result.action_done
+        else ExecutionCommandState.REJECTED
+        if result.execution.get("no_execute")
+        else ExecutionCommandState.CANCELLED
+    )
+    store.append_event(command, next_state=next_state, details=details)
+
+
+def _reconcile_live_command(*, command, store, trade_context, fetch_order_status) -> None:
+    state = store.current_state(command)
+    if state not in {
+        ExecutionCommandState.SUBMITTED,
+        ExecutionCommandState.ACCEPTED,
+        ExecutionCommandState.PARTIALLY_FILLED,
+        ExecutionCommandState.RECONCILIATION_REQUIRED,
+    } or not callable(fetch_order_status):
+        return
+    events = store.events(command)
+    orders = tuple((events[-1].details if events else {}).get("orders") or ())
+    if not orders or any(not str(item.get("broker_order_id") or "").strip() for item in orders):
+        return
+    statuses = []
+    for item in orders:
+        try:
+            payload = fetch_order_status(trade_context, str(item["broker_order_id"]))
+        except Exception:
+            return
+        if not isinstance(payload, dict):
+            return
+        status = str(payload.get("status") or "").strip().lower().replace("_", "")
+        statuses.append(status)
+    terminal = {"filled", "cancelled", "canceled", "rejected", "expired"}
+    if all(status == "filled" for status in statuses):
+        next_state = ExecutionCommandState.FILLED
+    elif all(status in terminal for status in statuses):
+        next_state = ExecutionCommandState.CANCELLED
+    elif any(status in {"partiallyfilled", "partial"} for status in statuses):
+        next_state = ExecutionCommandState.PARTIALLY_FILLED
+    elif all(status in {"accepted", "new", "submitted"} for status in statuses):
+        next_state = ExecutionCommandState.ACCEPTED
+    else:
+        return
+    if next_state is state:
+        return
+    store.append_event(
+        command,
+        next_state=next_state,
+        details={"orders_count": len(orders), "orders": orders},
+        expected_previous_state=state,
+    )
 
 def _translator_uses_zh(translator) -> bool:
     return _base_translator_uses_zh(translator)
@@ -417,14 +570,115 @@ def run_strategy(
             raise ValueError("LongBridgePlatform requires allocation.target_mode=value")
         return current_plan, current_portfolio, current_execution, current_allocation
 
+    portfolio_port = runtime.portfolio_port_factory(quote_context, trade_context)
+
+    frozen_execution = None
+    frozen_allocation = None
+
     def fetch_replanned_state():
-        current_snapshot = runtime.portfolio_port_factory(
-            quote_context,
-            trade_context,
-        ).get_portfolio_snapshot()
+        current_snapshot = portfolio_port.get_portfolio_snapshot()
+        if live_command_claimed and frozen_execution is not None and frozen_allocation is not None:
+            return_plan = runtime.resolve_frozen_rebalance_plan(
+                allocation=frozen_allocation,
+                execution=frozen_execution,
+                snapshot=current_snapshot,
+            )
+            return (
+                return_plan,
+                _plan_portfolio(return_plan),
+                _plan_execution(return_plan),
+                _plan_allocation(return_plan),
+            )
         return load_plan(current_snapshot=current_snapshot)
 
-    plan, portfolio, execution, allocation = fetch_replanned_state()
+    live_command = None
+    live_command_claimed = False
+    live_command_blocked = False
+    live_command_waiting = False
+    live_command_observation = None
+    live_command_enabled = bool(getattr(config, "durable_execution_command_live_enabled", False))
+    matching_commands = ()
+    if live_command_enabled:
+        if not getattr(config, "durable_live_execution_session_authorized", False):
+            raise RuntimeError("durable live execution requires an open exchange session")
+        matching_commands = _matching_live_commands(config=config)
+        for command in matching_commands:
+            _validate_live_command_binding(command=command, config=config)
+            _reconcile_live_command(
+                command=command, store=config.execution_command_store,
+                trade_context=trade_context, fetch_order_status=runtime.fetch_order_status,
+            )
+    # Reconciliation precedes this fresh account read; never size from a snapshot
+    # captured before an old order was confirmed filled.
+    initial_snapshot = portfolio_port.get_portfolio_snapshot()
+    selected_plan = None
+    if live_command_enabled:
+        session_date = _snapshot_session_date(initial_snapshot)
+        today_commands = tuple(c for c in matching_commands if c.signal_date == session_date)
+        if not today_commands:
+            # One current signal is saved for the next session independently of
+            # consuming yesterday's frozen signal. It never routes directly.
+            selected_plan = load_plan(current_snapshot=initial_snapshot)
+            _, _, signal_execution, signal_allocation = selected_plan
+            if str(signal_execution.get("signal_date") or "") != session_date:
+                raise RuntimeError("live signal session does not match fresh account session")
+            if not str(signal_execution.get("effective_date") or "") > session_date:
+                raise RuntimeError("durable live signal must target a future session")
+            produced = enqueue_live_execution_command(
+                enabled=True, dry_run_only=config.dry_run_only,
+                store=config.execution_command_store, platform="longbridge",
+                account_scope=str(config.execution_state_account_scope or "unknown"),
+                strategy_profile=str(config.strategy_profile or "unknown"),
+                physical_account_id=_resolve_physical_account_id(config=config),
+                runtime_identity_digest=config.durable_execution_runtime_identity_digest,
+                execution=signal_execution, allocation=signal_allocation,
+            )
+            command, created = produced
+            matching_commands = (*matching_commands, command)
+            today_commands = (command,)
+            live_command_observation = {
+                "command_id": command.command_id, "status": "QUEUED" if created else "ALREADY_QUEUED",
+                "effective_date": command.effective_date,
+            }
+        else:
+            live_command_observation = {
+                "command_id": today_commands[0].command_id, "status": "ALREADY_QUEUED",
+                "effective_date": today_commands[0].effective_date,
+            }
+        terminal = {ExecutionCommandState.FILLED, ExecutionCommandState.CANCELLED, ExecutionCommandState.REJECTED}
+        states = {c.command_id: config.execution_command_store.current_state(c) for c in matching_commands}
+        unresolved = tuple(c for c in matching_commands if states[c.command_id] not in terminal)
+        due = tuple(c for c in unresolved if c.is_due_on(session_date))
+        prior_unresolved = tuple(c for c in unresolved if (
+            states[c.command_id] is not ExecutionCommandState.QUEUED or c.effective_date < session_date
+        ))
+        if prior_unresolved or len(due) > 1 or len(today_commands) > 1:
+            live_command = (prior_unresolved or due or today_commands)[0]
+            live_command_blocked = True
+        elif due:
+            live_command = due[0]
+        elif unresolved:
+            live_command = unresolved[0]
+            live_command_blocked = True
+            live_command_waiting = True
+        if live_command is not None:
+            frozen_execution, frozen_allocation = _validate_live_command_binding(command=live_command, config=config)
+            resolver = runtime.resolve_frozen_rebalance_plan
+            if not callable(resolver):
+                raise RuntimeError("frozen live decision resolver is required")
+            frozen_plan = resolver(allocation=frozen_allocation, execution=frozen_execution, snapshot=initial_snapshot)
+            selected_plan = (frozen_plan, _plan_portfolio(frozen_plan), _plan_execution(frozen_plan), _plan_allocation(frozen_plan))
+            if not live_command_blocked:
+                claim = config.execution_command_store.claim_due(
+                    live_command, as_of_date=session_date, claimant=str(config.strategy_profile),
+                )
+                live_command_claimed = claim is not None
+                live_command_blocked = not live_command_claimed
+    if selected_plan is None:
+        selected_plan = load_plan(current_snapshot=initial_snapshot)
+    plan, portfolio, execution, allocation = selected_plan
+    if live_command_observation is not None:
+        execution["durable_live_execution_command"] = live_command_observation
     account_identity_blocked = bool(
         account_identity_decision is not None
         and not account_identity_decision.broker_write_allowed
@@ -471,14 +725,19 @@ def run_strategy(
 
     execution_marker_key = _build_execution_marker_key(config=config, execution=execution)
     execution_state_store = getattr(config, "execution_state_store", None)
-    direct_live_routing_blocked = _direct_live_routing_requires_durable_command(
+    direct_live_routing_blocked = (
+        _direct_live_routing_requires_durable_command(
         execution=execution,
         dry_run_only=bool(getattr(config, "dry_run_only", False)),
+        )
+        and not live_command_claimed
     )
     if direct_live_routing_blocked:
         execution["direct_live_routing_blocked"] = True
         execution["direct_live_routing_block_reason"] = "durable_execution_command_required"
-    execution_already_recorded = direct_live_routing_blocked or account_identity_blocked
+    execution_already_recorded = (
+        direct_live_routing_blocked or account_identity_blocked or live_command_blocked
+    )
     dry_run_bypass_marker = _dry_run_bypasses_execution_marker(config)
     if dry_run_bypass_marker:
         print(
@@ -492,10 +751,17 @@ def run_strategy(
         try:
             execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
         except Exception as exc:
+            detail = (
+                "execution_marker_read_failed"
+                if live_command_claimed
+                else f"Marker: {execution_marker_key}\n{type(exc).__name__}: {exc}"
+            )
             runtime.notify_issue(
                 "Execution marker read failed",
-                f"Marker: {execution_marker_key}\n{type(exc).__name__}: {exc}",
+                detail,
             )
+            if live_command_claimed:
+                execution_already_recorded = True
         if not execution_already_recorded and hasattr(execution_state_store, "has_prior_execution_report"):
             try:
                 execution_already_recorded = bool(
@@ -509,10 +775,17 @@ def run_strategy(
                     )
                 )
             except Exception as exc:
+                detail = (
+                    "execution_report_dedup_read_failed"
+                    if live_command_claimed
+                    else f"Marker: {execution_marker_key}\n{type(exc).__name__}: {exc}"
+                )
                 runtime.notify_issue(
                     "Execution report dedup read failed",
-                    f"Marker: {execution_marker_key}\n{type(exc).__name__}: {exc}",
+                    detail,
                 )
+                if live_command_claimed:
+                    execution_already_recorded = True
 
     if execution_already_recorded:
         if account_identity_blocked:
@@ -520,6 +793,11 @@ def run_strategy(
                 findings=tuple(account_identity_decision.findings),
             )
             runtime.notify_issue("Account identity gate blocked broker orders", message)
+        elif live_command_waiting:
+            message = "Durable live execution command queued; waiting for its effective trading session"
+        elif live_command_blocked:
+            message = "Durable live execution command is unresolved; broker orders blocked"
+            runtime.notify_issue("Durable live execution blocked", message)
         elif direct_live_routing_blocked:
             message = _durable_command_required_message(execution=execution)
             runtime.notify_issue("Next-session execution blocked", message)
@@ -668,6 +946,18 @@ def run_strategy(
                 result=execution_result,
                 notify_issue=runtime.notify_issue,
             )
+        if live_command_claimed and live_command is not None:
+            try:
+                _record_live_command_outcome(
+                    command=live_command,
+                    store=config.execution_command_store,
+                    result=execution_result,
+                )
+            except Exception:
+                runtime.notify_issue(
+                    "Durable live execution outcome write failed",
+                    "durable_live_execution_outcome_persistence_failed",
+                )
     execution = execution_result.execution
     execution["cash_only_execution"] = bool(getattr(config, "cash_only_execution", True))
     execution["signal_snapshot"] = build_signal_snapshot(

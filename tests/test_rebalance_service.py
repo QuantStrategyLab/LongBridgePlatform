@@ -34,6 +34,7 @@ try:
     from application.longbridge_portfolio import fetch_strategy_account_state
     from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
     from quant_platform_kit.common.account_identity import BrokerAccountIdentity
+    from quant_platform_kit.common.execution_commands import ExecutionCommandState, ExecutionCommandStore
     from notifications.telegram import build_translator
     from quant_platform_kit.common.models import ExecutionReport, PortfolioSnapshot, Position, QuoteSnapshot
     from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort, CallableNotificationPort, CallablePortfolioPort
@@ -1506,6 +1507,98 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(alerts[0][0], "Next-session execution blocked")
         self.assertIn("signal_date=2026-07-17", alerts[0][1])
         self.assertIn("effective_date=2026-07-20", alerts[0][1])
+
+    def test_live_commands_continue_daily_and_block_old_unknown_orders(self):
+        plan = _build_plan(
+            strategy_symbols=("SOXL",), risk_symbols=("SOXL",),
+            targets={"SOXL": 400.0}, market_values={"SOXL": 0.0},
+            sellable_quantities={"SOXL": 0}, quantities={"SOXL": 0},
+            current_min_trade=10.0, trade_threshold_value=10.0,
+            investable_cash=500.0, available_cash=500.0, total_strategy_equity=500.0,
+            market_status="Risk on", deploy_ratio_text="70.0%", income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%", signal_message="SOXL target",
+            portfolio_rows=(("SOXL",),), signal_date="2026-07-17", effective_date="2026-07-20",
+        )
+        command_store = ExecutionCommandStore(local_dir=self.enterContext(TemporaryDirectory()))
+        marker_store = ExecutionMarkerStore(local_dir=self.enterContext(TemporaryDirectory()))
+        clock = {"day": "2026-07-17", "status": "New"}
+        next_days = {"2026-07-17": "2026-07-20", "2026-07-20": "2026-07-21", "2026-07-21": "2026-07-22"}
+        targets = {"2026-07-17": 400.0, "2026-07-20": 300.0, "2026-07-21": 200.0}
+        resolved_new_signals, orders, alerts, frozen_targets = [], [], [], []
+
+        def new_plan(**_kwargs):
+            resolved_new_signals.append(clock["day"])
+            return {**plan, "allocation": {**plan["allocation"], "targets": {"SOXL": targets[clock["day"]]}},
+                    "execution": {**plan["execution"], "signal_date": clock["day"], "effective_date": next_days[clock["day"]]}}
+
+        def frozen_plan(*, allocation, execution, snapshot):
+            frozen_targets.append(allocation["targets"]["SOXL"])
+            return {**plan, "allocation": dict(allocation), "execution": dict(execution)}
+
+        runtime = LongBridgeRebalanceRuntime(
+            bootstrap=lambda: ("quote", "trade", {"trend": "ok"}),
+            resolve_rebalance_plan=new_plan, resolve_frozen_rebalance_plan=frozen_plan,
+            market_data_port_factory=lambda _context: CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(symbol=symbol, as_of=clock["day"], last_price=100.0)),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 5,
+            notifications=CallableNotificationPort(lambda _message: None),
+            notify_issue=lambda title, detail: alerts.append((title, detail)),
+            portfolio_port_factory=lambda *_contexts: CallablePortfolioPort(
+                lambda: replace(_build_snapshot(plan), as_of=clock["day"])),
+            execution_port_factory=lambda _context: CallableExecutionPort(
+                lambda intent: (orders.append(intent), ExecutionReport(
+                    symbol=intent.symbol, side=intent.side, quantity=intent.quantity,
+                    status="accepted", broker_order_id=f"broker-{len(orders)}"))[1]),
+            fetch_order_status=lambda _context, _order_id: {"status": clock["status"]},
+        )
+        config = LongBridgeRebalanceConfig(
+            limit_sell_discount=0.995, limit_buy_premium=1.005, separator="-",
+            translator=build_translator("en"), with_prefix=lambda message: message,
+            strategy_profile="soxl_soxx_trend_income", execution_state_account_scope="SG",
+            physical_account_id="lb-sg-001", dry_run_only=False, notify_no_trade_cycles=False,
+            execution_dedup_enabled=True, execution_state_store=marker_store,
+            durable_execution_command_live_enabled=True, execution_command_store=command_store,
+            durable_live_execution_session_authorized=True,
+            durable_execution_runtime_identity_digest="a" * 64,
+        )
+        first = rebalance_service.run_strategy(runtime=runtime, config=config)
+        rebalance_service.run_strategy(runtime=runtime, config=config)
+        self.assertFalse(first.action_done)
+        self.assertEqual(first.execution["durable_live_execution_command"]["status"], "QUEUED")
+        self.assertEqual(alerts, [])
+        self.assertEqual(resolved_new_signals, ["2026-07-17"])
+        monday = command_store.list_due("2026-07-20")[0]
+        clock["day"] = "2026-07-20"
+        consumed = rebalance_service.run_strategy(runtime=runtime, config=config)
+        self.assertTrue(consumed.action_done)
+        self.assertEqual(consumed.allocation["targets"]["SOXL"], 400.0)
+        self.assertEqual(len(command_store.list_due("2026-07-21")), 1)
+        self.assertEqual(len(orders), 1)
+        clock["day"] = "2026-07-21"
+        blocked = rebalance_service.run_strategy(runtime=runtime, config=config)
+        self.assertFalse(blocked.action_done)
+        self.assertEqual(len(orders), 1)  # Yesterday's unresolved order blocks today's due command.
+        clock["status"] = "Filled"
+        resumed = rebalance_service.run_strategy(runtime=runtime, config=config)
+        self.assertTrue(resumed.action_done)
+        self.assertEqual(resumed.allocation["targets"]["SOXL"], 300.0)
+        self.assertEqual(len(orders), 2)
+        self.assertIs(command_store.current_state(monday), ExecutionCommandState.FILLED)
+        self.assertEqual(resolved_new_signals, list(next_days))
+        self.assertEqual(len(command_store.list_due("2026-07-22")), 1)
+
+    def test_live_order_detail_normalizes_real_sdk_enum_and_checks_identity(self):
+        from application.longbridge_execution import fetch_live_order_status
+        from longport.openapi import OrderStatus
+        context = types.SimpleNamespace(order_detail=Mock(return_value=types.SimpleNamespace(
+            order_id="broker-1", status=OrderStatus.Filled,
+            executed_quantity="3", executed_price="100", msg="")))
+        self.assertEqual(fetch_live_order_status(context, "broker-1")["status"], "Filled")
+        context.order_detail.assert_called_once_with("broker-1")
+        context.order_detail.return_value.order_id = "different-order"
+        self.assertIsNone(fetch_live_order_status(context, "broker-1"))
+        context.order_detail.side_effect = RuntimeError("private broker failure")
+        self.assertIsNone(fetch_live_order_status(context, "broker-1"))
 
     def test_run_strategy_skips_when_execution_marker_already_exists(self):
         sent_messages = []

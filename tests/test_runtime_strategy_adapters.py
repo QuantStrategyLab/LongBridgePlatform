@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -247,6 +248,78 @@ def test_runtime_strategy_adapters_add_execution_policy_to_runtime_metadata():
             "reserved_cash_ratio": 0.03,
         },
     }
+
+
+def test_frozen_plan_reapplies_risk_gate_and_maps_only_the_original_target() -> None:
+    observed = {}
+    stamped = SimpleNamespace(total_equity=1000, positions=(), metadata={
+        "unrealized_pnl_pct": -0.25, "consecutive_losses": 6,
+    })
+    runtime = SimpleNamespace(
+        _stamp_portfolio_risk_metadata=lambda inputs: (
+            observed.setdefault("stamp_inputs", inputs), {"portfolio_snapshot": stamped},
+        )[1],
+        _build_capital_base_capabilities=lambda inputs: (
+            observed.setdefault("capital_inputs", inputs),
+            {"capital_base": "capital", "capital_base_binding": "binding"},
+        )[1]
+    )
+
+    def map_plan(decision, **kwargs):
+        observed["decision"] = decision
+        observed["map_kwargs"] = kwargs
+        return {"mapped": True}
+
+    adapters = build_runtime_strategy_adapters(
+        strategy_runtime=runtime,
+        strategy_profile="soxl_soxx_trend_income",
+        strategy_runtime_config={"fixed_param": 0.65},
+        available_inputs=("portfolio_snapshot",),
+        benchmark_symbol="SOXX",
+        signal_text_fn=str,
+        translator=str,
+        broker_adapters=SimpleNamespace(),
+        calculate_rotation_indicators_fn=lambda *_args, **_kwargs: {},
+        build_strategy_evaluation_inputs_fn=lambda **kwargs: kwargs,
+        map_strategy_decision_to_plan_fn=map_plan,
+    )
+    snapshot = object()
+
+    with patch(
+        "application.runtime_strategy_adapters.apply_risk_gate",
+        side_effect=lambda decision, **kwargs: (observed.setdefault("risk_kwargs", kwargs), decision)[1],
+    ):
+        result = adapters.resolve_frozen_rebalance_plan(
+            allocation={
+                "targets": {"SOXL": 200.0, "BOXX": 800.0},
+                "risk_symbols": ["SOXL"],
+                "safe_haven_symbols": ["BOXX"],
+            },
+            execution={
+                "signal_date": "2026-09-09",
+                "effective_date": "2026-09-10",
+                "execution_timing_contract": "next_trading_day",
+            },
+            snapshot=snapshot,
+        )
+
+    assert result == {"mapped": True}
+    assert observed["stamp_inputs"] == {"portfolio_snapshot": snapshot}
+    assert observed["capital_inputs"] == {"portfolio_snapshot": stamped}
+    assert observed["decision"].diagnostics["unrealized_pnl_pct"] == -0.25
+    assert observed["decision"].diagnostics["consecutive_losses"] == 6
+    assert observed["risk_kwargs"] == {
+        "portfolio_snapshot": stamped,
+        "max_single_weight": 0.20,
+        "enforce_value_target_exposure": True,
+        "capital_base": "capital",
+        "capital_base_binding": "binding",
+    }
+    assert [(item.symbol, item.target_value) for item in observed["decision"].positions] == [
+        ("BOXX", 800.0),
+        ("SOXL", 200.0),
+    ]
+    assert observed["map_kwargs"]["runtime_metadata"]["execution_annotations"]["signal_date"] == "2026-09-09"
 
 
 def test_runtime_strategy_adapters_loads_and_reports_plugin_signals():
