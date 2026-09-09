@@ -39,7 +39,10 @@ class LongBridgeRebalanceConfig:
     execution_state_account_scope: str = ""
     physical_account_id: str = ""
     durable_execution_command_paper_enabled: bool = False
+    durable_execution_command_live_enabled: bool = False
+    durable_live_execution_session_authorized: bool = False
     execution_command_store: Any = None
+    durable_execution_runtime_identity_digest: str = ""
     strategy_risk_state_paper_enabled: bool = False
     strategy_risk_state_store: Any = None
     runtime_release_receipt: Mapping[str, Any] | None = None
@@ -62,3 +65,4 @@ class LongBridgeRebalanceRuntime:
     post_submit_order: Callable[[Any, Any, Any], None] | None = None
     fetch_order_status: Callable[..., Any] | None = None
     account_identity_observer: Callable[[Any], Any] | None = None
+    resolve_frozen_rebalance_plan: Callable[..., dict[str, Any]] | None = None

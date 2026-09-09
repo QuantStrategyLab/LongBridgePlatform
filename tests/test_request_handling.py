@@ -936,6 +936,7 @@ class RequestHandlingTests(unittest.TestCase):
                 strategy_plugin_error=None,
                 notification_title_key="",
                 cash_only_execution=True,
+                live_execution_session_authorized=False,
             ):
                 return types.SimpleNamespace()
 
@@ -1010,6 +1011,7 @@ class RequestHandlingTests(unittest.TestCase):
                 strategy_plugin_error=None,
                 notification_title_key="",
                 cash_only_execution=True,
+                live_execution_session_authorized=False,
             ):
                 observed["notification_title_key"] = notification_title_key
                 return types.SimpleNamespace()
@@ -1060,6 +1062,7 @@ class RequestHandlingTests(unittest.TestCase):
                 strategy_plugin_error=None,
                 notification_title_key="",
                 cash_only_execution=True,
+                live_execution_session_authorized=False,
             ):
                 observed["notification_title_key"] = notification_title_key
                 return types.SimpleNamespace()
@@ -1152,7 +1155,9 @@ class RequestHandlingTests(unittest.TestCase):
             skip_logs=(),
             note_logs=(),
             action_done=True,
-            execution={},
+            execution={"durable_live_execution_command": {
+                "command_id": "next-session-command", "status": "QUEUED",
+            }},
             dry_run_orders=(),
             pending_orders=(
                 {
@@ -1174,6 +1179,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(summary["order_events_count"], 0)
         self.assertEqual(summary["orders_pending_count"], 1)
         self.assertEqual(summary["orders_pending"][0]["broker_order_id"], "lb-order-pending")
+        self.assertEqual(summary["durable_live_execution_command"]["status"], "QUEUED")
 
     def test_notification_delivery_log_summary_records_sent_dry_run_without_raw_text(self):
         module = load_module()

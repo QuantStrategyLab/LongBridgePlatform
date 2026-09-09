@@ -14,7 +14,9 @@ from application.execution_state import (
     resolve_execution_dedup_enabled,
 )
 from application.durable_execution_commands import (
+    build_live_runtime_identity_digest,
     build_execution_command_store_from_env,
+    resolve_live_execution_command_enabled,
     resolve_paper_execution_command_producer_enabled,
 )
 from application.paper_strategy_risk_state import (
@@ -31,6 +33,7 @@ from quant_platform_kit.common.account_identity import AccountIdentityPolicy
 from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt
 from notifications.telegram import build_prefixer
 from quant_platform_kit.notifications.cycle_channel import build_cycle_sender
+from application.longbridge_execution import fetch_live_order_status
 from runtime_execution_policy import FRACTIONAL_BUY_QUANTITY_STEP, dca_compat_mode_enabled, fractional_buy_execution_enabled
 
 
@@ -147,7 +150,13 @@ class LongBridgeRuntimeComposer:
             send_message=self.send_message,
             notification_channel=self.notification_channel,
             translator=self.translator,
-            fetch_order_status=self.fetch_order_status_fn,
+            fetch_order_status=(
+                fetch_live_order_status
+                if resolve_live_execution_command_enabled(
+                    env_reader=self.env_reader, dry_run_only=self.dry_run_only,
+                )
+                else self.fetch_order_status_fn
+            ),
             order_poll_interval_sec=self.order_poll_interval_sec,
             order_poll_max_attempts=self.order_poll_max_attempts,
             sleeper=self.sleeper,
@@ -229,6 +238,11 @@ class LongBridgeRuntimeComposer:
             post_submit_order=notification_adapters.post_submit_order,
             fetch_order_status=self.fetch_order_status_fn,
             account_identity_observer=observe_longbridge_account_identity,
+            resolve_frozen_rebalance_plan=getattr(
+                self.strategy_adapters,
+                "resolve_frozen_rebalance_plan",
+                None,
+            ),
         )
 
     def build_read_only_broker_contexts(self) -> tuple[Any, Any]:
@@ -255,6 +269,7 @@ class LongBridgeRuntimeComposer:
         strategy_plugin_error: str | None = None,
         notification_title_key: str = "",
         cash_only_execution: bool = True,
+        live_execution_session_authorized: bool = False,
     ) -> LongBridgeRebalanceConfig:
         market_scope_line = self.translator(
             "market_scope_detail",
@@ -284,6 +299,12 @@ class LongBridgeRuntimeComposer:
             raise RuntimeError(
                 "LongBridge live execution requires a gs:// execution state URI for atomic claims"
             )
+        live_command_enabled = resolve_live_execution_command_enabled(
+            env_reader=self.env_reader,
+            dry_run_only=self.dry_run_only,
+        )
+        if live_command_enabled and self.strategy_profile != "soxl_soxx_trend_income":
+            raise RuntimeError("durable live execution command is only verified for the SOXL profile")
         return LongBridgeRebalanceConfig(
             limit_sell_discount=self.limit_sell_discount,
             limit_buy_premium=self.limit_buy_premium,
@@ -322,10 +343,16 @@ class LongBridgeRuntimeComposer:
                 env_reader=self.env_reader,
                 dry_run_only=self.dry_run_only,
             ),
+            durable_execution_command_live_enabled=live_command_enabled,
+            durable_live_execution_session_authorized=bool(live_execution_session_authorized),
             execution_command_store=build_execution_command_store_from_env(
                 env_reader=self.env_reader,
                 gcp_project_id=self.project_id,
             ),
+            durable_execution_runtime_identity_digest=build_live_runtime_identity_digest(
+                strategy_profile=self.strategy_profile,
+                runtime_config=getattr(self.strategy_adapters, "strategy_runtime_config", {}),
+            ) if live_command_enabled else "",
             strategy_risk_state_paper_enabled=resolve_paper_strategy_risk_state_enabled(
                 env_reader=self.env_reader,
                 dry_run_only=self.dry_run_only,

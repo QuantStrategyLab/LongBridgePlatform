@@ -353,6 +353,9 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
     durable_command = execution.get("durable_execution_command")
     if isinstance(durable_command, dict):
         summary["durable_execution_command"] = dict(durable_command)
+    live_command = execution.get("durable_live_execution_command")
+    if isinstance(live_command, dict):
+        summary["durable_live_execution_command"] = dict(live_command)
     account_identity = execution.get("account_identity")
     if isinstance(account_identity, dict):
         summary["account_identity"] = dict(account_identity)
@@ -789,6 +792,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 else ""
             ),
             cash_only_execution=CASH_ONLY_EXECUTION,
+            live_execution_session_authorized=bool(market_open and not validation_only),
         )
         failure_phase = "strategy_cycle"
         cycle_result = run_rebalance_cycle(runtime=rebalance_runtime, config=rebalance_config)

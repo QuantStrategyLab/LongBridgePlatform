@@ -9,11 +9,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from application.durable_execution_commands import (  # noqa: E402
+    build_live_execution_command,
     build_paper_execution_decision_digest,
     build_paper_execution_command,
     enqueue_paper_execution_command,
+    enqueue_live_execution_command,
     resolve_paper_execution_command_consumer_enabled,
     resolve_paper_execution_command_producer_enabled,
+    resolve_live_execution_command_enabled,
 )
 from quant_platform_kit.common.paper_execution_admission import build_paper_risk_admission_receipt
 from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt
@@ -245,3 +248,82 @@ def test_paper_consumer_rejects_live_enablement() -> None:
         assert "paper-only" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("live enablement must fail closed")
+
+
+def test_live_command_is_content_addressed_and_binds_runtime_and_account() -> None:
+    command = build_live_execution_command(
+        platform="longbridge",
+        account_scope="SG",
+        strategy_profile="soxl_soxx_trend_income",
+        physical_account_id="account-123",
+        runtime_identity_digest="a" * 64,
+        execution={**_execution(), "trade_threshold_value": 100.0},
+        allocation=_allocation(),
+    )
+    repeated = build_live_execution_command(
+        platform="longbridge",
+        account_scope="SG",
+        strategy_profile="soxl_soxx_trend_income",
+        physical_account_id="account-123",
+        runtime_identity_digest="a" * 64,
+        execution={**_execution(), "trade_threshold_value": 100.0},
+        allocation=_allocation(),
+    )
+
+    assert command.command_id == repeated.command_id
+    assert command.execution_mode == "live"
+    assert command.intent["runtime_identity_digest"] == "a" * 64
+    assert command.intent["physical_account_digest"] != "account-123"
+    assert "account-123" not in command.intent_json
+    assert command.intent["allocation"]["targets"] == {"BOXX": 150.0, "SOXL": 350.0}
+
+
+def test_live_flag_is_default_off_and_rejects_paper_runtime() -> None:
+    assert not resolve_live_execution_command_enabled(
+        env_reader=lambda _name, default="": default,
+        dry_run_only=False,
+    )
+    assert resolve_live_execution_command_enabled(
+        env_reader=lambda _name, _default="": "true",
+        dry_run_only=False,
+    )
+    try:
+        resolve_live_execution_command_enabled(
+            env_reader=lambda _name, _default="": "true",
+            dry_run_only=True,
+        )
+    except RuntimeError as exc:
+        assert "live-only" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("paper runtime must fail closed")
+
+
+def test_live_producer_enqueue_is_business_idempotent() -> None:
+    observed = []
+
+    class Store:
+        cloud_prefix_uri = "gs://live/commands"
+        local_dir = None
+
+        def enqueue(self, command):
+            observed.append(command.command_id)
+            return len(observed) == 1
+
+    kwargs = dict(
+        enabled=True,
+        dry_run_only=False,
+        store=Store(),
+        platform="longbridge",
+        account_scope="SG",
+        strategy_profile="soxl_soxx_trend_income",
+        physical_account_id="account-123",
+        runtime_identity_digest="a" * 64,
+        execution=_execution(),
+        allocation=_allocation(),
+    )
+    first = enqueue_live_execution_command(**kwargs)
+    second = enqueue_live_execution_command(**kwargs)
+
+    assert first and first[1] is True
+    assert second and second[1] is False
+    assert observed[0] == observed[1]
