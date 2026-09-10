@@ -578,8 +578,9 @@ class RequestHandlingTests(unittest.TestCase):
 
         observed = {}
 
-        def collect(quote_context, trade_context, *, account_scope, now):
+        def collect(quote_context, trade_context, *, account_scope, now, include_broker_balances):
             observed["collector"] = (quote_context, trade_context, account_scope, now)
+            observed["include_broker_balances"] = include_broker_balances
             return reconciliation_module.LongBridgeReconciliationObservations(
                 account_scope={"configured_scope": account_scope, "account_channels": ["cash"]},
                 account_identity_match=False,
@@ -602,6 +603,7 @@ class RequestHandlingTests(unittest.TestCase):
                 cash_complete=True,
                 open_orders_complete=False,
                 recent_executions_complete=False,
+                broker_reported_balances=({"currency": "HKD", "net_assets": "2", "total_cash": "1"},),
             )
 
         def forbidden(*_args, **_kwargs):
@@ -631,6 +633,8 @@ class RequestHandlingTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(payload["cash"][0]["currency"], "HKD")
+        self.assertEqual(payload["broker_reported_balances"][0]["net_assets"], "2")
+        self.assertTrue(observed["include_broker_balances"])
         self.assertTrue(payload["no_order"])
         self.assertFalse(payload["live_authority_granted"])
         self.assertTrue(observed["read_only_contexts"])

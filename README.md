@@ -28,11 +28,16 @@ It is an execution layer, not a strategy research repository. Strategy logic com
 
 `GET /account-snapshot` is a separate, read-only diagnostic and stays disabled
 unless `LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED=true` is set exactly. It returns
-currency-specific cash, quantity-only positions, redacted known non-terminal
+currency-specific cash, broker-reported balance rows (`currency`, `net_assets`,
+`total_cash`), quantity-only positions, redacted known non-terminal
 orders from the bounded seven-day read, and a known recent-execution count. The
 response is always partial: the SDK read is non-atomic and does not prove a
 stable broker account ID, a unique account writer, complete open orders or
-executions, fees, market value, or equity. The endpoint grants no recovery,
+executions, fees, market value, or independently reconciled equity. Balance rows
+come from the same existing `account_balance` read, apply to SG/HK/paper, and
+are not summed across currencies or used in stable reconciliation digests.
+Missing or non-finite balance values reject the snapshot without affecting the
+separate reconciliation endpoint. The endpoint grants no recovery,
 live-trading, order, token-refresh, notification, or reporting authority.
 Access retains the service's existing Cloud Run IAM and internal ingress
 protection; deploying and enabling this endpoint is a separate operational step.

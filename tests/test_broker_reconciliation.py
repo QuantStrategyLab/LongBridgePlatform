@@ -164,6 +164,7 @@ def test_account_snapshot_returns_only_safe_partial_account_facts():
         "observed_started_at": now.isoformat(),
         "observed_finished_at": now.isoformat(),
         "snapshot_atomic": False,
+        "broker_reported_balances": [{"currency": "USD", "net_assets": "10", "total_cash": "10"}],
         "cash": [
             {
                 "currency": "USD",
@@ -222,6 +223,89 @@ def test_account_snapshot_preserves_a_known_empty_position_list():
     assert status == 200
     assert payload["positions"] == []
     assert payload["positions_complete"] is True
+
+
+@pytest.mark.parametrize("account_scope", ["SG", "HK", "PAPER"])
+def test_account_snapshot_preserves_broker_balances_without_currency_aggregation(account_scope):
+    context, calls = _read_only_trade_context()
+    original_reader = context.account_balance
+    balances = original_reader()
+    balances[0].net_assets = "123.4500"
+    balances[0].total_cash = "-2.500"
+    balances.append(SimpleNamespace(
+        currency="HKD", net_assets="900.00", total_cash="800",
+        cash_infos=[SimpleNamespace(
+            currency="HKD", available_cash="800", frozen_cash="0", settling_cash="0",
+        )],
+    ))
+    calls.clear()
+
+    def read_balances():
+        calls.append("account_balance")
+        return balances
+
+    context.account_balance = read_balances
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True, account_scope=account_scope,
+        build_read_only_contexts=lambda: (object(), context),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+    )
+    assert status == 200
+    assert payload["account_scope"] == account_scope
+    assert {row["currency"]: row for row in payload["broker_reported_balances"]} == {
+        "USD": {"currency": "USD", "net_assets": "123.45", "total_cash": "-2.5"},
+        "HKD": {"currency": "HKD", "net_assets": "900", "total_cash": "800"},
+    }
+    assert calls == ["account_balance", "stock_positions", "history_orders",
+                     "history_executions", "today_executions"]
+    assert payload["equity"] is None and payload["market_value"] is None
+    assert payload["status"] == "partial" and payload["snapshot_atomic"] is False
+    assert payload["open_orders_complete"] is False
+    assert payload["live_authority_granted"] is False
+
+
+@pytest.mark.parametrize("field,value", [
+    ("net_assets", None), ("net_assets", "NaN"), ("net_assets", "Infinity"),
+    ("total_cash", None), ("total_cash", "-Infinity"), ("currency", ""),
+])
+def test_account_snapshot_rejects_invalid_broker_balance_but_reconcile_is_unchanged(field, value):
+    context, _calls = _read_only_trade_context()
+    balances = context.account_balance()
+    setattr(balances[0], field, value)
+    context.account_balance = lambda: balances
+    observations = reconciliation.collect_read_only_reconciliation_observations(
+        object(), context, account_scope="SG",
+    )
+    assert observations.cash_complete is True
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True, account_scope="SG",
+        build_read_only_contexts=lambda: (object(), context),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+    )
+    assert status == 503
+    assert payload == {"status": "blocked", "reason": "account_snapshot_collection_failed"}
+
+
+def test_snapshot_valuation_does_not_change_reconciliation_observations_or_digests():
+    context, _calls = _read_only_trade_context()
+    balances = context.account_balance()
+    context.account_balance = lambda: balances
+    before = reconciliation.collect_read_only_reconciliation_observations(
+        object(), context, account_scope="SG",
+    )
+    balances[0].net_assets = "999"
+    balances[0].total_cash = "888"
+    after = reconciliation.collect_read_only_reconciliation_observations(
+        object(), context, account_scope="SG", include_broker_balances=True,
+    )
+    assert before.cash == after.cash
+    assert before.positions == after.positions
+    assert reconciliation.calculate_broker_observation_sha256(before.cash) == (
+        reconciliation.calculate_broker_observation_sha256(after.cash)
+    )
+    assert after.broker_reported_balances == (
+        {"currency": "USD", "net_assets": "999", "total_cash": "888"},
+    )
 
 
 @pytest.mark.parametrize("bad_cash", [[], None, "NaN", "Infinity"])
