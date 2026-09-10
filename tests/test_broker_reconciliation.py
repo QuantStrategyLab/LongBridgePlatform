@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -107,6 +108,167 @@ def test_disabled_reconciliation_does_not_build_contexts():
 
     assert status == 503
     assert payload["reason"] == "broker_reconciliation_disabled"
+
+
+def test_account_snapshot_disabled_or_bad_scope_does_not_build_contexts():
+    for enabled, scope, reason in (
+        (False, "PAPER", "account_snapshot_disabled"),
+        (True, "unknown", "account_snapshot_account_scope_unsupported"),
+    ):
+        payload, status = reconciliation.run_read_only_account_snapshot(
+            enabled=enabled,
+            account_scope=scope,
+            build_read_only_contexts=lambda: pytest.fail("must not build contexts"),
+            collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+        )
+
+        assert status == 503
+        assert payload == {"status": "blocked", "reason": reason}
+
+
+def test_account_snapshot_returns_only_safe_partial_account_facts():
+    context, calls = _read_only_trade_context()
+    now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+    context.history_orders = lambda **_kwargs: [
+        SimpleNamespace(
+            order_id="private-order-id",
+            status="NEW",
+            symbol="SOXL.US",
+            currency="USD",
+            side="BUY",
+            order_type="LO",
+            quantity="2",
+            executed_quantity="1",
+            submitted_at="2026-09-05T10:00:00Z",
+            updated_at=None,
+            account_id="private-account-id",
+        )
+    ]
+    context.history_executions = lambda **_kwargs: [
+        _execution("private-trade-id", now - timedelta(hours=1))
+    ]
+
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True,
+        account_scope="paper",
+        build_read_only_contexts=lambda: (object(), context),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+        now_reader=lambda: now,
+    )
+
+    assert status == 200
+    assert payload == {
+        "schema_version": "longbridge_account_snapshot.v1",
+        "status": "partial",
+        "account_scope": "PAPER",
+        "observed_started_at": now.isoformat(),
+        "observed_finished_at": now.isoformat(),
+        "snapshot_atomic": False,
+        "cash": [
+            {
+                "currency": "USD",
+                "available_cash": "10",
+                "frozen_cash": "0",
+                "settling_cash": "0",
+            }
+        ],
+        "positions": [{"symbol": "SOXL.US", "currency": "USD", "quantity": "1"}],
+        "known_non_terminal_orders_7d": [
+            {
+                "status": "NEW",
+                "symbol": "SOXL.US",
+                "currency": "USD",
+                "side": "BUY",
+                "order_type": "LO",
+                "quantity": "2",
+                "executed_quantity": "1",
+                "submitted_at": "2026-09-05T10:00:00Z",
+                "updated_at": None,
+            }
+        ],
+        "known_recent_executions_7d_count": 1,
+        "positions_complete": True,
+        "cash_complete": True,
+        "open_orders_complete": False,
+        "recent_executions_complete": False,
+        "stable_broker_account_id": None,
+        "unique_writer_confirmed": False,
+        "execution_fees": None,
+        "market_value": None,
+        "equity": None,
+        "no_order": True,
+        "live_authority_granted": False,
+    }
+    serialized = json.dumps(payload)
+    assert "private-order-id" not in serialized
+    assert "private-trade-id" not in serialized
+    assert "private-account-id" not in serialized
+    assert calls[:2] == ["account_balance", "stock_positions"]
+
+
+def test_account_snapshot_preserves_a_known_empty_position_list():
+    context, _calls = _read_only_trade_context()
+    context.stock_positions = lambda: SimpleNamespace(
+        channels=[SimpleNamespace(account_channel="Cash", positions=[])]
+    )
+
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True,
+        account_scope="SG",
+        build_read_only_contexts=lambda: (object(), context),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+    )
+
+    assert status == 200
+    assert payload["positions"] == []
+    assert payload["positions_complete"] is True
+
+
+@pytest.mark.parametrize("bad_cash", [[], None, "NaN", "Infinity"])
+def test_account_snapshot_rejects_missing_or_invalid_cash_without_partial_payload(bad_cash):
+    context, _calls = _read_only_trade_context()
+    if bad_cash == []:
+        context.account_balance = lambda: []
+    elif bad_cash is None:
+        context.account_balance = lambda: [SimpleNamespace(cash_infos=None)]
+    else:
+        context.account_balance = lambda: [
+            SimpleNamespace(
+                cash_infos=[
+                    SimpleNamespace(
+                        currency="USD",
+                        available_cash=bad_cash,
+                        frozen_cash="0",
+                        settling_cash="0",
+                    )
+                ]
+            )
+        ]
+
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True,
+        account_scope="HK",
+        build_read_only_contexts=lambda: (object(), context),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+    )
+
+    assert status == 503
+    assert payload == {"status": "blocked", "reason": "account_snapshot_collection_failed"}
+    assert "cash" not in payload
+
+
+def test_account_snapshot_provider_failure_is_sanitized():
+    context, _calls = _read_only_trade_context(fail_surface="account_balance")
+
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True,
+        account_scope="PAPER",
+        build_read_only_contexts=lambda: (object(), context),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+    )
+
+    assert status == 503
+    assert payload == {"status": "blocked", "reason": "account_snapshot_collection_failed"}
 
 
 def test_missing_collector_and_runtime_target_fail_before_contexts():

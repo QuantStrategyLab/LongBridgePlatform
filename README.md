@@ -26,6 +26,17 @@ It is an execution layer, not a strategy research repository. Strategy logic com
 - Must keep credentials in GitHub Secrets, cloud secret stores, or the broker-specific secret system, never in Git.
 - Should start with dry-run or paper mode before any live order path is enabled.
 
+`GET /account-snapshot` is a separate, read-only diagnostic and stays disabled
+unless `LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED=true` is set exactly. It returns
+currency-specific cash, quantity-only positions, redacted known non-terminal
+orders from the bounded seven-day read, and a known recent-execution count. The
+response is always partial: the SDK read is non-atomic and does not prove a
+stable broker account ID, a unique account writer, complete open orders or
+executions, fees, market value, or equity. The endpoint grants no recovery,
+live-trading, order, token-refresh, notification, or reporting authority.
+Access retains the service's existing Cloud Run IAM and internal ingress
+protection; deploying and enabling this endpoint is a separate operational step.
+
 ## Direct vs snapshot-backed profiles
 
 Direct runtime profiles can usually run from market history or portfolio state. Snapshot-backed profiles need a current artifact bundle from the matching snapshot pipeline before this platform should execute them. The platform should not invent strategy eligibility; it should consume the status and artifacts published by the strategy and snapshot repositories.

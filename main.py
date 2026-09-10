@@ -15,8 +15,10 @@ import google.auth
 import requests
 from application.monitor_dispatcher import dispatch_due_monitors, load_monitor_targets
 from application.broker_reconciliation import (
+    account_snapshot_enabled,
     collect_read_only_reconciliation_observations,
     reconciliation_enabled,
+    run_read_only_account_snapshot,
     run_read_only_broker_reconciliation,
 )
 from application.execution_receipt_adapter import (
@@ -1122,6 +1124,17 @@ def run_broker_reconciliation():
     )
 
 
+def run_account_snapshot():
+    """Read bounded account facts through the order-port-free broker contexts."""
+
+    return run_read_only_account_snapshot(
+        enabled=account_snapshot_enabled(os.getenv),
+        account_scope=getattr(RUNTIME_SETTINGS, "account_region", None),
+        build_read_only_contexts=lambda: build_composer().build_read_only_broker_contexts(),
+        collect_evidence=READ_ONLY_BROKER_RECONCILIATION_COLLECTOR,
+    )
+
+
 @app.route("/run", methods=["POST"])
 def handle_trigger():
     """Entrypoint for Cloud Run / scheduler: run strategy and return 200."""
@@ -1189,6 +1202,19 @@ def handle_broker_reconciliation():
         return "Method Not Allowed", 405
     payload, status = run_broker_reconciliation()
     return json.dumps(payload, ensure_ascii=True), status, {"Content-Type": "application/json"}
+
+
+@app.route("/account-snapshot", methods=["GET"])
+def handle_account_snapshot():
+    """Return a non-cacheable, read-only and authority-free account snapshot."""
+
+    if request_method() != "GET":
+        return "Method Not Allowed", 405
+    payload, status = run_account_snapshot()
+    return json.dumps(payload, ensure_ascii=True), status, {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+    }
 
 
 @app.route("/monitor-dispatch", methods=["POST", "GET"])
