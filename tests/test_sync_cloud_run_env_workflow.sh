@@ -392,7 +392,8 @@ if command == "git" and args == ["rev-parse", "HEAD"]:
 elif command == "git" and args == ["archive", "HEAD"]:
     print("synthetic tracked source archive")
 elif command == "docker" and args[0] in ("build", "push"):
-    pass
+    if args[0] == "build":
+        sys.stdin.buffer.read()
 elif command == "gcloud" and args[:3] == ["run", "services", "describe"]:
     if os.environ.get("SERVICE_MISSING") == "1":
         sys.exit(1)
