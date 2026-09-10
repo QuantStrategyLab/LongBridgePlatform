@@ -22,6 +22,7 @@ from quant_platform_kit.common.execution_state import build_execution_marker_sto
 
 
 ENABLED_ENV_NAME = "LONGBRIDGE_BROKER_RECONCILIATION_ENABLED"
+ACCOUNT_SNAPSHOT_ENABLED_ENV_NAME = "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED"
 EXPECTED_DIGESTS_ENV_NAME = "LONGBRIDGE_RECONCILIATION_EXPECTED_DIGESTS_JSON"
 SUPPORTED_ACCOUNT_SCOPES = frozenset({"PAPER", "HK", "SG"})
 _EXPECTED_DIGEST_KEYS = (
@@ -54,6 +55,15 @@ def reconciliation_enabled(env_reader: Callable[[str, str], str | None]) -> bool
     """Require an explicit exact boolean; missing or malformed values stay off."""
 
     return str(env_reader(ENABLED_ENV_NAME, "") or "").strip().lower() == "true"
+
+
+def account_snapshot_enabled(env_reader: Callable[[str, str], str | None]) -> bool:
+    """Require an explicit exact boolean; missing or malformed values stay off."""
+
+    return (
+        str(env_reader(ACCOUNT_SNAPSHOT_ENABLED_ENV_NAME, "") or "").strip().lower()
+        == "true"
+    )
 
 
 def _text(value: object) -> str:
@@ -489,15 +499,143 @@ def run_read_only_broker_reconciliation(
         return {"status": "blocked", "reason": "broker_reconciliation_collection_failed"}, 503
 
 
+def run_read_only_account_snapshot(
+    *,
+    enabled: bool,
+    account_scope: object,
+    build_read_only_contexts: Callable[[], tuple[Any, Any]],
+    collect_evidence: Callable[..., LongBridgeReconciliationObservations] | None,
+    now_reader: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+) -> tuple[dict[str, object], int]:
+    """Return bounded account facts without granting execution or recovery authority."""
+
+    scope = _text(account_scope).upper()
+    if not enabled:
+        return {"status": "blocked", "reason": "account_snapshot_disabled"}, 503
+    if scope not in SUPPORTED_ACCOUNT_SCOPES:
+        return {
+            "status": "blocked",
+            "reason": "account_snapshot_account_scope_unsupported",
+        }, 503
+    if not callable(collect_evidence) or not callable(build_read_only_contexts):
+        return {"status": "blocked", "reason": "account_snapshot_collection_failed"}, 503
+
+    try:
+        started_at = now_reader()
+        if not isinstance(started_at, datetime) or started_at.utcoffset() is None:
+            raise LongBridgeReconciliationReadError("Account snapshot time is invalid.")
+        started_at = started_at.astimezone(timezone.utc)
+        quote_context, trade_context = build_read_only_contexts()
+        observations = collect_evidence(
+            quote_context,
+            trade_context,
+            account_scope=scope,
+            now=started_at,
+        )
+        finished_at = now_reader()
+        if not isinstance(finished_at, datetime) or finished_at.utcoffset() is None:
+            raise LongBridgeReconciliationReadError("Account snapshot time is invalid.")
+        finished_at = finished_at.astimezone(timezone.utc)
+        if finished_at < started_at or not isinstance(
+            observations, LongBridgeReconciliationObservations
+        ):
+            raise LongBridgeReconciliationReadError("Account snapshot data is invalid.")
+        if not observations.cash_complete or not observations.positions_complete:
+            raise LongBridgeReconciliationReadError("Account snapshot data is incomplete.")
+
+        cash: list[dict[str, object]] = []
+        for balance in observations.cash:
+            cash_infos = balance.get("cash_infos") if isinstance(balance, Mapping) else None
+            if not isinstance(cash_infos, list) or not cash_infos:
+                raise LongBridgeReconciliationReadError("Account snapshot cash is incomplete.")
+            for cash_info in cash_infos:
+                if not isinstance(cash_info, Mapping):
+                    raise LongBridgeReconciliationReadError("Account snapshot cash is invalid.")
+                cash.append(
+                    {
+                        key: cash_info[key]
+                        for key in (
+                            "currency",
+                            "available_cash",
+                            "frozen_cash",
+                            "settling_cash",
+                        )
+                    }
+                )
+        if not cash:
+            raise LongBridgeReconciliationReadError("Account snapshot cash is missing.")
+
+        positions = [
+            {
+                "symbol": position["symbol"],
+                "currency": position["currency"],
+                "quantity": position["quantity"],
+            }
+            for position in observations.positions
+        ]
+        safe_order_keys = (
+            "status",
+            "symbol",
+            "currency",
+            "side",
+            "order_type",
+            "quantity",
+            "executed_quantity",
+            "submitted_at",
+            "updated_at",
+        )
+        known_orders = []
+        for order in observations.open_orders:
+            projected_order = {key: order[key] for key in safe_order_keys}
+            projected_order["updated_at"] = _text(projected_order["updated_at"]) or None
+            known_orders.append(projected_order)
+        required_order_keys = tuple(key for key in safe_order_keys if key != "updated_at")
+        if any(
+            not all(_text(order[key]) for key in required_order_keys)
+            for order in known_orders
+        ):
+            raise LongBridgeReconciliationReadError("Account snapshot order is invalid.")
+
+        return {
+            "schema_version": "longbridge_account_snapshot.v1",
+            "status": "partial",
+            "account_scope": scope,
+            "observed_started_at": started_at.isoformat(),
+            "observed_finished_at": finished_at.isoformat(),
+            "snapshot_atomic": False,
+            "cash": cash,
+            "positions": positions,
+            "known_non_terminal_orders_7d": known_orders,
+            "known_recent_executions_7d_count": len(observations.recent_executions),
+            "positions_complete": True,
+            "cash_complete": True,
+            "open_orders_complete": False,
+            # The SDK does not expose enough paging metadata to prove completeness.
+            "recent_executions_complete": False,
+            "stable_broker_account_id": None,
+            "unique_writer_confirmed": False,
+            "execution_fees": None,
+            "market_value": None,
+            "equity": None,
+            "no_order": True,
+            "live_authority_granted": False,
+        }, 200
+    except Exception:
+        return {"status": "blocked", "reason": "account_snapshot_collection_failed"}, 503
+
+
 __all__ = [
+    "ACCOUNT_SNAPSHOT_ENABLED_ENV_NAME",
     "ENABLED_ENV_NAME",
     "EXPECTED_DIGESTS_ENV_NAME",
     "LongBridgeReconciliationCandidate",
     "LongBridgeReconciliationObservations",
     "LongBridgeReconciliationReadError",
+    "account_snapshot_enabled",
     "build_reconciliation_candidate",
     "collect_read_only_reconciliation_observations",
     "reconciliation_enabled",
     "run_read_only_broker_reconciliation",
+    "run_read_only_account_snapshot",
     "validate_reconciliation_candidate",
 ]

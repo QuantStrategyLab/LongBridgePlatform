@@ -270,6 +270,10 @@ class RequestHandlingTests(unittest.TestCase):
             module.handle_broker_reconciliation,
         )
         self.assertIs(
+            module.app._routes[("/account-snapshot", ("GET",))],
+            module.handle_account_snapshot,
+        )
+        self.assertIs(
             module.app._routes[("/monitor-dispatch", ("POST", "GET"))],
             module.handle_monitor_dispatch,
         )
@@ -552,6 +556,86 @@ class RequestHandlingTests(unittest.TestCase):
 
         self.assertEqual(status, 503)
         self.assertEqual(json.loads(body)["reason"], "broker_reconciliation_disabled")
+
+    def test_account_snapshot_get_is_no_store_json_and_does_not_use_runtime_fallback(self):
+        module = load_module()
+        module.run_account_snapshot = lambda: ({"status": "partial", "no_order": True}, 200)
+        module._route_with_runtime_error_fallback = lambda *_args, **_kwargs: self.fail(
+            "account snapshot must not use the notifying runtime fallback"
+        )
+
+        with module.app.test_request_context("/account-snapshot", method="GET"):
+            body, status, headers = module.handle_account_snapshot()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"status": "partial", "no_order": True})
+        self.assertEqual(headers["Content-Type"], "application/json")
+        self.assertEqual(headers["Cache-Control"], "no-store")
+
+    def test_account_snapshot_main_path_builds_only_read_only_contexts(self):
+        module = load_module()
+        from application import broker_reconciliation as reconciliation_module
+
+        observed = {}
+
+        def collect(quote_context, trade_context, *, account_scope, now):
+            observed["collector"] = (quote_context, trade_context, account_scope, now)
+            return reconciliation_module.LongBridgeReconciliationObservations(
+                account_scope={"configured_scope": account_scope, "account_channels": ["cash"]},
+                account_identity_match=False,
+                positions=(),
+                cash=(
+                    {
+                        "cash_infos": [
+                            {
+                                "currency": "HKD",
+                                "available_cash": "1",
+                                "frozen_cash": "0",
+                                "settling_cash": "0",
+                            }
+                        ]
+                    },
+                ),
+                open_orders=(),
+                recent_executions=(),
+                positions_complete=True,
+                cash_complete=True,
+                open_orders_complete=False,
+                recent_executions_complete=False,
+            )
+
+        def forbidden(*_args, **_kwargs):
+            self.fail("normal runtime side effect was called")
+
+        module.READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = collect
+        module.fetch_token_from_secret = lambda project_id, secret_name: (
+            observed.update(secret_read=(project_id, secret_name)) or "test-token"
+        )
+        module.build_contexts = lambda app_key, app_secret, token: (
+            observed.update(
+                read_only_contexts=True,
+                context_credentials=(app_key, app_secret, token),
+            )
+            or ("quote-context", "trade-context")
+        )
+        module.refresh_token_if_needed = forbidden
+        module.run_rebalance_cycle = forbidden
+        module.submit_order = forbidden
+        module._notify_runtime_error = forbidden
+        module.persist_runtime_report = forbidden
+
+        with patch.dict(
+            os.environ, {"LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED": "true"}, clear=False
+        ):
+            payload, status = module.run_account_snapshot()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["cash"][0]["currency"], "HKD")
+        self.assertTrue(payload["no_order"])
+        self.assertFalse(payload["live_authority_granted"])
+        self.assertTrue(observed["read_only_contexts"])
+        self.assertEqual(observed["context_credentials"][2], "test-token")
+        self.assertEqual(observed["collector"][:3], ("quote-context", "trade-context", "HK"))
 
     def test_broker_reconciliation_all_scopes_require_a_collector_before_contexts(self):
         module = load_module()
