@@ -155,6 +155,17 @@ def _normalize_cash(balance: Any) -> dict[str, object]:
     return {"cash_infos": list(_canonical_records(cash_detail))}
 
 
+def _normalize_broker_balance(balance: Any) -> dict[str, object]:
+    currency = _text(getattr(balance, "currency", "")).upper()
+    if not currency:
+        raise LongBridgeReconciliationReadError("Account snapshot balance currency is missing.")
+    return {
+        "currency": currency,
+        "net_assets": _decimal_text(getattr(balance, "net_assets", None), field_name="net assets"),
+        "total_cash": _decimal_text(getattr(balance, "total_cash", None), field_name="total cash"),
+    }
+
+
 def _normalize_order(order: Any) -> dict[str, object]:
     order_id = _text(getattr(order, "order_id", ""))
     status = _enum_name(getattr(order, "status", ""))
@@ -210,6 +221,8 @@ class LongBridgeReconciliationObservations:
     cash_complete: bool
     open_orders_complete: bool
     recent_executions_complete: bool
+    # Dynamic valuation is diagnostic only; excluded from reconciliation digests.
+    broker_reported_balances: tuple[Mapping[str, object], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -241,6 +254,7 @@ def collect_read_only_reconciliation_observations(
     account_scope: str,
     now: datetime | None = None,
     lookback: timedelta = timedelta(days=7),
+    include_broker_balances: bool = False,
 ) -> LongBridgeReconciliationObservations:
     """Read only documented SDK surfaces; never construct or invoke an order port.
 
@@ -320,6 +334,10 @@ def collect_read_only_reconciliation_observations(
         # A bounded history query cannot prove every long-lived active order is present.
         open_orders_complete=False,
         recent_executions_complete=len(executions) < 1000,
+        broker_reported_balances=(
+            _canonical_records([_normalize_broker_balance(balance) for balance in balances])
+            if include_broker_balances else ()
+        ),
     )
 
 
@@ -531,6 +549,7 @@ def run_read_only_account_snapshot(
             trade_context,
             account_scope=scope,
             now=started_at,
+            include_broker_balances=True,
         )
         finished_at = now_reader()
         if not isinstance(finished_at, datetime) or finished_at.utcoffset() is None:
@@ -542,6 +561,8 @@ def run_read_only_account_snapshot(
             raise LongBridgeReconciliationReadError("Account snapshot data is invalid.")
         if not observations.cash_complete or not observations.positions_complete:
             raise LongBridgeReconciliationReadError("Account snapshot data is incomplete.")
+        if not observations.broker_reported_balances:
+            raise LongBridgeReconciliationReadError("Account snapshot balances are missing.")
 
         cash: list[dict[str, object]] = []
         for balance in observations.cash:
@@ -604,6 +625,7 @@ def run_read_only_account_snapshot(
             "observed_finished_at": finished_at.isoformat(),
             "snapshot_atomic": False,
             "cash": cash,
+            "broker_reported_balances": list(observations.broker_reported_balances),
             "positions": positions,
             "known_non_terminal_orders_7d": known_orders,
             "known_recent_executions_7d_count": len(observations.recent_executions),
