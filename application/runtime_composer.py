@@ -82,6 +82,8 @@ class LongBridgeRuntimeComposer:
     symbol_suffix: str = ".US"
     trading_currency: str = "USD"
     dry_run_only: bool = False
+    configured_dry_run_only: bool | None = None
+    suppress_live_execution_commands: bool = False
     broker_adapters: Any = None
     strategy_adapters: Any = None
     estimate_max_purchase_quantity_fn: Callable[..., float] | None = None
@@ -144,6 +146,24 @@ class LongBridgeRuntimeComposer:
 
     send_tg_message = send_message  # backward-compat alias
 
+    def _live_execution_command_enabled(self) -> bool:
+        configured_dry_run_only = (
+            self.dry_run_only
+            if self.configured_dry_run_only is None
+            else self.configured_dry_run_only
+        )
+        enabled = resolve_live_execution_command_enabled(
+            env_reader=self.env_reader,
+            dry_run_only=configured_dry_run_only,
+        )
+        if (
+            self.suppress_live_execution_commands
+            and self.dry_run_only
+            and not configured_dry_run_only
+        ):
+            return False
+        return enabled
+
     def build_notification_adapters(self, *, delivery_events: list[dict[str, Any]] | None = None):
         return self.notification_adapter_builder(
             with_prefix=self.with_prefix,
@@ -152,9 +172,7 @@ class LongBridgeRuntimeComposer:
             translator=self.translator,
             fetch_order_status=(
                 fetch_live_order_status
-                if resolve_live_execution_command_enabled(
-                    env_reader=self.env_reader, dry_run_only=self.dry_run_only,
-                )
+                if self._live_execution_command_enabled()
                 else self.fetch_order_status_fn
             ),
             order_poll_interval_sec=self.order_poll_interval_sec,
@@ -299,10 +317,7 @@ class LongBridgeRuntimeComposer:
             raise RuntimeError(
                 "LongBridge live execution requires a gs:// execution state URI for atomic claims"
             )
-        live_command_enabled = resolve_live_execution_command_enabled(
-            env_reader=self.env_reader,
-            dry_run_only=self.dry_run_only,
-        )
+        live_command_enabled = self._live_execution_command_enabled()
         if live_command_enabled and self.strategy_profile != "soxl_soxx_trend_income":
             raise RuntimeError("durable live execution command is only verified for the SOXL profile")
         return LongBridgeRebalanceConfig(
@@ -475,6 +490,8 @@ def build_runtime_composer(
         symbol_suffix=str(symbol_suffix or ""),
         trading_currency=str(trading_currency or "USD").upper(),
         dry_run_only=bool(dry_run_only if dry_run_only_override is None else dry_run_only_override),
+        configured_dry_run_only=bool(dry_run_only),
+        suppress_live_execution_commands=bool(dry_run_only_override) and not bool(dry_run_only),
         broker_adapters=broker_adapters,
         strategy_adapters=strategy_adapters,
         estimate_max_purchase_quantity_fn=estimate_max_purchase_quantity_fn,
