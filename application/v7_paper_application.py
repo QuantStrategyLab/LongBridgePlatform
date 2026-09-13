@@ -32,7 +32,7 @@ V7_PAPER_SCOPE = "PAPER"
 V7_PAPER_PLATFORM = "longbridge"
 # The research contract's frozen source is 07b164..., while the package that
 # is actually approved for the disabled account process is the controlled
-# d1ca... revision.  Keep those identities separate.
+# b83ef4b3... revision.  Keep those identities separate.
 V7_APPROVED_UES_REVISION = "b83ef4b3ae67c47d132ddd660ba3ccc60d474c85"
 
 _COMMIT_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
