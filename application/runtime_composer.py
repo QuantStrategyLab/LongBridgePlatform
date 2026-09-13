@@ -327,7 +327,13 @@ class LongBridgeRuntimeComposer:
                 "LongBridge live execution requires a gs:// execution state URI for atomic claims"
             )
         live_command_enabled = self._live_execution_command_enabled()
-        if live_command_enabled and self.strategy_profile != "soxl_soxx_trend_income":
+        v7_evidence_execution = bool(
+            self.strategy_profile == "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+            and getattr(getattr(self.strategy_adapters, "strategy_runtime", None), "uses_evidence_execution", False)
+            and self.runtime_target is not None
+            and self.runtime_target.strategy_release is not None
+        )
+        if live_command_enabled and self.strategy_profile != "soxl_soxx_trend_income" and not v7_evidence_execution:
             raise RuntimeError("durable live execution command is only verified for the SOXL profile")
         validation_suppressed = bool(
             self.suppress_live_execution_commands

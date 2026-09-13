@@ -519,6 +519,7 @@ STRATEGY_ADAPTERS = build_runtime_strategy_adapters(
         "reserved_cash_ratio": getattr(RUNTIME_SETTINGS, "reserved_cash_ratio", 0.0),
         "cash_only_execution": CASH_ONLY_EXECUTION,
     },
+    execution_materials=getattr(STRATEGY_RUNTIME, "execution_materials", {}),
     build_strategy_plugin_report_payload_fn=build_strategy_plugin_report_payload,
     load_configured_strategy_plugin_signals_fn=load_configured_strategy_plugin_signals,
     parse_strategy_plugin_mounts_fn=parse_strategy_plugin_mounts,

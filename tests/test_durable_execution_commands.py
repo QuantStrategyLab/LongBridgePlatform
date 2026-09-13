@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,7 @@ from application.durable_execution_commands import (  # noqa: E402
     resolve_paper_execution_command_producer_enabled,
     resolve_live_execution_command_enabled,
 )
+from application.rebalance_service import _validate_live_command_binding  # noqa: E402
 from quant_platform_kit.common.paper_execution_admission import build_paper_risk_admission_receipt
 from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt
 
@@ -51,6 +53,10 @@ def _release_identity() -> dict[str, str]:
         "plugin_bundle_sha256": "e" * 64,
         "effective_session": "2026-08-25",
     }
+
+
+def _live_release_identity() -> dict[str, str]:
+    return {**_release_identity(), "strategy_revision": "a" * 40}
 
 
 def _paper_risk_receipt(*, allocation: dict[str, object], effective_session: str) -> dict[str, object]:
@@ -276,6 +282,51 @@ def test_live_command_is_content_addressed_and_binds_runtime_and_account() -> No
     assert command.intent["physical_account_digest"] != "account-123"
     assert "account-123" not in command.intent_json
     assert command.intent["allocation"]["targets"] == {"BOXX": 150.0, "SOXL": 350.0}
+
+
+def test_live_command_carries_immutable_strategy_release() -> None:
+    release = _live_release_identity()
+    command = build_live_execution_command(
+        platform="longbridge",
+        account_scope="PAPER",
+        strategy_profile="soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve",
+        physical_account_id="account-123",
+        runtime_identity_digest="a" * 64,
+        execution=_execution(),
+        allocation=_allocation(),
+        strategy_release=release,
+    )
+
+    assert command.intent["strategy_release"] == release
+
+
+def test_release_mismatch_is_rejected_before_any_broker_submit() -> None:
+    expected = _live_release_identity()
+    mismatched = {**expected, "strategy_revision": "c" * 40}
+    command = build_live_execution_command(
+        platform="longbridge",
+        account_scope="PAPER",
+        strategy_profile="soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve",
+        physical_account_id="account-123",
+        runtime_identity_digest="a" * 64,
+        execution=_execution(),
+        allocation=_allocation(),
+        strategy_release=mismatched,
+    )
+    config = SimpleNamespace(
+        execution_state_account_scope="PAPER",
+        strategy_profile="soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve",
+        physical_account_id="account-123",
+        durable_execution_runtime_identity_digest="a" * 64,
+        expected_strategy_release=expected,
+    )
+
+    try:
+        _validate_live_command_binding(command=command, config=config)
+    except ValueError as exc:
+        assert str(exc) == "live execution command strategy release is invalid"
+    else:  # pragma: no cover
+        raise AssertionError("release mismatch must fail before broker submission")
 
 
 def test_live_flag_is_default_off_and_rejects_paper_runtime() -> None:

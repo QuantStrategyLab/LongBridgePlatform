@@ -14,11 +14,36 @@ from quant_platform_kit.common.strategy_plugins import (
     translate_strategy_plugin_value,
 )
 from quant_platform_kit.common.strategy_contracts import PositionTarget, StrategyDecision
-from quant_platform_kit.risk.gate import apply_risk_gate, enrich_decision_risk_diagnostics
+from quant_platform_kit.risk.contracts import CandidateRiskIdentity
+from quant_platform_kit.risk.gate import (
+    apply_risk_gate,
+    assess_with_evidence,
+    enrich_decision_risk_diagnostics,
+)
 from quant_platform_kit.risk.portfolio_diagnostics import extract_portfolio_risk_diagnostics
 
 
 _V7_PROFILE_NAME = "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+
+
+def _typed_execution_candidate(materials: Mapping[str, Any]) -> CandidateRiskIdentity | None:
+    candidate = materials.get("candidate_risk_identity")
+    if isinstance(candidate, CandidateRiskIdentity):
+        return candidate
+    if not isinstance(candidate, Mapping):
+        return None
+    try:
+        return CandidateRiskIdentity(
+            strategy_profile=candidate["strategy_profile"],
+            account_mode=candidate["account_mode"],
+            strategy_revision=candidate["strategy_revision"],
+            runner_revision=candidate["runner_revision"],
+            config_sha256=candidate["config_sha256"],
+            input_manifest_sha256=candidate["input_manifest_sha256"],
+            authority_receipt_sha256=candidate["authority_receipt_sha256"],
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _get_direct_market_history_profiles() -> frozenset[str]:
@@ -63,6 +88,7 @@ class LongBridgeRuntimeStrategyAdapters:
     build_strategy_evaluation_inputs_fn: Callable[..., dict[str, Any]]
     map_strategy_decision_to_plan_fn: Callable[..., dict[str, Any]]
     execution_policy: Mapping[str, Any] | None = None
+    execution_materials: Mapping[str, Any] | None = None
     build_strategy_plugin_report_payload_fn: Callable[..., dict[str, Any]] | None = None
     load_configured_strategy_plugin_signals_fn: Callable[..., Any] | None = None
     parse_strategy_plugin_mounts_fn: Callable[..., Any] | None = None
@@ -168,6 +194,8 @@ class LongBridgeRuntimeStrategyAdapters:
     def _apply_v7_validation_risk_gate(self, decision, *, snapshot):
         if self.strategy_profile != _V7_PROFILE_NAME:
             return decision
+        if getattr(self.strategy_runtime, "uses_evidence_execution", False):
+            return decision
         risk_snapshot = snapshot
         stamp_portfolio_risk_metadata = getattr(
             self.strategy_runtime,
@@ -263,7 +291,12 @@ class LongBridgeRuntimeStrategyAdapters:
         ):
             for symbol in allocation.get(field, ()) or ():
                 roles[str(symbol).strip().upper()] = role
-        frozen_diagnostics = {"execution_annotations": dict(execution)}
+        frozen_execution_annotations = dict(execution)
+        if "signal_effective_after_trading_days" in frozen_execution_annotations:
+            frozen_execution_annotations["signal_effective_after_trading_days"] = int(
+                frozen_execution_annotations["signal_effective_after_trading_days"]
+            )
+        frozen_diagnostics = {"execution_annotations": frozen_execution_annotations}
         for marker in ("no_order", "execution_authorized"):
             if marker in execution:
                 frozen_diagnostics[marker] = execution[marker]
@@ -288,14 +321,30 @@ class LongBridgeRuntimeStrategyAdapters:
         capabilities = self.strategy_runtime._build_capital_base_capabilities(  # noqa: SLF001
             {"portfolio_snapshot": snapshot}
         )
-        decision = apply_risk_gate(
-            decision,
-            portfolio_snapshot=snapshot,
-            max_single_weight=0.20,
-            enforce_value_target_exposure=True,
-            **capabilities,
-        )
-        runtime_metadata = {"execution_annotations": dict(execution)}
+        if getattr(self.strategy_runtime, "uses_evidence_execution", False):
+            materials = dict(self.execution_materials or {})
+            candidate = _typed_execution_candidate(materials)
+            result = assess_with_evidence(
+                decision,
+                snapshot,
+                scope="ACCOUNT",
+                mandate_provenance=materials.get("mandate_provenance"),
+                market_data=dict(materials.get("market_data") or {}),
+                candidate_identity=candidate,
+                risk_control_state=materials.get("risk_control_state"),
+                capital_base=capabilities.get("capital_base"),
+                capital_base_binding=capabilities.get("capital_base_binding"),
+            )
+            decision = result.decision
+        else:
+            decision = apply_risk_gate(
+                decision,
+                portfolio_snapshot=snapshot,
+                max_single_weight=0.20,
+                enforce_value_target_exposure=True,
+                **capabilities,
+            )
+        runtime_metadata = {"execution_annotations": frozen_execution_annotations}
         if self.execution_policy is not None:
             runtime_metadata["longbridge_execution_policy"] = dict(self.execution_policy)
         return self.map_strategy_decision_to_plan_fn(
@@ -321,6 +370,7 @@ def build_runtime_strategy_adapters(
     build_strategy_evaluation_inputs_fn: Callable[..., dict[str, Any]],
     map_strategy_decision_to_plan_fn: Callable[..., dict[str, Any]],
     execution_policy: Mapping[str, Any] | None = None,
+    execution_materials: Mapping[str, Any] | None = None,
     build_strategy_plugin_report_payload_fn: Callable[..., dict[str, Any]] | None = None,
     load_configured_strategy_plugin_signals_fn: Callable[..., Any] | None = None,
     parse_strategy_plugin_mounts_fn: Callable[..., Any] | None = None,
@@ -338,6 +388,7 @@ def build_runtime_strategy_adapters(
         build_strategy_evaluation_inputs_fn=build_strategy_evaluation_inputs_fn,
         map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan_fn,
         execution_policy=dict(execution_policy) if execution_policy is not None else None,
+        execution_materials=dict(execution_materials) if execution_materials is not None else None,
         build_strategy_plugin_report_payload_fn=build_strategy_plugin_report_payload_fn,
         load_configured_strategy_plugin_signals_fn=load_configured_strategy_plugin_signals_fn,
         parse_strategy_plugin_mounts_fn=parse_strategy_plugin_mounts_fn,

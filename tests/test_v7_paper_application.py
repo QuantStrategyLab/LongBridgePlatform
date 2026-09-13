@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from application.v7_paper_application import (
     V7_CONFIG_SHA256,
     V7_PAPER_PROFILE,
+    V7_APPROVED_UES_REVISION,
     V7_UES_REVISION,
     V7PaperApplicationError,
     build_v7_loaded_version_readback,
@@ -16,7 +18,18 @@ from application.v7_paper_application import (
     load_v7_paper_application_binding,
 )
 from decision_mapper import map_strategy_decision_to_plan
+from quant_platform_kit.common.capital_base import (
+    CapitalBaseBinding,
+    CapitalScope,
+    CapitalValuationBasis,
+    build_capital_base_snapshot,
+)
+from quant_platform_kit.risk.contracts import CandidateRiskIdentity
 from quant_platform_kit.common.strategy_contracts import PositionTarget, StrategyDecision
+
+
+FIXED_FRIDAY = datetime(2026, 9, 11, 21, 0, tzinfo=timezone.utc)
+FIXED_MONDAY = datetime(2026, 9, 14, 21, 0, tzinfo=timezone.utc)
 
 
 def _record(**overrides):
@@ -33,7 +46,7 @@ def _record(**overrides):
         "candidate_id": V7_PAPER_PROFILE,
         "config_sha256": V7_CONFIG_SHA256,
         "source_commit": "a" * 40,
-        "approved_ues_revision": "d1ca798d880cd83965f3da5081850ca48a616d19",
+        "approved_ues_revision": V7_APPROVED_UES_REVISION,
         "expected_revision": 42,
         "expected_strategy_profile": "soxl_soxx_trend_income",
         "desired_state": "paused",
@@ -81,6 +94,77 @@ def _protected_env():
     }
 
 
+def _synthetic_v7_execution_materials(snapshot):
+    candidate = CandidateRiskIdentity(
+        strategy_profile=V7_PAPER_PROFILE,
+        account_mode="longbridge_paper_v1",
+        strategy_revision=V7_APPROVED_UES_REVISION,
+        runner_revision="b" * 40,
+        config_sha256=V7_CONFIG_SHA256,
+        input_manifest_sha256="c" * 64,
+        authority_receipt_sha256="a" * 64,
+    )
+    mandate = {
+        "mandate_id": "soxl_v7_synthetic_paper_v1",
+        "mandate_version": "synthetic-2026-09-11.1",
+        "authority_receipt_sha256": candidate.authority_receipt_sha256,
+        "authority_scope": "PAPER",
+        "strategy_profile": candidate.strategy_profile,
+        "account_mode": candidate.account_mode,
+        "strategy_revision": candidate.strategy_revision,
+        "runner_revision": candidate.runner_revision,
+        "config_sha256": candidate.config_sha256,
+        "input_manifest_sha256": candidate.input_manifest_sha256,
+        "candidate_identity_sha256": candidate.candidate_sha256,
+        "effective_at": "2026-09-01T00:00:00Z",
+        "expires_at": "2026-09-30T00:00:00Z",
+        "max_snapshot_age_seconds": 300,
+        "effective_exposure_cap": 1.0,
+        "loss_budget": 0.01,
+        "product_caps": {"SOXL": 0.50, "SOXX": 0.50, "BOXX": 1.0},
+        "nominal_caps": {"SOXL": 0.50, "SOXX": 0.50, "BOXX": 1.0},
+        "product_leverage_factors": {"SOXL": 3, "SOXX": 1, "BOXX": 1},
+        "allowed_nonzero_assets": ["BOXX", "SOXL", "SOXX"],
+        "source_revision": V7_UES_REVISION,
+    }
+    binding = CapitalBaseBinding(
+        account_scope="PAPER",
+        runtime_scope="longbridge-quant-paper-service",
+        strategy_scope=V7_PAPER_PROFILE,
+        target_currency="USD",
+        capital_scope=CapitalScope.ACCOUNT,
+        valuation_basis=CapitalValuationBasis.BROKER_ACCOUNT_NET_LIQUIDATION,
+    )
+    capital = build_capital_base_snapshot(
+        snapshot,
+        account_scope=binding.account_scope,
+        runtime_scope=binding.runtime_scope,
+        strategy_scope=binding.strategy_scope,
+        reported_currency="USD",
+        target_currency="USD",
+        fx_rate_to_target=1.0,
+        source_digest_sha256="d" * 64,
+        capital_scope=binding.capital_scope,
+        valuation_basis=binding.valuation_basis,
+    )
+    return {
+        "candidate_risk_identity": candidate,
+        "mandate_provenance": mandate,
+        "capital_base": capital,
+        "capital_base_binding": binding,
+        "strategy_release": {
+            "release_id": "v7-synthetic-paper-20260913",
+            "manifest_sha256": "e" * 64,
+            "strategy_revision": V7_APPROVED_UES_REVISION,
+            "config_sha256": V7_CONFIG_SHA256,
+            "risk_policy_sha256": "f" * 64,
+            "evidence_sha256": "1" * 64,
+            "plugin_bundle_sha256": "2" * 64,
+            "effective_session": "2026-09-14",
+        },
+    }
+
+
 def test_build_v7_runtime_binding_is_paused_and_broker_paper() -> None:
     binding = build_v7_runtime_binding(_record(), protected_env=_protected_env())
 
@@ -94,9 +178,84 @@ def test_build_v7_runtime_binding_is_paused_and_broker_paper() -> None:
     assert binding["runtime_target"]["execution_mode"] == "live"
     assert binding["account_target"]["physical_account_id"] == "paper-account-1"
     assert binding["expected_revision"] == 42
-    assert binding["approved_ues_revision"] == "d1ca798d880cd83965f3da5081850ca48a616d19"
+    assert binding["approved_ues_revision"] == V7_APPROVED_UES_REVISION
     assert binding["runtime_target"].get("strategy_release") is None
     assert binding["previous_strategy_release"]["release_id"] == "old-release"
+
+
+def test_v7_binding_can_carry_validated_paper_execution_materials_without_unpausing() -> None:
+    from quant_platform_kit.common.models import PortfolioSnapshot
+
+    snapshot = PortfolioSnapshot(
+        as_of=FIXED_FRIDAY,
+        total_equity=100_000.0,
+        buying_power=100_000.0,
+        positions=(),
+        metadata={"market_currency_cash": 100_000.0},
+    )
+    binding = build_v7_runtime_binding(
+        _record(),
+        protected_env=_protected_env(),
+        execution_materials=_synthetic_v7_execution_materials(snapshot),
+    )
+
+    loaded = load_v7_paper_application_binding(
+        {"LONGBRIDGE_V7_PAPER_APPLICATION_JSON": json.dumps(binding)}
+    )
+    assert loaded["runtime_target_enabled"] is False
+    assert loaded["desired_state"] == "paused"
+    assert loaded["execution_materials"]["mandate_provenance"]["authority_scope"] == "PAPER"
+
+
+def test_formal_loader_consumes_json_execution_materials_but_keeps_paused_guard(monkeypatch) -> None:
+    from quant_platform_kit.common.models import PortfolioSnapshot
+    from quant_platform_kit.common.runtime_target import build_runtime_target
+    from runtime_config_support import PlatformRuntimeSettings
+    from strategy_runtime import load_strategy_runtime
+
+    snapshot = PortfolioSnapshot(
+        as_of=FIXED_FRIDAY,
+        total_equity=100_000.0,
+        buying_power=100_000.0,
+        positions=(),
+        metadata={"market_currency_cash": 100_000.0},
+    )
+    binding = build_v7_runtime_binding(
+        _record(),
+        protected_env=_protected_env(),
+        execution_materials=_synthetic_v7_execution_materials(snapshot),
+    )
+    monkeypatch.setenv("LONGBRIDGE_V7_PAPER_APPLICATION_JSON", json.dumps(binding))
+    target = build_runtime_target(
+        platform_id="longbridge",
+        strategy_profile=V7_PAPER_PROFILE,
+        dry_run_only=False,
+        account_selector=["PAPER"],
+        account_scope="PAPER",
+        service_name="longbridge-quant-paper-service",
+        execution_environment="paper",
+    )
+    settings = PlatformRuntimeSettings(
+        project_id=None,
+        secret_name="paper",
+        account_prefix="PAPER",
+        strategy_profile=V7_PAPER_PROFILE,
+        strategy_display_name="V7",
+        strategy_domain="us_equity",
+        account_region="PAPER",
+        notify_lang="en",
+        tg_token=None,
+        tg_chat_id=None,
+        dry_run_only=False,
+        runtime_target=target,
+    )
+
+    loaded = load_strategy_runtime(V7_PAPER_PROFILE, runtime_settings=settings)
+
+    assert loaded.execution_materials["candidate_risk_identity"]["strategy_profile"] == V7_PAPER_PROFILE
+    assert loaded.execution_materials["mandate_provenance"]["authority_scope"] == "PAPER"
+    assert loaded.execution_entrypoint is None
+    assert settings.runtime_target_enabled is False
 
 
 @pytest.mark.parametrize(
@@ -228,7 +387,7 @@ def test_loaded_version_readback_uses_process_identity_and_stays_paused(monkeypa
     )
     assert readback["activation_state"] == "applied_paused"
     assert readback["runtime_target_enabled"] is False
-    assert readback["ues_revision"] == "d1ca798d880cd83965f3da5081850ca48a616d19"
+    assert readback["ues_revision"] == V7_APPROVED_UES_REVISION
     assert readback["revision_name"] == "paper-v7-00001"
     assert readback["runtime_loaded_receipt"]["schema_version"] == "runtime_loaded_receipt.v1"
 
@@ -361,7 +520,7 @@ def test_bound_v7_loaded_runtime_to_rebalance_isolated_validation_has_zero_write
             raise AssertionError("V7 validation must not write paper risk state")
 
     runtime = LongBridgeRebalanceRuntime(
-        bootstrap=lambda: ("quote", "trade", {}),
+        bootstrap=lambda: ("quote", "trade", inputs["derived_indicators"]),
         resolve_rebalance_plan=lambda **_kwargs: plan,
         market_data_port_factory=lambda _quote: CallableMarketDataPort(
             quote_loader=lambda _symbol: (_ for _ in ()).throw(
@@ -405,6 +564,223 @@ def test_bound_v7_loaded_runtime_to_rebalance_isolated_validation_has_zero_write
     assert plan["execution"]["no_order"] is True
     assert result.dry_run_orders == ()
     assert observed == {"submit": 0, "notify": 0}
+
+
+def test_v7_evidence_runtime_to_rebalance_uses_real_risk_and_fake_broker(monkeypatch, tmp_path) -> None:
+    from application import rebalance_service
+    from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
+    from application.runtime_strategy_adapters import build_runtime_strategy_adapters
+    from quant_platform_kit.common.models import ExecutionReport, PortfolioSnapshot, QuoteSnapshot
+    from quant_platform_kit.common.execution_commands import ExecutionCommandStore
+    from application.execution_state import ExecutionMarkerStore
+    from quant_platform_kit.common.port_adapters import (
+        CallableExecutionPort,
+        CallableMarketDataPort,
+        CallableNotificationPort,
+        CallablePortfolioPort,
+    )
+    from quant_platform_kit.common.runtime_inputs import build_strategy_evaluation_inputs
+    from quant_platform_kit.common.runtime_target import build_runtime_target
+    from runtime_config_support import PlatformRuntimeSettings
+    from strategy_loader import load_strategy_entrypoint_for_profile, load_strategy_runtime_adapter_for_profile
+    import strategy_runtime as strategy_runtime_module
+    from strategy_runtime import LoadedStrategyRuntime
+    from test_v7_paper_preview import _available_inputs
+    from notifications.telegram import build_translator
+
+    try:
+        from us_equity_strategies.entrypoints import soxl_soxx_core_only_p2_v7_execution_entrypoint
+    except ImportError:
+        pytest.skip("installed UES revision predates the V7 execution entrypoint")
+
+    clock = {"now": FIXED_FRIDAY}
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = clock["now"]
+            return value if tz is not None else value.replace(tzinfo=None)
+
+    monkeypatch.setattr(strategy_runtime_module, "datetime", FrozenDateTime)
+    from quant_platform_kit.risk import gate as risk_gate
+
+    monkeypatch.setattr(risk_gate, "_utc_now", lambda: clock["now"])
+    original_validate_capital_base = strategy_runtime_module.validate_capital_base
+    monkeypatch.setattr(
+        strategy_runtime_module,
+        "validate_capital_base",
+        lambda capital, *, binding: original_validate_capital_base(
+            capital,
+            binding=binding,
+            now=clock["now"],
+        ),
+    )
+
+    binding = build_v7_runtime_binding(_record(), protected_env=_protected_env())
+    monkeypatch.setenv("LONGBRIDGE_V7_PAPER_APPLICATION_JSON", json.dumps(binding))
+    target = build_runtime_target(
+        platform_id="longbridge",
+        strategy_profile=V7_PAPER_PROFILE,
+        dry_run_only=False,
+        account_selector=["PAPER"],
+        account_scope="PAPER",
+        service_name="longbridge-quant-paper-service",
+        execution_environment="paper",
+    )
+    settings = PlatformRuntimeSettings(
+        project_id=None,
+        secret_name="paper",
+        account_prefix="PAPER",
+        strategy_profile=V7_PAPER_PROFILE,
+        strategy_display_name="V7",
+        strategy_domain="us_equity",
+        account_region="PAPER",
+        notify_lang="en",
+        tg_token=None,
+        tg_chat_id=None,
+        dry_run_only=False,
+        runtime_target=target,
+    )
+    entrypoint = load_strategy_entrypoint_for_profile(V7_PAPER_PROFILE)
+    runtime_adapter = load_strategy_runtime_adapter_for_profile(V7_PAPER_PROFILE)
+    inputs = _available_inputs(high_volatility=True)
+    snapshot = PortfolioSnapshot(
+        as_of=FIXED_FRIDAY,
+        total_equity=100_000.0,
+        buying_power=100_000.0,
+        positions=(),
+        metadata={
+            "market_currency_cash": 100_000.0,
+            "observed_effective_exposure": 0.0,
+            "account_hash": "PAPER",
+            "broker_capital": {
+                "currency": "USD",
+                "net_assets": 100_000.0,
+                "observed_at": FIXED_FRIDAY,
+                "source_digest_sha256": "d" * 64,
+            },
+        },
+    )
+    materials = _synthetic_v7_execution_materials(snapshot)
+    loaded_runtime = LoadedStrategyRuntime(
+        entrypoint=entrypoint,
+        execution_entrypoint=soxl_soxx_core_only_p2_v7_execution_entrypoint,
+        execution_materials=materials,
+        runtime_adapter=runtime_adapter,
+        runtime_settings=settings,
+    )
+    strategy_adapters = build_runtime_strategy_adapters(
+        strategy_runtime=loaded_runtime,
+        strategy_profile=V7_PAPER_PROFILE,
+        strategy_runtime_config=loaded_runtime.merged_runtime_config,
+        available_inputs=runtime_adapter.available_inputs,
+        benchmark_symbol="SOXX",
+        signal_text_fn=lambda icon: str(icon),
+        translator=lambda key, **_kwargs: str(key),
+        broker_adapters=type("BrokerAdapters", (), {})(),
+        calculate_rotation_indicators_fn=lambda *_args, **_kwargs: {},
+        build_strategy_evaluation_inputs_fn=build_strategy_evaluation_inputs,
+        map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan,
+        execution_materials=materials,
+    )
+    current_snapshot = {"value": snapshot}
+
+    def resolve_plan(*, indicators, snapshot=None, account_state=None):
+        return strategy_adapters.resolve_rebalance_plan(
+            indicators=indicators,
+            snapshot=snapshot or current_snapshot["value"],
+            account_state=account_state,
+        )
+
+    plan = resolve_plan(indicators=inputs["derived_indicators"], snapshot=snapshot)
+    assert plan["execution"]["risk_gate"] == "APPROVE"
+    assert plan["execution"].get("no_order") is not True
+    assert plan["execution"].get("no_execute") is not True
+    command_store = ExecutionCommandStore(local_dir=tmp_path)
+    marker_store = ExecutionMarkerStore(local_dir=tmp_path / "markers")
+
+    submitted = []
+    runtime = LongBridgeRebalanceRuntime(
+        bootstrap=lambda: ("quote", "trade", inputs["derived_indicators"]),
+        resolve_rebalance_plan=resolve_plan,
+        resolve_frozen_rebalance_plan=lambda *, allocation, execution, snapshot: strategy_adapters.resolve_frozen_rebalance_plan(
+            allocation=allocation,
+            execution=execution,
+            snapshot=snapshot,
+        ),
+        market_data_port_factory=lambda _quote: CallableMarketDataPort(
+            quote_loader=lambda symbol: QuoteSnapshot(
+                symbol=symbol,
+                as_of=clock["now"].date().isoformat(),
+                last_price=100.0,
+            )
+        ),
+        execution_port_factory=lambda _trade: CallableExecutionPort(
+            lambda order: (
+                submitted.append(order),
+                ExecutionReport(
+                    symbol=order.symbol,
+                    side=order.side,
+                    quantity=order.quantity,
+                    status="filled",
+                    broker_order_id=f"fake-{len(submitted)}",
+                ),
+            )[-1]
+        ),
+        estimate_max_purchase_quantity=lambda *_args, **_kwargs: 10_000,
+        notifications=CallableNotificationPort(lambda _message: None),
+        notify_issue=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("approved V7 validation must not notify an issue")
+        ),
+        portfolio_port_factory=lambda *_args: CallablePortfolioPort(
+            lambda: current_snapshot["value"]
+        ),
+    )
+    config = LongBridgeRebalanceConfig(
+        strategy_profile=V7_PAPER_PROFILE,
+        dry_run_only=False,
+        execution_dedup_enabled=True,
+        execution_state_store=marker_store,
+        limit_sell_discount=1.0,
+        limit_buy_premium=1.0,
+        separator="-",
+        translator=build_translator("en"),
+        with_prefix=lambda message: message,
+        notify_no_trade_cycles=False,
+        execution_state_account_scope="PAPER",
+        physical_account_id="fake-paper-account",
+        durable_execution_command_live_enabled=True,
+        durable_live_execution_session_authorized=True,
+        durable_execution_runtime_identity_digest="a" * 64,
+        execution_command_store=command_store,
+        expected_strategy_release=materials["strategy_release"],
+    )
+    first = rebalance_service.run_strategy(runtime=runtime, config=config)
+    assert first.action_done is False
+    assert first.execution["durable_live_execution_command"]["status"] == "QUEUED"
+
+    current_snapshot["value"] = PortfolioSnapshot(
+        as_of=FIXED_MONDAY,
+        total_equity=100_000.0,
+        buying_power=100_000.0,
+        positions=(),
+        metadata={
+            "market_currency_cash": 100_000.0,
+            "observed_effective_exposure": 0.0,
+            "account_hash": "PAPER",
+            "broker_capital": {
+                "currency": "USD",
+                "net_assets": 100_000.0,
+                "observed_at": FIXED_MONDAY,
+                "source_digest_sha256": "d" * 64,
+            },
+        },
+    )
+    clock["now"] = FIXED_MONDAY
+    result = rebalance_service.run_strategy(runtime=runtime, config=config)
+
+    assert result.action_done is True, result.execution
+    assert submitted
 
 
 def test_runtime_settings_accept_only_bound_v7_and_force_disabled_paper_target(monkeypatch) -> None:

@@ -22,7 +22,10 @@ from quant_platform_kit.common.account_identity import (
     evaluate_account_identity,
 )
 from quant_platform_kit.common.models import ExecutionReport
-from quant_platform_kit.common.execution_commands import ExecutionCommandState
+from quant_platform_kit.common.execution_commands import (
+    ExecutionCommandState,
+    validate_execution_command_release_binding,
+)
 from quant_platform_kit.common.port_adapters import CallableExecutionPort
 from quant_platform_kit.longbridge.market_data import fetch_lot_sizes
 from application.signal_snapshot import build_signal_snapshot
@@ -134,6 +137,14 @@ def _validate_live_command_binding(*, command, config) -> tuple[dict, dict]:
     allocation = intent.get("allocation")
     if not isinstance(execution, dict) or not isinstance(allocation, dict):
         raise ValueError("invalid live execution command")
+    expected_release = getattr(config, "expected_strategy_release", None)
+    if expected_release is not None:
+        verification = validate_execution_command_release_binding(
+            command,
+            expected_strategy_release=expected_release,
+        )
+        if not verification.is_valid:
+            raise ValueError("live execution command strategy release is invalid")
     if (
         str(execution.get("signal_date") or "") != command.signal_date
         or str(execution.get("effective_date") or "") != command.effective_date
@@ -632,6 +643,7 @@ def run_strategy(
                 physical_account_id=_resolve_physical_account_id(config=config),
                 runtime_identity_digest=config.durable_execution_runtime_identity_digest,
                 execution=signal_execution, allocation=signal_allocation,
+                strategy_release=getattr(config, "expected_strategy_release", None),
             )
             command, created = produced
             matching_commands = (*matching_commands, command)
