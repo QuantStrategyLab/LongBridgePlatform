@@ -56,9 +56,15 @@ def _build_live_command_test_composer(*, dry_run_only, dry_run_only_override=Non
         min_order_notional_usd=1.0,
         dry_run_only=dry_run_only,
         dry_run_only_override=dry_run_only_override,
-        broker_adapters=SimpleNamespace(),
+        broker_adapters=SimpleNamespace(
+            build_market_data_port=lambda *_args: None,
+            build_portfolio_port=lambda *_args: None,
+            build_execution_port=lambda *_args: None,
+        ),
         strategy_adapters=SimpleNamespace(
             strategy_runtime_config={},
+            calculate_strategy_indicators=lambda *_args, **_kwargs: {},
+            resolve_rebalance_plan=lambda **_kwargs: {},
             build_strategy_plugin_notification_lines=lambda _signals: (),
             build_strategy_plugin_error_notification_lines=lambda _error: (),
         ),
@@ -225,6 +231,42 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders(monkeypa
     assert config.execution_state_account_scope == "HK"
     assert config.execution_state_store.cloud_prefix_uri == "gs://bucket/runtime-reports"
     assert config.account_identity_policy.is_configured is False
+
+
+def test_validation_override_disables_all_external_execution_writers():
+    composer, _legacy_order_status, _notification_calls = _build_live_command_test_composer(
+        dry_run_only=False,
+        dry_run_only_override=True,
+    )
+    object.__setattr__(
+        composer,
+        "strategy_profile",
+        "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve",
+    )
+
+    config = composer.build_rebalance_config()
+
+    assert composer.suppress_live_execution_commands is True
+    assert config.dry_run_only is True
+    assert config.execution_dedup_enabled is False
+    assert config.durable_execution_command_live_enabled is False
+    assert config.durable_execution_command_paper_enabled is False
+    assert config.strategy_risk_state_paper_enabled is False
+
+
+def test_v7_validation_runtime_suppresses_issue_notifications():
+    composer, _legacy_order_status, _notification_calls = _build_live_command_test_composer(
+        dry_run_only=False,
+        dry_run_only_override=True,
+    )
+    object.__setattr__(
+        composer,
+        "strategy_profile",
+        "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve",
+    )
+    runtime = composer.build_rebalance_runtime(silent_cycle_notifications=True)
+
+    runtime.notify_issue("blocked", "validation")
 
 
 def test_runtime_composer_parks_live_without_durable_execution_claim_backend():

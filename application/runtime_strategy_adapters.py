@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from quant_platform_kit.common.strategy_plugins import (
@@ -16,6 +16,9 @@ from quant_platform_kit.common.strategy_plugins import (
 from quant_platform_kit.common.strategy_contracts import PositionTarget, StrategyDecision
 from quant_platform_kit.risk.gate import apply_risk_gate, enrich_decision_risk_diagnostics
 from quant_platform_kit.risk.portfolio_diagnostics import extract_portfolio_risk_diagnostics
+
+
+_V7_PROFILE_NAME = "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
 
 
 def _get_direct_market_history_profiles() -> frozenset[str]:
@@ -162,6 +165,47 @@ class LongBridgeRuntimeStrategyAdapters:
             for symbol in self._market_history_symbols()
         }
 
+    def _apply_v7_validation_risk_gate(self, decision, *, snapshot):
+        if self.strategy_profile != _V7_PROFILE_NAME:
+            return decision
+        risk_snapshot = snapshot
+        stamp_portfolio_risk_metadata = getattr(
+            self.strategy_runtime,
+            "_stamp_portfolio_risk_metadata",
+            None,
+        )
+        if snapshot is not None and callable(stamp_portfolio_risk_metadata):
+            risk_snapshot = stamp_portfolio_risk_metadata(
+                {"portfolio_snapshot": snapshot}
+            )["portfolio_snapshot"]
+        build_capital_base_capabilities = getattr(
+            self.strategy_runtime,
+            "_build_capital_base_capabilities",
+            None,
+        )
+        capabilities = (
+            build_capital_base_capabilities({"portfolio_snapshot": risk_snapshot})
+            if callable(build_capital_base_capabilities)
+            else {}
+        )
+        gated = apply_risk_gate(
+            decision,
+            portfolio_snapshot=risk_snapshot,
+            max_single_weight=0.20,
+            enforce_value_target_exposure=True,
+            **capabilities,
+        )
+        # RiskEngine must be able to add rejection diagnostics without losing
+        # the research-only markers that keep this candidate non-executable.
+        markers = {
+            marker: decision.diagnostics[marker]
+            for marker in ("no_order", "execution_authorized")
+            if marker in decision.diagnostics and marker not in gated.diagnostics
+        }
+        if markers:
+            gated = replace(gated, diagnostics={**dict(gated.diagnostics), **markers})
+        return gated
+
     def resolve_rebalance_plan(self, *, indicators, snapshot=None, account_state=None):
         available_inputs = set(self.available_inputs)
         resolved_snapshot = snapshot
@@ -190,11 +234,15 @@ class LongBridgeRuntimeStrategyAdapters:
             signal_text_fn=self.signal_text_fn,
         )
         evaluation = self.strategy_runtime.evaluate(**evaluation_inputs)
+        decision = self._apply_v7_validation_risk_gate(
+            evaluation.decision,
+            snapshot=resolved_snapshot,
+        )
         runtime_metadata = dict(getattr(evaluation, "metadata", None) or {})
         if self.execution_policy is not None:
             runtime_metadata["longbridge_execution_policy"] = dict(self.execution_policy)
         return self.map_strategy_decision_to_plan_fn(
-            evaluation.decision,
+            decision,
             account_state=resolved_account_state if "account_state" in available_inputs else None,
             snapshot=resolved_snapshot,
             strategy_profile=self.strategy_profile,
@@ -215,6 +263,10 @@ class LongBridgeRuntimeStrategyAdapters:
         ):
             for symbol in allocation.get(field, ()) or ():
                 roles[str(symbol).strip().upper()] = role
+        frozen_diagnostics = {"execution_annotations": dict(execution)}
+        for marker in ("no_order", "execution_authorized"):
+            if marker in execution:
+                frozen_diagnostics[marker] = execution[marker]
         decision = StrategyDecision(
             positions=tuple(
                 PositionTarget(
@@ -224,7 +276,7 @@ class LongBridgeRuntimeStrategyAdapters:
                 )
                 for symbol, target in sorted(targets.items())
             ),
-            diagnostics={"execution_annotations": dict(execution)},
+            diagnostics=frozen_diagnostics,
         )
         # Preserve the same portfolio diagnostics enrichment as the UES gate.
         diagnostics = extract_portfolio_risk_diagnostics(snapshot)

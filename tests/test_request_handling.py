@@ -345,14 +345,97 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(status, 500)
         self.assertEqual(body, "Error")
 
-    def test_bound_v7_candidate_blocks_run_even_when_forced(self):
+    def test_bound_v7_candidate_blocks_normal_run_even_when_forced(self):
         module = load_module()
         module._v7_application_candidate_bound = lambda: True
         module.build_composer = lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("paused V7 candidate must not build broker runtime")
         )
 
+        self.assertTrue(module.run_strategy(force_run=True, validation_only=False))
+
+    def test_bound_v7_candidate_allows_explicit_validation_only_path(self):
+        module = load_module()
+        module._v7_application_candidate_bound = lambda: True
+        observed = {"built": False}
+
+        class ValidationComposer:
+            def build_reporting_adapters(self):
+                return types.SimpleNamespace(
+                    start_run=lambda: (types.SimpleNamespace(run_id="run-001"), {"status": "pending"}),
+                    log_event=lambda *args, **kwargs: None,
+                    persist_execution_report=lambda report: None,
+                )
+
+            def build_notification_adapters(self, **_kwargs):
+                return types.SimpleNamespace(publish_cycle_notification=lambda **_kwargs: None)
+
+            def load_strategy_plugin_signals(self, *_args, **_kwargs):
+                return (), None
+
+            def attach_strategy_plugin_report(self, *_args, **_kwargs):
+                return None
+
+            def with_prefix(self, message):
+                return message
+
+            def build_rebalance_runtime(self, **_kwargs):
+                return types.SimpleNamespace()
+
+            def build_rebalance_config(self, **_kwargs):
+                return types.SimpleNamespace()
+
+        def build_composer(**_kwargs):
+            observed["built"] = True
+            return ValidationComposer()
+
+        module.build_composer = build_composer
+        module.is_market_open_now = lambda **_kwargs: True
+        module.run_rebalance_cycle = lambda **_kwargs: None
         self.assertTrue(module.run_strategy(force_run=True, validation_only=True))
+        self.assertTrue(observed["built"])
+
+    def test_bound_v7_validation_error_has_no_notification_or_report_write(self):
+        module = load_module()
+        module._v7_application_candidate_bound = lambda: True
+        observed = {"notifications": 0, "persist": 0}
+
+        class ValidationComposer:
+            def build_reporting_adapters(self):
+                return types.SimpleNamespace(
+                    start_run=lambda: (types.SimpleNamespace(run_id="run-001"), {"status": "pending"}),
+                    log_event=lambda *args, **kwargs: None,
+                    persist_execution_report=lambda report: observed.__setitem__("persist", observed["persist"] + 1),
+                )
+
+            def build_notification_adapters(self, **_kwargs):
+                return types.SimpleNamespace(
+                    publish_cycle_notification=lambda **_kwargs: observed.__setitem__(
+                        "notifications", observed["notifications"] + 1
+                    )
+                )
+
+            def load_strategy_plugin_signals(self, *_args, **_kwargs):
+                return (), None
+
+            def attach_strategy_plugin_report(self, *_args, **_kwargs):
+                return None
+
+            def with_prefix(self, message):
+                return message
+
+            def build_rebalance_runtime(self, **_kwargs):
+                return types.SimpleNamespace()
+
+            def build_rebalance_config(self, **_kwargs):
+                return types.SimpleNamespace()
+
+        module.build_composer = lambda **_kwargs: ValidationComposer()
+        module.is_market_open_now = lambda **_kwargs: True
+        module.run_rebalance_cycle = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("synthetic validation failure"))
+
+        self.assertFalse(module.run_strategy(force_run=True, validation_only=True))
+        self.assertEqual(observed, {"notifications": 0, "persist": 0})
 
     def test_bound_v7_candidate_blocks_paper_command_consumer(self):
         module = load_module()
