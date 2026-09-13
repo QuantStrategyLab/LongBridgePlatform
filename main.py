@@ -178,6 +178,49 @@ STRATEGY_RUNTIME_CONFIG = dict(STRATEGY_RUNTIME.merged_runtime_config)
 MANAGED_SYMBOLS = STRATEGY_RUNTIME.managed_symbols
 AVAILABLE_INPUTS = frozenset(STRATEGY_RUNTIME.runtime_adapter.available_inputs)
 BENCHMARK_SYMBOL = str(STRATEGY_RUNTIME_CONFIG.get("benchmark_symbol", "QQQ"))
+
+
+def _emit_v7_loaded_version_log() -> None:
+    """Emit one safe startup receipt for the disabled candidate revision."""
+
+    if STRATEGY_PROFILE != "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve":
+        return
+    from application.v7_paper_application import (
+        V7PaperApplicationError,
+        build_v7_loaded_version_readback,
+        load_v7_paper_application_binding,
+    )
+
+    binding = load_v7_paper_application_binding(os.environ)
+    if binding is None:
+        return
+    try:
+        readback = build_v7_loaded_version_readback(
+            binding,
+            runtime_settings=RUNTIME_SETTINGS,
+            strategy_runtime=STRATEGY_RUNTIME,
+            runtime_env=os.environ,
+        )
+        print(
+            json.dumps(
+                {"event": "v7_paper_application_loaded", "status": "applied_paused", "readback": readback},
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
+    except V7PaperApplicationError:
+        print(
+            json.dumps(
+                {"event": "v7_paper_application_loaded", "status": "uncertain"},
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
+
+
+_emit_v7_loaded_version_log()
 SIGNAL_EFFECTIVE_AFTER_TRADING_DAYS = getattr(
     getattr(STRATEGY_RUNTIME.runtime_adapter, "runtime_policy", None),
     "signal_effective_after_trading_days",
@@ -664,6 +707,9 @@ def publish_strategy_plugin_alerts(signals, *, report=None):
 
 
 def run_strategy(*, force_run: bool = False, validation_only: bool = False, validation_label: str = "backfill"):
+    if _v7_application_candidate_bound():
+        print(f"[{datetime.now()}] V7 paper candidate is paused; skip all execution paths.", flush=True)
+        return True
     if not validation_only and not force_run and not getattr(RUNTIME_SETTINGS, "runtime_target_enabled", True):
         print(f"[{datetime.now()}] Runtime target disabled; skip strategy execution.", flush=True)
         return True
@@ -919,6 +965,8 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
 
 
 def run_probe(*, response_body: str = "Probe OK"):
+    if _v7_application_candidate_bound():
+        return response_body, 200
     composer = None
     reporting_adapters = None
     log_context = None
@@ -1031,6 +1079,8 @@ def run_paper_execution_command_consumer() -> bool:
     order API.  It is deliberately separate from ``/run`` so a normal cycle
     cannot start consuming delayed commands by accident.
     """
+    if _v7_application_candidate_bound():
+        return True
     if not _paper_command_consumer_runtime_is_isolated():
         raise RuntimeError(
             "paper command consumer requires RUNTIME_TARGET_JSON.execution_mode=paper "
@@ -1215,6 +1265,51 @@ def handle_account_snapshot():
         "Content-Type": "application/json",
         "Cache-Control": "no-store",
     }
+
+
+@app.route("/v7-paper-application-loaded", methods=["GET"])
+def handle_v7_paper_application_loaded():
+    """Read back the disabled V7 process identity without broker access."""
+
+    if request_method() != "GET":
+        return "Method Not Allowed", 405
+    from application.v7_paper_application import (
+        V7PaperApplicationError,
+        build_v7_loaded_version_readback,
+        load_v7_paper_application_binding,
+    )
+    try:
+        binding = load_v7_paper_application_binding(os.environ)
+        if binding is None:
+            return json.dumps(
+                {"status": "unavailable", "reason": "application_binding_missing"},
+                ensure_ascii=True,
+            ), 409, {"Content-Type": "application/json", "Cache-Control": "no-store"}
+        payload = build_v7_loaded_version_readback(
+            binding,
+            runtime_settings=RUNTIME_SETTINGS,
+            strategy_runtime=STRATEGY_RUNTIME,
+            runtime_env=os.environ,
+        )
+    except V7PaperApplicationError:
+        return json.dumps(
+            {"status": "uncertain", "reason": "loaded_version_unavailable"},
+            ensure_ascii=True,
+        ), 409, {"Content-Type": "application/json", "Cache-Control": "no-store"}
+    return json.dumps(
+        {"status": "applied_paused", "readback": payload},
+        ensure_ascii=True,
+    ), 200, {"Content-Type": "application/json", "Cache-Control": "no-store"}
+
+
+def _v7_application_candidate_bound() -> bool:
+    """Keep the exact V7 binding paused even when a route bypasses the flag."""
+
+    if STRATEGY_PROFILE != "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve":
+        return False
+    from application.v7_paper_application import load_v7_paper_application_binding
+
+    return load_v7_paper_application_binding(os.environ) is not None
 
 
 @app.route("/monitor-dispatch", methods=["POST", "GET"])

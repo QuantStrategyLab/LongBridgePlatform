@@ -110,13 +110,67 @@ jobs:
           set -euo pipefail
           uv sync --frozen --no-dev
 
+      - name: Authenticate to Google Cloud
+        if: ${{ steps.selection.outputs.selected == 'true' }}
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        if: ${{ steps.selection.outputs.selected == 'true' }}
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Read the deployed PAPER candidate state
+        if: ${{ steps.selection.outputs.selected == 'true' && matrix.target.id == 'paper' }}
+        id: candidate_state
+        env:
+          CLOUD_RUN_SERVICE: ${{ matrix.target.service }}
+          CLOUD_RUN_REGION: ${{ matrix.target.region }}
+        run: |
+          set -euo pipefail
+          service_json="$(gcloud run services describe "$CLOUD_RUN_SERVICE" --project="$GCP_PROJECT_ID" --region="$CLOUD_RUN_REGION" --format=json)"
+          SERVICE_JSON="$service_json" python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          service = json.loads(os.environ["SERVICE_JSON"])
+          containers = ((service.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers", [])
+          env = {str(item.get("name") or ""): str(item.get("value") or "") for item in (containers[0].get("env", []) if containers else []) if isinstance(item, dict)}
+          raw = env.get("LONGBRIDGE_V7_PAPER_APPLICATION_JSON", "").strip()
+          if not raw:
+              print("candidate=false")
+              raise SystemExit(0)
+          try:
+              binding = json.loads(raw)
+              target = json.loads(env.get("RUNTIME_TARGET_JSON", "{}"))
+          except json.JSONDecodeError:
+              raise SystemExit(2)
+          if not isinstance(binding, dict) or not isinstance(target, dict) or binding.get("strategy_profile") != "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve" or target.get("execution_environment") != "paper":
+              raise SystemExit(2)
+          enabled = str(env.get("RUNTIME_TARGET_ENABLED", "true")).strip().lower()
+          if enabled not in {"true", "false"}:
+              raise SystemExit(2)
+          print("candidate=true")
+          print(f"configured_state={'enabled' if enabled == 'true' else 'disabled'}")
+          print("execution_mode=paper")
+          PY
+
       - name: Resolve declared no-order target state
         if: ${{ steps.selection.outputs.selected == 'true' }}
         id: target_state
         env:
           FALLBACK_MODE: ${{ matrix.target.id == 'paper' && 'paper' || 'live' }}
+          CANDIDATE_STATE: ${{ steps.candidate_state.outputs.candidate || 'false' }}
+          CANDIDATE_CONFIGURED_STATE: ${{ steps.candidate_state.outputs.configured_state || '' }}
+          CANDIDATE_EXECUTION_MODE: ${{ steps.candidate_state.outputs.execution_mode || '' }}
         run: |
           set -euo pipefail
+          if [ "$CANDIDATE_STATE" = "true" ]; then
+            printf 'configured_state=%s\n' "$CANDIDATE_CONFIGURED_STATE" >> "$GITHUB_OUTPUT"
+            printf 'execution_mode=%s\n' "$CANDIDATE_EXECUTION_MODE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json
           import os
@@ -142,19 +196,6 @@ jobs:
           print(f"configured_state={'enabled' if enabled == 'true' else 'disabled'}")
           print(f"execution_mode={mode}")
           PY
-
-      - name: Authenticate to Google Cloud
-        if: ${{ steps.selection.outputs.selected == 'true' }}
-        uses: google-github-actions/auth@v3
-        with:
-          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
-
-      - name: Set up gcloud
-        if: ${{ steps.selection.outputs.selected == 'true' }}
-        uses: google-github-actions/setup-gcloud@v3
-        with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
 
       - name: Check Cloud Run runtime without notification side effects
         if: ${{ steps.selection.outputs.selected == 'true' }}
