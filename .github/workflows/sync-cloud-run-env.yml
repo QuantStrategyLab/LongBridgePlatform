@@ -721,6 +721,28 @@ jobs:
           project_id: ${{ env.GCP_PROJECT_ID }}
           version: ">= 416.0.0"
 
+      - name: Refuse legacy sync over a paused V7 application
+        if: steps.config.outputs.deploy_enabled == 'true' || steps.config.outputs.env_sync_enabled == 'true'
+        run: |
+          set -euo pipefail
+          if [ "${CLOUD_RUN_SERVICE}" != "longbridge-quant-paper-service" ]; then
+            exit 0
+          fi
+          service_json="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" --format=json)"
+          if SERVICE_JSON="$service_json" python3 - <<'PY'
+          import json, os
+          service = json.loads(os.environ["SERVICE_JSON"])
+          containers = ((service.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers", [])
+          env = containers[0].get("env", []) if containers else []
+          names = {str(item.get("name") or "") for item in env if isinstance(item, dict)}
+          raise SystemExit(0 if "LONGBRIDGE_V7_PAPER_APPLICATION_JSON" not in names else 1)
+          PY
+          then
+            exit 0
+          fi
+          echo "Cloud Run PAPER service has a paused V7 application binding; legacy sync is refused." >&2
+          exit 1
+
       - name: Verify deployed runtime target admission before traffic shift
         if: steps.config.outputs.deploy_enabled == 'true'
         run: |

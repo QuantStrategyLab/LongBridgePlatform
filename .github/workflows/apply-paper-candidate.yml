@@ -1,0 +1,268 @@
+name: Apply LongBridge PAPER Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      application_id:
+        description: "Approved QRT paper application UUID"
+        required: true
+        type: string
+
+env:
+  GCP_PROJECT_ID: longbridgequant
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+
+concurrency:
+  # Match Deploy Cloud Run's group so a legacy image/env sync cannot overlap
+  # this single-account candidate application.
+  group: Deploy Cloud Run-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    name: Apply approved PAPER candidate (paused)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    environment: longbridge-paper
+    env:
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+      CLOUD_SCHEDULER_LOCATION: ${{ vars.CLOUD_SCHEDULER_LOCATION }}
+      RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+      LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}
+      LONGPORT_SECRET_NAME: ${{ vars.LONGPORT_SECRET_NAME }}
+      LONGPORT_APP_KEY_SECRET_NAME: ${{ vars.LONGPORT_APP_KEY_SECRET_NAME }}
+      LONGPORT_APP_SECRET_SECRET_NAME: ${{ vars.LONGPORT_APP_SECRET_SECRET_NAME }}
+      LONGBRIDGE_PHYSICAL_ACCOUNT_ID: ${{ vars.LONGBRIDGE_PHYSICAL_ACCOUNT_ID }}
+      GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
+      GCP_ARTIFACT_REGISTRY_REPOSITORY: ${{ vars.GCP_ARTIFACT_REGISTRY_REPOSITORY || 'cloud-run-source-deploy' }}
+      QSL_CONTROL_PLANE_SYNC_URL: ${{ vars.QSL_CONTROL_PLANE_SYNC_URL || 'https://qsl-strategy-switch-console.pigbibi.workers.dev' }}
+      EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+    steps:
+      - name: Checkout protected main
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud and uv
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          version: ">= 416.0.0"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+
+      - name: Install locked runtime dependencies
+        run: uv sync --frozen --no-dev
+
+      - name: Fetch the approved QRT application
+        id: application
+        env:
+          APPLICATION_ID: ${{ inputs.application_id }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          chmod 700 "$work"
+          echo "work=$work" >> "$GITHUB_OUTPUT"
+          umask 077
+          uv run python -m scripts.v7_paper_application_http fetch \
+            --base-url "$QSL_CONTROL_PLANE_SYNC_URL" \
+            --application-id "$APPLICATION_ID" \
+            --run-id "$RUN_ID" \
+            --attempt "$RUN_ATTEMPT" > "$work/application.json"
+          python3 - "$work/application.json" "$APPLICATION_ID" <<'PY'
+          import json, sys, uuid
+          payload = json.load(open(sys.argv[1], encoding="utf-8"))
+          expected = str(uuid.UUID(sys.argv[2]))
+          if str(payload.get("application_id") or "") != expected:
+              raise SystemExit(2)
+          workflow = payload.get("workflow") or {}
+          if workflow.get("repository") != "QuantStrategyLab/LongBridgePlatform" or workflow.get("workflow") != "apply-paper-candidate.yml" or workflow.get("ref") != "main":
+              raise SystemExit(2)
+          PY
+
+      - name: Claim the single application
+        id: claim
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.v7_paper_application_http claim \
+            --base-url "$QSL_CONTROL_PLANE_SYNC_URL" \
+            --record-file "${{ steps.application.outputs.work }}/application.json" \
+            --run-id "$RUN_ID" \
+            --attempt "$RUN_ATTEMPT" > "${{ steps.application.outputs.work }}/claim.json"
+          python3 - "${{ steps.application.outputs.work }}/application.json" "$RUN_ID" "$RUN_ATTEMPT" <<'PY'
+          import json, sys
+          path, run_id, attempt = sys.argv[1:]
+          with open(path, encoding="utf-8") as handle:
+              record = json.load(handle)
+          claim = record.get("claim")
+          if not isinstance(claim, dict):
+              raise SystemExit(2)
+          claim["workflow_run_id"] = run_id
+          claim["workflow_run_attempt"] = attempt
+          with open(path, "w", encoding="utf-8") as handle:
+              json.dump(record, handle, separators=(",", ":"))
+          PY
+
+      - name: Build the redacted disabled binding
+        run: |
+          set -euo pipefail
+          umask 077
+          uv run python -m scripts.build_v7_paper_application_binding \
+            --record-file "${{ steps.application.outputs.work }}/application.json" \
+            > "${{ steps.application.outputs.work }}/binding.json"
+
+      - name: Validate the exact approved source
+        id: source
+        run: |
+          set -euo pipefail
+          source_commit="$(python3 - <<'PY'
+          import json
+          print(json.load(open("${{ steps.application.outputs.work }}/application.json", encoding="utf-8"))["source_commit"])
+          PY
+          )"
+          if ! git cat-file -e "${source_commit}^{commit}" 2>/dev/null || ! git merge-base --is-ancestor "$source_commit" HEAD; then
+            exit 2
+          fi
+          echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
+          git checkout --detach "$source_commit" >/dev/null
+
+      - name: Build the disabled candidate image
+        id: image
+        env:
+          SOURCE_COMMIT: ${{ steps.source.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          artifact_registry_hostname="${GCP_ARTIFACT_REGISTRY_HOSTNAME:-${CLOUD_RUN_REGION}-docker.pkg.dev}"
+          image_repo="${artifact_registry_hostname}/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY_REPOSITORY}/longbridgeplatform/${CLOUD_RUN_SERVICE}"
+          image="${image_repo}:${SOURCE_COMMIT}-${GITHUB_RUN_ID}"
+          gcloud auth configure-docker "${artifact_registry_hostname}" --quiet
+          git archive HEAD | docker build --pull --build-arg "V7_PAPER_SOURCE_COMMIT=${SOURCE_COMMIT}" -t "${image}" - >/dev/null
+          docker push "${image}" >/dev/null
+          digest="$(gcloud artifacts docker images describe "${image}" --format='value(image_summary.digest)')"
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            exit 2
+          fi
+          echo "image=${image_repo}@${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Pause the existing PAPER schedulers
+        run: |
+          set -euo pipefail
+          location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}"
+          for job in \
+            "${CLOUD_RUN_SERVICE}-scheduler" \
+            "${CLOUD_RUN_SERVICE}-probe-scheduler" \
+            "${CLOUD_RUN_SERVICE}-precheck-scheduler"; do
+            state="$(gcloud scheduler jobs describe "$job" --location "$location" --project "$GCP_PROJECT_ID" --format='value(state)' 2>/dev/null)" || exit 2
+            if [ "$state" != "PAUSED" ]; then
+              gcloud scheduler jobs pause "$job" --location "$location" --project "$GCP_PROJECT_ID" --quiet || exit 2
+            fi
+            [ "$(gcloud scheduler jobs describe "$job" --location "$location" --project "$GCP_PROJECT_ID" --format='value(state)' 2>/dev/null)" = "PAUSED" ] || exit 2
+          done
+
+      - name: Deploy disabled candidate and route all traffic
+        id: deploy
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          set -euo pipefail
+          binding="${{ steps.application.outputs.work }}/binding.json"
+          target_json="$(python3 - "$binding" <<'PY'
+          import json, sys
+          print(json.dumps(json.load(open(sys.argv[1], encoding="utf-8"))["runtime_target"], separators=(",", ":")))
+          PY
+          )"
+          binding_json="$(cat "$binding")"
+          strategy_profile="$(python3 - "$binding" <<'PY'
+          import json, sys
+          print(json.load(open(sys.argv[1], encoding="utf-8"))["strategy_profile"])
+          PY
+          )"
+          gcloud run services update "$CLOUD_RUN_SERVICE" \
+            --project "$GCP_PROJECT_ID" --region "$CLOUD_RUN_REGION" \
+            --image "$IMAGE" --no-traffic --quiet \
+            --remove-env-vars "V7_PAPER_SOURCE_COMMIT" \
+            --update-env-vars "RUNTIME_TARGET_ENABLED=false,LONGBRIDGE_DRY_RUN_ONLY=false,STRATEGY_PROFILE=$strategy_profile" \
+            --update-env-vars "^|^RUNTIME_TARGET_JSON=$target_json|LONGBRIDGE_V7_PAPER_APPLICATION_JSON=$binding_json"
+          revision="$(gcloud run services describe "$CLOUD_RUN_SERVICE" --project "$GCP_PROJECT_ID" --region "$CLOUD_RUN_REGION" --format='value(status.latestCreatedRevisionName)')"
+          test -n "$revision"
+          gcloud run services update-traffic "$CLOUD_RUN_SERVICE" --project "$GCP_PROJECT_ID" --region "$CLOUD_RUN_REGION" --to-revisions "$revision=100" --quiet
+          service_json="$(gcloud run services describe "$CLOUD_RUN_SERVICE" --project "$GCP_PROJECT_ID" --region "$CLOUD_RUN_REGION" --format=json)"
+          SERVICE_JSON="$service_json" REVISION="$revision" python3 - <<'PY'
+          import json, os
+          service = json.loads(os.environ["SERVICE_JSON"])
+          revision = os.environ["REVISION"]
+          traffic = (service.get("status") or {}).get("traffic") or []
+          matching = [item for item in traffic if item.get("revisionName") == revision]
+          if len(matching) != 1 or int(matching[0].get("percent") or 0) != 100 or any(item.get("tag") for item in traffic):
+              raise SystemExit(2)
+          PY
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      - name: Verify loaded disabled process identity
+        run: |
+          set -euo pipefail
+          logs_file="${{ steps.application.outputs.work }}/startup-logs.json"
+          found=0
+          for attempt in 1 2 3; do
+            gcloud logging read \
+              '(resource.type="cloud_run_revision" AND resource.labels.service_name="'"$CLOUD_RUN_SERVICE"'" AND resource.labels.revision_name="'"${{ steps.deploy.outputs.revision }}"'" AND (jsonPayload.event="v7_paper_application_loaded" OR textPayload:"v7_paper_application_loaded"))' \
+              --project "$GCP_PROJECT_ID" --limit 20 --format=json > "$logs_file" || exit 2
+            if uv run python scripts/parse_v7_loaded_log.py \
+              --logs-file "$logs_file" \
+              --application-id "${{ inputs.application_id }}" \
+              --revision "${{ steps.deploy.outputs.revision }}" \
+              --readback-out "${{ steps.application.outputs.work }}/readback-inner.json"; then
+              found=1
+              break
+            fi
+            [ "$attempt" -eq 3 ] || sleep 10
+          done
+          [ "$found" -eq 1 ]
+
+      - name: Publish applied-paused result
+        if: ${{ success() }}
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.v7_paper_application_http result \
+            --base-url "$QSL_CONTROL_PLANE_SYNC_URL" \
+            --record-file "${{ steps.application.outputs.work }}/application.json" \
+            --readback-file "${{ steps.application.outputs.work }}/readback-inner.json" \
+            --status applied_paused --run-id "$RUN_ID" --attempt "$RUN_ATTEMPT" >/dev/null
+
+      - name: Publish uncertain result after a claimed failure
+        if: ${{ failure() && steps.claim.outcome == 'success' }}
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          uv run python -m scripts.v7_paper_application_http result \
+            --base-url "$QSL_CONTROL_PLANE_SYNC_URL" \
+            --record-file "${{ steps.application.outputs.work }}/application.json" \
+            --status uncertain --run-id "$RUN_ID" --attempt "$RUN_ATTEMPT" >/dev/null
+
+      - name: Remove application material
+        if: ${{ always() }}
+        run: rm -rf -- "${{ steps.application.outputs.work }}"

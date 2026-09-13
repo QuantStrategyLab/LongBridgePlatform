@@ -274,6 +274,10 @@ class RequestHandlingTests(unittest.TestCase):
             module.handle_account_snapshot,
         )
         self.assertIs(
+            module.app._routes[("/v7-paper-application-loaded", ("GET",))],
+            module.handle_v7_paper_application_loaded,
+        )
+        self.assertIs(
             module.app._routes[("/monitor-dispatch", ("POST", "GET"))],
             module.handle_monitor_dispatch,
         )
@@ -340,6 +344,24 @@ class RequestHandlingTests(unittest.TestCase):
 
         self.assertEqual(status, 500)
         self.assertEqual(body, "Error")
+
+    def test_bound_v7_candidate_blocks_run_even_when_forced(self):
+        module = load_module()
+        module._v7_application_candidate_bound = lambda: True
+        module.build_composer = lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("paused V7 candidate must not build broker runtime")
+        )
+
+        self.assertTrue(module.run_strategy(force_run=True, validation_only=True))
+
+    def test_bound_v7_candidate_blocks_paper_command_consumer(self):
+        module = load_module()
+        module._v7_application_candidate_bound = lambda: True
+        module.build_composer = lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("paused V7 candidate must not build paper consumer")
+        )
+
+        self.assertTrue(module.run_paper_execution_command_consumer())
 
     def test_handle_trigger_runtime_error_fallback_sends_telegram(self):
         module = load_module()

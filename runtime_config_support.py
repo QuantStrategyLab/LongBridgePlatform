@@ -25,6 +25,7 @@ from quant_platform_kit.common.runtime_target import (
     RuntimeTarget,
     resolve_runtime_target_from_env,
 )
+from quant_platform_kit.common.strategies import get_catalog_strategy_metadata
 from quant_platform_kit.common.live_continuity import runtime_target_permits_standard_execution
 try:
     from quant_platform_kit.common.broker_costs import (
@@ -85,6 +86,16 @@ DEFAULT_LONGBRIDGE_MIN_ORDER_NOTIONAL_USD = minimum_economic_order_notional_usd(
         explicit_min_order_notional_usd=100.0,
     )
 )
+
+
+def _bound_v7_profile() -> str:
+    return "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+
+
+def _load_bound_v7_application() -> dict[str, object] | None:
+    from application.v7_paper_application import load_v7_paper_application_binding
+
+    return load_v7_paper_application_binding(os.environ)
 
 
 @dataclass(frozen=True)
@@ -265,14 +276,25 @@ def load_platform_runtime_settings(
         env=os.environ,
         expected_platform_id=LONGBRIDGE_PLATFORM,
     )
-    strategy_definition = resolve_strategy_definition(
-        runtime_target.strategy_profile,
-        platform_id=LONGBRIDGE_PLATFORM,
-    )
-    strategy_metadata = resolve_strategy_metadata(
-        strategy_definition.profile,
-        platform_id=LONGBRIDGE_PLATFORM,
-    )
+    strategy_definition = None
+    strategy_metadata = None
+    if runtime_target.strategy_profile == _bound_v7_profile():
+        binding = _load_bound_v7_application()
+        if binding is not None:
+            strategy_definition = STRATEGY_CATALOG.definitions[runtime_target.strategy_profile]
+            strategy_metadata = get_catalog_strategy_metadata(
+                STRATEGY_CATALOG,
+                strategy_definition.profile,
+            )
+    if strategy_definition is None or strategy_metadata is None:
+        strategy_definition = resolve_strategy_definition(
+            runtime_target.strategy_profile,
+            platform_id=LONGBRIDGE_PLATFORM,
+        )
+        strategy_metadata = resolve_strategy_metadata(
+            strategy_definition.profile,
+            platform_id=LONGBRIDGE_PLATFORM,
+        )
     runtime_paths = resolve_strategy_runtime_path_settings(
         strategy_catalog=STRATEGY_CATALOG,
         strategy_definition=strategy_definition,
