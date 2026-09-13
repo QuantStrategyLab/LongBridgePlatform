@@ -17,6 +17,7 @@ from typing import Any
 
 from quant_platform_kit.common.runtime_target import build_runtime_target
 from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt
+from quant_platform_kit.common.strategy_release import build_strategy_release_identity
 from us_equity_strategies.v7_soxl_profile import (
     SOXL_SOXX_CORE_ONLY_P2_V7_PROFILE,
     V7_CONFIG_SHA256,
@@ -32,7 +33,7 @@ V7_PAPER_PLATFORM = "longbridge"
 # The research contract's frozen source is 07b164..., while the package that
 # is actually approved for the disabled account process is the controlled
 # d1ca... revision.  Keep those identities separate.
-V7_APPROVED_UES_REVISION = "d1ca798d880cd83965f3da5081850ca48a616d19"
+V7_APPROVED_UES_REVISION = "b83ef4b3ae67c47d132ddd660ba3ccc60d474c85"
 
 _COMMIT_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 _TICKET_PATTERN = re.compile(r"^rpt_[0-9a-fA-F]{64}$")
@@ -214,6 +215,7 @@ def build_v7_runtime_binding(
     *,
     protected_env: Mapping[str, str],
     current_service: Mapping[str, Any] | None = None,
+    execution_materials: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Combine QRT's bounded approval with protected PAPER deployment facts.
 
@@ -222,6 +224,8 @@ def build_v7_runtime_binding(
     """
 
     application = _validate_application_record(record)
+    if execution_materials is not None:
+        _validate_v7_execution_materials(execution_materials)
     current_target = _protected_target(protected_env)
     if str(current_target.get("strategy_profile") or "").strip() != str(
         application["expected_strategy_profile"]
@@ -313,7 +317,115 @@ def build_v7_runtime_binding(
             "workflow_run_id": str(application["claim"]["workflow_run_id"]),
             "workflow_run_attempt": str(application["claim"]["workflow_run_attempt"]),
         },
+        **(
+            {"execution_materials": _json_safe_v7_execution_materials(execution_materials)}
+            if execution_materials is not None
+            else {}
+        ),
     }
+
+
+def _json_safe_v7_execution_materials(materials: Mapping[str, Any]) -> dict[str, Any]:
+    candidate = materials["candidate_risk_identity"]
+    candidate_fields = (
+        "strategy_profile",
+        "account_mode",
+        "strategy_revision",
+        "runner_revision",
+        "config_sha256",
+        "input_manifest_sha256",
+        "authority_receipt_sha256",
+    )
+    if isinstance(candidate, Mapping):
+        candidate_payload = {field: candidate.get(field) for field in candidate_fields}
+        candidate_payload["candidate_sha256"] = candidate.get("candidate_sha256")
+    else:
+        candidate_payload = {
+            field: getattr(candidate, field, None) for field in (*candidate_fields, "candidate_sha256")
+        }
+    capital_base = materials.get("capital_base")
+    if isinstance(capital_base, Mapping):
+        capital_payload = dict(capital_base)
+    else:
+        capital_payload = {
+            field: getattr(capital_base, field, None)
+            for field in (
+                "reported_equity",
+                "reported_currency",
+                "target_currency",
+                "fx_rate_to_target",
+                "as_of",
+                "account_scope",
+                "runtime_scope",
+                "strategy_scope",
+                "source_digest_sha256",
+                "capital_scope",
+                "valuation_basis",
+                "allocation_scope",
+                "component_coverage_digest_sha256",
+                "fx_source_digest_sha256",
+            )
+        }
+    capital_binding = materials.get("capital_base_binding")
+    if isinstance(capital_binding, Mapping):
+        binding_payload = dict(capital_binding)
+    else:
+        binding_payload = {
+            field: getattr(capital_binding, field, None)
+            for field in (
+                "account_scope",
+                "runtime_scope",
+                "strategy_scope",
+                "target_currency",
+                "capital_scope",
+                "valuation_basis",
+                "allocation_scope",
+                "max_age_seconds",
+            )
+        }
+    for payload in (capital_payload, binding_payload):
+        for key, value in tuple(payload.items()):
+            if hasattr(value, "value"):
+                payload[key] = value.value
+            elif hasattr(value, "isoformat"):
+                payload[key] = value.isoformat().replace("+00:00", "Z")
+    return {
+        "candidate_risk_identity": candidate_payload,
+        "mandate_provenance": dict(materials["mandate_provenance"]),
+        "capital_base": capital_payload,
+        "capital_base_binding": binding_payload,
+        "strategy_release": build_strategy_release_identity(materials["strategy_release"]).to_dict(),
+        **(
+            {"market_data": dict(materials["market_data"])}
+            if isinstance(materials.get("market_data"), Mapping)
+            else {}
+        ),
+    }
+
+
+def _validate_v7_execution_materials(materials: Mapping[str, Any]) -> None:
+    """Validate explicit PAPER execution evidence without issuing authority."""
+    candidate = materials.get("candidate_risk_identity")
+    mandate = materials.get("mandate_provenance")
+    release_value = materials.get("strategy_release")
+    if candidate is None or not isinstance(mandate, Mapping) or release_value is None:
+        raise V7PaperApplicationError("V7 execution materials are incomplete")
+    try:
+        release = build_strategy_release_identity(release_value)
+    except (TypeError, ValueError) as exc:
+        raise V7PaperApplicationError("V7 execution release is invalid") from exc
+    def candidate_value(name):
+        return candidate.get(name) if isinstance(candidate, Mapping) else getattr(candidate, name, None)
+
+    if (
+        candidate_value("strategy_profile") != V7_PAPER_PROFILE
+        or candidate_value("config_sha256") != V7_CONFIG_SHA256
+        or candidate_value("strategy_revision") != release.strategy_revision
+        or candidate_value("config_sha256") != release.config_sha256
+        or mandate.get("authority_scope") != V7_PAPER_SCOPE
+        or mandate.get("candidate_identity_sha256") != candidate_value("candidate_sha256")
+    ):
+        raise V7PaperApplicationError("V7 execution materials do not match PAPER candidate")
 
 
 def _validate_bound_binding(binding: Mapping[str, Any]) -> dict[str, Any]:
@@ -368,6 +480,11 @@ def _validate_bound_binding(binding: Mapping[str, Any]) -> dict[str, Any]:
         raise V7PaperApplicationError("bound claim is required")
     _text(claim.get("workflow_run_id"), field="claim.workflow_run_id")
     _text(claim.get("workflow_run_attempt"), field="claim.workflow_run_attempt")
+    if payload.get("execution_materials") is not None:
+        materials = payload.get("execution_materials")
+        if not isinstance(materials, Mapping):
+            raise V7PaperApplicationError("bound V7 execution materials are invalid")
+        _validate_v7_execution_materials(materials)
     return payload
 
 

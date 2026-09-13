@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
@@ -49,6 +50,8 @@ class LoadedStrategyRuntime:
     entrypoint: StrategyEntrypoint
     runtime_adapter: StrategyRuntimeAdapter
     runtime_settings: PlatformRuntimeSettings
+    execution_entrypoint: StrategyEntrypoint | None = None
+    execution_materials: Mapping[str, Any] = field(default_factory=dict)
     runtime_overrides: Mapping[str, Any] = field(default_factory=dict)
     runtime_config: Mapping[str, Any] = field(default_factory=dict)
     merged_runtime_config: Mapping[str, Any] = field(default_factory=dict)
@@ -67,6 +70,10 @@ class LoadedStrategyRuntime:
         configured = self.merged_runtime_config.get("managed_symbols", ())
         return tuple(str(symbol) for symbol in configured)
 
+    @property
+    def uses_evidence_execution(self) -> bool:
+        return self.execution_entrypoint is not None and bool(self.execution_materials)
+
     def _stamp_portfolio_risk_metadata(self, available_inputs: Mapping[str, Any]) -> dict[str, Any]:
         resolved = dict(available_inputs)
         snapshot = resolved.get("portfolio_snapshot")
@@ -82,14 +89,19 @@ class LoadedStrategyRuntime:
         return resolved
 
     def _build_capital_base_capabilities(self, available_inputs: Mapping[str, Any]) -> dict[str, Any]:
+        capabilities = {
+            key: value
+            for key, value in self.execution_materials.items()
+            if key not in {"capital_base", "capital_base_binding"}
+        }
         snapshot = available_inputs.get("portfolio_snapshot")
         target = self.runtime_settings.runtime_target
         metadata = getattr(snapshot, "metadata", None)
         if target is None or not isinstance(metadata, Mapping):
-            return {}
+            return capabilities
         source = metadata.get("broker_capital")
         if not isinstance(source, Mapping):
-            return {}
+            return capabilities
         settings = self.runtime_settings
         if (
             target.platform_id != "longbridge"
@@ -98,7 +110,7 @@ class LoadedStrategyRuntime:
             or metadata.get("account_hash") != (settings.account_prefix or settings.account_region)
             or source.get("currency") != settings.trading_currency
         ):
-            return {}
+            return capabilities
         try:
             binding = CapitalBaseBinding(
                 account_scope=target.account_scope,
@@ -123,10 +135,11 @@ class LoadedStrategyRuntime:
                 valuation_basis=binding.valuation_basis,
             )
             if not validate_capital_base(capital, binding=binding).is_valid:
-                return {}
+                return capabilities
         except (TypeError, ValueError, AttributeError):
-            return {}
-        return {"capital_base": capital, "capital_base_binding": binding}
+            return capabilities
+        capabilities.update({"capital_base": capital, "capital_base_binding": binding})
+        return capabilities
 
     def _build_feature_snapshot_context(self, request):
         return build_strategy_context_from_available_inputs(
@@ -151,7 +164,8 @@ class LoadedStrategyRuntime:
             runtime_config.setdefault("signal_text_fn", signal_text_fn)
         apply_runtime_policy_to_runtime_config(runtime_config, self.runtime_adapter)
 
-        if _FEATURE_SNAPSHOT_INPUT in frozenset(self.entrypoint.manifest.required_inputs):
+        active_entrypoint = self.execution_entrypoint or self.entrypoint
+        if _FEATURE_SNAPSHOT_INPUT in frozenset(active_entrypoint.manifest.required_inputs):
             return self._evaluate_feature_snapshot_strategy(
                 runtime_config=runtime_config,
                 available_inputs=self._stamp_portfolio_risk_metadata(available_inputs),
@@ -169,15 +183,16 @@ class LoadedStrategyRuntime:
                 logger=self.logger,
             )
         )
+        capabilities = self._build_capital_base_capabilities(resolved_available_inputs)
         ctx = build_strategy_context_from_available_inputs(
-            entrypoint=self.entrypoint,
+            entrypoint=active_entrypoint,
             runtime_adapter=self.runtime_adapter,
             as_of=as_of,
             available_inputs=resolved_available_inputs,
             runtime_config=runtime_config,
-            capabilities=self._build_capital_base_capabilities(resolved_available_inputs),
+            capabilities=capabilities,
         )
-        decision = self.entrypoint.evaluate(ctx)
+        decision = active_entrypoint.evaluate(ctx)
         return StrategyEvaluationResult(
             decision=decision,
             metadata={
@@ -339,6 +354,8 @@ def load_strategy_runtime(
     *,
     runtime_settings: PlatformRuntimeSettings | None = None,
     runtime_overrides: Mapping[str, Any] | None = None,
+    execution_entrypoint: StrategyEntrypoint | None = None,
+    execution_materials: Mapping[str, Any] | None = None,
     logger: Callable[[str], None] = print,
 ) -> LoadedStrategyRuntime:
     entrypoint = load_strategy_entrypoint_for_profile(raw_profile)
@@ -347,12 +364,38 @@ def load_strategy_runtime(
         entrypoint.manifest.profile,
         entrypoint.manifest.display_name,
     )
+    resolved_execution_materials = dict(execution_materials or {})
+    if not resolved_execution_materials and entrypoint.manifest.profile == "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve":
+        try:
+            from application.v7_paper_application import load_v7_paper_application_binding
+
+            binding = load_v7_paper_application_binding(os.environ)
+            if binding is not None:
+                resolved_execution_materials = dict(binding.get("execution_materials") or {})
+        except (ImportError, ValueError):
+            resolved_execution_materials = {}
+    resolved_execution_entrypoint = execution_entrypoint
+    if (
+        resolved_execution_entrypoint is None
+        and resolved_execution_materials
+        and entrypoint.manifest.profile == "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+        and bool(getattr(resolved_runtime_settings, "runtime_target_enabled", False))
+        and getattr(getattr(resolved_runtime_settings, "runtime_target", None), "strategy_release", None) is not None
+    ):
+        from strategy_loader import load_strategy_execution_entrypoint_for_profile
+
+        resolved_execution_entrypoint = load_strategy_execution_entrypoint_for_profile(
+            entrypoint.manifest.profile,
+            execution_materials=resolved_execution_materials,
+        )
     overrides = _build_runtime_overrides(entrypoint.manifest.profile, resolved_runtime_settings)
     overrides.update(runtime_overrides or {})
     runtime = LoadedStrategyRuntime(
         entrypoint=entrypoint,
         runtime_adapter=runtime_adapter,
         runtime_settings=resolved_runtime_settings,
+        execution_entrypoint=resolved_execution_entrypoint,
+        execution_materials=resolved_execution_materials,
         runtime_overrides=overrides,
         logger=logger,
     )
@@ -364,6 +407,8 @@ def load_strategy_runtime(
         entrypoint=entrypoint,
         runtime_adapter=runtime_adapter,
         runtime_settings=resolved_runtime_settings,
+        execution_entrypoint=resolved_execution_entrypoint,
+        execution_materials=resolved_execution_materials,
         runtime_overrides=overrides,
         runtime_config=runtime_config,
         merged_runtime_config=merged_runtime_config,

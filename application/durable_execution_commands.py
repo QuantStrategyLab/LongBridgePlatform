@@ -99,12 +99,13 @@ def _build_live_execution_intent(
     runtime_identity_digest: str,
     execution: Mapping[str, Any],
     allocation: Mapping[str, Any],
+    strategy_release: Any = None,
 ) -> dict[str, object]:
     account_id = str(physical_account_id or "").strip()
     if not account_id:
         raise ValueError("physical_account_id is required")
     frozen_execution = json.loads(_canonical_json(execution))
-    return {
+    intent = {
         "kind": "longbridge_next_session_live",
         "physical_account_digest": _sha256_text(account_id),
         "runtime_identity_digest": _required_sha256(
@@ -121,6 +122,11 @@ def _build_live_execution_intent(
             "safe_haven_symbols": _normalized_symbols(allocation.get("safe_haven_symbols")),
         },
     }
+    if strategy_release is not None:
+        intent[EXECUTION_COMMAND_STRATEGY_RELEASE_FIELD] = build_strategy_release_identity(
+            strategy_release
+        ).to_dict()
+    return intent
 
 
 def build_live_execution_command(
@@ -132,6 +138,7 @@ def build_live_execution_command(
     runtime_identity_digest: str,
     execution: Mapping[str, Any],
     allocation: Mapping[str, Any],
+    strategy_release: Any = None,
 ) -> ExecutionCommand:
     """Build one immutable next-session live intent without broker authority."""
     intent = _build_live_execution_intent(
@@ -139,6 +146,7 @@ def build_live_execution_command(
         runtime_identity_digest=runtime_identity_digest,
         execution=execution,
         allocation=allocation,
+        strategy_release=strategy_release,
     )
     return ExecutionCommand.from_decision(
         platform=platform,
@@ -165,6 +173,7 @@ def enqueue_live_execution_command(
     runtime_identity_digest: str,
     execution: Mapping[str, Any],
     allocation: Mapping[str, Any],
+    strategy_release: Any = None,
 ) -> tuple[ExecutionCommand, bool] | None:
     if not enabled:
         return None
@@ -180,6 +189,7 @@ def enqueue_live_execution_command(
         runtime_identity_digest=runtime_identity_digest,
         execution=execution,
         allocation=allocation,
+        strategy_release=strategy_release,
     )
     return command, bool(store.enqueue(command))
 

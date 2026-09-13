@@ -56,6 +56,33 @@ def load_strategy_entrypoint_for_profile(raw_profile: str | None) -> StrategyEnt
     )
 
 
+def load_strategy_execution_entrypoint_for_profile(
+    raw_profile: str | None,
+    *,
+    execution_materials: dict[str, object] | None,
+) -> StrategyEntrypoint:
+    """Load the separately guarded V7 execution entrypoint.
+
+    The ordinary loader remains research-only for V7.  Execution selection is
+    explicit and requires a validated PAPER mandate and release material.
+    """
+    if str(raw_profile or "").strip() != _V7_PROFILE_NAME:
+        raise ValueError("V7 execution entrypoint requires the exact V7 profile")
+    if not _bound_v7_application(raw_profile):
+        raise ValueError("V7 execution entrypoint requires the protected binding")
+    materials = execution_materials or {}
+    mandate = materials.get("mandate_provenance")
+    if not isinstance(mandate, dict) or mandate.get("authority_scope") != "PAPER":
+        raise ValueError("V7 execution entrypoint requires a PAPER mandate")
+    if materials.get("strategy_release") is None:
+        raise ValueError("V7 execution entrypoint requires a strategy release")
+    try:
+        from us_equity_strategies.entrypoints import soxl_soxx_core_only_p2_v7_execution_entrypoint
+    except ImportError as exc:
+        raise ValueError("V7 execution entrypoint is unavailable in the installed UES revision") from exc
+    return soxl_soxx_core_only_p2_v7_execution_entrypoint
+
+
 def load_strategy_runtime_adapter_for_profile(raw_profile: str | None) -> StrategyRuntimeAdapter:
     definition = load_strategy_definition(raw_profile)
     return get_platform_runtime_adapter(
