@@ -235,6 +235,15 @@ class LongBridgeRuntimeComposer:
             if silent_cycle_notifications
             else notification_adapters.notification_port
         )
+        notify_issue = (
+            (lambda _title, _detail: None)
+            if (
+                silent_cycle_notifications
+                and self.strategy_profile
+                == "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+            )
+            else notification_adapters.notify_issue
+        )
         return LongBridgeRebalanceRuntime(
             bootstrap=self.bootstrap_builder(
                 project_id=self.project_id,
@@ -250,7 +259,7 @@ class LongBridgeRuntimeComposer:
             market_data_port_factory=self.broker_adapters.build_market_data_port,
             estimate_max_purchase_quantity=self.estimate_max_purchase_quantity_fn,
             notifications=notifications,
-            notify_issue=notification_adapters.notify_issue,
+            notify_issue=notify_issue,
             portfolio_port_factory=self.broker_adapters.build_portfolio_port,
             execution_port_factory=self.broker_adapters.build_execution_port,
             post_submit_order=notification_adapters.post_submit_order,
@@ -320,6 +329,10 @@ class LongBridgeRuntimeComposer:
         live_command_enabled = self._live_execution_command_enabled()
         if live_command_enabled and self.strategy_profile != "soxl_soxx_trend_income":
             raise RuntimeError("durable live execution command is only verified for the SOXL profile")
+        validation_suppressed = bool(
+            self.suppress_live_execution_commands
+            and self.strategy_profile == "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+        )
         return LongBridgeRebalanceConfig(
             limit_sell_discount=self.limit_sell_discount,
             limit_buy_premium=self.limit_buy_premium,
@@ -344,19 +357,27 @@ class LongBridgeRuntimeComposer:
             notification_title_key=notification_title_key,
             notify_no_trade_cycles=False,
             strategy_plugin_signals=tuple(strategy_plugin_signals or ()),
-            execution_dedup_enabled=resolve_execution_dedup_enabled(
-                env_reader=self.env_reader,
-                dry_run_only=self.dry_run_only,
-                account_scope=self.account_region,
+            execution_dedup_enabled=(
+                False
+                if validation_suppressed
+                else resolve_execution_dedup_enabled(
+                    env_reader=self.env_reader,
+                    dry_run_only=self.dry_run_only,
+                    account_scope=self.account_region,
+                )
             ),
             execution_state_store=execution_state_store,
             execution_state_account_scope=self.account_region,
             physical_account_id=_resolve_configured_physical_account_id(
                 env_reader=self.env_reader
             ),
-            durable_execution_command_paper_enabled=resolve_paper_execution_command_producer_enabled(
-                env_reader=self.env_reader,
-                dry_run_only=self.dry_run_only,
+            durable_execution_command_paper_enabled=(
+                False
+                if validation_suppressed
+                else resolve_paper_execution_command_producer_enabled(
+                    env_reader=self.env_reader,
+                    dry_run_only=self.dry_run_only,
+                )
             ),
             durable_execution_command_live_enabled=live_command_enabled,
             durable_live_execution_session_authorized=bool(live_execution_session_authorized),
@@ -368,9 +389,13 @@ class LongBridgeRuntimeComposer:
                 strategy_profile=self.strategy_profile,
                 runtime_config=getattr(self.strategy_adapters, "strategy_runtime_config", {}),
             ) if live_command_enabled else "",
-            strategy_risk_state_paper_enabled=resolve_paper_strategy_risk_state_enabled(
-                env_reader=self.env_reader,
-                dry_run_only=self.dry_run_only,
+            strategy_risk_state_paper_enabled=(
+                False
+                if validation_suppressed
+                else resolve_paper_strategy_risk_state_enabled(
+                    env_reader=self.env_reader,
+                    dry_run_only=self.dry_run_only,
+                )
             ),
             strategy_risk_state_store=build_strategy_risk_state_store_from_env(
                 env_reader=self.env_reader,

@@ -18,6 +18,8 @@ from quant_platform_kit.common.execution_translation import (
 )
 from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
 
+_V7_PROFILE_NAME = "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+
 _SAFE_HAVEN_SYMBOLS = frozenset({"BOXX", "BIL"})
 _HK_SAFE_HAVEN_SYMBOLS = frozenset({"02800", "82800"})  # TraHK (HKD + RMB counters)
 _INCOME_SYMBOLS = frozenset({"QQQI", "SPYI"})
@@ -206,6 +208,12 @@ def _symbol_role(symbol: str) -> str | None:
 
 
 def _resolve_canonical_profile(strategy_profile: str) -> str:
+    if str(strategy_profile or "").strip() == _V7_PROFILE_NAME:
+        # Keep the normal LongBridge allowlist closed; the loader only resolves
+        # V7 when its exact paused application binding is present.
+        from strategy_loader import load_strategy_definition
+
+        return load_strategy_definition(strategy_profile).profile
     return resolve_strategy_definition(
         strategy_profile,
         platform_id=LONGBRIDGE_PLATFORM,
@@ -245,6 +253,9 @@ def _attach_execution_block_fields(
     risk_gate = decision.diagnostics.get("risk_gate")
     if risk_gate is not None and str(risk_gate) != "":
         execution["risk_gate"] = risk_gate
+    for marker in ("no_order", "execution_authorized"):
+        if marker in decision.diagnostics:
+            execution[marker] = decision.diagnostics[marker]
     if _decision_blocks_execution(decision):
         execution["no_execute"] = True
 
@@ -462,6 +473,10 @@ def _decision_blocks_execution(decision: StrategyDecision) -> bool:
     if "no_execute" in flags:
         return True
     if any(str(flag).startswith("rejected:") for flag in decision.risk_flags):
+        return True
+    if decision.diagnostics.get("no_order") is True:
+        return True
+    if decision.diagnostics.get("execution_authorized") is False:
         return True
     risk_gate = str(decision.diagnostics.get("risk_gate") or "").strip().upper()
     return risk_gate == "REJECT"

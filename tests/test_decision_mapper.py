@@ -411,6 +411,33 @@ class DecisionMapperTests(unittest.TestCase):
             any(str(flag).startswith("rejected:") for flag in plan["execution"].get("risk_flags", ()))
         )
 
+    def test_v7_research_no_order_and_unauthorized_markers_block_execution(self):
+        decision = StrategyDecision(
+            positions=(PositionTarget(symbol="SOXL", target_value=1000.0),),
+            diagnostics={
+                "no_order": True,
+                "execution_authorized": False,
+                "trade_threshold_value": 100.0,
+            },
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            account_state={
+                "available_cash": 5000.0,
+                "market_values": {"SOXL": 0.0},
+                "quantities": {"SOXL": 0},
+                "sellable_quantities": {"SOXL": 0},
+                "total_strategy_equity": 5000.0,
+            },
+            strategy_profile="soxl_soxx_trend_income",
+        )
+
+        self.assertEqual(plan["allocation"]["targets"]["SOXL"], 1000.0)
+        self.assertTrue(plan["execution"]["no_execute"])
+        self.assertTrue(plan["execution"]["no_order"])
+        self.assertIs(plan["execution"]["execution_authorized"], False)
+
     def test_approved_empty_target_clear_remains_executable_zero_targets(self):
         decision = StrategyDecision(
             positions=(PositionTarget(symbol="BOXX", target_value=0.0, role="safe_haven"),),

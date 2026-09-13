@@ -707,7 +707,7 @@ def publish_strategy_plugin_alerts(signals, *, report=None):
 
 
 def run_strategy(*, force_run: bool = False, validation_only: bool = False, validation_label: str = "backfill"):
-    if _v7_application_candidate_bound():
+    if _v7_application_candidate_bound() and not validation_only:
         print(f"[{datetime.now()}] V7 paper candidate is paused; skip all execution paths.", flush=True)
         return True
     if not validation_only and not force_run and not getattr(RUNTIME_SETTINGS, "runtime_target_enabled", True):
@@ -913,27 +913,28 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             failure_phase=failure_phase,
             failure_reason=failure_reason,
         )
-        try:
-            notification_adapters.publish_cycle_notification(
-                detailed_text=_compact_error_notification(exc, phase=failure_phase),
-                compact_text=_compact_error_notification(exc, phase=failure_phase),
-            )
-        except Exception as notification_exc:
-            notification_delivery_events.append(
-                {
-                    "sink": "telegram",
-                    "delivery_status": "failed",
-                    "transport_acknowledged": False,
-                    "error_type": type(notification_exc).__name__,
-                }
-            )
-            reporting_adapters.log_event(
-                log_context,
-                "strategy_error_notification_failed",
-                message="Strategy error notification failed",
-                severity="ERROR",
-                error_type=type(notification_exc).__name__,
-            )
+        if not (validation_only and _v7_application_candidate_bound()):
+            try:
+                notification_adapters.publish_cycle_notification(
+                    detailed_text=_compact_error_notification(exc, phase=failure_phase),
+                    compact_text=_compact_error_notification(exc, phase=failure_phase),
+                )
+            except Exception as notification_exc:
+                notification_delivery_events.append(
+                    {
+                        "sink": "telegram",
+                        "delivery_status": "failed",
+                        "transport_acknowledged": False,
+                        "error_type": type(notification_exc).__name__,
+                    }
+                )
+                reporting_adapters.log_event(
+                    log_context,
+                    "strategy_error_notification_failed",
+                    message="Strategy error notification failed",
+                    severity="ERROR",
+                    error_type=type(notification_exc).__name__,
+                )
         error_summary = {}
         notification_delivery_summary = _build_notification_delivery_summary(
             notification_delivery_events
@@ -957,11 +958,12 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 # Legacy targets remain evidence-missing; receipt metadata
                 # cannot affect strategy execution or error handling.
                 pass
-        try:
-            report_path = reporting_adapters.persist_execution_report(report)
-            print(f"execution_report {report_path}", flush=True)
-        except Exception as persist_exc:
-            print(f"failed to persist execution report: {type(persist_exc).__name__}", flush=True)
+        if not (validation_only and _v7_application_candidate_bound()):
+            try:
+                report_path = reporting_adapters.persist_execution_report(report)
+                print(f"execution_report {report_path}", flush=True)
+            except Exception as persist_exc:
+                print(f"failed to persist execution report: {type(persist_exc).__name__}", flush=True)
 
 
 def run_probe(*, response_body: str = "Probe OK"):

@@ -36,6 +36,8 @@ try:
     from quant_platform_kit.common.account_identity import BrokerAccountIdentity
     from quant_platform_kit.common.execution_commands import ExecutionCommandState, ExecutionCommandStore
     from notifications.telegram import build_translator
+    from decision_mapper import map_strategy_decision_to_plan
+    from quant_platform_kit.common.strategy_contracts import PositionTarget, StrategyDecision
     from quant_platform_kit.common.models import ExecutionReport, PortfolioSnapshot, Position, QuoteSnapshot
     from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort, CallableNotificationPort, CallablePortfolioPort
 finally:
@@ -171,6 +173,81 @@ def _build_snapshot(plan, *, phase=""):
 
 
 class RebalanceServiceNotificationTests(unittest.TestCase):
+    def test_research_no_order_plan_reaches_cycle_without_broker_or_external_writes(self):
+        snapshot = PortfolioSnapshot(
+            as_of="2026-09-13",
+            total_equity=5000.0,
+            buying_power=5000.0,
+            cash_balance=5000.0,
+            positions=(Position(symbol="SOXL", quantity=0, market_value=0.0),),
+            metadata={"cash_by_currency": {"USD": 5000.0}},
+        )
+        plan = map_strategy_decision_to_plan(
+            StrategyDecision(
+                positions=(PositionTarget(symbol="SOXL", target_value=1000.0),),
+                diagnostics={
+                    "trade_threshold_value": 100.0,
+                    "no_order": True,
+                    "execution_authorized": False,
+                },
+            ),
+            snapshot=snapshot,
+            strategy_profile="soxl_soxx_trend_income",
+        )
+        observed = {"submit": 0, "owner": 0, "marker": 0, "command": 0, "notify": 0}
+
+        class NoWriteMarkerStore:
+            def has_marker(self, _key):
+                observed["marker"] += 1
+                return False
+
+            def record_marker(self, *_args, **_kwargs):
+                observed["marker"] += 1
+                raise AssertionError("blocked research plan must not write execution marker")
+
+        runtime = LongBridgeRebalanceRuntime(
+            bootstrap=lambda: ("quote", "trade", {}),
+            resolve_rebalance_plan=lambda **_kwargs: plan,
+            market_data_port_factory=lambda _quote: CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-09-13",
+                    last_price=80.0,
+                )
+            ),
+            execution_port_factory=lambda _trade: CallableExecutionPort(
+                lambda _order: (
+                    observed.__setitem__("submit", observed["submit"] + 1),
+                    (_ for _ in ()).throw(AssertionError("research plan must not submit")),
+                )[1]
+            ),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 0,
+            notifications=CallableNotificationPort(
+                lambda _message: observed.__setitem__("notify", observed["notify"] + 1)
+            ),
+            notify_issue=lambda *_args, **_kwargs: observed.__setitem__("notify", observed["notify"] + 1),
+            portfolio_port_factory=lambda *_args: CallablePortfolioPort(lambda: snapshot),
+        )
+        config = LongBridgeRebalanceConfig(
+            strategy_profile="soxl_soxx_trend_income",
+            dry_run_only=True,
+            execution_dedup_enabled=True,
+            execution_state_store=NoWriteMarkerStore(),
+            durable_execution_command_paper_enabled=False,
+            limit_sell_discount=1.0,
+            limit_buy_premium=1.0,
+            separator="-",
+            translator=build_translator("en"),
+            with_prefix=lambda message: message,
+            notify_no_trade_cycles=False,
+        )
+
+        result = rebalance_service.run_strategy(runtime=runtime, config=config)
+
+        self.assertEqual(result.dry_run_orders, ())
+        self.assertEqual(observed["submit"], 0)
+        self.assertEqual(observed["notify"], 0)
+
     def test_account_identity_gate_marks_mismatch_for_pre_execution_block(self):
         runtime = LongBridgeRebalanceRuntime(
             bootstrap=lambda: None,

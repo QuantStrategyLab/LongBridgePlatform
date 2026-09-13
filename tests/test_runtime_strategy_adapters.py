@@ -5,6 +5,9 @@ from types import SimpleNamespace
 import pandas as pd
 from unittest.mock import patch
 
+from quant_platform_kit.common.runtime_target import build_runtime_target
+from runtime_config_support import PlatformRuntimeSettings
+from strategy_runtime import LoadedStrategyRuntime
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -14,6 +17,9 @@ if str(HK_STRATEGIES_SRC) not in sys.path:
     sys.path.insert(0, str(HK_STRATEGIES_SRC))
 
 from application.runtime_strategy_adapters import build_runtime_strategy_adapters
+
+
+V7_PROFILE = "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
 
 
 def test_runtime_strategy_adapters_build_market_history_inputs():
@@ -200,6 +206,80 @@ def test_runtime_strategy_adapters_resolve_plan_builds_inputs_and_maps_decision(
     assert result == {"plan": True}
 
 
+def test_v7_loaded_runtime_uses_real_entrypoint_risk_gate_and_mapper(monkeypatch):
+    import json
+    import sys
+
+    sys.path.insert(0, str(ROOT / "tests"))
+    from test_v7_paper_application import _protected_env, _record
+    from test_v7_paper_preview import _available_inputs
+    from application.v7_paper_application import build_v7_runtime_binding
+    from decision_mapper import map_strategy_decision_to_plan
+    from quant_platform_kit.common.runtime_inputs import build_strategy_evaluation_inputs
+    from strategy_loader import (
+        load_strategy_entrypoint_for_profile,
+        load_strategy_runtime_adapter_for_profile,
+    )
+
+    binding = build_v7_runtime_binding(_record(), protected_env=_protected_env())
+    monkeypatch.setenv("LONGBRIDGE_V7_PAPER_APPLICATION_JSON", json.dumps(binding))
+    target = build_runtime_target(
+        platform_id="longbridge",
+        strategy_profile=V7_PROFILE,
+        dry_run_only=False,
+        account_selector=["PAPER"],
+        account_scope="PAPER",
+        service_name="longbridge-quant-paper-service",
+        execution_environment="paper",
+    )
+    settings = PlatformRuntimeSettings(
+        project_id=None,
+        secret_name="paper",
+        account_prefix="PAPER",
+        strategy_profile=V7_PROFILE,
+        strategy_display_name="V7",
+        strategy_domain="us_equity",
+        account_region="PAPER",
+        notify_lang="en",
+        tg_token=None,
+        tg_chat_id=None,
+        dry_run_only=False,
+        runtime_target=target,
+    )
+    entrypoint = load_strategy_entrypoint_for_profile(V7_PROFILE)
+    runtime_adapter = load_strategy_runtime_adapter_for_profile(V7_PROFILE)
+    loaded_runtime = LoadedStrategyRuntime(
+        entrypoint=entrypoint,
+        runtime_adapter=runtime_adapter,
+        runtime_settings=settings,
+    )
+    inputs = _available_inputs()
+    adapters = build_runtime_strategy_adapters(
+        strategy_runtime=loaded_runtime,
+        strategy_profile=V7_PROFILE,
+        strategy_runtime_config=loaded_runtime.merged_runtime_config,
+        available_inputs=runtime_adapter.available_inputs,
+        benchmark_symbol="SOXX",
+        signal_text_fn=lambda icon: str(icon),
+        translator=lambda key, **_kwargs: str(key),
+        broker_adapters=SimpleNamespace(),
+        calculate_rotation_indicators_fn=lambda *_args, **_kwargs: {},
+        build_strategy_evaluation_inputs_fn=build_strategy_evaluation_inputs,
+        map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan,
+    )
+
+    plan = adapters.resolve_rebalance_plan(
+        indicators=inputs["derived_indicators"],
+        snapshot=inputs["portfolio_snapshot"],
+    )
+
+    assert plan["execution"]["no_execute"] is True
+    assert plan["execution"]["no_order"] is True
+    assert plan["execution"]["execution_authorized"] is False
+    assert plan["execution"]["risk_gate"] == "REJECT"
+    assert plan["allocation"]["targets"] == {}
+
+
 def test_runtime_strategy_adapters_add_execution_policy_to_runtime_metadata():
     observed = {}
 
@@ -299,6 +379,8 @@ def test_frozen_plan_reapplies_risk_gate_and_maps_only_the_original_target() -> 
                 "signal_date": "2026-09-09",
                 "effective_date": "2026-09-10",
                 "execution_timing_contract": "next_trading_day",
+                "no_order": True,
+                "execution_authorized": False,
             },
             snapshot=snapshot,
         )
@@ -320,6 +402,8 @@ def test_frozen_plan_reapplies_risk_gate_and_maps_only_the_original_target() -> 
         ("SOXL", 200.0),
     ]
     assert observed["map_kwargs"]["runtime_metadata"]["execution_annotations"]["signal_date"] == "2026-09-09"
+    assert observed["decision"].diagnostics["no_order"] is True
+    assert observed["decision"].diagnostics["execution_authorized"] is False
 
 
 def test_runtime_strategy_adapters_loads_and_reports_plugin_signals():

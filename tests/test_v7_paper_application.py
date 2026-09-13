@@ -15,6 +15,8 @@ from application.v7_paper_application import (
     build_v7_runtime_binding,
     load_v7_paper_application_binding,
 )
+from decision_mapper import map_strategy_decision_to_plan
+from quant_platform_kit.common.strategy_contracts import PositionTarget, StrategyDecision
 
 
 def _record(**overrides):
@@ -243,6 +245,166 @@ def test_bound_v7_loader_is_opt_in_and_normal_loader_stays_fail_closed(monkeypat
 
     assert entrypoint.manifest.profile == V7_PAPER_PROFILE
     assert entrypoint.manifest.default_config["managed_symbols"] == ("SOXL", "SOXX", "BOXX")
+
+
+def test_bound_v7_decision_mapper_preserves_research_block_markers(monkeypatch) -> None:
+    binding = build_v7_runtime_binding(_record(), protected_env=_protected_env())
+    monkeypatch.setenv("LONGBRIDGE_V7_PAPER_APPLICATION_JSON", json.dumps(binding))
+
+    plan = map_strategy_decision_to_plan(
+        StrategyDecision(
+            positions=(PositionTarget(symbol="SOXL", target_value=1000.0),),
+            diagnostics={
+                "trade_threshold_value": 100.0,
+                "no_order": True,
+                "execution_authorized": False,
+            },
+        ),
+        account_state={
+            "available_cash": 5000.0,
+            "market_values": {"SOXL": 0.0},
+            "quantities": {"SOXL": 0},
+            "sellable_quantities": {"SOXL": 0},
+            "total_strategy_equity": 5000.0,
+        },
+        strategy_profile=V7_PAPER_PROFILE,
+    )
+
+    assert plan["allocation"]["targets"]["SOXL"] == 1000.0
+    assert plan["execution"]["no_execute"] is True
+    assert plan["execution"]["no_order"] is True
+    assert plan["execution"]["execution_authorized"] is False
+
+
+def test_bound_v7_loaded_runtime_to_rebalance_isolated_validation_has_zero_writes(monkeypatch) -> None:
+    from application import rebalance_service
+    from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
+    from application.runtime_strategy_adapters import build_runtime_strategy_adapters
+    from quant_platform_kit.common.models import QuoteSnapshot
+    from quant_platform_kit.common.port_adapters import (
+        CallableExecutionPort,
+        CallableMarketDataPort,
+        CallableNotificationPort,
+        CallablePortfolioPort,
+    )
+    from quant_platform_kit.common.runtime_inputs import build_strategy_evaluation_inputs
+    from quant_platform_kit.common.runtime_target import build_runtime_target
+    from runtime_config_support import PlatformRuntimeSettings
+    from strategy_loader import (
+        load_strategy_entrypoint_for_profile,
+        load_strategy_runtime_adapter_for_profile,
+    )
+    from strategy_runtime import LoadedStrategyRuntime
+    from test_v7_paper_preview import _available_inputs
+    from notifications.telegram import build_translator
+
+    binding = build_v7_runtime_binding(_record(), protected_env=_protected_env())
+    monkeypatch.setenv("LONGBRIDGE_V7_PAPER_APPLICATION_JSON", json.dumps(binding))
+    target = build_runtime_target(
+        platform_id="longbridge",
+        strategy_profile=V7_PAPER_PROFILE,
+        dry_run_only=False,
+        account_selector=["PAPER"],
+        account_scope="PAPER",
+        service_name="longbridge-quant-paper-service",
+        execution_environment="paper",
+    )
+    settings = PlatformRuntimeSettings(
+        project_id=None,
+        secret_name="paper",
+        account_prefix="PAPER",
+        strategy_profile=V7_PAPER_PROFILE,
+        strategy_display_name="V7",
+        strategy_domain="us_equity",
+        account_region="PAPER",
+        notify_lang="en",
+        tg_token=None,
+        tg_chat_id=None,
+        dry_run_only=False,
+        runtime_target=target,
+    )
+    entrypoint = load_strategy_entrypoint_for_profile(V7_PAPER_PROFILE)
+    runtime_adapter = load_strategy_runtime_adapter_for_profile(V7_PAPER_PROFILE)
+    loaded_runtime = LoadedStrategyRuntime(
+        entrypoint=entrypoint,
+        runtime_adapter=runtime_adapter,
+        runtime_settings=settings,
+    )
+    inputs = _available_inputs()
+    strategy_adapters = build_runtime_strategy_adapters(
+        strategy_runtime=loaded_runtime,
+        strategy_profile=V7_PAPER_PROFILE,
+        strategy_runtime_config=loaded_runtime.merged_runtime_config,
+        available_inputs=runtime_adapter.available_inputs,
+        benchmark_symbol="SOXX",
+        signal_text_fn=lambda icon: str(icon),
+        translator=lambda key, **_kwargs: str(key),
+        broker_adapters=type("BrokerAdapters", (), {})(),
+        calculate_rotation_indicators_fn=lambda *_args, **_kwargs: {},
+        build_strategy_evaluation_inputs_fn=build_strategy_evaluation_inputs,
+        map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan,
+    )
+    plan = strategy_adapters.resolve_rebalance_plan(
+        indicators=inputs["derived_indicators"],
+        snapshot=inputs["portfolio_snapshot"],
+    )
+    observed = {"submit": 0, "notify": 0}
+
+    class NoWriteStore:
+        cloud_prefix_uri = "gs://validation-only/blocked"
+        local_dir = None
+
+        def enqueue(self, *_args, **_kwargs):
+            raise AssertionError("V7 validation must not enqueue a command")
+
+        def append(self, *_args, **_kwargs):
+            raise AssertionError("V7 validation must not write paper risk state")
+
+    runtime = LongBridgeRebalanceRuntime(
+        bootstrap=lambda: ("quote", "trade", {}),
+        resolve_rebalance_plan=lambda **_kwargs: plan,
+        market_data_port_factory=lambda _quote: CallableMarketDataPort(
+            quote_loader=lambda _symbol: (_ for _ in ()).throw(
+                AssertionError("blocked validation must not quote for an order")
+            )
+        ),
+        execution_port_factory=lambda _trade: CallableExecutionPort(
+            lambda _order: (
+                observed.__setitem__("submit", observed["submit"] + 1),
+                (_ for _ in ()).throw(AssertionError("V7 validation must not submit")),
+            )[1]
+        ),
+        estimate_max_purchase_quantity=lambda *_args, **_kwargs: 0,
+        notifications=CallableNotificationPort(
+            lambda _message: observed.__setitem__("notify", observed["notify"] + 1)
+        ),
+        notify_issue=lambda *_args, **_kwargs: observed.__setitem__("notify", observed["notify"] + 1),
+        portfolio_port_factory=lambda *_args: CallablePortfolioPort(
+            lambda: inputs["portfolio_snapshot"]
+        ),
+    )
+    config = LongBridgeRebalanceConfig(
+        strategy_profile=V7_PAPER_PROFILE,
+        dry_run_only=True,
+        execution_dedup_enabled=False,
+        execution_command_store=NoWriteStore(),
+        durable_execution_command_paper_enabled=False,
+        strategy_risk_state_store=NoWriteStore(),
+        limit_sell_discount=1.0,
+        limit_buy_premium=1.0,
+        separator="-",
+        translator=build_translator("en"),
+        with_prefix=lambda message: message,
+        notify_no_trade_cycles=False,
+    )
+
+    result = rebalance_service.run_strategy(runtime=runtime, config=config)
+
+    assert plan["execution"]["risk_gate"] == "REJECT"
+    assert plan["execution"]["no_execute"] is True
+    assert plan["execution"]["no_order"] is True
+    assert result.dry_run_orders == ()
+    assert observed == {"submit": 0, "notify": 0}
 
 
 def test_runtime_settings_accept_only_bound_v7_and_force_disabled_paper_target(monkeypatch) -> None:
