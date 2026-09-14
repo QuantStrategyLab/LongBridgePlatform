@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from application.v7_paper_application import (
+    _application_contract,
+    _validate_application_record,
     V7_CONFIG_SHA256,
     V7_PAPER_PROFILE,
     V7_APPROVED_UES_REVISION,
@@ -163,6 +165,28 @@ def _synthetic_v7_execution_materials(snapshot):
             "effective_session": "2026-09-14",
         },
     }
+
+
+def test_parameterized_candidate_contract_is_fixture_only_and_does_not_select_runtime_adapter() -> None:
+    contract = _application_contract(
+        label="synthetic fixture",
+        platform_id="longbridge",
+        account_scope="PAPER",
+        service_name="longbridge-quant-paper-service",
+        strategy_profile="synthetic_candidate_fixture",
+        candidate_id="synthetic_candidate_fixture",
+        config_sha256="f" * 64,
+        approved_ues_revision="synthetic-ues-revision",
+    )
+    record = _record(
+        strategy_profile="synthetic_candidate_fixture",
+        candidate_id="synthetic_candidate_fixture",
+        config_sha256="f" * 64,
+        approved_ues_revision="synthetic-ues-revision",
+    )
+    validated = _validate_application_record(record, contract=contract)
+    assert validated["candidate_id"] == "synthetic_candidate_fixture"
+    assert validated["desired_state"] == "paused"
 
 
 def test_build_v7_runtime_binding_is_paused_and_broker_paper() -> None:

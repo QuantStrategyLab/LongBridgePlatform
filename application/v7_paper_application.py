@@ -65,6 +65,44 @@ class V7PaperApplicationError(ValueError):
     """The trusted application record or protected target is not admissible."""
 
 
+def _application_contract(
+    *,
+    label: str,
+    platform_id: str,
+    account_scope: str,
+    service_name: str,
+    strategy_profile: str,
+    candidate_id: str,
+    config_sha256: str,
+    approved_ues_revision: str,
+) -> dict[str, str]:
+    """Describe a reviewed application binding without selecting an adapter."""
+
+    return {
+        "label": label,
+        "platform_id": platform_id,
+        "account_scope": account_scope,
+        "service_name": service_name,
+        "strategy_profile": strategy_profile,
+        "candidate_id": candidate_id,
+        "config_sha256": config_sha256,
+        "approved_ues_revision": approved_ues_revision,
+    }
+
+
+def _v7_application_contract() -> dict[str, str]:
+    return _application_contract(
+        label="V7",
+        platform_id=V7_PAPER_PLATFORM,
+        account_scope=V7_PAPER_SCOPE,
+        service_name=V7_PAPER_SERVICE,
+        strategy_profile=V7_PAPER_PROFILE,
+        candidate_id=V7_PAPER_PROFILE,
+        config_sha256=V7_CONFIG_SHA256,
+        approved_ues_revision=V7_APPROVED_UES_REVISION,
+    )
+
+
 def _text(value: object, *, field: str) -> str:
     normalized = str(value or "").strip()
     if not normalized:
@@ -123,7 +161,12 @@ def _parse_json_object(raw: object, *, field: str) -> dict[str, Any]:
     return payload
 
 
-def _validate_application_record(record: Mapping[str, Any]) -> dict[str, Any]:
+def _validate_application_record(
+    record: Mapping[str, Any],
+    *,
+    contract: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    contract = contract or _v7_application_contract()
     payload = dict(record)
     # QRT keeps the claim fields flat on the wire.  Normalize them only in
     # memory so the token can never be copied into the process binding.
@@ -144,24 +187,24 @@ def _validate_application_record(record: Mapping[str, Any]) -> dict[str, Any]:
     payload["ticket_id"] = _ticket_text(payload["ticket_id"])
     if str(payload["status"]).strip().lower() not in {"approved", "claimed"}:
         raise V7PaperApplicationError("application status is not approved or claimed")
-    if str(payload["platform_id"]).strip().lower() != V7_PAPER_PLATFORM:
-        raise V7PaperApplicationError("application platform is not longbridge")
-    if str(payload["account_scope"]).strip().upper() != V7_PAPER_SCOPE:
-        raise V7PaperApplicationError("application account_scope must be PAPER")
-    if str(payload["account_selector"]).strip().upper() != V7_PAPER_SCOPE:
-        raise V7PaperApplicationError("application account_selector must be PAPER")
-    if str(payload["service_name"]).strip() != V7_PAPER_SERVICE:
-        raise V7PaperApplicationError("application service is not the protected PAPER service")
-    if str(payload["strategy_profile"]).strip() != V7_PAPER_PROFILE:
-        raise V7PaperApplicationError("application strategy profile is not the frozen V7 profile")
-    if str(payload["candidate_id"]).strip() != V7_PAPER_PROFILE:
-        raise V7PaperApplicationError("application candidate identity does not match V7")
-    if str(payload["config_sha256"]).strip().lower() != V7_CONFIG_SHA256:
-        raise V7PaperApplicationError("application config identity does not match frozen V7")
+    if str(payload["platform_id"]).strip().lower() != contract["platform_id"]:
+        raise V7PaperApplicationError(f"application platform does not match {contract['label']}")
+    if str(payload["account_scope"]).strip().upper() != contract["account_scope"]:
+        raise V7PaperApplicationError(f"application account_scope does not match {contract['label']}")
+    if str(payload["account_selector"]).strip().upper() != contract["account_scope"]:
+        raise V7PaperApplicationError(f"application account_selector does not match {contract['label']}")
+    if str(payload["service_name"]).strip() != contract["service_name"]:
+        raise V7PaperApplicationError(f"application service does not match {contract['label']}")
+    if str(payload["strategy_profile"]).strip() != contract["strategy_profile"]:
+        raise V7PaperApplicationError(f"application strategy profile does not match {contract['label']}")
+    if str(payload["candidate_id"]).strip() != contract["candidate_id"]:
+        raise V7PaperApplicationError(f"application candidate identity does not match {contract['label']}")
+    if str(payload["config_sha256"]).strip().lower() != contract["config_sha256"]:
+        raise V7PaperApplicationError(f"application config identity does not match {contract['label']}")
     source_commit = _text(payload["source_commit"], field="source_commit")
     if not _COMMIT_PATTERN.fullmatch(source_commit):
         raise V7PaperApplicationError("source_commit must be a full commit SHA")
-    if str(payload["approved_ues_revision"]).strip() != V7_APPROVED_UES_REVISION:
+    if str(payload["approved_ues_revision"]).strip() != contract["approved_ues_revision"]:
         raise V7PaperApplicationError("approved UES revision does not match the controlled source")
     _text(payload["account_key"], field="account_key")
     payload["expected_revision"] = _revision_number(payload["expected_revision"], field="expected_revision")
@@ -179,23 +222,28 @@ def _validate_application_record(record: Mapping[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _protected_target(protected_env: Mapping[str, str]) -> dict[str, Any]:
+def _protected_target(
+    protected_env: Mapping[str, str],
+    *,
+    contract: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    contract = contract or _v7_application_contract()
     service = _text(protected_env.get("CLOUD_RUN_SERVICE"), field="CLOUD_RUN_SERVICE")
-    if service != V7_PAPER_SERVICE:
-        raise V7PaperApplicationError("protected Cloud Run service does not match PAPER")
+    if service != contract["service_name"]:
+        raise V7PaperApplicationError(f"protected Cloud Run service does not match {contract['label']}")
     _text(protected_env.get("CLOUD_RUN_REGION"), field="CLOUD_RUN_REGION")
     raw_target = protected_env.get("RUNTIME_TARGET_JSON") or protected_env.get("QSL_RUNTIME_TARGET_JSON")
     target = _parse_json_object(raw_target, field="RUNTIME_TARGET_JSON")
-    if str(target.get("platform_id") or "").strip().lower() != V7_PAPER_PLATFORM:
+    if str(target.get("platform_id") or "").strip().lower() != contract["platform_id"]:
         raise V7PaperApplicationError("protected runtime target platform does not match")
-    if str(target.get("service_name") or "").strip() != V7_PAPER_SERVICE:
+    if str(target.get("service_name") or "").strip() != contract["service_name"]:
         raise V7PaperApplicationError("protected runtime target service does not match")
-    if str(target.get("account_scope") or "").strip().upper() != V7_PAPER_SCOPE:
+    if str(target.get("account_scope") or "").strip().upper() != contract["account_scope"]:
         raise V7PaperApplicationError("protected runtime target account_scope does not match")
     selectors = target.get("account_selector")
     if isinstance(selectors, str):
         selectors = [selectors]
-    if not isinstance(selectors, (list, tuple)) or tuple(str(item).strip().upper() for item in selectors) != (V7_PAPER_SCOPE,):
+    if not isinstance(selectors, (list, tuple)) or tuple(str(item).strip().upper() for item in selectors) != (contract["account_scope"],):
         raise V7PaperApplicationError("protected runtime target account_selector does not match")
     return target
 
@@ -223,10 +271,11 @@ def build_v7_runtime_binding(
     physical-account binding are retained for the paused process readback.
     """
 
-    application = _validate_application_record(record)
+    contract = _v7_application_contract()
+    application = _validate_application_record(record, contract=contract)
     if execution_materials is not None:
         _validate_v7_execution_materials(execution_materials)
-    current_target = _protected_target(protected_env)
+    current_target = _protected_target(protected_env, contract=contract)
     if str(current_target.get("strategy_profile") or "").strip() != str(
         application["expected_strategy_profile"]
     ).strip():
