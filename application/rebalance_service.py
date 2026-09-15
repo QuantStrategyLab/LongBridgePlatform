@@ -750,6 +750,7 @@ def run_strategy(
     execution_already_recorded = (
         direct_live_routing_blocked or account_identity_blocked or live_command_blocked
     )
+    live_command_deduplicated = False
     dry_run_bypass_marker = _dry_run_bypasses_execution_marker(config)
     if dry_run_bypass_marker:
         print(
@@ -762,6 +763,7 @@ def run_strategy(
     elif not execution_already_recorded and execution_marker_key and execution_state_store:
         try:
             execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
+            live_command_deduplicated = execution_already_recorded
         except Exception as exc:
             detail = (
                 "execution_marker_read_failed"
@@ -786,6 +788,7 @@ def run_strategy(
                         dry_run_only=bool(getattr(config, "dry_run_only", False)),
                     )
                 )
+                live_command_deduplicated = execution_already_recorded
             except Exception as exc:
                 detail = (
                     "execution_report_dedup_read_failed"
@@ -830,6 +833,18 @@ def run_strategy(
             note_logs=(message,),
             action_done=False,
         )
+        if live_command_claimed and live_command is not None and live_command_deduplicated:
+            try:
+                _record_live_command_outcome(
+                    command=live_command,
+                    store=config.execution_command_store,
+                    result=execution_result,
+                )
+            except Exception:
+                runtime.notify_issue(
+                    "Durable live execution outcome write failed",
+                    "durable_live_execution_outcome_persistence_failed",
+                )
     else:
         if not config.dry_run_only:
             delegate = execution_port
