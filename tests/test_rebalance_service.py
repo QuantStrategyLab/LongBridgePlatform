@@ -1599,14 +1599,14 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         command_store = ExecutionCommandStore(local_dir=self.enterContext(TemporaryDirectory()))
         marker_store = ExecutionMarkerStore(local_dir=self.enterContext(TemporaryDirectory()))
         clock = {"day": "2026-07-17", "status": "New"}
-        next_days = {"2026-07-17": "2026-07-20", "2026-07-20": "2026-07-21", "2026-07-21": "2026-07-22"}
-        targets = {"2026-07-17": 400.0, "2026-07-20": 300.0, "2026-07-21": 200.0}
+        next_days = {"2026-07-17": "2026-07-20", "2026-07-20": "2026-07-21", "2026-07-21": "2026-07-22", "2026-07-22": "2026-07-23"}
+        targets = {"2026-07-17": 400.0, "2026-07-20": 300.0, "2026-07-21": 200.0, "2026-07-22": 200.0}
         resolved_new_signals, orders, alerts, frozen_targets = [], [], [], []
 
         def new_plan(**_kwargs):
             resolved_new_signals.append(clock["day"])
             return {**plan, "allocation": {**plan["allocation"], "targets": {"SOXL": targets[clock["day"]]}},
-                    "execution": {**plan["execution"], "signal_date": clock["day"], "effective_date": next_days[clock["day"]]}}
+                    "execution": {**plan["execution"], "signal_date": clock["day"], "effective_date": clock["day"] if clock["day"] == "2026-07-22" else next_days[clock["day"]]}}
 
         def frozen_plan(*, allocation, execution, snapshot):
             frozen_targets.append(allocation["targets"]["SOXL"])
@@ -1661,8 +1661,44 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(resumed.allocation["targets"]["SOXL"], 300.0)
         self.assertEqual(len(orders), 2)
         self.assertIs(command_store.current_state(monday), ExecutionCommandState.FILLED)
-        self.assertEqual(resolved_new_signals, list(next_days))
+        self.assertEqual(resolved_new_signals, list(next_days)[:-1])
         self.assertEqual(len(command_store.list_due("2026-07-22")), 1)
+        duplicate = command_store.list_due("2026-07-22")[0]
+        command_store.append_event(duplicate, next_state=ExecutionCommandState.CANCELLED)
+        from application.durable_execution_commands import build_live_execution_command
+        dedup_command = build_live_execution_command(
+            platform="longbridge", account_scope="SG", strategy_profile=config.strategy_profile,
+            physical_account_id=config.physical_account_id,
+            runtime_identity_digest=config.durable_execution_runtime_identity_digest,
+            execution={**duplicate.intent["execution"], "signal_date": "2026-07-22", "effective_date": "2026-07-22"},
+            allocation=duplicate.intent["allocation"],
+        )
+        command_store.enqueue(dedup_command)
+        clock["day"] = "2026-07-22"
+        with patch.object(type(marker_store), "has_marker", return_value=True):
+            deduplicated = rebalance_service.run_strategy(runtime=runtime, config=config)
+        self.assertFalse(deduplicated.action_done)
+        generated = [
+            command for command in rebalance_service.list_live_execution_commands(command_store)
+            if command.command_id == dedup_command.command_id
+        ]
+        self.assertEqual(len(generated), 1)
+        self.assertEqual(command_store.current_state(generated[0]), ExecutionCommandState.CANCELLED)
+        self.assertEqual(len(orders), 2)
+        read_error_command = build_live_execution_command(
+            platform="longbridge", account_scope="SG", strategy_profile=config.strategy_profile,
+            physical_account_id=config.physical_account_id,
+            runtime_identity_digest=config.durable_execution_runtime_identity_digest,
+            execution={**duplicate.intent["execution"], "signal_date": "2026-07-23", "effective_date": "2026-07-23"},
+            allocation=duplicate.intent["allocation"],
+        )
+        command_store.enqueue(read_error_command)
+        clock["day"] = "2026-07-23"
+        with patch.object(type(marker_store), "has_marker", side_effect=RuntimeError("marker unavailable")):
+            read_error = rebalance_service.run_strategy(runtime=runtime, config=config)
+        self.assertFalse(read_error.action_done)
+        self.assertEqual(command_store.current_state(read_error_command), ExecutionCommandState.CLAIMED)
+        self.assertEqual(len(orders), 2)
 
     def test_live_order_detail_normalizes_real_sdk_enum_and_checks_identity(self):
         from application.longbridge_execution import fetch_live_order_status
