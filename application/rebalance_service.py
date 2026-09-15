@@ -737,6 +737,9 @@ def run_strategy(
 
     execution_marker_key = _build_execution_marker_key(config=config, execution=execution)
     execution_state_store = getattr(config, "execution_state_store", None)
+    duplicate_marker_found = False
+    duplicate_report_found = False
+    duplicate_evidence_read_failed = False
     direct_live_routing_blocked = (
         _direct_live_routing_requires_durable_command(
         execution=execution,
@@ -761,8 +764,10 @@ def run_strategy(
         )
     elif not execution_already_recorded and execution_marker_key and execution_state_store:
         try:
-            execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
+            duplicate_marker_found = bool(execution_state_store.has_marker(execution_marker_key))
+            execution_already_recorded = duplicate_marker_found
         except Exception as exc:
+            duplicate_evidence_read_failed = True
             detail = (
                 "execution_marker_read_failed"
                 if live_command_claimed
@@ -774,9 +779,9 @@ def run_strategy(
             )
             if live_command_claimed:
                 execution_already_recorded = True
-        if not execution_already_recorded and hasattr(execution_state_store, "has_prior_execution_report"):
+        if hasattr(execution_state_store, "has_prior_execution_report"):
             try:
-                execution_already_recorded = bool(
+                duplicate_report_found = bool(
                     execution_state_store.has_prior_execution_report(
                         platform="longbridge",
                         strategy_profile=getattr(config, "strategy_profile", "") or "unknown",
@@ -786,7 +791,9 @@ def run_strategy(
                         dry_run_only=bool(getattr(config, "dry_run_only", False)),
                     )
                 )
+                execution_already_recorded = execution_already_recorded or duplicate_report_found
             except Exception as exc:
+                duplicate_evidence_read_failed = True
                 detail = (
                     "execution_report_dedup_read_failed"
                     if live_command_claimed
@@ -799,7 +806,23 @@ def run_strategy(
                 if live_command_claimed:
                     execution_already_recorded = True
 
+    duplicate_execution_confirmed = bool(
+        live_command_claimed
+        and not duplicate_evidence_read_failed
+        and (duplicate_marker_found or duplicate_report_found)
+    )
+
     if execution_already_recorded:
+        if duplicate_execution_confirmed and not account_identity_blocked and not live_command_blocked:
+            try:
+                config.execution_command_store.append_event(
+                    live_command,
+                    next_state=ExecutionCommandState.CANCELLED,
+                    details={"reason": "duplicate_execution_confirmed", "orders_count": 0},
+                    expected_previous_state=ExecutionCommandState.CLAIMED,
+                )
+            except Exception:
+                pass
         if account_identity_blocked:
             message = _account_identity_blocked_message(
                 findings=tuple(account_identity_decision.findings),
