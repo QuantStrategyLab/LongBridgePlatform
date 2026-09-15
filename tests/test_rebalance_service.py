@@ -35,6 +35,7 @@ try:
     from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
     from quant_platform_kit.common.account_identity import BrokerAccountIdentity
     from quant_platform_kit.common.execution_commands import ExecutionCommandState, ExecutionCommandStore
+    from application.durable_execution_commands import build_live_execution_command
     from notifications.telegram import build_translator
     from decision_mapper import map_strategy_decision_to_plan
     from quant_platform_kit.common.strategy_contracts import PositionTarget, StrategyDecision
@@ -3539,6 +3540,84 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertNotIn("📊 市场状态: ", sent_messages[0])
         self.assertNotIn("💼 交易层风险仓位: ", sent_messages[0])
         self.assertNotIn("🏦 收入层锁定占比: ", sent_messages[0])
+
+
+    def test_historical_sg_duplicate_closes_claim_only_with_confirmed_report(self):
+        for prior_report_outcome, expected_state in ((True, ExecutionCommandState.CANCELLED), (RuntimeError("unreadable"), ExecutionCommandState.CLAIMED)):
+            with self.subTest(prior_report_outcome=type(prior_report_outcome).__name__), TemporaryDirectory() as command_dir, TemporaryDirectory() as marker_dir:
+                old_plan = _build_plan(
+                    strategy_symbols=("SOXL",), risk_symbols=("SOXL",), targets={"SOXL": 400.0},
+                    market_values={"SOXL": 0.0}, sellable_quantities={"SOXL": 0}, quantities={"SOXL": 0},
+                    current_min_trade=10.0, trade_threshold_value=10.0, investable_cash=500.0,
+                    available_cash=500.0, total_strategy_equity=500.0, market_status="Risk on",
+                    deploy_ratio_text="70.0%", income_ratio_text="0.0%", income_locked_ratio_text="0.0%",
+                    signal_message="Historical SG duplicate", portfolio_rows=(("SOXL",),),
+                    signal_date="2026-09-10", effective_date="2026-09-11",
+                )
+                new_plan = {**old_plan, "execution": {**old_plan["execution"], "signal_date": "2026-09-11", "effective_date": "2026-09-12"}}
+                command_store = ExecutionCommandStore(local_dir=command_dir)
+                old_command = build_live_execution_command(
+                    platform="longbridge", account_scope="SG", strategy_profile="soxl_soxx_trend_income",
+                    physical_account_id="lb-sg-001", runtime_identity_digest="a" * 64,
+                    execution=old_plan["execution"], allocation=old_plan["allocation"],
+                )
+                self.assertTrue(command_store.enqueue(old_command))
+                reads = []
+
+                class EvidenceStore:
+                    def has_marker(self, key):
+                        reads.append(("marker", key))
+                        return False
+
+                    def has_prior_execution_report(self, **kwargs):
+                        reads.append(("report", kwargs["signal_date"], kwargs["effective_date"]))
+                        if isinstance(prior_report_outcome, Exception):
+                            raise prior_report_outcome
+                        return prior_report_outcome
+
+                snapshot = replace(_build_snapshot(old_plan), as_of="2026-09-11")
+                runtime = LongBridgeRebalanceRuntime(
+                    bootstrap=lambda: ("quote", "trade", {}),
+                    resolve_rebalance_plan=lambda **_kwargs: new_plan,
+                    resolve_frozen_rebalance_plan=lambda *, allocation, execution, snapshot: old_plan,
+                    market_data_port_factory=lambda _quote: CallableMarketDataPort(
+                        quote_loader=lambda _symbol: (_ for _ in ()).throw(AssertionError("duplicate must not quote"))
+                    ),
+                    estimate_max_purchase_quantity=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("duplicate must not estimate")),
+                    notifications=CallableNotificationPort(lambda _message: None),
+                    notify_issue=lambda _title, _detail: None,
+                    portfolio_port_factory=lambda *_contexts: CallablePortfolioPort(lambda: snapshot),
+                    execution_port_factory=lambda _context: CallableExecutionPort(
+                        lambda _intent: (_ for _ in ()).throw(AssertionError("duplicate must not submit"))
+                    ),
+                )
+                config = LongBridgeRebalanceConfig(
+                    limit_sell_discount=0.995, limit_buy_premium=1.005, separator="-",
+                    translator=build_translator("en"), with_prefix=lambda message: message,
+                    strategy_profile="soxl_soxx_trend_income", execution_state_account_scope="SG",
+                    physical_account_id="lb-sg-001", dry_run_only=False,
+                    execution_dedup_enabled=True, execution_state_store=EvidenceStore(),
+                    durable_execution_command_live_enabled=True, execution_command_store=command_store,
+                    durable_live_execution_session_authorized=True,
+                    durable_execution_runtime_identity_digest="a" * 64,
+                    notify_no_trade_cycles=False,
+                )
+
+                result = rebalance_service.run_strategy(runtime=runtime, config=config)
+
+                self.assertFalse(result.action_done)
+                self.assertEqual(result.pending_orders, ())
+                self.assertEqual(reads[0][0], "marker")
+                self.assertEqual(reads[1], ("report", "2026-09-10", "2026-09-11"))
+                self.assertEqual(command_store.current_state(old_command), expected_state)
+                self.assertEqual(
+                    len([event for event in command_store.events(old_command) if event.state is ExecutionCommandState.CLAIMED]),
+                    1,
+                )
+                self.assertEqual(
+                    len([event for event in command_store.events(old_command) if event.state is ExecutionCommandState.CANCELLED]),
+                    int(expected_state is ExecutionCommandState.CANCELLED),
+                )
 
 
 class RequiredExecutionClaimTests(unittest.TestCase):
