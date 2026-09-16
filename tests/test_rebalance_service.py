@@ -242,8 +242,12 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             notify_no_trade_cycles=False,
         )
 
-        result = rebalance_service.run_strategy(runtime=runtime, config=config)
+        with patch(
+            "quant_platform_kit.risk.production_drift_new_risk.resolve_production_drift_status_from_store"
+        ) as resolver:
+            result = rebalance_service.run_strategy(runtime=runtime, config=config)
 
+        resolver.assert_not_called()
         self.assertEqual(result.dry_run_orders, ())
         self.assertEqual(observed["submit"], 0)
         self.assertEqual(observed["notify"], 0)
