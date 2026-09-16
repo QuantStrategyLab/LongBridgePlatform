@@ -387,6 +387,13 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
             "quotes": [dict(snapshot) for snapshot in quote_snapshots],
         }
     execution = dict(getattr(cycle_result, "execution", {}) or {})
+    if execution.get("execution_status") == "blocked":
+        summary["execution_status"] = "blocked"
+        summary["blocked_reason"] = (
+            "durable_live_execution_command_binding_invalid"
+            if execution.get("blocked_reason") == "durable_live_execution_command_binding_invalid"
+            else "unknown"
+        )
     for field in (
         "signal_date",
         "effective_date",
