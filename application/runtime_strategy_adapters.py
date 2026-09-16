@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Callable
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from quant_platform_kit.common.strategy_plugins import (
@@ -24,6 +25,31 @@ from quant_platform_kit.risk.portfolio_diagnostics import extract_portfolio_risk
 
 
 _V7_PROFILE_NAME = "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+
+
+def _completed_xnys_session_date(now: datetime | None = None) -> str:
+    """Resolve the latest completed XNYS session, including early closes."""
+    import pandas as pd
+    import pandas_market_calendars as mcal
+
+    instant = now or datetime.now(timezone.utc)
+    instant = pd.Timestamp(instant)
+    instant = instant.tz_localize("UTC") if instant.tzinfo is None else instant.tz_convert("UTC")
+    schedule = mcal.get_calendar("NYSE").schedule(
+        start_date=(instant - timedelta(days=10)).date(), end_date=instant.date()
+    )
+    completed = schedule[schedule["market_close"] <= instant]
+    if completed.empty:
+        raise RuntimeError("no completed XNYS session is available")
+    return str(completed.index[-1].date())
+
+
+def _next_xnys_session_date(session_date: str) -> str:
+    import pandas_market_calendars as mcal
+
+    schedule = mcal.get_calendar("NYSE").schedule(start_date=session_date, end_date=(datetime.fromisoformat(session_date) + timedelta(days=10)).date())
+    sessions = [str(index.date()) for index in schedule.index]
+    return next(date for date in sessions if date > session_date)
 
 
 def _typed_execution_candidate(materials: Mapping[str, Any]) -> CandidateRiskIdentity | None:
@@ -166,6 +192,12 @@ class LongBridgeRuntimeStrategyAdapters:
         if "benchmark_history" in available_inputs or "qqq_history" in available_inputs:
             return self.broker_adapters.build_price_history(market_data_port, self.benchmark_symbol)
         trend_ma_window = int(self.strategy_runtime_config.get("trend_ma_window", 150))
+        if self.strategy_profile == "soxl_soxx_trend_income":
+            return self.calculate_rotation_indicators_fn(
+                quote_context,
+                trend_window=trend_ma_window,
+                completed_session_date=_completed_xnys_session_date(),
+            )
         return self.calculate_rotation_indicators_fn(quote_context, trend_window=trend_ma_window)
 
     def _market_history_symbols(self) -> tuple[str, ...]:
@@ -267,15 +299,38 @@ class LongBridgeRuntimeStrategyAdapters:
             snapshot=resolved_snapshot,
         )
         runtime_metadata = dict(getattr(evaluation, "metadata", None) or {})
+        completed = indicators.get("completed_session") if isinstance(indicators, Mapping) else None
+        if (
+            self.strategy_profile == "soxl_soxx_trend_income"
+            and isinstance(completed, Mapping)
+            and completed.get("date")
+        ):
+            signal_date = str(completed["date"])
+            annotations = dict(runtime_metadata.get("execution_annotations") or {})
+            annotations.update({"signal_date": signal_date, "effective_date": _next_xnys_session_date(signal_date)})
+            runtime_metadata["execution_annotations"] = annotations
         if self.execution_policy is not None:
             runtime_metadata["longbridge_execution_policy"] = dict(self.execution_policy)
-        return self.map_strategy_decision_to_plan_fn(
+        plan = self.map_strategy_decision_to_plan_fn(
             decision,
             account_state=resolved_account_state if "account_state" in available_inputs else None,
             snapshot=resolved_snapshot,
             strategy_profile=self.strategy_profile,
             runtime_metadata=runtime_metadata,
         )
+        # This is deliberately an opt-in production SOXL path. The mapper may
+        # retain strategy diagnostics over runtime annotations, so stamp the
+        # final mapped execution payload that becomes the immutable command.
+        if self.strategy_profile == "soxl_soxx_trend_income" and isinstance(completed, Mapping) and completed.get("date"):
+            execution = plan.get("execution") if isinstance(plan, Mapping) else None
+            if isinstance(execution, dict):
+                execution.update({
+                    "signal_date": signal_date,
+                    "effective_date": _next_xnys_session_date(signal_date),
+                    "completed_session_date": signal_date,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                })
+        return plan
 
     def resolve_frozen_rebalance_plan(self, *, allocation, execution, snapshot):
         """Re-map one stored target decision against a fresh broker snapshot."""

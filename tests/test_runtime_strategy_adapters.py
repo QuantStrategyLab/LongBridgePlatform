@@ -121,8 +121,8 @@ def test_runtime_strategy_adapters_materialize_hk_direct_market_history():
 def test_runtime_strategy_adapters_fall_back_to_rotation_indicators():
     observed = {}
 
-    def fake_rotation_indicators(quote_context, *, trend_window):
-        observed["rotation_call"] = (quote_context, trend_window)
+    def fake_rotation_indicators(quote_context, *, trend_window, completed_session_date):
+        observed["rotation_call"] = (quote_context, trend_window, completed_session_date)
         return {"rotation": True}
 
     adapters = build_runtime_strategy_adapters(
@@ -141,7 +141,8 @@ def test_runtime_strategy_adapters_fall_back_to_rotation_indicators():
 
     result = adapters.calculate_strategy_indicators("quote-context")
 
-    assert observed["rotation_call"] == ("quote-context", 180)
+    assert observed["rotation_call"][:2] == ("quote-context", 180)
+    assert observed["rotation_call"][2]
     assert result == {"rotation": True}
 
 
@@ -517,3 +518,125 @@ def test_runtime_strategy_adapters_builds_escalated_plugin_alert_message():
     assert "mode=shadow" in alerts[0].body
     assert "would_trade=" not in alerts[0].body
     assert "source=" not in alerts[0].body
+
+
+def test_completed_session_soxl_overrides_mapper_annotations_on_final_plan(monkeypatch):
+    from datetime import datetime, timezone
+    from decision_mapper import map_strategy_decision_to_plan
+    from quant_platform_kit.common.strategy_contracts import PositionTarget, StrategyDecision
+
+    class BrokerAdapters:
+        def build_account_state_from_snapshot(self, _snapshot):
+            return {
+                "available_cash": 1_000.0,
+                "market_values": {"SOXL": 0.0},
+                "quantities": {"SOXL": 0.0},
+                "sellable_quantities": {"SOXL": 0.0},
+                "total_strategy_equity": 1_000.0,
+            }
+
+    decision = StrategyDecision(
+        positions=(PositionTarget(symbol="SOXL", target_value=500.0),),
+        diagnostics={
+            "execution_annotations": {
+                "signal_date": "1999-01-01",
+                "effective_date": "1999-01-02",
+                "execution_timing_contract": "next_trading_day",
+                "trade_threshold_value": 10.0,
+                "current_min_trade": 10.0,
+                "investable_cash": 1_000.0,
+            },
+        },
+    )
+    runtime = SimpleNamespace(evaluate=lambda **_kwargs: SimpleNamespace(decision=decision, metadata={}))
+    adapters = build_runtime_strategy_adapters(
+        strategy_runtime=runtime,
+        strategy_profile="soxl_soxx_trend_income",
+        strategy_runtime_config={},
+        available_inputs=("portfolio_snapshot", "account_state"),
+        benchmark_symbol="SOXX",
+        signal_text_fn=str,
+        translator=lambda key, **_kwargs: key,
+        broker_adapters=BrokerAdapters(),
+        calculate_rotation_indicators_fn=lambda *_args, **_kwargs: {},
+        build_strategy_evaluation_inputs_fn=lambda **kwargs: kwargs,
+        map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan,
+    )
+    monkeypatch.setattr(
+        "application.runtime_strategy_adapters._next_xnys_session_date",
+        lambda value: "2026-07-06" if value == "2026-07-02" else None,
+    )
+    before = datetime.now(timezone.utc)
+    plan = adapters.resolve_rebalance_plan(
+        indicators={"completed_session": {"date": "2026-07-02"}},
+        snapshot=object(),
+    )
+    after = datetime.now(timezone.utc)
+
+    assert plan["execution"]["signal_date"] == "2026-07-02"
+    assert plan["execution"]["effective_date"] == "2026-07-06"
+    assert plan["execution"]["completed_session_date"] == "2026-07-02"
+    assert before <= datetime.fromisoformat(plan["execution"]["generated_at"]) <= after
+
+
+def test_completed_session_does_not_change_non_soxl_mapper_output():
+    observed = {}
+    adapters = build_runtime_strategy_adapters(
+        strategy_runtime=SimpleNamespace(evaluate=lambda **_kwargs: SimpleNamespace(decision="decision", metadata={})),
+        strategy_profile="russell_top50_leader_rotation",
+        strategy_runtime_config={},
+        available_inputs=("portfolio_snapshot",),
+        benchmark_symbol="SOXX",
+        signal_text_fn=str,
+        translator=lambda key, **_kwargs: key,
+        broker_adapters=SimpleNamespace(),
+        calculate_rotation_indicators_fn=lambda *_args, **_kwargs: {},
+        build_strategy_evaluation_inputs_fn=lambda **kwargs: kwargs,
+        map_strategy_decision_to_plan_fn=lambda _decision, **kwargs: observed.setdefault(
+            "plan", {"execution": {"signal_date": "2026-07-06", "effective_date": "2026-07-07"}}
+        ),
+    )
+
+    plan = adapters.resolve_rebalance_plan(
+        indicators={"completed_session": {"date": "2026-07-02"}}, snapshot=object()
+    )
+
+    assert plan["execution"] == {"signal_date": "2026-07-06", "effective_date": "2026-07-07"}
+
+
+def test_completed_xnys_session_respects_close_holiday_and_weekend():
+    from datetime import datetime, timezone
+    from application.runtime_strategy_adapters import _completed_xnys_session_date
+
+    # 2026-11-27 is the XNYS early-close session after Thanksgiving.
+    # At the production 15:45 New York schedule on the Monday after the
+    # July 3 holiday, Friday's completed session remains July 2.
+    assert _completed_xnys_session_date(datetime(2026, 7, 6, 19, 45, tzinfo=timezone.utc)) == "2026-07-02"
+    assert _completed_xnys_session_date(datetime(2026, 11, 27, 17, 59, tzinfo=timezone.utc)) == "2026-11-25"
+    assert _completed_xnys_session_date(datetime(2026, 11, 27, 18, 1, tzinfo=timezone.utc)) == "2026-11-27"
+    assert _completed_xnys_session_date(datetime(2026, 11, 29, 20, 0, tzinfo=timezone.utc)) == "2026-11-27"
+
+
+def test_v7_derived_indicators_fallback_keeps_legacy_rotation_signature():
+    observed = {}
+
+    def legacy_rotation_indicators(quote_context, *, trend_window):
+        observed["call"] = (quote_context, trend_window)
+        return {"derived": True}
+
+    adapters = build_runtime_strategy_adapters(
+        strategy_runtime=SimpleNamespace(evaluate=lambda **_kwargs: None),
+        strategy_profile=V7_PROFILE,
+        strategy_runtime_config={"trend_ma_window": 150},
+        available_inputs=("derived_indicators", "portfolio_snapshot"),
+        benchmark_symbol="SOXX",
+        signal_text_fn=str,
+        translator=lambda key, **_kwargs: key,
+        broker_adapters=SimpleNamespace(),
+        calculate_rotation_indicators_fn=legacy_rotation_indicators,
+        build_strategy_evaluation_inputs_fn=lambda **kwargs: kwargs,
+        map_strategy_decision_to_plan_fn=lambda *_args, **_kwargs: {},
+    )
+
+    assert adapters.calculate_strategy_indicators("v7-quote") == {"derived": True}
+    assert observed["call"] == ("v7-quote", 150)
