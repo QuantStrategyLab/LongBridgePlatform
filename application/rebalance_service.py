@@ -111,6 +111,30 @@ def _snapshot_session_date(snapshot) -> str:
     return str(value or "")[:10]
 
 
+def _is_completed_session_soxl_command(command) -> bool:
+    execution = command.intent.get("execution") if isinstance(command.intent, dict) else None
+    if (
+        not isinstance(execution, dict)
+        or str(execution.get("completed_session_date") or "") != command.signal_date
+    ):
+        return False
+    try:
+        from application.runtime_strategy_adapters import _next_xnys_session_date
+
+        return _next_xnys_session_date(command.signal_date) == command.effective_date
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_completed_session_soxl_plan(*, execution: dict, session_date: str, strategy_profile: str) -> bool:
+    return (
+        strategy_profile == "soxl_soxx_trend_income"
+        and str(execution.get("completed_session_date") or "") == str(execution.get("signal_date") or "")
+        and str(execution.get("signal_date") or "") < session_date
+        and str(execution.get("effective_date") or "") == session_date
+    )
+
+
 def _physical_account_digest(config: LongBridgeRebalanceConfig) -> str:
     return hashlib.sha256(_resolve_physical_account_id(config=config).encode("utf-8")).hexdigest()
 
@@ -665,47 +689,106 @@ def run_strategy(
     selected_plan = None
     if live_command_enabled:
         session_date = _snapshot_session_date(initial_snapshot)
-        today_commands = tuple(c for c in matching_commands if c.signal_date == session_date)
-        if not today_commands:
-            # One current signal is saved for the next session independently of
-            # consuming yesterday's frozen signal. It never routes directly.
-            selected_plan = load_plan(current_snapshot=initial_snapshot)
-            _, _, signal_execution, signal_allocation = selected_plan
-            if str(signal_execution.get("signal_date") or "") != session_date:
-                raise RuntimeError("live signal session does not match fresh account session")
-            if not str(signal_execution.get("effective_date") or "") > session_date:
-                raise RuntimeError("durable live signal must target a future session")
-            produced = enqueue_live_execution_command(
-                enabled=True, dry_run_only=config.dry_run_only,
-                store=config.execution_command_store, platform="longbridge",
-                account_scope=str(config.execution_state_account_scope or "unknown"),
-                strategy_profile=str(config.strategy_profile or "unknown"),
-                physical_account_id=_resolve_physical_account_id(config=config),
-                runtime_identity_digest=config.durable_execution_runtime_identity_digest,
-                execution=signal_execution, allocation=signal_allocation,
-                strategy_release=getattr(config, "expected_strategy_release", None),
-            )
-            command, created = produced
-            matching_commands = (*matching_commands, command)
-            today_commands = (command,)
-            live_command_observation = {
-                "command_id": command.command_id, "status": "QUEUED" if created else "ALREADY_QUEUED",
-                "effective_date": command.effective_date,
-            }
-        else:
-            live_command_observation = {
-                "command_id": today_commands[0].command_id, "status": "ALREADY_QUEUED",
-                "effective_date": today_commands[0].effective_date,
-            }
         terminal = {ExecutionCommandState.FILLED, ExecutionCommandState.CANCELLED, ExecutionCommandState.REJECTED}
+        states = {c.command_id: config.execution_command_store.current_state(c) for c in matching_commands}
+        unresolved_before_enqueue = tuple(c for c in matching_commands if states[c.command_id] not in terminal)
+        completed_session_path = str(config.strategy_profile or "") == "soxl_soxx_trend_income"
+        if completed_session_path:
+            # A same-day consumer is safe only for commands minted with the
+            # completed-session marker. Old future-dated commands remain
+            # immutable and are blocked rather than reinterpreted as fresh.
+            current_session_commands = tuple(
+                c for c in matching_commands if c.effective_date == session_date
+            )
+            terminal_today = tuple(c for c in current_session_commands if states[c.command_id] in terminal)
+            unsafe_due = tuple(
+                c for c in unresolved_before_enqueue
+                if c.effective_date == session_date and not _is_completed_session_soxl_command(c)
+            )
+            today_commands = tuple(
+                c for c in unresolved_before_enqueue
+                if c.effective_date == session_date and _is_completed_session_soxl_command(c)
+            )
+            if terminal_today:
+                # A command already ended in this session remains its own
+                # immutable record. Do not evaluate a changed target or mint a
+                # replacement decision for the same session.
+                live_command = terminal_today[0]
+                live_command_blocked = True
+            elif unsafe_due:
+                live_command = unsafe_due[0]
+                live_command_blocked = True
+            elif not today_commands:
+                selected_plan = load_plan(current_snapshot=initial_snapshot)
+                _, _, signal_execution, signal_allocation = selected_plan
+                if not _is_completed_session_soxl_plan(
+                    execution=signal_execution,
+                    session_date=session_date,
+                    strategy_profile=str(config.strategy_profile or ""),
+                ):
+                    raise RuntimeError("production SOXL live signal requires a completed session proof")
+                produced = enqueue_live_execution_command(
+                    enabled=True, dry_run_only=config.dry_run_only,
+                    store=config.execution_command_store, platform="longbridge",
+                    account_scope=str(config.execution_state_account_scope or "unknown"),
+                    strategy_profile=str(config.strategy_profile or "unknown"),
+                    physical_account_id=_resolve_physical_account_id(config=config),
+                    runtime_identity_digest=config.durable_execution_runtime_identity_digest,
+                    execution=signal_execution, allocation=signal_allocation,
+                    strategy_release=getattr(config, "expected_strategy_release", None),
+                )
+                command, created = produced
+                matching_commands = (*matching_commands, command)
+                today_commands = (command,)
+                live_command_observation = {
+                    "command_id": command.command_id, "status": "QUEUED" if created else "ALREADY_QUEUED",
+                    "effective_date": command.effective_date,
+                }
+            else:
+                live_command_observation = {
+                    "command_id": today_commands[0].command_id, "status": "ALREADY_QUEUED",
+                    "effective_date": today_commands[0].effective_date,
+                }
+        else:
+            # Existing non-SOXL and V7 queues retain their next-session flow.
+            today_commands = tuple(c for c in matching_commands if c.signal_date == session_date)
+            if not today_commands:
+                selected_plan = load_plan(current_snapshot=initial_snapshot)
+                _, _, signal_execution, signal_allocation = selected_plan
+                if str(signal_execution.get("signal_date") or "") != session_date:
+                    raise RuntimeError("live signal session does not match fresh account session")
+                if not str(signal_execution.get("effective_date") or "") > session_date:
+                    raise RuntimeError("durable live signal must target a future session")
+                produced = enqueue_live_execution_command(
+                    enabled=True, dry_run_only=config.dry_run_only,
+                    store=config.execution_command_store, platform="longbridge",
+                    account_scope=str(config.execution_state_account_scope or "unknown"),
+                    strategy_profile=str(config.strategy_profile or "unknown"),
+                    physical_account_id=_resolve_physical_account_id(config=config),
+                    runtime_identity_digest=config.durable_execution_runtime_identity_digest,
+                    execution=signal_execution, allocation=signal_allocation,
+                    strategy_release=getattr(config, "expected_strategy_release", None),
+                )
+                command, created = produced
+                matching_commands = (*matching_commands, command)
+                today_commands = (command,)
+                live_command_observation = {
+                    "command_id": command.command_id, "status": "QUEUED" if created else "ALREADY_QUEUED",
+                    "effective_date": command.effective_date,
+                }
+            else:
+                live_command_observation = {
+                    "command_id": today_commands[0].command_id, "status": "ALREADY_QUEUED",
+                    "effective_date": today_commands[0].effective_date,
+                }
         states = {c.command_id: config.execution_command_store.current_state(c) for c in matching_commands}
         unresolved = tuple(c for c in matching_commands if states[c.command_id] not in terminal)
         due = tuple(c for c in unresolved if c.is_due_on(session_date))
         prior_unresolved = tuple(c for c in unresolved if (
             states[c.command_id] is not ExecutionCommandState.QUEUED or c.effective_date < session_date
         ))
-        if prior_unresolved or len(due) > 1 or len(today_commands) > 1:
-            live_command = (prior_unresolved or due or today_commands)[0]
+        if live_command_blocked or prior_unresolved or len(due) > 1 or len(today_commands) > 1:
+            live_command = live_command or (prior_unresolved or due or today_commands)[0]
             live_command_blocked = True
         elif due:
             live_command = due[0]
