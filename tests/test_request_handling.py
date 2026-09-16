@@ -1374,6 +1374,28 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(summary["orders_pending"][0]["broker_order_id"], "lb-order-pending")
         self.assertEqual(summary["durable_live_execution_command"]["status"], "QUEUED")
 
+    def test_cycle_result_summary_projects_fixed_live_command_binding_block(self):
+        module = load_module()
+        cycle_result = types.SimpleNamespace(
+            logs=(), skip_logs=(), note_logs=("blocked",), action_done=False,
+            execution={
+                "execution_status": "blocked",
+                "blocked_reason": "durable_live_execution_command_binding_invalid",
+                "durable_live_execution_command": {"status": "BLOCKED_INVALID_BINDING"},
+            },
+            dry_run_orders=(), pending_orders=(), quote_snapshots=(),
+        )
+
+        summary = module._summarize_cycle_result_for_report(cycle_result, dry_run=False)
+
+        self.assertEqual(summary["execution_status"], "blocked")
+        self.assertEqual(summary["blocked_reason"], "durable_live_execution_command_binding_invalid")
+        cycle_result.execution["blocked_reason"] = "SYNTHETIC_SECRET_DO_NOT_EMIT"
+        self.assertEqual(
+            module._summarize_cycle_result_for_report(cycle_result, dry_run=False)["blocked_reason"],
+            "unknown",
+        )
+
     def test_notification_delivery_log_summary_records_sent_dry_run_without_raw_text(self):
         module = load_module()
 

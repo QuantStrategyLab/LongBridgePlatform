@@ -1700,6 +1700,178 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(command_store.current_state(read_error_command), ExecutionCommandState.CLAIMED)
         self.assertEqual(len(orders), 2)
 
+    def test_terminal_stale_live_command_is_ignored_before_current_cycle(self):
+        from application.durable_execution_commands import build_live_execution_command
+
+        plan = _build_plan(
+            strategy_symbols=("SOXL",), risk_symbols=("SOXL",),
+            targets={"SOXL": 400.0}, market_values={"SOXL": 0.0},
+            sellable_quantities={"SOXL": 0}, quantities={"SOXL": 0},
+            current_min_trade=10.0, trade_threshold_value=10.0,
+            investable_cash=500.0, available_cash=500.0, total_strategy_equity=500.0,
+            market_status="Risk on", deploy_ratio_text="70.0%", income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%", signal_message="SOXL target",
+            portfolio_rows=(("SOXL",),), signal_date="2026-04-21", effective_date="2026-04-22",
+        )
+        command_store = ExecutionCommandStore(local_dir=self.enterContext(TemporaryDirectory()))
+        stale = build_live_execution_command(
+            platform="longbridge", account_scope="SG", strategy_profile="soxl_soxx_trend_income",
+            physical_account_id="lb-sg-001", runtime_identity_digest="b" * 64,
+            execution={**plan["execution"], "signal_date": "2026-04-20", "effective_date": "2026-04-21"},
+            allocation=plan["allocation"],
+        )
+        self.assertTrue(command_store.enqueue(stale))
+        command_store.append_event(stale, next_state=ExecutionCommandState.CANCELLED)
+        orders = []
+        runtime = LongBridgeRebalanceRuntime(
+            bootstrap=lambda: ("quote", "trade", {"trend": "ok"}),
+            resolve_rebalance_plan=lambda **_kwargs: plan,
+            market_data_port_factory=lambda _context: CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(symbol=symbol, as_of="2026-04-21", last_price=100.0)),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 5,
+            notifications=CallableNotificationPort(lambda _message: None),
+            notify_issue=lambda *_args: None,
+            portfolio_port_factory=lambda *_contexts: CallablePortfolioPort(lambda: _build_snapshot(plan)),
+            execution_port_factory=lambda _context: CallableExecutionPort(lambda order: orders.append(order)),
+            resolve_frozen_rebalance_plan=lambda **_kwargs: plan,
+        )
+        config = LongBridgeRebalanceConfig(
+            limit_sell_discount=0.995, limit_buy_premium=1.005, separator="-",
+            translator=build_translator("en"), with_prefix=lambda message: message,
+            strategy_profile="soxl_soxx_trend_income", execution_state_account_scope="SG",
+            physical_account_id="lb-sg-001", dry_run_only=False, notify_no_trade_cycles=False,
+            durable_execution_command_live_enabled=True, execution_command_store=command_store,
+            durable_live_execution_session_authorized=True,
+            durable_execution_runtime_identity_digest="a" * 64,
+        )
+
+        result = rebalance_service.run_strategy(runtime=runtime, config=config)
+
+        self.assertFalse(result.action_done)
+        self.assertEqual(orders, [])
+        self.assertIs(command_store.current_state(stale), ExecutionCommandState.CANCELLED)
+        self.assertEqual(len(rebalance_service.list_live_execution_commands(command_store)), 2)
+
+
+    def test_same_day_terminal_live_command_prevents_duplicate_command_or_submit(self):
+        from application.durable_execution_commands import build_live_execution_command
+
+        plan = _build_plan(
+            strategy_symbols=("SOXL",), risk_symbols=("SOXL",),
+            targets={"SOXL": 400.0}, market_values={"SOXL": 0.0},
+            sellable_quantities={"SOXL": 0}, quantities={"SOXL": 0},
+            current_min_trade=10.0, trade_threshold_value=10.0,
+            investable_cash=500.0, available_cash=500.0, total_strategy_equity=500.0,
+            market_status="Risk on", deploy_ratio_text="70.0%", income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%", signal_message="SOXL target",
+            portfolio_rows=(("SOXL",),), signal_date="2026-04-21", effective_date="2026-04-22",
+        )
+        command_store = ExecutionCommandStore(local_dir=self.enterContext(TemporaryDirectory()))
+        terminal = build_live_execution_command(
+            platform="longbridge", account_scope="SG", strategy_profile="soxl_soxx_trend_income",
+            physical_account_id="lb-sg-001", runtime_identity_digest="b" * 64,
+            execution=plan["execution"], allocation=plan["allocation"],
+        )
+        self.assertTrue(command_store.enqueue(terminal))
+        command_store.append_event(terminal, next_state=ExecutionCommandState.CANCELLED)
+        orders = []
+        runtime = LongBridgeRebalanceRuntime(
+            bootstrap=lambda: ("quote", "trade", {"trend": "ok"}),
+            resolve_rebalance_plan=lambda **_kwargs: plan,
+            market_data_port_factory=lambda _context: CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(symbol=symbol, as_of="2026-04-21", last_price=100.0)),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: 5,
+            notifications=CallableNotificationPort(lambda _message: None),
+            notify_issue=lambda *_args: None,
+            portfolio_port_factory=lambda *_contexts: CallablePortfolioPort(lambda: _build_snapshot(plan)),
+            execution_port_factory=lambda _context: CallableExecutionPort(lambda order: orders.append(order)),
+            resolve_frozen_rebalance_plan=lambda **_kwargs: plan,
+        )
+        config = LongBridgeRebalanceConfig(
+            limit_sell_discount=0.995, limit_buy_premium=1.005, separator="-",
+            translator=build_translator("en"), with_prefix=lambda message: message,
+            strategy_profile="soxl_soxx_trend_income", execution_state_account_scope="SG",
+            physical_account_id="lb-sg-001", dry_run_only=False, notify_no_trade_cycles=False,
+            durable_execution_command_live_enabled=True, execution_command_store=command_store,
+            durable_live_execution_session_authorized=True,
+            durable_execution_runtime_identity_digest="a" * 64,
+        )
+
+        result = rebalance_service.run_strategy(runtime=runtime, config=config)
+
+        self.assertFalse(result.action_done)
+        self.assertTrue(result.execution["direct_live_routing_blocked"])
+        self.assertEqual(orders, [])
+        self.assertEqual(rebalance_service.list_live_execution_commands(command_store), (terminal,))
+        self.assertIs(command_store.current_state(terminal), ExecutionCommandState.CANCELLED)
+
+    def test_queued_stale_live_command_blocks_without_store_or_broker_writes(self):
+        from application.durable_execution_commands import build_live_execution_command
+
+        plan = _build_plan(
+            strategy_symbols=("SOXL",), risk_symbols=("SOXL",),
+            targets={"SOXL": 400.0}, market_values={"SOXL": 0.0},
+            sellable_quantities={"SOXL": 0}, quantities={"SOXL": 0},
+            current_min_trade=10.0, trade_threshold_value=10.0,
+            investable_cash=500.0, available_cash=500.0, total_strategy_equity=500.0,
+            market_status="Risk on", deploy_ratio_text="70.0%", income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%", signal_message="SOXL target",
+            portfolio_rows=(("SOXL",),), signal_date="2026-04-21", effective_date="2026-04-22",
+        )
+        command_store = ExecutionCommandStore(local_dir=self.enterContext(TemporaryDirectory()))
+        stale = build_live_execution_command(
+            platform="longbridge", account_scope="SG", strategy_profile="soxl_soxx_trend_income",
+            physical_account_id="lb-sg-001", runtime_identity_digest="b" * 64,
+            execution=plan["execution"], allocation=plan["allocation"],
+        )
+        valid = build_live_execution_command(
+            platform="longbridge", account_scope="SG", strategy_profile="soxl_soxx_trend_income",
+            physical_account_id="lb-sg-001", runtime_identity_digest="a" * 64,
+            execution=plan["execution"], allocation=plan["allocation"],
+        )
+        self.assertTrue(command_store.enqueue(valid))
+        self.assertTrue(command_store.enqueue(stale))
+        issues = []
+        runtime = LongBridgeRebalanceRuntime(
+            bootstrap=lambda: ("quote", "trade", {"trend": "ok"}),
+            resolve_rebalance_plan=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not evaluate")),
+            market_data_port_factory=lambda _context: CallableMarketDataPort(
+                quote_loader=lambda _symbol: (_ for _ in ()).throw(AssertionError("must not load quote"))),
+            estimate_max_purchase_quantity=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not estimate")),
+            notifications=CallableNotificationPort(lambda _message: None),
+            notify_issue=lambda title, detail: issues.append((title, detail)),
+            portfolio_port_factory=lambda *_contexts: CallablePortfolioPort(
+                lambda: (_ for _ in ()).throw(AssertionError("must not load snapshot"))),
+            execution_port_factory=lambda _context: CallableExecutionPort(
+                lambda _order: (_ for _ in ()).throw(AssertionError("must not submit"))),
+        )
+        config = LongBridgeRebalanceConfig(
+            limit_sell_discount=0.995, limit_buy_premium=1.005, separator="-",
+            translator=build_translator("en"), with_prefix=lambda message: message,
+            strategy_profile="soxl_soxx_trend_income", execution_state_account_scope="SG",
+            physical_account_id="lb-sg-001", dry_run_only=False, notify_no_trade_cycles=False,
+            durable_execution_command_live_enabled=True, execution_command_store=command_store,
+            durable_live_execution_session_authorized=True,
+            durable_execution_runtime_identity_digest="a" * 64,
+        )
+
+        with patch.object(rebalance_service, "list_live_execution_commands", return_value=(valid, stale)), patch.object(
+            rebalance_service, "_reconcile_live_command"
+        ) as reconcile:
+            result = rebalance_service.run_strategy(runtime=runtime, config=config)
+
+        self.assertFalse(result.action_done)
+        self.assertEqual(result.execution["execution_status"], "blocked")
+        self.assertEqual(result.execution["blocked_reason"], "durable_live_execution_command_binding_invalid")
+        self.assertEqual(result.execution["durable_live_execution_command"]["status"], "BLOCKED_INVALID_BINDING")
+        self.assertEqual(issues, [("Durable live execution blocked", "Durable live execution command binding is invalid; broker orders blocked")])
+        reconcile.assert_not_called()
+        self.assertIs(command_store.current_state(valid), ExecutionCommandState.QUEUED)
+        self.assertIs(command_store.current_state(stale), ExecutionCommandState.QUEUED)
+        self.assertEqual(command_store.events(valid), ())
+        self.assertEqual(command_store.events(stale), ())
+        self.assertEqual(len(rebalance_service.list_live_execution_commands(command_store)), 2)
+
     def test_live_order_detail_normalizes_real_sdk_enum_and_checks_identity(self):
         from application.longbridge_execution import fetch_live_order_status
         from longport.openapi import OrderStatus

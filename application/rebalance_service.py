@@ -40,6 +40,12 @@ from quant_platform_kit.strategy_lifecycle.performance_monitor import try_record
 
 _DETAIL_FIELD_SPLIT_RE = re.compile(r"\s+(?=[^\s=:：]+[=:：])")
 DRY_RUN_BYPASS_EXECUTION_MARKER_ENV = "DRY_RUN_BYPASS_EXECUTION_MARKER"
+_LIVE_COMMAND_BINDING_ERRORS = frozenset(
+    {
+        "invalid live execution command",
+        "live execution command strategy release is invalid",
+    }
+)
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -613,8 +619,42 @@ def run_strategy(
         if not getattr(config, "durable_live_execution_session_authorized", False):
             raise RuntimeError("durable live execution requires an open exchange session")
         matching_commands = _matching_live_commands(config=config)
+        terminal_states = {
+            ExecutionCommandState.FILLED,
+            ExecutionCommandState.CANCELLED,
+            ExecutionCommandState.REJECTED,
+        }
+        unresolved_matching_commands = []
         for command in matching_commands:
-            _validate_live_command_binding(command=command, config=config)
+            if config.execution_command_store.current_state(command) in terminal_states:
+                continue
+            try:
+                _validate_live_command_binding(command=command, config=config)
+            except ValueError as exc:
+                if str(exc) not in _LIVE_COMMAND_BINDING_ERRORS:
+                    raise
+                message = "Durable live execution command binding is invalid; broker orders blocked"
+                runtime.notify_issue("Durable live execution blocked", message)
+                return ExecutionCycleResult(
+                    plan={},
+                    portfolio={},
+                    execution={
+                        "execution_status": "blocked",
+                        "blocked_reason": "durable_live_execution_command_binding_invalid",
+                        "durable_live_execution_command": {
+                            "command_id": command.command_id,
+                            "status": "BLOCKED_INVALID_BINDING",
+                            "effective_date": command.effective_date,
+                        },
+                    },
+                    allocation={},
+                    logs=(),
+                    skip_logs=(),
+                    note_logs=(message,),
+                    action_done=False,
+                )
+            unresolved_matching_commands.append(command)
+        for command in unresolved_matching_commands:
             _reconcile_live_command(
                 command=command, store=config.execution_command_store,
                 trade_context=trade_context, fetch_order_status=runtime.fetch_order_status,
