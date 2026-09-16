@@ -25,6 +25,11 @@ It is an execution layer, not a strategy research repository. Strategy logic com
 - Handles broker/API connectivity, dry-run checks, notifications, and deployment settings.
 - Must keep credentials in GitHub Secrets, cloud secret stores, or the broker-specific secret system, never in Git.
 - Should start with dry-run or paper mode before any live order path is enabled.
+- The account new-risk gate consumes an explicit account snapshot first and the
+  current portfolio status second. It does not derive production drift from a
+  shared research PerformanceStore: absent optional drift is not fabricated,
+  while missing required account inputs and review, critical, or invalid
+  evidence remain fail-closed for new buys.
 
 `GET /account-snapshot` is a separate, read-only diagnostic and stays disabled
 unless `LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED=true` is set exactly. It returns
