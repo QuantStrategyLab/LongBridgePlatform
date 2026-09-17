@@ -1415,8 +1415,10 @@ jobs:
               --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
               --oidc-token-audience="${service_url}" \
               --attempt-deadline=180s \
-              --max-retry-attempts=0 \
-              --max-retry-duration=0s \
+              --max-retry-attempts=3 \
+              --min-backoff=120s \
+              --max-backoff=300s \
+              --max-retry-duration=900s \
               --quiet
           else
             echo "Creating Cloud Scheduler probe ${probe_job_name} at ${desired_probe_schedule}."
@@ -1430,8 +1432,10 @@ jobs:
               --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
               --oidc-token-audience="${service_url}" \
               --attempt-deadline=180s \
-              --max-retry-attempts=0 \
-              --max-retry-duration=0s \
+              --max-retry-attempts=3 \
+              --min-backoff=120s \
+              --max-backoff=300s \
+              --max-retry-duration=900s \
               --quiet
           fi
 
@@ -1451,8 +1455,10 @@ jobs:
               --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
               --oidc-token-audience="${service_url}" \
               --attempt-deadline=180s \
-              --max-retry-attempts=0 \
-              --max-retry-duration=0s \
+              --max-retry-attempts=3 \
+              --min-backoff=120s \
+              --max-backoff=300s \
+              --max-retry-duration=900s \
               --quiet
           else
             echo "Creating Cloud Scheduler precheck ${precheck_job_name} at ${desired_precheck_schedule}."
@@ -1466,8 +1472,10 @@ jobs:
               --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
               --oidc-token-audience="${service_url}" \
               --attempt-deadline=180s \
-              --max-retry-attempts=0 \
-              --max-retry-duration=0s \
+              --max-retry-attempts=3 \
+              --min-backoff=120s \
+              --max-backoff=300s \
+              --max-retry-duration=900s \
               --quiet
           fi
 
