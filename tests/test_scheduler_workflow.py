@@ -54,6 +54,26 @@ def test_main_scheduler_update_and_create_use_post_oidc() -> None:
         assert "--http-method=POST" in command_section
         assert '--oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}"' in command_section
         assert '--oidc-token-audience="${service_url}"' in command_section
+        assert "--max-retry-attempts=3" not in command_section
+
+
+def test_probe_and_precheck_retry_transient_capacity_errors() -> None:
+    workflow = Path(".github/workflows/sync-cloud-run-env.yml").read_text(encoding="utf-8")
+    for marker in (
+        'probe_job_name="${CLOUD_RUN_SERVICE}-probe-scheduler"',
+        'precheck_job_name="${CLOUD_RUN_SERVICE}-precheck-scheduler"',
+    ):
+        section = workflow[workflow.index(marker) :]
+        # Stop before the next managed job block.
+        if "precheck_job_name=" in marker:
+            section = section[: section.index("managed_scheduler_jobs=")]
+        else:
+            section = section[: section.index("precheck_job_name=")]
+        assert "--max-retry-attempts=3" in section
+        assert "--min-backoff=120s" in section
+        assert "--max-backoff=300s" in section
+        assert "--max-retry-duration=900s" in section
+        assert "--max-retry-attempts=0" not in section
 
 
 def test_cloud_run_deploy_stays_private_and_serial() -> None:

@@ -241,6 +241,12 @@ grep -Fq 'probe_job_name="${CLOUD_RUN_SERVICE}-probe-scheduler"' "$workflow_file
 grep -Fq 'probe_uri="${service_url}/probe"' "$workflow_file"
 grep -Fq 'precheck_job_name="${CLOUD_RUN_SERVICE}-precheck-scheduler"' "$workflow_file"
 grep -Fq 'precheck_uri="${service_url}/dry-run"' "$workflow_file"
+# probe/precheck may collide on maxScale=1; retry transient 429 capacity aborts.
+# Keep /run without retries to avoid duplicate live submits.
+grep -Fq -- '--max-retry-attempts=3' "$workflow_file"
+grep -Fq -- '--min-backoff=120s' "$workflow_file"
+grep -Fq -- '--max-backoff=300s' "$workflow_file"
+grep -Fq -- '--max-retry-duration=900s' "$workflow_file"
 grep -Fq 'managed_scheduler_jobs=("${job_name}" "${probe_job_name}" "${precheck_job_name}")' "$workflow_file"
 grep -Fq 'gcloud scheduler jobs resume "${managed_job_name}"' "$workflow_file"
 grep -Fq 'gcloud scheduler jobs pause "${managed_job_name}"' "$workflow_file"
