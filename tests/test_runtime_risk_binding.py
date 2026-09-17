@@ -138,6 +138,55 @@ class LongBridgeRuntimeRiskBindingTests(unittest.TestCase):
         self.assertEqual(entrypoint.ctx.capabilities["runtime_risk_limits"].max_positions, 8)
         self.assertIsInstance(entrypoint.ctx.capabilities["runtime_risk_limits"], RuntimeRiskLimits)
 
+    def test_attaches_small_account_hold_policy(self):
+        from quant_platform_kit.risk.contracts import SmallAccountRiskHoldPolicy
+
+        policy = _policy()
+        policy["small_account_hold"] = {
+            "enabled": True,
+            "hold_below_nav": 1000.0,
+            "require_cash_only": True,
+        }
+        entrypoint = _SoxlEntrypoint()
+        runtime = strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            runtime_settings=_settings(policy),
+            merged_runtime_config=dict(entrypoint.manifest.default_config),
+        )
+        with patch.object(strategy_runtime_module, "_installed_ues_revision", return_value="ues-revision"):
+            with patch("us_equity_strategies.signals.resolve_external_market_signal_inputs", return_value={}):
+                result = runtime.evaluate(
+                    translator=lambda key, **_k: key,
+                    benchmark_history=[{"close": 1.0}],
+                    portfolio_snapshot=_snapshot(),
+                )
+        self.assertEqual(result.metadata["runtime_risk_status"], "verified:runtime_risk_limits")
+        hold = entrypoint.ctx.capabilities["small_account_hold_policy"]
+        self.assertIsInstance(hold, SmallAccountRiskHoldPolicy)
+        self.assertEqual(hold.hold_below_nav, 1000.0)
+        self.assertTrue(entrypoint.ctx.capabilities["cash_only_execution"])
+
+    def test_rejects_invalid_small_account_hold(self):
+        policy = _policy()
+        policy["small_account_hold"] = {"enabled": True, "hold_below_nav": -1}
+        entrypoint = _SoxlEntrypoint()
+        runtime = strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            runtime_settings=_settings(policy),
+            merged_runtime_config=dict(entrypoint.manifest.default_config),
+        )
+        with patch.object(strategy_runtime_module, "_installed_ues_revision", return_value="ues-revision"):
+            with patch("us_equity_strategies.signals.resolve_external_market_signal_inputs", return_value={}):
+                result = runtime.evaluate(
+                    translator=lambda key, **_k: key,
+                    benchmark_history=[{"close": 1.0}],
+                    portfolio_snapshot=_snapshot(),
+                )
+        self.assertEqual(result.metadata["runtime_risk_status"], "unavailable:invalid_small_account_hold")
+        self.assertNotIn("small_account_hold_policy", entrypoint.ctx.capabilities)
+
     def test_rejects_wrong_account_hash(self):
         entrypoint = _SoxlEntrypoint()
         runtime = strategy_runtime_module.LoadedStrategyRuntime(
