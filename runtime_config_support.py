@@ -187,6 +187,7 @@ class PlatformRuntimeSettings:
     strategy_plugin_alert_telegram_parse_mode: str | None = None
     strategy_plugin_alert_telegram_disable_web_page_preview: str | None = None
     strategy_plugin_alert_telegram_body_max_chars: str | None = None
+    trusted_runtime_risk_policy: Mapping[str, Any] | None = None
     runtime_target: RuntimeTarget | None = None
     strategy_metadata: Any = None
 
@@ -263,6 +264,26 @@ def _runtime_target_market_value(runtime_target: RuntimeTarget, field: str) -> s
     return str(value).strip() if value is not None and str(value).strip() else None
 
 
+
+def _load_trusted_runtime_risk_policy() -> Mapping[str, Any] | None:
+    """Read risk limits only from the deployment runtime target JSON."""
+    raw_target = os.getenv("RUNTIME_TARGET_JSON") or os.getenv("QSL_RUNTIME_TARGET_JSON")
+    if raw_target is None or not str(raw_target).strip():
+        return None
+    try:
+        payload = json.loads(raw_target)
+    except (TypeError, ValueError) as exc:
+        raise EnvironmentError("RUNTIME_TARGET_JSON must be valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise EnvironmentError("RUNTIME_TARGET_JSON must decode to an object")
+    policy = payload.get("runtime_risk_limits")
+    if policy is None:
+        return None
+    if not isinstance(policy, dict):
+        raise EnvironmentError("RUNTIME_TARGET_JSON.runtime_risk_limits must be an object")
+    return dict(policy)
+
+
 def load_platform_runtime_settings(
     *,
     project_id_resolver: Callable[[], str | None],
@@ -276,6 +297,7 @@ def load_platform_runtime_settings(
         env=os.environ,
         expected_platform_id=LONGBRIDGE_PLATFORM,
     )
+    trusted_runtime_risk_policy = _load_trusted_runtime_risk_policy()
     strategy_definition = None
     strategy_metadata = None
     if runtime_target.strategy_profile == _bound_v7_profile():
@@ -516,6 +538,7 @@ def load_platform_runtime_settings(
             os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_BODY_MAX_CHARS")
         ),
         runtime_target=runtime_target,
+        trusted_runtime_risk_policy=trusted_runtime_risk_policy,
         strategy_metadata=strategy_metadata,
     )
 

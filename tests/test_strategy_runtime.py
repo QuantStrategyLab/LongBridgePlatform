@@ -223,9 +223,11 @@ class StrategyRuntimeTests(unittest.TestCase):
         runtime = self._capital_runtime(entrypoint=entrypoint)
         with patch.object(runtime.__class__, "_stamp_portfolio_risk_metadata", side_effect=lambda inputs: dict(inputs)):
             result = runtime.evaluate(translator=str, derived_indicators={}, portfolio_snapshot=self._capital_snapshot())
-        self.assertEqual(result.decision.diagnostics["risk_gate"], "APPROVE")
+        # SOXL without trusted runtime_risk_limits must fail closed under QPK amount checks.
+        self.assertEqual(result.decision.diagnostics["risk_gate"], "REJECT")
         self.assertEqual(entrypoint.ctx.capabilities["capital_base"].reported_equity, 2000.0)
         self.assertEqual(entrypoint.ctx.portfolio.total_equity, 200.0)
+        self.assertEqual(result.metadata.get("runtime_risk_status"), "unavailable:runtime_risk_policy")
 
     def test_capital_context_withholds_stale_future_wrong_currency_or_account(self):
         from quant_platform_kit.common.capital_base import validate_capital_base

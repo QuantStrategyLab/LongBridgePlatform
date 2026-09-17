@@ -31,9 +31,9 @@ V7_PAPER_SERVICE = "longbridge-quant-paper-service"
 V7_PAPER_SCOPE = "PAPER"
 V7_PAPER_PLATFORM = "longbridge"
 # The research contract's frozen source is 07b164..., while the package that
-# is actually approved for the disabled account process is the controlled
-# b83ef4b3... revision.  Keep those identities separate.
-V7_APPROVED_UES_REVISION = "b83ef4b3ae67c47d132ddd660ba3ccc60d474c85"
+# is actually approved for the disabled account process tracks the platform UES pin.
+# Keep research source_commit separate from approved_ues_revision.
+V7_APPROVED_UES_REVISION = "e2258223310913f6db9f40b810756db0ee2cfd68"
 
 _COMMIT_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 _TICKET_PATTERN = re.compile(r"^rpt_[0-9a-fA-F]{64}$")
