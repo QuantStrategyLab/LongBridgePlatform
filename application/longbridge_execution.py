@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from application.account_new_risk_gate_support import (
-    apply_combined_scale,
     evaluate_cycle_new_risk_admission,
     is_account_new_risk_gate_enabled,
     new_risk_buy_prohibited,
@@ -68,7 +67,6 @@ def submit_order(
                     "live_authority_granted": admission.live_authority_granted,
                 },
             )
-        quantity = apply_combined_scale(quantity, admission.combined_scale)
     return _get_qpk_submit_order()(
         t_ctx,
         symbol,

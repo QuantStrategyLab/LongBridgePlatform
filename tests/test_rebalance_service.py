@@ -3076,10 +3076,13 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIn("限价卖出] SOXL: 2股", sent_messages[0])
 
     def test_zero_investable_cash_reports_buying_power_without_trade_note(self):
+        # Equity ~103k sits in the 50k–250k capital band (combined_scale=0.85).
+        # Keep pre-scale targets high enough that post-scale target still exceeds
+        # market value so the scenario stays "want buy / zero investable cash".
         plan = _build_plan(
             strategy_symbols=("BOXX",),
             safe_haven_symbols=("BOXX",),
-            targets={"BOXX": 27316.33},
+            targets={"BOXX": 32000.0},
             market_values={"BOXX": 24880.00},
             sellable_quantities={"BOXX": 214},
             quantities={"BOXX": 214},
