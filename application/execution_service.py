@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from application.account_new_risk_gate_support import (
+    apply_combined_scale_to_allocation_targets,
     build_account_new_risk_snapshot,
     build_snapshot_from_portfolio,
     evaluate_portfolio_new_risk_admission,
@@ -1125,6 +1126,18 @@ def execute_rebalance_cycle(
         print(with_prefix(attention_message), flush=True)
         if dry_run_only:
             note_logs.append(attention_message)
+        allocation = apply_combined_scale_to_allocation_targets(
+            allocation,
+            admission.combined_scale,
+        )
+        if admission.combined_scale is not None:
+            scale_message = (
+                f"[Envelope scale] combined_scale={admission.combined_scale} "
+                "applied_to_allocation_targets"
+            )
+            print(with_prefix(scale_message), flush=True)
+            if dry_run_only:
+                note_logs.append(scale_message)
     else:
         set_cycle_snapshot(None)
     if _execution_is_blocked(plan=plan, execution=execution, allocation=allocation):
