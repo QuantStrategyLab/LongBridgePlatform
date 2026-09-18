@@ -11,6 +11,7 @@ from application.account_new_risk_gate_support import (
     build_snapshot_from_portfolio,
     evaluate_portfolio_new_risk_admission,
     is_account_new_risk_gate_enabled,
+    maybe_publish_attention_for_admission,
     new_risk_buy_prohibited,
     set_cycle_snapshot,
 )
@@ -1109,6 +1110,21 @@ def execute_rebalance_cycle(
             # Dry-run verification reports need this axis proof; live heartbeat/
             # trade notifications stay unchanged (console diagnostic above still fires).
             note_logs.append(gate_diagnostic_message)
+        attention_counts = maybe_publish_attention_for_admission(
+            admission,
+            portfolio=portfolio,
+            execution=execution,
+            snapshot=account_new_risk_cycle_snapshot,
+        )
+        attention_message = (
+            "[Attention notify] "
+            f"sent={attention_counts.get('sent', 0)} "
+            f"skipped={attention_counts.get('skipped', 0)} "
+            f"failed={attention_counts.get('failed', 0)}"
+        )
+        print(with_prefix(attention_message), flush=True)
+        if dry_run_only:
+            note_logs.append(attention_message)
     else:
         set_cycle_snapshot(None)
     if _execution_is_blocked(plan=plan, execution=execution, allocation=allocation):
