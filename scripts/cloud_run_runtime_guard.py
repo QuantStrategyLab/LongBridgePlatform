@@ -117,6 +117,44 @@ def _load_services() -> list[str]:
     return unique
 
 
+def _enabled_runtime_target_configured() -> bool:
+    """Return True when config explicitly marks at least one runtime target enabled."""
+    raw_enabled = os.environ.get("RUNTIME_TARGET_ENABLED")
+    if raw_enabled is not None and str(raw_enabled).strip() != "":
+        if _coerce_bool(raw_enabled, False):
+            return True
+
+    raw_targets = (os.environ.get("CLOUD_RUN_SERVICE_TARGETS_JSON") or "").strip()
+    if not raw_targets:
+        return False
+    try:
+        payload = json.loads(raw_targets)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"CLOUD_RUN_SERVICE_TARGETS_JSON is invalid: {exc}") from exc
+    defaults = payload.get("defaults") if isinstance(payload, dict) else {}
+    defaults = defaults if isinstance(defaults, dict) else {}
+    targets = payload.get("targets") if isinstance(payload, dict) else payload
+    if not isinstance(targets, list):
+        return False
+    for target in targets:
+        if isinstance(target, dict) and _target_enabled(target, defaults):
+            return True
+    return False
+
+
+def _record_missing_monitor_services(
+    services: list[str],
+    issues: list[str],
+    details: list[str],
+) -> None:
+    if services or not _enabled_runtime_target_configured():
+        return
+    issues.append(_notice("runtime_guard_service_configuration_error"))
+    details.append(
+        "enabled runtime target(s) configured but no monitorable Cloud Run services remain"
+    )
+
+
 def _cloud_run_log_filter(service: str, since_text: str, region: str = "") -> str:
     parts = [
         'resource.type="cloud_run_revision"',
@@ -683,6 +721,7 @@ def main() -> int:
 
     try:
         services = _load_services()
+        _record_missing_monitor_services(services, issues, details)
     except RuntimeError as exc:
         services = []
         issues.append(_notice("runtime_guard_service_configuration_error"))

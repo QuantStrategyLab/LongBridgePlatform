@@ -57,6 +57,24 @@ def test_main_scheduler_update_and_create_use_post_oidc() -> None:
         assert "--max-retry-attempts=3" not in command_section
 
 
+def test_main_scheduler_update_and_create_share_attempt_deadline() -> None:
+    workflow = Path(".github/workflows/sync-cloud-run-env.yml").read_text(encoding="utf-8")
+    scheduler_section = workflow[workflow.index('scheduler_uri="${service_url}/run"') :]
+    scheduler_section = scheduler_section[: scheduler_section.index('probe_job_name=')]
+
+    deadlines: list[str] = []
+    for command in (
+        'gcloud scheduler jobs update http "${job_name}"',
+        'gcloud scheduler jobs create http "${job_name}"',
+    ):
+        command_section = scheduler_section[scheduler_section.index(command) :]
+        command_section = command_section[: command_section.index("--quiet")]
+        assert "--attempt-deadline=600s" in command_section
+        assert "--attempt-deadline=180s" not in command_section
+        deadlines.append("--attempt-deadline=600s")
+    assert deadlines[0] == deadlines[1]
+
+
 def test_probe_and_precheck_retry_transient_capacity_errors() -> None:
     workflow = Path(".github/workflows/sync-cloud-run-env.yml").read_text(encoding="utf-8")
     for marker in (

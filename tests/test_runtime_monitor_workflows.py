@@ -27,6 +27,14 @@ def test_runtime_monitor_workflows_retry_gcp_authentication() -> None:
         assert "steps.gcp_auth_primary.outcome == 'failure'" in workflow
 
 
+def test_runtime_guard_workflow_passes_runtime_target_enabled() -> None:
+    workflow = (ROOT / ".github/workflows/runtime-guard.yml").read_text()
+    heartbeat = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+
+    assert "RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}" in workflow
+    assert "RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}" in heartbeat
+
+
 def test_runtime_monitor_workflows_use_frozen_runtime_environment() -> None:
     setup_uv = "uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
     workflows = {
