@@ -1383,6 +1383,7 @@ jobs:
               --oidc-token-audience="${service_url}" \
               --schedule="${desired_schedule}" \
               --time-zone="${market_timezone}" \
+              --attempt-deadline=600s \
               --quiet
           else
             echo "Creating Cloud Scheduler job ${job_name} schedule ${desired_schedule}, timezone ${market_timezone}, and URI ${scheduler_uri}."

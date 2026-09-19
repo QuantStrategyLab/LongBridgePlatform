@@ -22,6 +22,7 @@ def _clear_runtime_guard_env(monkeypatch):
         "CLOUD_RUN_SERVICE",
         "CLOUD_RUN_SERVICE_TARGETS_JSON",
         "CLOUD_RUN_REGION",
+        "RUNTIME_TARGET_ENABLED",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -402,3 +403,103 @@ def test_explicit_disabled_service_is_removed_using_target_defaults(monkeypatch)
     )
 
     assert guard._load_services() == ["enabled-service"]
+
+
+def test_enabled_runtime_target_with_empty_services_is_configuration_failure(monkeypatch):
+    _clear_runtime_guard_env(monkeypatch)
+    monkeypatch.delenv("RUNTIME_TARGET_ENABLED", raising=False)
+    monkeypatch.setenv("RUNTIME_TARGET_ENABLED", "true")
+
+    assert guard._load_services() == []
+    assert guard._enabled_runtime_target_configured() is True
+    issues: list[str] = []
+    details: list[str] = []
+    guard._record_missing_monitor_services([], issues, details)
+    assert issues == [guard._notice("runtime_guard_service_configuration_error")]
+    assert details
+    assert "secret" not in details[0].lower()
+    assert "token" not in details[0].lower()
+
+
+def test_disabled_runtime_target_with_empty_services_stays_compatible(monkeypatch):
+    _clear_runtime_guard_env(monkeypatch)
+    monkeypatch.delenv("RUNTIME_TARGET_ENABLED", raising=False)
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {"service": "disabled-service", "RUNTIME_TARGET_ENABLED": "false"},
+                ]
+            }
+        ),
+    )
+
+    assert guard._load_services() == []
+    assert guard._enabled_runtime_target_configured() is False
+    issues: list[str] = []
+    details: list[str] = []
+    guard._record_missing_monitor_services([], issues, details)
+    assert issues == []
+    assert details == []
+
+
+def test_enabled_target_filtered_to_empty_services_is_configuration_failure(monkeypatch):
+    _clear_runtime_guard_env(monkeypatch)
+    monkeypatch.delenv("RUNTIME_TARGET_ENABLED", raising=False)
+    monkeypatch.setenv("CLOUD_RUN_SERVICES", "disabled-service")
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {"service": "enabled-service", "RUNTIME_TARGET_ENABLED": "true"},
+                    {"service": "disabled-service", "RUNTIME_TARGET_ENABLED": "false"},
+                ]
+            }
+        ),
+    )
+
+    assert guard._load_services() == []
+    assert guard._enabled_runtime_target_configured() is True
+    issues: list[str] = []
+    details: list[str] = []
+    guard._record_missing_monitor_services([], issues, details)
+    assert issues
+    assert details
+
+
+def test_valid_monitor_services_skip_empty_configuration_issue(monkeypatch):
+    _clear_runtime_guard_env(monkeypatch)
+    monkeypatch.delenv("RUNTIME_TARGET_ENABLED", raising=False)
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {"service": "enabled-service", "RUNTIME_TARGET_ENABLED": "true"},
+                ]
+            }
+        ),
+    )
+
+    services = guard._load_services()
+    assert services == ["enabled-service"]
+    issues: list[str] = []
+    details: list[str] = []
+    guard._record_missing_monitor_services(services, issues, details)
+    assert issues == []
+    assert details == []
+
+
+def test_absent_enabled_configuration_keeps_empty_services_compatible(monkeypatch):
+    _clear_runtime_guard_env(monkeypatch)
+    monkeypatch.delenv("RUNTIME_TARGET_ENABLED", raising=False)
+
+    assert guard._load_services() == []
+    assert guard._enabled_runtime_target_configured() is False
+    issues: list[str] = []
+    details: list[str] = []
+    guard._record_missing_monitor_services([], issues, details)
+    assert issues == []
+    assert details == []
