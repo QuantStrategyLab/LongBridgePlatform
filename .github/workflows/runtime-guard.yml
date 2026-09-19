@@ -47,26 +47,29 @@ jobs:
         target:
           - label: PAPER
             environment: longbridge-paper
+            service: longbridge-quant-paper-service
+            region: asia-east1
           - label: HK
             environment: longbridge-hk
+            service: longbridge-quant-hk-service
+            region: asia-east2
           - label: SG
             environment: longbridge-sg
+            service: longbridge-quant-sg-service
+            region: asia-southeast1
     permissions:
       contents: read
       id-token: write
     environment: ${{ matrix.target.environment }}
     env:
       RUNTIME_GUARD_NAME: LongBridgePlatform ${{ matrix.target.label }}
-      RUNTIME_GUARD_CLOUD_RUN_SERVICES: ${{ vars.RUNTIME_GUARD_CLOUD_RUN_SERVICES }}
+      RUNTIME_GUARD_CLOUD_RUN_SERVICES: ${{ matrix.target.service }}
       RUNTIME_GUARD_LOOKBACK_MINUTES: ${{ inputs.lookback_minutes || vars.RUNTIME_GUARD_LOOKBACK_MINUTES || '180' }}
       RUNTIME_GUARD_REQUIRE_SUCCESS: ${{ inputs.require_success || vars.RUNTIME_GUARD_REQUIRE_SUCCESS || 'false' }}
       RUNTIME_GUARD_FAIL_WORKFLOW_ON_ALERT: ${{ inputs.fail_workflow_on_alert || vars.RUNTIME_GUARD_FAIL_WORKFLOW_ON_ALERT || 'true' }}
-      RUNTIME_GUARD_SCHEDULER_JOB_PATTERN: ${{ secrets.RUNTIME_GUARD_SCHEDULER_JOB_PATTERN || secrets.CLOUD_RUN_SERVICE }}
+      RUNTIME_GUARD_SCHEDULER_JOB_PATTERN: ''
       RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
-      CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
-      CLOUD_RUN_SERVICES: ${{ secrets.CLOUD_RUN_SERVICES }}
-      CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}
-      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      CLOUD_RUN_REGION: ${{ matrix.target.region }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG || 'zh' }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ secrets.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
