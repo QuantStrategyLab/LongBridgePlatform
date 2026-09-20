@@ -1,0 +1,56 @@
+name: PAPER Notification Preview
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-notification-preview-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    name: Send PAPER Telegram notification preview pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    environment: longbridge-paper
+    env:
+      GCP_PROJECT_ID: longbridgequant
+      NOTIFY_LANG: ${{ vars.NOTIFY_LANG || 'zh' }}
+      GLOBAL_TELEGRAM_CHAT_ID: ${{ secrets.GLOBAL_TELEGRAM_CHAT_ID }}
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+
+      - name: Install locked runtime dependencies
+        run: |
+          set -euo pipefail
+          uv sync --frozen --no-dev
+
+      - name: Authenticate to Google Cloud for existing Telegram secret access
+        if: ${{ env.TELEGRAM_TOKEN == '' && env.TELEGRAM_TOKEN_SECRET_NAME != '' }}
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
+          service_account: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+
+      - name: Set up gcloud for existing Telegram secret access
+        if: ${{ env.TELEGRAM_TOKEN == '' && env.TELEGRAM_TOKEN_SECRET_NAME != '' }}
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Send PAPER notification preview pack
+        run: uv run --no-sync python scripts/send_paper_notification_preview.py
