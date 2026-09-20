@@ -99,6 +99,20 @@ on:
         required: false
         type: string
         default: longport-app-secret-paper
+      shift_traffic_to_commit:
+        description: "Explicit traffic switch: route 100% traffic to the Ready revision matching this commit. Default false preserves serving traffic during image/env updates."
+        required: true
+        type: boolean
+        default: false
+      scheduler_enabled_action:
+        description: "Explicit Scheduler enabled-state action. preserve (default) keeps current pause/resume; pause/resume mutate and read back independently of image/env sync."
+        required: true
+        type: choice
+        default: preserve
+        options:
+          - preserve
+          - pause
+          - resume
 
 env:
   GCP_PROJECT_ID: longbridgequant
@@ -256,6 +270,8 @@ jobs:
       INPUT_PAPER_COMMAND_VERIFY_LONGPORT_SECRET_NAME: ${{ inputs.paper_command_verify_longport_secret_name }}
       INPUT_PAPER_COMMAND_VERIFY_LONGPORT_APP_KEY_SECRET_NAME: ${{ inputs.paper_command_verify_longport_app_key_secret_name }}
       INPUT_PAPER_COMMAND_VERIFY_LONGPORT_APP_SECRET_SECRET_NAME: ${{ inputs.paper_command_verify_longport_app_secret_secret_name }}
+      INPUT_SHIFT_TRAFFIC_TO_COMMIT: ${{ inputs.shift_traffic_to_commit }}
+      INPUT_SCHEDULER_ENABLED_ACTION: ${{ inputs.scheduler_enabled_action }}
       GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
       # Set CLOUD_RUN_REGION per Environment so paper/HK/SG can target different regions.
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
@@ -381,6 +397,18 @@ jobs:
           deploy_enabled=false
           env_sync_enabled=false
           scheduler_sync_enabled=false
+          traffic_shift_enabled=false
+          scheduler_enabled_action=preserve
+
+          case "${INPUT_SCHEDULER_ENABLED_ACTION:-preserve}" in
+            preserve|pause|resume)
+              scheduler_enabled_action="${INPUT_SCHEDULER_ENABLED_ACTION:-preserve}"
+              ;;
+            *)
+              echo "scheduler_enabled_action must be preserve, pause, or resume." >&2
+              exit 1
+              ;;
+          esac
 
           # QSL_ENABLE_CLOUD_RUN_AUTOMATION overrides ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION
           ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION="${QSL_ENABLE_CLOUD_RUN_AUTOMATION:-$ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION}"
@@ -388,6 +416,8 @@ jobs:
             write_github_output \
               "deploy_enabled=false" \
               "env_sync_enabled=false" \
+              "traffic_shift_enabled=false" \
+              "scheduler_enabled_action=preserve" \
               "enabled=false"
             echo "Skipping ${DEPLOYMENT_LABEL} Cloud Run automation on push because ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION is not true." >&2
             exit 0
@@ -399,6 +429,8 @@ jobs:
             write_github_output \
               "deploy_enabled=false" \
               "env_sync_enabled=false" \
+              "traffic_shift_enabled=false" \
+              "scheduler_enabled_action=preserve" \
               "enabled=false"
             echo "Skipping ${DEPLOYMENT_LABEL} Cloud Run automation because hk-verify targets only the HK deployment." >&2
             exit 0
@@ -411,6 +443,8 @@ jobs:
               "deploy_enabled=false" \
               "env_sync_enabled=false" \
               "scheduler_sync_enabled=false" \
+              "traffic_shift_enabled=false" \
+              "scheduler_enabled_action=preserve" \
               "enabled=false"
             echo "Skipping ${DEPLOYMENT_LABEL} Cloud Run automation because paper-command-verify targets only the PAPER deployment." >&2
             exit 0
@@ -439,12 +473,22 @@ jobs:
             scheduler_sync_enabled=true
           fi
 
+          # Traffic switch and scheduler pause/resume are never implied by image/env sync.
+          if [ "${INPUT_SHIFT_TRAFFIC_TO_COMMIT:-false}" = "true" ]; then
+            traffic_shift_enabled=true
+          fi
+
           write_github_output \
             "deploy_enabled=${deploy_enabled}" \
             "env_sync_enabled=${env_sync_enabled}" \
-            "scheduler_sync_enabled=${scheduler_sync_enabled}"
+            "scheduler_sync_enabled=${scheduler_sync_enabled}" \
+            "traffic_shift_enabled=${traffic_shift_enabled}" \
+            "scheduler_enabled_action=${scheduler_enabled_action}"
 
-          if [ "${deploy_enabled}" != "true" ] && [ "${env_sync_enabled}" != "true" ]; then
+          if [ "${deploy_enabled}" != "true" ] \
+            && [ "${env_sync_enabled}" != "true" ] \
+            && [ "${traffic_shift_enabled}" != "true" ] \
+            && [ "${scheduler_enabled_action}" = "preserve" ]; then
             write_github_output "enabled=false"
             echo "Skipping ${DEPLOYMENT_LABEL} Cloud Run automation because ENABLE_GITHUB_CLOUD_RUN_DEPLOY and ENABLE_GITHUB_ENV_SYNC are not true." >&2
             exit 0
@@ -689,7 +733,7 @@ jobs:
           fi
 
       - name: Validate deploy inputs
-        if: steps.config.outputs.deploy_enabled == 'true'
+        if: steps.config.outputs.deploy_enabled == 'true' || steps.config.outputs.traffic_shift_enabled == 'true' || steps.config.outputs.scheduler_enabled_action != 'preserve'
         run: |
           set -euo pipefail
 
@@ -722,7 +766,7 @@ jobs:
           version: ">= 416.0.0"
 
       - name: Refuse legacy sync over a paused V7 application
-        if: steps.config.outputs.deploy_enabled == 'true' || steps.config.outputs.env_sync_enabled == 'true'
+        if: steps.config.outputs.deploy_enabled == 'true' || steps.config.outputs.env_sync_enabled == 'true' || steps.config.outputs.traffic_shift_enabled == 'true'
         run: |
           set -euo pipefail
           if [ "${CLOUD_RUN_SERVICE}" != "longbridge-quant-paper-service" ]; then
@@ -744,7 +788,7 @@ jobs:
           exit 1
 
       - name: Verify deployed runtime target admission before traffic shift
-        if: steps.config.outputs.deploy_enabled == 'true'
+        if: steps.config.outputs.deploy_enabled == 'true' || steps.config.outputs.traffic_shift_enabled == 'true'
         run: |
           set -euo pipefail
           uv run --no-sync python scripts/verify_deployed_runtime_target_admission.py \
@@ -770,6 +814,8 @@ jobs:
           git archive HEAD | docker build --pull -t "${image}" -
           docker push "${image}"
 
+          # Ordinary image updates must not move serving traffic. Use the
+          # explicit shift_traffic_to_commit action after independent readback.
           gcloud run deploy "${CLOUD_RUN_SERVICE}" \
             --project="${GCP_PROJECT_ID}" \
             --region="${CLOUD_RUN_REGION}" \
@@ -783,6 +829,7 @@ jobs:
             --memory=512Mi \
             --cpu=1 \
             --timeout=300s \
+            --no-traffic \
             --labels="managed-by=github-actions,commit-sha=${GITHUB_SHA},github-run-id=${GITHUB_RUN_ID},deployment-label=${deployment_label}" \
             --quiet
 
@@ -1178,9 +1225,12 @@ jobs:
           # gcloud rejects duplicate names in --remove-env-vars.
           mapfile -t remove_env_vars < <(printf '%s\n' "${remove_env_vars[@]}" | awk 'NF && !seen[$0]++')
 
+          # Env sync creates a revision but must preserve serving traffic unless
+          # shift_traffic_to_commit is explicitly requested later.
           gcloud_args=(
             run services update "${CLOUD_RUN_SERVICE}"
             --region "${CLOUD_RUN_REGION}"
+            --no-traffic
             --remove-env-vars "$(IFS=,; echo "${remove_env_vars[*]}")"
             --update-env-vars "^|^$(join_by_delimiter "|" "${env_pairs[@]}")"
           )
@@ -1204,13 +1254,29 @@ jobs:
           set -euo pipefail
           python3 scripts/verify_cloud_run_strategy_plugin_mounts.py
 
-      - name: Reconcile Cloud Run traffic
-        if: steps.config.outputs.env_sync_enabled == 'true'
+      - name: Read back Cloud Run traffic without shifting
+        if: steps.config.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          python3 scripts/reconcile_cloud_runtime.py \
+            --platform longbridge \
+            --read-traffic \
+            --service "${CLOUD_RUN_SERVICE}"
+
+      - name: Shift Cloud Run traffic to this commit
+        if: steps.config.outputs.traffic_shift_enabled == 'true'
         env:
           SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
         run: |
           set -euo pipefail
-          python3 scripts/reconcile_cloud_runtime.py --platform longbridge --ensure-latest-traffic --service "${CLOUD_RUN_SERVICE}"
+          python3 scripts/reconcile_cloud_runtime.py \
+            --platform longbridge \
+            --ensure-latest-traffic \
+            --service "${CLOUD_RUN_SERVICE}"
+          python3 scripts/reconcile_cloud_runtime.py \
+            --platform longbridge \
+            --read-traffic \
+            --service "${CLOUD_RUN_SERVICE}"
 
       - name: Sync Cloud Scheduler schedule
         if: steps.config.outputs.scheduler_sync_enabled == 'true'
@@ -1237,19 +1303,16 @@ jobs:
               targets[0],
           )
           scheduler = target.get("scheduler") or {}
-          target_env = target.get("env") or {}
           print(str(scheduler.get("timezone") or os.environ.get("LONGBRIDGE_MARKET_TIMEZONE", "")).strip() or "America/New_York")
           print(str(scheduler.get("main_time") or os.environ.get("CLOUD_SCHEDULER_MAIN_TIME", "").strip() or "45 15"))
           print(str(scheduler.get("probe_time") or os.environ.get("CLOUD_SCHEDULER_PROBE_TIME", "").strip() or "35 9,15"))
           print(str(scheduler.get("precheck_time") or os.environ.get("CLOUD_SCHEDULER_PRECHECK_TIME", "").strip() or "45 9"))
-          print(str(target_env.get("RUNTIME_TARGET_ENABLED") or "true").strip().lower())
           PY
           )
           market_timezone="${scheduler_config[0]}"
           main_time="${scheduler_config[1]}"
           probe_time="${scheduler_config[2]}"
           precheck_time="${scheduler_config[3]}"
-          runtime_target_enabled="${scheduler_config[4]}"
           # Keep probe parsed for runtime-target schema parity.
           : "${probe_time}"
 
@@ -1372,6 +1435,7 @@ jobs:
           )"
 
           scheduler_uri="${service_url}/run"
+          main_job_created=false
           if [ -n "${current_schedule}" ]; then
             echo "Updating Cloud Scheduler job ${job_name} schedule to ${desired_schedule}, timezone to ${market_timezone}, and URI to ${scheduler_uri}."
             gcloud scheduler jobs update http "${job_name}" \
@@ -1398,10 +1462,12 @@ jobs:
               --time-zone="${market_timezone}" \
               --attempt-deadline=600s \
               --quiet
+            main_job_created=true
           fi
 
           probe_job_name="${CLOUD_RUN_SERVICE}-probe-scheduler"
           probe_uri="${service_url}/probe"
+          probe_job_created=false
           if gcloud scheduler jobs describe "${probe_job_name}" \
             --project="${GCP_PROJECT_ID}" \
             --location="${scheduler_location}" >/dev/null 2>&1; then
@@ -1438,10 +1504,12 @@ jobs:
               --max-backoff=300s \
               --max-retry-duration=900s \
               --quiet
+            probe_job_created=true
           fi
 
           precheck_job_name="${CLOUD_RUN_SERVICE}-precheck-scheduler"
           precheck_uri="${service_url}/dry-run"
+          precheck_job_created=false
           if gcloud scheduler jobs describe "${precheck_job_name}" \
             --project="${GCP_PROJECT_ID}" \
             --location="${scheduler_location}" >/dev/null 2>&1; then
@@ -1478,35 +1546,84 @@ jobs:
               --max-backoff=300s \
               --max-retry-duration=900s \
               --quiet
+            precheck_job_created=true
           fi
 
           managed_scheduler_jobs=("${job_name}" "${probe_job_name}" "${precheck_job_name}")
-          for managed_job_name in "${managed_scheduler_jobs[@]}"; do
-            managed_job_state="$(gcloud scheduler jobs describe "${managed_job_name}" \
+          # Newly created jobs default to ENABLED in Cloud Scheduler. Under the
+          # default preserve action, pause them so ordinary config sync cannot
+          # start production triggers; explicit resume is required afterwards.
+          if [ "${{ steps.config.outputs.scheduler_enabled_action }}" = "preserve" ]; then
+            newly_created_jobs=()
+            if [ "${main_job_created}" = "true" ]; then
+              newly_created_jobs+=("${job_name}")
+            fi
+            if [ "${probe_job_created}" = "true" ]; then
+              newly_created_jobs+=("${probe_job_name}")
+            fi
+            if [ "${precheck_job_created}" = "true" ]; then
+              newly_created_jobs+=("${precheck_job_name}")
+            fi
+            for managed_job_name in "${newly_created_jobs[@]}"; do
+              echo "Pausing newly created Cloud Scheduler job ${managed_job_name}; explicit resume is required."
+              gcloud scheduler jobs pause "${managed_job_name}" \
+                --project="${GCP_PROJECT_ID}" \
+                --location="${scheduler_location}" \
+                --quiet
+            done
+          fi
+
+          python3 scripts/reconcile_cloud_runtime.py \
+            --platform longbridge \
+            --read-scheduler-enabled \
+            --scheduler-location "${scheduler_location}" \
+            --scheduler-jobs "$(IFS=,; echo "${managed_scheduler_jobs[*]}")" \
+            --service "${CLOUD_RUN_SERVICE}"
+
+      - name: Apply explicit Scheduler enabled-state action
+        if: steps.config.outputs.scheduler_enabled_action != 'preserve'
+        env:
+          SCHEDULER_ENABLED_ACTION: ${{ steps.config.outputs.scheduler_enabled_action }}
+        run: |
+          set -euo pipefail
+
+          scheduler_location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}"
+          if [ -z "${scheduler_location}" ]; then
+            echo "Scheduler enabled-state action requires CLOUD_RUN_REGION or CLOUD_SCHEDULER_LOCATION." >&2
+            exit 1
+          fi
+
+          scheduler_job_candidates=("${CLOUD_RUN_SERVICE}-scheduler")
+          if [[ "${CLOUD_RUN_SERVICE}" == *-service ]]; then
+            scheduler_job_candidates+=("${CLOUD_RUN_SERVICE%-service}-scheduler")
+          fi
+          job_name="${scheduler_job_candidates[0]}"
+          for candidate_job in "${scheduler_job_candidates[@]}"; do
+            if gcloud scheduler jobs describe "${candidate_job}" \
               --project="${GCP_PROJECT_ID}" \
-              --location="${scheduler_location}" \
-              --format='value(state)')"
-            case "${runtime_target_enabled}" in
-              1|true|yes|on)
-                if [ "${managed_job_state}" = "PAUSED" ]; then
-                  echo "Resuming Cloud Scheduler job ${managed_job_name} because ${CLOUD_RUN_SERVICE} is enabled."
-                  gcloud scheduler jobs resume "${managed_job_name}" \
-                    --project="${GCP_PROJECT_ID}" \
-                    --location="${scheduler_location}" \
-                    --quiet
-                fi
-                ;;
-              *)
-                if [ "${managed_job_state}" != "PAUSED" ]; then
-                  echo "Pausing Cloud Scheduler job ${managed_job_name} because ${CLOUD_RUN_SERVICE} is disabled."
-                  gcloud scheduler jobs pause "${managed_job_name}" \
-                    --project="${GCP_PROJECT_ID}" \
-                    --location="${scheduler_location}" \
-                    --quiet
-                fi
-                ;;
-            esac
+              --location="${scheduler_location}" >/dev/null 2>&1; then
+              job_name="${candidate_job}"
+              break
+            fi
           done
+          managed_scheduler_jobs=(
+            "${job_name}"
+            "${CLOUD_RUN_SERVICE}-probe-scheduler"
+            "${CLOUD_RUN_SERVICE}-precheck-scheduler"
+          )
+
+          python3 scripts/reconcile_cloud_runtime.py \
+            --platform longbridge \
+            --scheduler-enabled-action "${SCHEDULER_ENABLED_ACTION}" \
+            --scheduler-location "${scheduler_location}" \
+            --scheduler-jobs "$(IFS=,; echo "${managed_scheduler_jobs[*]}")" \
+            --service "${CLOUD_RUN_SERVICE}"
+          python3 scripts/reconcile_cloud_runtime.py \
+            --platform longbridge \
+            --read-scheduler-enabled \
+            --scheduler-location "${scheduler_location}" \
+            --scheduler-jobs "$(IFS=,; echo "${managed_scheduler_jobs[*]}")" \
+            --service "${CLOUD_RUN_SERVICE}"
 
       - name: Reconcile legacy Cloud Scheduler jobs
         if: steps.config.outputs.scheduler_sync_enabled == 'true'
