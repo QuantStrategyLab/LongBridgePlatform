@@ -225,8 +225,6 @@ grep -Fq 'gcloud_args+=(--update-secrets "$(IFS=,; echo "${secret_pairs[*]}")")'
 grep -Fq -- '--update-env-vars "^|^$(join_by_delimiter "|" "${env_pairs[@]}")"' "$workflow_file"
 grep -Fq 'Sync Cloud Scheduler schedule' "$workflow_file"
 grep -Fq 'scheduler_location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}"' "$workflow_file"
-grep -Fq 'target_env = target.get("env") or {}' "$workflow_file"
-grep -Fq 'runtime_target_enabled="${scheduler_config[4]}"' "$workflow_file"
 grep -Fq 'scheduler_job_candidates=("${CLOUD_RUN_SERVICE}-scheduler")' "$workflow_file"
 grep -Fq 'current_schedule="$(gcloud scheduler jobs describe "${candidate_job}"' "$workflow_file"
 grep -Fq 'desired_schedule="$(CURRENT_SCHEDULE="${current_schedule}" SCHEDULE_TIME="${main_time}" python - <<' "$workflow_file"
@@ -248,16 +246,79 @@ grep -Fq -- '--min-backoff=120s' "$workflow_file"
 grep -Fq -- '--max-backoff=300s' "$workflow_file"
 grep -Fq -- '--max-retry-duration=900s' "$workflow_file"
 grep -Fq 'managed_scheduler_jobs=("${job_name}" "${probe_job_name}" "${precheck_job_name}")' "$workflow_file"
-grep -Fq 'gcloud scheduler jobs resume "${managed_job_name}"' "$workflow_file"
+grep -Fq 'shift_traffic_to_commit:' "$workflow_file"
+grep -Fq 'scheduler_enabled_action:' "$workflow_file"
+grep -Fq 'INPUT_SHIFT_TRAFFIC_TO_COMMIT: ${{ inputs.shift_traffic_to_commit }}' "$workflow_file"
+grep -Fq 'INPUT_SCHEDULER_ENABLED_ACTION: ${{ inputs.scheduler_enabled_action }}' "$workflow_file"
+grep -Fq 'traffic_shift_enabled=${traffic_shift_enabled}' "$workflow_file"
+grep -Fq 'scheduler_enabled_action=${scheduler_enabled_action}' "$workflow_file"
+grep -Fq -- '--no-traffic' "$workflow_file"
+grep -Fq 'Shift Cloud Run traffic to this commit' "$workflow_file"
+grep -Fq 'Read back Cloud Run traffic without shifting' "$workflow_file"
+grep -Fq 'Apply explicit Scheduler enabled-state action' "$workflow_file"
+grep -Fq -- '--ensure-latest-traffic' "$workflow_file"
+grep -Fq -- '--read-traffic' "$workflow_file"
+grep -Fq -- '--read-scheduler-enabled' "$workflow_file"
+grep -Fq -- '--scheduler-enabled-action' "$workflow_file"
+grep -Fq 'Pausing newly created Cloud Scheduler job' "$workflow_file"
 grep -Fq 'gcloud scheduler jobs pause "${managed_job_name}"' "$workflow_file"
 grep -Fq 'monitor_job_name="longbridge-monitor-dispatcher-scheduler"' "$workflow_file"
 grep -Fq 'gcloud scheduler jobs delete "${monitor_job_name}"' "$workflow_file"
-grep -Fq 'Reconcile Cloud Run traffic' "$workflow_file"
-grep -Fq 'python3 scripts/reconcile_cloud_runtime.py --platform longbridge --ensure-latest-traffic --service "${CLOUD_RUN_SERVICE}"' "$workflow_file"
 grep -Fq 'Reconcile legacy Cloud Scheduler jobs' "$workflow_file"
 grep -Fq 'python3 scripts/reconcile_cloud_runtime.py --platform longbridge --delete-legacy-schedulers --service "${CLOUD_RUN_SERVICE}"' "$workflow_file"
 grep -Fq -- '--schedule="${desired_schedule}"' "$workflow_file"
 grep -Fq -- '--time-zone="${market_timezone}"' "$workflow_file"
+
+# Counter-examples: ordinary image/env sync must not imply traffic or pause/resume.
+python3 - "$workflow_file" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+workflow = Path(sys.argv[1]).read_text()
+legacy = workflow.split("\n  sync:\n", 1)[1].split("\n  cleanup-shared-monitor:\n", 1)[0]
+
+deploy = legacy.split("      - name: Build, push, and deploy Cloud Run image\n", 1)[1]
+deploy = deploy.split("\n      - name: Wait for Cloud Run deployment of current commit\n", 1)[0]
+assert "--no-traffic" in deploy, "legacy image deploy must preserve serving traffic"
+
+env_sync = legacy.split("      - name: Sync Cloud Run environment\n", 1)[1]
+env_sync = env_sync.split("\n      - name: Verify strategy plugin mounts\n", 1)[0]
+assert "--no-traffic" in env_sync, "legacy env sync must preserve serving traffic"
+
+traffic_header = [
+    line for line in legacy.splitlines()
+    if "Shift Cloud Run traffic to this commit" in line or "traffic_shift_enabled" in line
+]
+assert any("if: steps.config.outputs.traffic_shift_enabled == 'true'" in line for line in legacy.splitlines())
+assert "Reconcile Cloud Run traffic" not in legacy
+
+scheduler = legacy.split("      - name: Sync Cloud Scheduler schedule\n", 1)[1]
+scheduler = scheduler.split("\n      - name: Apply explicit Scheduler enabled-state action\n", 1)[0]
+assert "RUNTIME_TARGET_ENABLED" not in scheduler
+assert "gcloud scheduler jobs resume" not in scheduler
+assert "is enabled." not in scheduler
+assert "is disabled." not in scheduler
+
+assert any(
+    "if: steps.config.outputs.scheduler_enabled_action != 'preserve'" in line
+    for line in legacy.splitlines()
+)
+assert "--scheduler-enabled-action" in legacy
+assert "--read-scheduler-enabled" in legacy
+assert "--read-traffic" in legacy
+
+# Desired-state coupling must not remain in the workflow.
+assert not re.search(
+    r"Resuming Cloud Scheduler job \$\{managed_job_name\} because \$\{CLOUD_RUN_SERVICE\} is enabled",
+    workflow,
+)
+assert not re.search(
+    r"Pausing Cloud Scheduler job \$\{managed_job_name\} because \$\{CLOUD_RUN_SERVICE\} is disabled",
+    workflow,
+)
+print("runtime write isolation counter-examples: passed")
+PY
 
 if grep -Fq 'monitor_uri="${service_url}/monitor-dispatch"' "$workflow_file"; then
   echo "unexpected shared monitor dispatcher creation still present" >&2

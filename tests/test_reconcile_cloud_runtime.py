@@ -268,6 +268,122 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
             ],
         )
 
+    def test_read_traffic_does_not_mutate(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run(args, *, json_output=False, dry_run=False):
+            calls.append(tuple(args))
+            if args[1:4] == ["run", "services", "describe"]:
+                return {
+                    "status": {
+                        "latestReadyRevisionName": "service-00001",
+                        "latestCreatedRevisionName": "service-00002",
+                        "traffic": [{"revisionName": "service-00001", "percent": 100}],
+                    }
+                }
+            self.fail(f"unexpected command: {args!r}")
+
+        with patch.object(reconcile, "_run", side_effect=fake_run):
+            readbacks = reconcile.read_traffic(
+                project="p",
+                region="asia-east1",
+                targets=[reconcile.RuntimeTarget(service_name="service")],
+                dry_run=False,
+            )
+
+        self.assertEqual(readbacks[0]["traffic"][0]["revisionName"], "service-00001")
+        self.assertFalse(any(cmd[1:4] == ("run", "services", "update-traffic") for cmd in calls))
+
+    def test_apply_scheduler_enabled_action_preserve_only_reads(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run_optional(args, *, dry_run=False):
+            calls.append(tuple(args))
+            return True
+
+        def fake_run(args, *, json_output=False, dry_run=False):
+            calls.append(tuple(args))
+            if args[1:4] == ["scheduler", "jobs", "describe"]:
+                return "ENABLED\n"
+            self.fail(f"unexpected command: {args!r}")
+
+        with patch.object(reconcile, "_run_optional", side_effect=fake_run_optional), patch.object(
+            reconcile, "_run", side_effect=fake_run
+        ):
+            readbacks = reconcile.apply_scheduler_enabled_action(
+                project="p",
+                scheduler_location="asia-east1",
+                job_names=["service-scheduler"],
+                action="preserve",
+                dry_run=False,
+            )
+
+        self.assertEqual(readbacks[0]["state"], "ENABLED")
+        self.assertFalse(any(cmd[3] in {"pause", "resume"} for cmd in calls if len(cmd) > 3))
+
+    def test_apply_scheduler_enabled_action_pause_mutates_and_readback_must_match(self) -> None:
+        states = {"service-scheduler": "ENABLED"}
+        calls: list[tuple[str, ...]] = []
+
+        def fake_run_optional(args, *, dry_run=False):
+            return True
+
+        def fake_run(args, *, json_output=False, dry_run=False):
+            calls.append(tuple(args))
+            if args[1:4] == ["scheduler", "jobs", "describe"]:
+                return f"{states[args[4]]}\n"
+            if args[1:4] == ["scheduler", "jobs", "pause"]:
+                states[args[4]] = "PAUSED"
+                return ""
+            self.fail(f"unexpected command: {args!r}")
+
+        with patch.object(reconcile, "_run_optional", side_effect=fake_run_optional), patch.object(
+            reconcile, "_run", side_effect=fake_run
+        ):
+            readbacks = reconcile.apply_scheduler_enabled_action(
+                project="p",
+                scheduler_location="asia-east1",
+                job_names=["service-scheduler"],
+                action="pause",
+                dry_run=False,
+            )
+
+        self.assertEqual(readbacks[0]["state"], "PAUSED")
+        self.assertTrue(any(cmd[1:4] == ("scheduler", "jobs", "pause") for cmd in calls))
+
+    def test_apply_scheduler_enabled_action_resume_rejects_readback_mismatch(self) -> None:
+        def fake_run_optional(args, *, dry_run=False):
+            return True
+
+        def fake_run(args, *, json_output=False, dry_run=False):
+            if args[1:4] == ["scheduler", "jobs", "describe"]:
+                return "PAUSED\n"
+            if args[1:4] == ["scheduler", "jobs", "resume"]:
+                return ""
+            self.fail(f"unexpected command: {args!r}")
+
+        with patch.object(reconcile, "_run_optional", side_effect=fake_run_optional), patch.object(
+            reconcile, "_run", side_effect=fake_run
+        ):
+            with self.assertRaisesRegex(reconcile.ReconcileError, "does not match expected 'ENABLED'"):
+                reconcile.apply_scheduler_enabled_action(
+                    project="p",
+                    scheduler_location="asia-east1",
+                    job_names=["service-scheduler"],
+                    action="resume",
+                    dry_run=False,
+                )
+
+    def test_apply_scheduler_enabled_action_rejects_desired_state_coupling_inputs(self) -> None:
+        with self.assertRaisesRegex(reconcile.ReconcileError, "preserve, pause, or resume"):
+            reconcile.apply_scheduler_enabled_action(
+                project="p",
+                scheduler_location="asia-east1",
+                job_names=["service-scheduler"],
+                action="true",
+                dry_run=True,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
