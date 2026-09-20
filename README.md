@@ -61,6 +61,7 @@ Direct runtime profiles can usually run from market history or portfolio state. 
 
 ## Repository layout
 
+- `config/`: public non-sensitive runtime-target manifest.
 - `tests/`: unit, contract, and regression tests.
 - `docs/`: runbooks, design notes, evidence, and integration contracts.
 - `.github/workflows/`: CI, scheduled jobs, release, or deployment workflows.
@@ -78,6 +79,7 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 ## Useful docs
 
 - [`docs/hk_equity_runtime.md`](docs/hk_equity_runtime.md)
+- [`docs/runtime_target_manifest.md`](docs/runtime_target_manifest.md): public runtime-target manifest contract, add/remove steps, and next-phase workflow wiring boundary
 
 ## Community and security
 

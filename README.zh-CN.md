@@ -40,6 +40,7 @@ LongBridgePlatform 是 QuantStrategyLab 的LongBridge 美股/港股执行平台�
 
 ## 仓库结构
 
+- `config/`：公开非敏感 runtime-target manifest。
 - `tests/`：单元测试、契约测试和回归测试。
 - `docs/`：运行手册、设计说明、证据和集成契约。
 - `.github/workflows/`：CI、定时任务、发布或部署 workflow。
@@ -57,6 +58,7 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 ## 延伸文档
 
 - [`docs/hk_equity_runtime.md`](docs/hk_equity_runtime.md)
+- [`docs/runtime_target_manifest.md`](docs/runtime_target_manifest.md)：公开 runtime-target manifest 契约、增减目标步骤与下一阶段 workflow wiring 边界
 
 ## 社区和安全
 
