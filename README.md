@@ -79,7 +79,7 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 ## Useful docs
 
 - [`docs/hk_equity_runtime.md`](docs/hk_equity_runtime.md)
-- [`docs/runtime_target_manifest.md`](docs/runtime_target_manifest.md): public runtime-target manifest contract, add/remove steps, and next-phase workflow wiring boundary
+- [`docs/runtime_target_manifest.md`](docs/runtime_target_manifest.md): public runtime-target manifest contract, dynamic workflow matrix rendering, and Environment enablement boundary
 
 ## Community and security
 

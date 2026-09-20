@@ -29,33 +29,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve-matrix:
+    name: Resolve runtime-target matrix
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.display_title != 'Image-only no-traffic staging'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.render.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Render validated matrix from public manifest
+        id: render
+        run: |
+          set -euo pipefail
+          python3 scripts/render_runtime_target_matrix.py --profile lifecycle --github-output
+
   lifecycle:
+    needs: resolve-matrix
     if: github.event_name != 'workflow_run' || github.event.workflow_run.display_title != 'Image-only no-traffic staging'
     name: Publish ${{ matrix.target.label }} target lifecycle
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      matrix:
-        target:
-          - id: paper
-            label: PAPER
-            environment: longbridge-paper
-            account_scope: PAPER
-            service: longbridge-quant-paper-service
-            region: asia-east1
-          - id: hk
-            label: HK
-            environment: longbridge-hk
-            account_scope: HK
-            service: longbridge-quant-hk-service
-            region: asia-east2
-          - id: sg
-            label: SG
-            environment: longbridge-sg
-            account_scope: SG
-            service: longbridge-quant-sg-service
-            region: asia-southeast1
+      matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}
     permissions:
       contents: read
       id-token: write

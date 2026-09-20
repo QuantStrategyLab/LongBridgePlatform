@@ -37,26 +37,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve-matrix:
+    name: Resolve runtime-target matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.render.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Render validated matrix from public manifest
+        id: render
+        run: |
+          set -euo pipefail
+          python3 scripts/render_runtime_target_matrix.py --profile guard --github-output
+
   guard:
+    needs: resolve-matrix
     name: Check ${{ matrix.target.label }} Cloud Run runtime
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      matrix:
-        target:
-          - label: PAPER
-            environment: longbridge-paper
-            service: longbridge-quant-paper-service
-            region: asia-east1
-          - label: HK
-            environment: longbridge-hk
-            service: longbridge-quant-hk-service
-            region: asia-east2
-          - label: SG
-            environment: longbridge-sg
-            service: longbridge-quant-sg-service
-            region: asia-southeast1
+      matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}
     permissions:
       contents: read
       id-token: write

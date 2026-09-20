@@ -38,19 +38,17 @@ def test_runtime_guard_workflow_passes_runtime_target_enabled() -> None:
 def test_runtime_guard_workflow_binds_each_environment_to_its_service() -> None:
     workflow = (ROOT / ".github/workflows/runtime-guard.yml").read_text()
 
-    for label, environment, service, region in (
-        ("PAPER", "longbridge-paper", "longbridge-quant-paper-service", "asia-east1"),
-        ("HK", "longbridge-hk", "longbridge-quant-hk-service", "asia-east2"),
-        ("SG", "longbridge-sg", "longbridge-quant-sg-service", "asia-southeast1"),
-    ):
-        assert f"- label: {label}" in workflow
-        assert f"environment: {environment}" in workflow
-        assert f"service: {service}" in workflow
-        assert f"region: {region}" in workflow
-
+    assert "resolve-matrix:" in workflow
+    assert "render_runtime_target_matrix.py --profile guard --github-output" in workflow
+    assert "matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}" in workflow
     assert "RUNTIME_GUARD_CLOUD_RUN_SERVICES: ${{ matrix.target.service }}" in workflow
     assert "CLOUD_RUN_REGION: ${{ matrix.target.region }}" in workflow
+    assert "environment: ${{ matrix.target.environment }}" in workflow
     assert "CLOUD_RUN_SERVICE_TARGETS_JSON:" not in workflow
+    # Hardcoded PAPER/HK/SG inventory must live in the public manifest, not the workflow.
+    assert "- label: PAPER\n            environment: longbridge-paper" not in workflow
+    assert "- label: HK\n            environment: longbridge-hk" not in workflow
+    assert "- label: SG\n            environment: longbridge-sg" not in workflow
 
 
 def test_runtime_monitor_workflows_use_frozen_runtime_environment() -> None:
@@ -86,6 +84,14 @@ def test_runtime_monitor_workflows_use_frozen_runtime_environment() -> None:
     assert "scripts/production_drift_health_observe.py" in lifecycle
     assert "id: production_drift" in lifecycle
     assert "| Production drift |" in lifecycle
+    assert "resolve-matrix:" in lifecycle
+    assert "render_runtime_target_matrix.py --profile lifecycle --github-output" in lifecycle
+    assert "matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}" in lifecycle
+
+    heartbeat = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+    assert "resolve-matrix:" in heartbeat
+    assert "render_runtime_target_matrix.py --profile heartbeat --github-output" in heartbeat
+    assert "matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}" in heartbeat
 
 
 def test_cloud_run_deployment_requires_manual_dispatch_and_lifecycle_observes_completed_sync() -> None:
