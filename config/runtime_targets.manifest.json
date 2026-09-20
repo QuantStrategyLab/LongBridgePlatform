@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "platform_id": "longbridge",
+  "description": "Public non-sensitive runtime-target inventory for LongBridgePlatform. Secret values and production enablement remain in GitHub Environment / Secret Manager; this file is not yet consumed by workflows.",
+  "targets": [
+    {
+      "id": "paper",
+      "label": "PAPER",
+      "account_scope": "PAPER",
+      "mode": "paper",
+      "enabled": false,
+      "environment": "longbridge-paper",
+      "service": "longbridge-quant-paper-service",
+      "region": "asia-east1",
+      "strategy_profile": "russell_top50_leader_rotation",
+      "secret_ref": {
+        "longport_token": "longport_token_paper",
+        "longport_app_key": "longport-app-key-paper",
+        "longport_app_secret": "longport-app-secret-paper"
+      }
+    },
+    {
+      "id": "hk",
+      "label": "HK",
+      "account_scope": "HK",
+      "mode": "live",
+      "enabled": false,
+      "environment": "longbridge-hk",
+      "service": "longbridge-quant-hk-service",
+      "region": "asia-east2",
+      "strategy_profile": "hk_global_etf_tactical_rotation",
+      "secret_ref": {
+        "longport_token": "longport_token_hk",
+        "longport_app_key": "longport-app-key-hk",
+        "longport_app_secret": "longport-app-secret-hk"
+      }
+    },
+    {
+      "id": "sg",
+      "label": "SG",
+      "account_scope": "SG",
+      "mode": "live",
+      "enabled": false,
+      "environment": "longbridge-sg",
+      "service": "longbridge-quant-sg-service",
+      "region": "asia-southeast1",
+      "strategy_profile": "soxl_soxx_trend_income",
+      "secret_ref": {
+        "longport_token": "longport_token_sg",
+        "longport_app_key": "longport-app-key-sg",
+        "longport_app_secret": "longport-app-secret-sg"
+      }
+    }
+  ]
+}
