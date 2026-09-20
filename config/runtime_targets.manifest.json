@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "platform_id": "longbridge",
-  "description": "Public non-sensitive runtime-target inventory for LongBridgePlatform. Secret values and production enablement remain in GitHub Environment / Secret Manager; this file is not yet consumed by workflows.",
+  "description": "Public non-sensitive runtime-target inventory for LongBridgePlatform. Guard / Lifecycle / Heartbeat / Deploy workflows render GitHub Actions matrices from this validated file. Secret values and production enablement remain in GitHub Environment / Secret Manager; manifest enabled never overrides RUNTIME_TARGET_ENABLED.",
   "targets": [
     {
       "id": "paper",

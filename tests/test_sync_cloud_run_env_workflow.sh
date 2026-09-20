@@ -8,8 +8,13 @@ grep -Fq 'GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global
 grep -Fq 'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com' "$workflow_file"
 grep -Fq 'name: Deploy / Sync ${{ matrix.target.label }} Cloud Run' "$workflow_file"
 grep -Fq 'fail-fast: false' "$workflow_file"
-grep -Fq 'environment: longbridge-paper' "$workflow_file"
-grep -Fq 'environment: longbridge-hk' "$workflow_file"
+grep -Fq 'resolve-matrix:' "$workflow_file"
+grep -Fq 'render_runtime_target_matrix.py --profile sync --github-output' "$workflow_file"
+grep -Fq 'needs: resolve-matrix' "$workflow_file"
+grep -Fq 'matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}' "$workflow_file"
+grep -Fq "inputs.target == 'PAPER' && 'longbridge-paper'" "$workflow_file"
+grep -Fq "inputs.target == 'HK' && 'longbridge-hk'" "$workflow_file"
+grep -Fq "inputs.target == 'SG' && 'longbridge-sg'" "$workflow_file"
 grep -Fq 'environment: longbridge-sg' "$workflow_file"
 grep -Fq 'environment: ${{ matrix.target.environment }}' "$workflow_file"
 grep -Fq 'target:' "$workflow_file"
@@ -418,15 +423,19 @@ for mode in ("legacy", "image-only-no-traffic"):
         assert allowed == (event != "workflow_run" or mode == "legacy"), (mode, event)
 print("lifecycle event condition cases: 6 passed")
 assert "  image-only-no-traffic:\n" in workflow, "missing explicit no-traffic job"
-job = workflow.split("  image-only-no-traffic:\n", 1)[1].split("\n  sync:\n", 1)[0]
+job = workflow.split("  image-only-no-traffic:\n", 1)[1].split("\n  resolve-matrix:\n", 1)[0]
 assert "matrix" not in job, "image-only mode must select exactly one environment"
 assert "inputs.deployment_mode == 'image-only-no-traffic'" in job
 assert "inputs.target == 'PAPER'" in job and "inputs.target == 'HK'" in job and "inputs.target == 'SG'" in job
 assert "ref: ${{ github.sha }}" in job
+assert "  resolve-matrix:\n" in workflow
+assert "render_runtime_target_matrix.py --profile sync --github-output" in workflow
+assert "matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}" in workflow
 legacy = workflow.split("\n  sync:\n", 1)[1].split("\n  cleanup-shared-monitor:\n", 1)[0]
 cleanup = workflow.split("\n  cleanup-shared-monitor:\n", 1)[1]
 for section in (legacy, cleanup):
     assert "inputs.deployment_mode != 'image-only-no-traffic'" in section.split("    steps:", 1)[0]
+assert "needs: resolve-matrix" in legacy.split("    steps:", 1)[0]
 assert job.index("name: Validate image-only dispatch") < job.index("uses: google-github-actions/auth@")
 assert job.index("name: Verify exact image-only source") < job.index("uses: google-github-actions/auth@")
 # The isolated job cannot bind broker/runtime credentials or run legacy helpers.

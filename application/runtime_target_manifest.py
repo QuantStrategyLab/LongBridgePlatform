@@ -207,6 +207,88 @@ def iter_enabled_targets(
             yield target
 
 
+# GitHub Actions matrix profiles. Manifest ``enabled`` never filters rows and is
+# never emitted: Environment ``RUNTIME_TARGET_ENABLED`` remains the authority.
+MATRIX_PROFILES = frozenset({"guard", "lifecycle", "heartbeat", "sync"})
+
+
+def build_github_actions_matrix(
+    manifest: RuntimeTargetManifest,
+    *,
+    profile: str,
+) -> dict[str, list[dict[str, str]]]:
+    """Build a GitHub Actions strategy matrix from a validated manifest.
+
+    Returns ``{"target": [...]}`` suitable for ``fromJSON(...)`` so existing
+    workflows keep using ``matrix.target.*``. Every validated target is included
+    regardless of manifest ``enabled``; missing/empty inventories fail closed.
+    """
+    normalized = str(profile or "").strip().lower()
+    if normalized not in MATRIX_PROFILES:
+        raise RuntimeTargetManifestError(
+            f"Unknown matrix profile {profile!r}; expected one of {sorted(MATRIX_PROFILES)}"
+        )
+    if not manifest.targets:
+        raise RuntimeTargetManifestError(
+            "Cannot render workflow matrix: validated manifest has no targets"
+        )
+
+    rows = [_matrix_row_for_target(target, profile=normalized) for target in manifest.targets]
+    return {"target": rows}
+
+
+def _matrix_row_for_target(
+    target: RuntimeTargetEntry,
+    *,
+    profile: str,
+) -> dict[str, str]:
+    label = (target.label or target.id).strip()
+    if not label:
+        raise RuntimeTargetManifestError(f"Target {target.id!r} is missing a matrix label")
+    account_scope = (target.account_scope or label).strip()
+    if not account_scope:
+        raise RuntimeTargetManifestError(
+            f"Target {target.id!r} is missing account_scope / default_account_region"
+        )
+
+    # mode is informational only; never use it as an enablement switch.
+    if profile == "guard":
+        return {
+            "id": target.id,
+            "label": label,
+            "environment": target.environment,
+            "service": target.service,
+            "region": target.region,
+            "mode": target.mode,
+        }
+    if profile == "lifecycle":
+        return {
+            "id": target.id,
+            "label": label,
+            "environment": target.environment,
+            "account_scope": account_scope,
+            "service": target.service,
+            "region": target.region,
+            "mode": target.mode,
+        }
+    if profile == "heartbeat":
+        return {
+            "id": target.id,
+            "label": label,
+            "environment": target.environment,
+            "mode": target.mode,
+        }
+    if profile == "sync":
+        return {
+            "id": target.id,
+            "label": label,
+            "environment": target.environment,
+            "default_account_region": account_scope,
+            "mode": target.mode,
+        }
+    raise RuntimeTargetManifestError(f"Unknown matrix profile {profile!r}")
+
+
 def _validate_target(raw_target: Any, *, path: str) -> RuntimeTargetEntry:
     if not isinstance(raw_target, Mapping):
         raise RuntimeTargetManifestError(f"{path} must be a JSON object")

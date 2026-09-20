@@ -223,7 +223,26 @@ jobs:
             --image="${image_repo}@${digest}" --no-traffic \
             --update-labels="commit-sha=${SOURCE_COMMIT},github-run-id=${GITHUB_RUN_ID}" --quiet
 
+  resolve-matrix:
+    name: Resolve runtime-target matrix
+    # Same gate as sync: no dynamic deploy matrix for image-only staging.
+    if: github.event_name == 'workflow_dispatch' && inputs.deployment_mode != 'image-only-no-traffic'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.render.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Render validated matrix from public manifest
+        id: render
+        run: |
+          set -euo pipefail
+          python3 scripts/render_runtime_target_matrix.py --profile sync --github-output
+
   sync:
+    needs: resolve-matrix
     name: Deploy / Sync ${{ matrix.target.label }} Cloud Run
     # Production deployment and environment sync require an explicit operator dispatch.
     if: github.event_name == 'workflow_dispatch' && inputs.deployment_mode != 'image-only-no-traffic'
@@ -231,17 +250,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        target:
-          - label: PAPER
-            environment: longbridge-paper
-            default_account_region: PAPER
-          - label: HK
-            environment: longbridge-hk
-            default_account_region: HK
-          - label: SG
-            environment: longbridge-sg
-            default_account_region: SG
+      matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}
     permissions:
       actions: read
       contents: read

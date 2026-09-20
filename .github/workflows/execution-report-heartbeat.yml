@@ -29,20 +29,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve-matrix:
+    name: Resolve runtime-target matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.render.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Render validated matrix from public manifest
+        id: render
+        run: |
+          set -euo pipefail
+          python3 scripts/render_runtime_target_matrix.py --profile heartbeat --github-output
+
   heartbeat:
+    needs: resolve-matrix
     name: Check ${{ matrix.target.label }} execution report heartbeat
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      matrix:
-        target:
-          - label: PAPER
-            environment: longbridge-paper
-          - label: HK
-            environment: longbridge-hk
-          - label: SG
-            environment: longbridge-sg
+      matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}
     permissions:
       contents: read
       id-token: write

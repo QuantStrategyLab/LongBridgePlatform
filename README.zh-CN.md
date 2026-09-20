@@ -58,7 +58,7 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 ## 延伸文档
 
 - [`docs/hk_equity_runtime.md`](docs/hk_equity_runtime.md)
-- [`docs/runtime_target_manifest.md`](docs/runtime_target_manifest.md)：公开 runtime-target manifest 契约、增减目标步骤与下一阶段 workflow wiring 边界
+- [`docs/runtime_target_manifest.md`](docs/runtime_target_manifest.md)：公开 runtime-target manifest 契约、动态 workflow matrix 渲染与 Environment 启停边界
 
 ## 社区和安全
 
