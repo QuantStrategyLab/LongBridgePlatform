@@ -122,6 +122,16 @@ PLATFORM_GENERIC_ENV = (
     "LONGBRIDGE_EXECUTION_COMMAND_CLOUD_URI",
 )
 
+# Paper-only durable-command switches. Live / formal targets must never sync
+# these (including from shared GitHub vars); keep them only for explicit paper
+# dry-run targets. LIVE_ENABLED is intentionally not in this set.
+PAPER_ONLY_DURABLE_COMMAND_ENV = frozenset(
+    {
+        "LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_ENABLED",
+        "LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_CONSUMER_ENABLED",
+    }
+)
+
 # Strategy-derived vars: auto-populated from platform-config.json defaults.
 # Each entry maps a platform-config.json path to (env_var_name, default_factory).
 # The factory receives the strategy's config dict and returns a string value.
@@ -408,6 +418,7 @@ def _build_target_plan(
     )
 
     remove_env_vars: list[str] = []
+    allow_paper_only_flags = _is_explicit_paper_dry_run_target(runtime_target, env_values)
     for name in OPTIONAL_TARGET_ENV:
         # 1. Explicit GitHub variable
         value = _target_env_value(
@@ -453,6 +464,12 @@ def _build_target_plan(
             )
             if secret_name:
                 value = f"lb:{secret_name}"
+
+        if name in PAPER_ONLY_DURABLE_COMMAND_ENV and not allow_paper_only_flags:
+            # Live / formal targets: never deploy paper-only switches, and
+            # explicitly remove any leftover Cloud Run values.
+            remove_env_vars.append(name)
+            continue
 
         if value is None:
             # Do not delete LONGBRIDGE_PHYSICAL_ACCOUNT_ID from Cloud Run when
@@ -566,6 +583,19 @@ def _runtime_target_enabled(env_values: Mapping[str, str]) -> bool:
     if raw in {"0", "false", "no", "off"}:
         return False
     raise ValueError("RUNTIME_TARGET_ENABLED must be true or false")
+
+
+def _is_explicit_paper_dry_run_target(
+    runtime_target: Mapping[str, object],
+    env_values: Mapping[str, str],
+) -> bool:
+    """Paper-only durable flags are allowed only for explicit paper dry-run."""
+    dry_run_raw = env_values.get("LONGBRIDGE_DRY_RUN_ONLY")
+    if dry_run_raw is None:
+        dry_run_raw = _coerce_env_value(runtime_target.get("dry_run_only"))
+    dry_run = str(dry_run_raw or "").strip().lower() in {"1", "true", "yes", "on"}
+    execution_mode = str(runtime_target.get("execution_mode") or "").strip().lower()
+    return dry_run and execution_mode == "paper"
 
 
 def _resolve_runtime_target(

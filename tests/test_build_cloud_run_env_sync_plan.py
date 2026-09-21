@@ -95,6 +95,67 @@ def runtime_target_json(
     return json.dumps(payload, separators=(",", ":"))
 
 
+def test_live_target_strips_paper_only_durable_command_flags():
+    """Live / formal targets must never sync paper-only durable command switches.
+
+    Regression: SG live (dry_run_only=false, execution_mode=live) previously
+    absorbed LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_* from shared vars and
+    deployed them, causing runtime paper_live_conflict before order submit.
+    """
+    paper_flags = (
+        "LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_ENABLED",
+        "LONGBRIDGE_DURABLE_EXECUTION_COMMAND_PAPER_CONSUMER_ENABLED",
+    )
+    payload = {
+        "defaults": {
+            "GLOBAL_TELEGRAM_CHAT_ID": "5992562050",
+            "NOTIFY_LANG": "zh",
+            "LONGBRIDGE_MARKET": "US",
+            "LONGBRIDGE_MARKET_TIMEZONE": "America/New_York",
+            **{name: "true" for name in paper_flags},
+        },
+        "targets": [
+            {
+                "service": "longbridge-quant-sg-service",
+                "account_prefix": "SG",
+                "runtime_target": json.loads(
+                    runtime_target_json(
+                        "tqqq_growth_income",
+                        dry_run_only=False,
+                        deployment_selector="SG",
+                        account_scope="SG",
+                        service_name="longbridge-quant-sg-service",
+                    )
+                ),
+            }
+        ],
+    }
+    env = {
+        **os.environ,
+        "CLOUD_RUN_SERVICE_TARGETS_JSON": json.dumps(payload),
+        "CLOUD_RUN_SERVICE": "longbridge-quant-sg-service",
+        "LONGBRIDGE_DRY_RUN_ONLY": "false",
+        **{name: "true" for name in paper_flags},
+    }
+
+    result = subprocess.run(
+        [sys.executable, str(SYNC_PLAN_SCRIPT_PATH), "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    target = json.loads(result.stdout)["targets"][0]
+    runtime_target = json.loads(target["env"]["RUNTIME_TARGET_JSON"])
+    assert runtime_target["dry_run_only"] is False
+    assert runtime_target["execution_mode"] == "live"
+    assert target["env"]["LONGBRIDGE_DRY_RUN_ONLY"] == "false"
+    for name in paper_flags:
+        assert name not in target["env"]
+        assert name in target["remove_env_vars"]
+
+
 def test_build_cloud_run_env_sync_plan_legacy_mode_uses_shared_env():
     env = {
         **os.environ,
@@ -104,6 +165,7 @@ def test_build_cloud_run_env_sync_plan_legacy_mode_uses_shared_env():
         "ACCOUNT_PREFIX": "PAPER",
         "RUNTIME_TARGET_JSON": runtime_target_json(
             "soxl_soxx_trend_income",
+            dry_run_only=True,
             deployment_selector="PAPER",
             account_scope="PAPER",
             service_name="longbridge-quant-paper-service",
