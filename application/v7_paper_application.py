@@ -33,7 +33,7 @@ V7_PAPER_PLATFORM = "longbridge"
 # The research contract's frozen source is 07b164..., while the package that
 # is actually approved for the disabled account process tracks the platform UES pin.
 # Keep research source_commit separate from approved_ues_revision.
-V7_APPROVED_UES_REVISION = "4a3943883cd6b5bbfe32a559e56a91b40a81b7ce"
+V7_APPROVED_UES_REVISION = "8412d8338879f335ef8830678c2733e02e53e7c7"
 
 _COMMIT_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 _TICKET_PATTERN = re.compile(r"^rpt_[0-9a-fA-F]{64}$")
