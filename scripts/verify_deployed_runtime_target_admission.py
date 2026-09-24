@@ -94,6 +94,8 @@ def verify_ues_image_pin(
     *, service: str, project: str, region: str, service_json: Mapping[str, Any], admission: Mapping[str, object]
 ) -> None:
     """Keep a configured account on its serving UES pin until the target approves a change."""
+    if not admission["enabled"]:
+        return
     if admission["profile"] not in {
         "soxl_soxx_trend_income", "russell_top50_leader_rotation"
     }:
