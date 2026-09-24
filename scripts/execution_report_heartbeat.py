@@ -1048,8 +1048,19 @@ def _is_accepted_report(payload: dict[str, Any]) -> tuple[bool, str]:
     status, stage = _report_status(payload)
     status_key = status.lower()
     stage_key = stage.upper()
+    summary = payload.get("summary")
+    execution_status = (
+        str(summary.get("execution_status") or "").strip().lower()
+        if isinstance(summary, dict)
+        else ""
+    )
     errors = _report_errors(payload)
     notification_failure = _report_notification_failure(payload)
+    if (
+        execution_status in {"blocked", "error", "failed", "failure"}
+        or execution_status.endswith("_blocked")
+    ):
+        return False, f"rejected execution_status={execution_status}"
     if errors and not allow_errors:
         return False, f"errors={len(errors)} status={status or '-'} stage={stage or '-'}"
     if notification_failure:
