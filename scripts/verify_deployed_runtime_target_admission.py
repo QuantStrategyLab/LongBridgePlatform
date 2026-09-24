@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
+import tomllib
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
@@ -19,6 +22,98 @@ from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
 
 class AdmissionError(ValueError):
     """A deployed runtime target is not safe to receive a new image."""
+
+
+_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _locked_ues_revision(lock_text: str) -> str:
+    try:
+        packages = tomllib.loads(lock_text)["package"]
+        sources = [
+            package["source"]["git"]
+            for package in packages
+            if package.get("name") == "us-equity-strategies"
+        ]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AdmissionError("UES lock entry is missing or invalid") from exc
+    if len(sources) != 1:
+        raise AdmissionError("UES lock must contain exactly one package")
+    match = re.search(r"[?&]rev=([0-9a-f]{40})#([0-9a-f]{40})$", sources[0])
+    if not match or match.group(1) != match.group(2):
+        raise AdmissionError("UES lock must resolve to one full commit SHA")
+    return match.group(1)
+
+
+def _candidate_ues_revision() -> str:
+    root = Path(__file__).resolve().parents[1]
+    candidate = _locked_ues_revision((root / "uv.lock").read_text(encoding="utf-8"))
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = project.get("project", {}).get("dependencies", [])
+    refs = [
+        match.group(1)
+        for dependency in dependencies
+        if (match := re.match(
+            r"^us-equity-strategies\s*@\s*git\+https://github\.com/QuantStrategyLab/UsEquityStrategies\.git@([0-9a-f]{40})$",
+            dependency,
+        ))
+    ]
+    if refs != [candidate]:
+        raise AdmissionError("UES pyproject and uv.lock revisions differ")
+    qsl = tomllib.loads((root / "qsl.toml").read_text(encoding="utf-8"))
+    if qsl.get("qsl", {}).get("requires", {}).get("us_equity_strategies") != candidate:
+        raise AdmissionError("UES QSL contract and uv.lock revisions differ")
+    return candidate
+
+
+def _serving_ues_revisions(*, service: str, project: str, region: str, service_json: Mapping[str, Any]) -> set[str]:
+    traffic = service_json.get("status", {}).get("traffic", [])
+    if not isinstance(traffic, list):
+        raise AdmissionError(f"{service}: serving traffic is unavailable")
+    serving = [entry.get("revisionName") for entry in traffic if isinstance(entry, Mapping) and entry.get("percent", 0) > 0]
+    if not serving or any(not isinstance(revision, str) or not revision for revision in serving):
+        raise AdmissionError(f"{service}: serving revisions are unavailable")
+    revisions = set()
+    for revision in serving:
+        try:
+            revision_json = json.loads(_run([
+                "gcloud", "run", "revisions", "describe", revision,
+                f"--project={project}", f"--region={region}", "--format=json",
+            ]))
+            source_sha = revision_json["metadata"]["labels"]["commit-sha"]
+            if not isinstance(source_sha, str) or not _SHA.fullmatch(source_sha):
+                raise ValueError("invalid source SHA")
+            lock_text = _run(["git", "show", f"{source_sha}:uv.lock"])
+            revisions.add(_locked_ues_revision(lock_text))
+        except (KeyError, TypeError, ValueError, AdmissionError) as exc:
+            raise AdmissionError(f"{service}: serving UES revision cannot be independently verified") from exc
+    return revisions
+
+
+def verify_ues_image_pin(
+    *, service: str, project: str, region: str, service_json: Mapping[str, Any], admission: Mapping[str, object]
+) -> None:
+    """Keep a configured account on its serving UES pin until the target approves a change."""
+    if not admission["enabled"]:
+        return
+    if admission["profile"] not in {
+        "soxl_soxx_trend_income", "russell_top50_leader_rotation"
+    }:
+        return
+    candidate = _candidate_ues_revision()
+    env = _container_env(service_json)
+    target = json.loads(env.get("RUNTIME_TARGET_JSON") or env.get("QSL_RUNTIME_TARGET_JSON") or "{}")
+    release = target.get("strategy_release") or {}
+    risk_binding = (target.get("runtime_risk_limits") or {}).get("binding") or {}
+    approved = release.get("strategy_revision")
+    risk_pin = risk_binding.get("ues_revision")
+    if approved is not None or risk_pin is not None:
+        if approved != candidate or (admission["profile"] == "soxl_soxx_trend_income" and risk_pin != candidate):
+            raise AdmissionError(f"{service}: candidate UES revision does not match approved target binding")
+        return
+    serving = _serving_ues_revisions(service=service, project=project, region=region, service_json=service_json)
+    if serving != {candidate}:
+        raise AdmissionError(f"{service}: candidate UES revision differs from serving image without approved target binding")
 
 
 def _run(command: Sequence[str]) -> str:
@@ -132,9 +227,17 @@ def main() -> int:
     parser.add_argument("--service", required=True)
     args = parser.parse_args()
     try:
+        service_json = _describe_service(service=args.service, project=args.project, region=args.region)
         result = verify_service(
             service=args.service,
-            service_json=_describe_service(service=args.service, project=args.project, region=args.region),
+            service_json=service_json,
+        )
+        verify_ues_image_pin(
+            service=args.service,
+            project=args.project,
+            region=args.region,
+            service_json=service_json,
+            admission=result,
         )
     except AdmissionError as exc:
         print(f"Deployed runtime target admission failed: {exc}", file=sys.stderr)

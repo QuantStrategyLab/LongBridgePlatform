@@ -510,6 +510,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
+          # The image admission check compares against the source of each
+          # revision currently receiving production traffic.
+          fetch-depth: 0
 
       - name: Apply HK verify-only dispatch defaults
         if: steps.config.outputs.enabled == 'true' && github.event_name == 'workflow_dispatch' && inputs.target == 'hk-verify'
