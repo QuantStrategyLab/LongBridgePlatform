@@ -1165,7 +1165,7 @@ def _notify_normal_heartbeat(name: str, detail: str) -> None:
         detail=_localized_heartbeat_detail(detail),
     )
     if not _send_telegram(message):
-        print("Execution report heartbeat normal-summary notification was not acknowledged", file=sys.stderr)
+        raise RuntimeError("Execution report heartbeat normal-summary notification was not acknowledged")
 
 
 def main(now: dt.datetime | None = None) -> int:
@@ -1177,7 +1177,6 @@ def main(now: dt.datetime | None = None) -> int:
     name = os.environ.get("RUNTIME_HEARTBEAT_NAME") or os.environ.get("GITHUB_REPOSITORY") or "runtime"
     if not _runtime_target_enabled():
         print(f"Execution report heartbeat skipped for {name}: runtime target is disabled")
-        _notify_normal_heartbeat(name, "Runtime target is disabled; no order was submitted.")
         return 0
     if (
         runtime_target_configuration_present(os.environ)
@@ -1199,6 +1198,7 @@ def main(now: dt.datetime | None = None) -> int:
         now = now.replace(tzinfo=dt.timezone.utc)
     now = now.astimezone(dt.timezone.utc)
     since = now - dt.timedelta(hours=lookback_hours)
+    due_since = max(since, now - dt.timedelta(hours=24))
     runtime_targets = load_runtime_targets(os.environ)
     try:
         runtime_targets = _hydrate_runtime_target_profiles(
@@ -1228,14 +1228,14 @@ def main(now: dt.datetime | None = None) -> int:
         raise ValueError("RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES must be non-negative")
     due_targets, target_schedule_evaluated = filter_due_targets(
         runtime_targets,
-        since=since,
+        since=due_since,
         now=now,
         market_aware=_env_bool("RUNTIME_HEARTBEAT_MARKET_AWARE", True),
         publication_grace=dt.timedelta(minutes=publication_grace_minutes),
     )
     if runtime_targets and target_schedule_evaluated and not due_targets:
         target_names = ", ".join(target_label(target) for target in runtime_targets)
-        schedule_reason = _runtime_target_scheduler_skip_reason(since, now)
+        schedule_reason = _runtime_target_scheduler_skip_reason(due_since, now)
         print(
             f"Execution report heartbeat skipped for {name}: "
             + (
@@ -1247,7 +1247,7 @@ def main(now: dt.datetime | None = None) -> int:
         _notify_normal_heartbeat(name, "No scheduled trading window was due; no order was submitted.")
         return 0
     if not runtime_targets:
-        runtime_target_skip_reason = _runtime_target_scheduler_skip_reason(since, now)
+        runtime_target_skip_reason = _runtime_target_scheduler_skip_reason(due_since, now)
         if runtime_target_skip_reason:
             print(f"Execution report heartbeat skipped for {name}: {runtime_target_skip_reason}")
             _notify_normal_heartbeat(name, "No scheduled trading window was due; no order was submitted.")
@@ -1255,7 +1255,7 @@ def main(now: dt.datetime | None = None) -> int:
 
     required_services, scheduler_skip_reason, _scheduler_checked = _resolve_required_services(
         project=project,
-        since=since,
+        since=due_since,
         now=now,
     )
     if scheduler_skip_reason:
@@ -1299,6 +1299,7 @@ def main(now: dt.datetime | None = None) -> int:
         raise SystemExit(str(exc)) from exc
     if expected_window and not expected_window[0]:
         print(f"Execution report heartbeat skipped for {name}: {expected_window[1]}")
+        _notify_normal_heartbeat(name, "No scheduled trading window was due; no order was submitted.")
         return 0
 
     globs = _report_globs(since, now)
@@ -1333,6 +1334,9 @@ def main(now: dt.datetime | None = None) -> int:
         )
         if not matches:
             inspected.append(f"- {updated.isoformat()} {uri} skipped {filter_reason}")
+            continue
+        if updated < due_since:
+            inspected.append(f"- {updated.isoformat()} {uri} skipped predates daily heartbeat window")
             continue
         latest_due_at = required_due_at.get(service_name)
         if latest_due_at is not None and updated < latest_due_at:
