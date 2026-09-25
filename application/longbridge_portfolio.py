@@ -34,30 +34,38 @@ def _normalize_symbol(symbol: str) -> str:
     return str(symbol or "").strip().upper()
 
 
-def _heartbeat_account_snapshot(account_balance, currency: str, broker_capital: dict | None, observed_at: datetime) -> dict | None:
+def _heartbeat_account_snapshot(account_balance, currency: str, observed_at: datetime) -> dict | None:
     """Project the existing broker read for display without cash zero defaults."""
-    balances = [account for account in account_balance if getattr(account, "currency", None) == currency]
-    if len(balances) != 1:
-        return None
+    balances = list(account_balance)
     cash_rows = [
-        item for item in (getattr(balances[0], "cash_infos", None) or [])
+        item for account in balances for item in (getattr(account, "cash_infos", None) or [])
         if str(getattr(item, "currency", "") or "").strip().upper() == currency
     ]
     snapshot = {
-        "currency": currency,
         "observed_at": observed_at.isoformat(),
     }
     if cash_rows:
-        amounts = [getattr(item, "available_cash", None) for item in cash_rows]
+        amounts = [getattr(row, "available_cash", None) for row in cash_rows]
         if all(value is not None and not isinstance(value, bool) for value in amounts):
             try:
                 cash = math.fsum(float(value) for value in amounts)
             except (TypeError, ValueError, OverflowError):
                 cash = None
             if cash is not None and math.isfinite(cash):
-                snapshot["available_cash"] = cash
-    if broker_capital is not None:
-        snapshot["net_assets"] = broker_capital["net_assets"]
+                snapshot.update(available_cash=cash, cash_currency=currency)
+    # A broker total in another currency is still useful, but only one balance
+    # row can establish that it represents the entire account.
+    if len(balances) == 1:
+        account = balances[0]
+        equity_currency = str(getattr(account, "currency", "") or "").strip().upper()
+        raw_equity = getattr(account, "net_assets", None)
+        if equity_currency and raw_equity is not None and not isinstance(raw_equity, bool):
+            try:
+                equity = float(raw_equity)
+            except (TypeError, ValueError, OverflowError):
+                equity = None
+            if equity is not None and math.isfinite(equity) and equity > 0:
+                snapshot.update(net_assets=equity, equity_currency=equity_currency)
     return snapshot if "available_cash" in snapshot or "net_assets" in snapshot else None
 
 
@@ -206,7 +214,7 @@ def fetch_strategy_account_state(
     broker_capital = _broker_capital(account_balance, trading_currency, observed_at)
     return {
         "broker_capital": broker_capital,
-        "heartbeat_account_snapshot": _heartbeat_account_snapshot(account_balance, trading_currency, broker_capital, observed_at),
+        "heartbeat_account_snapshot": _heartbeat_account_snapshot(account_balance, trading_currency, observed_at),
         "available_cash": available_cash,
         "cash_by_currency": cash_by_currency,
         "market_values": market_values,

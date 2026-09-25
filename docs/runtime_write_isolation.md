@@ -71,11 +71,12 @@ successful business cycle.
 
 The cycle carries a display-only `heartbeat_account_snapshot` into its notification
 and `summary.heartbeat_account_snapshot` report field from its own existing initial
-broker balance read: `available_cash`, `net_assets`, `currency`, and ISO
-`observed_at`. The projection requires one matching-currency account balance;
-each amount is validated separately. Account total equity requires finite
-positive broker `net_assets` and never uses the strategy subset's equity. Cash
-requires explicit finite values. Missing cash rows or fields are not converted
+broker balance read: `available_cash`, `cash_currency`, `net_assets`,
+`equity_currency`, and ISO `observed_at`. Each amount is validated separately.
+Account total equity requires one unambiguous account balance row with finite
+positive broker `net_assets`; it keeps the broker's own currency and never uses
+the strategy subset's equity. Cash sums explicit finite rows in the trading
+currency and labels that currency separately. Missing cash rows or fields are not converted
 to zero; unavailable amounts display
 `未核实` / `Unverified`. The timestamp labels the pre-rebalance observation.
 Notification rendering never reads the broker or falls back to an older report.
