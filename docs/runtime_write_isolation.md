@@ -36,6 +36,50 @@ Readbacks:
 - Pause/resume existing Scheduler jobs from `RUNTIME_TARGET_ENABLED` / desired config alone.
 - Treat Guard success, CI green, or deploy success as a natural trading cycle.
 
+## Runtime Guard evidence boundary
+
+Runtime Guard checks configured Cloud Run and Scheduler logs for errors. Its
+no-alert message only describes those log checks, not strategy-cycle completion.
+By default, `RUNTIME_GUARD_REQUIRE_SUCCESS=false` also allows a window with no
+HTTP responses. A zero exit code alone is not even an absence-of-alert guarantee:
+`RUNTIME_GUARD_FAIL_WORKFLOW_ON_ALERT=false` allows it after an alert is emitted.
+
+The HTTP count includes all 2xx/3xx responses, including health checks, login
+redirects, and disabled no-op requests. Setting
+`RUNTIME_GUARD_REQUIRE_SUCCESS=true` requires such a response for each configured
+service, but still does not check business-cycle completion.
+
+Assess business operation from a timely execution report for the actual target,
+with account identity, order outcomes, and reconciliation evidence. If that
+evidence is missing or stale, business-cycle status remains unknown even when
+the log guard passes. These log checks do not authorize production recovery.
+
+## Cycle heartbeat and account values
+
+An authorized, market-open `/run` emits its no-trade heartbeat through the existing
+`run_strategy` notification branch as the cycle finishes. `NOTIFY_LANG` selects
+Chinese or English. Pending orders and completed actions retain their existing
+separate notifications; disabled, market-closed, validation-only and dry-run paths
+do not gain a success heartbeat. Existing execution deduplication and notification
+delivery acknowledgement remain unchanged.
+
+The scheduled execution-report scanner keeps its cadence and failure alerts, but
+never sends success summaries, even if the legacy
+`RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS` variable is true. This prevents delayed or
+duplicate success notifications and avoids describing a no-due window as a
+successful business cycle.
+
+The cycle carries a display-only `heartbeat_account_snapshot` into its notification
+and `summary.heartbeat_account_snapshot` report field from its own existing initial
+broker balance read: `available_cash`, `net_assets`, `currency`, and ISO
+`observed_at`. The projection requires one matching-currency account balance;
+each amount is validated separately. Account total equity requires finite
+positive broker `net_assets` and never uses the strategy subset's equity. Cash
+requires explicit finite values. Missing cash rows or fields are not converted
+to zero; unavailable amounts display
+`未核实` / `Unverified`. The timestamp labels the pre-rebalance observation.
+Notification rendering never reads the broker or falls back to an older report.
+
 ## Safety gates kept
 
 - V7 paused PAPER binding refusal

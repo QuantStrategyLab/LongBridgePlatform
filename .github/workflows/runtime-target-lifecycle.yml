@@ -196,7 +196,7 @@ jobs:
           print(f"execution_mode={mode}")
           PY
 
-      - name: Check Cloud Run runtime without notification side effects
+      - name: Check Cloud Run and Scheduler logs without notification side effects
         if: ${{ steps.selection.outputs.selected == 'true' }}
         id: runtime_guard
         env:
@@ -349,7 +349,7 @@ jobs:
             echo "| Target | longbridge.${{ matrix.target.id }} |"
             echo "| Configured state | ${{ steps.target_state.outputs.configured_state }} |"
             echo "| Intended lane | ${{ steps.target_state.outputs.execution_mode }} |"
-            echo "| Runtime guard | ${{ steps.runtime_guard.outputs.status }} |"
+            echo "| Request/error log guard | ${{ steps.runtime_guard.outputs.status }} |"
             echo "| Execution heartbeat | ${{ steps.execution_heartbeat.outputs.status }} |"
             echo "| Production drift | ${{ steps.production_drift.outputs.status }} |"
             echo

@@ -185,6 +185,7 @@ class LongBridgeBrokerAdapters:
             metadata={
                 "account_hash": self.account_hash,
                 "broker_capital": account_state.get("broker_capital"),
+                "heartbeat_account_snapshot": account_state.get("heartbeat_account_snapshot"),
             },
         )
 

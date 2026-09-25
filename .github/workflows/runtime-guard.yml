@@ -9,7 +9,7 @@ on:
         type: string
         default: "180"
       require_success:
-        description: "Alert if no successful Cloud Run request exists in the lookback window."
+        description: "Alert if no HTTP 2xx/3xx response is logged; does not verify strategy cycles."
         required: false
         type: choice
         default: "false"
@@ -55,7 +55,7 @@ jobs:
 
   guard:
     needs: resolve-matrix
-    name: Check ${{ matrix.target.label }} Cloud Run runtime
+    name: Check ${{ matrix.target.label }} Cloud Run and Scheduler logs
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:

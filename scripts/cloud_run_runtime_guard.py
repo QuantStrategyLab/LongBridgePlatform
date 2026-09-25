@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check Cloud Scheduler and Cloud Run logs, then notify Telegram on failures."""
+"""Check Cloud Scheduler and Cloud Run logs, without verifying strategy cycles."""
 
 from __future__ import annotations
 
@@ -596,6 +596,7 @@ def _is_failure(entry: dict[str, Any]) -> bool:
 
 
 def _is_success(entry: dict[str, Any]) -> bool:
+    """Count HTTP responses only, not completed strategy cycles."""
     status = _status(entry)
     return status is not None and 200 <= status < 400
 
@@ -814,7 +815,10 @@ def main() -> int:
     if not issues:
         service_text = ", ".join(services) if services else "<none configured>"
         print(
-            f"Runtime guard OK for {name}: services={service_text}, lookback={lookback_minutes}m, successes={success_count}"
+            f"Runtime guard found no configured log alerts for {name}: "
+            f"services={service_text}, lookback={lookback_minutes}m, "
+            f"HTTP 2xx/3xx requests={success_count}. "
+            "Business-cycle completion is not checked."
         )
         return 0
 
