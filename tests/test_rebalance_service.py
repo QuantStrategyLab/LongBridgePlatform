@@ -2539,7 +2539,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("💓 【心跳检测】", sent_messages[0])
+        self.assertIn("💓 【策略运行心跳】", sent_messages[0])
         self.assertNotIn("⏱ 执行时点:", sent_messages[0])
         self.assertIn("本轮没有可执行订单", sent_messages[0])
         self.assertIn("说明", sent_messages[0])
@@ -2696,11 +2696,11 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("💓 【心跳检测】", sent_messages[0])
+        self.assertIn("💓 【策略运行心跳】", sent_messages[0])
         self.assertIn("⚠️ 本轮没有可执行订单", sent_messages[0])
         self.assertIn("QQQ.US 目标金额 $507.87 低于 1 股价格 $715.86", sent_messages[0])
         self.assertIn("现金替代：现金", sent_messages[0])
-        self.assertNotIn("✅ 无需调仓", sent_messages[0])
+        self.assertNotIn("✅ 无交易，无需调仓", sent_messages[0])
 
     def test_tqqq_delevered_qqqm_target_is_executable_for_small_account(self):
         plan = _build_plan(
@@ -2859,7 +2859,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("💓 【心跳检测】", sent_messages[0])
+        self.assertIn("💓 【策略运行心跳】", sent_messages[0])
         self.assertIn("BOXX.US 目标差额 $1005.08 未超过 1 股价格 $1167.40", sent_messages[0])
         self.assertNotIn("可投资现金 $164.98 不足买入 1 股", sent_messages[0])
 
@@ -3108,7 +3108,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertNotIn("账户现金", sent_messages[0])
         self.assertIn("可用现金: $3065.61 | 可投资现金: $0.00", sent_messages[0])
         self.assertIn("BOXX: $24,880.00 / 214股", sent_messages[0])
-        self.assertIn("✅ 无需调仓", sent_messages[0])
+        self.assertIn("✅ 无交易，无需调仓", sent_messages[0])
         self.assertNotIn("本轮没有可执行订单", sent_messages[0])
         self.assertNotIn("说明", sent_messages[0])
         self.assertNotIn("买入跳过", sent_messages[0])
@@ -3178,7 +3178,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertTrue(any("各币种现金: SGD 350.00" in message for message in sent_messages))
         self.assertTrue(any("检测到非 USD 现金" in message for message in sent_messages))
         self.assertTrue(any("本轮没有可执行订单" in message for message in sent_messages))
-        self.assertFalse(any("✅ 无需调仓" in message for message in sent_messages))
+        self.assertFalse(any("✅ 无交易，无需调仓" in message for message in sent_messages))
 
     def test_refreshes_account_state_after_sell_and_can_place_followup_buy(self):
         initial_plan = _build_plan(
@@ -3606,7 +3606,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("💓 【心跳检测】", sent_messages[0])
+        self.assertIn("💓 【策略运行心跳】", sent_messages[0])
         self.assertIn("BOXX.US 剩余可投资现金 $1200.00", sent_messages[0])
         self.assertIn("券商估算可买数量为 0", sent_messages[0])
         self.assertNotIn("市价买入] BOXX", sent_messages[0])
@@ -3787,7 +3787,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("💓 【心跳检测】", sent_messages[0])
+        self.assertIn("💓 【策略运行心跳】", sent_messages[0])
         self.assertIn("可投资现金", sent_messages[0])
         self.assertNotIn("💵 资金\n  - 账户现金:", sent_messages[0])
         self.assertIn("📌 策略账户概览", sent_messages[0])
@@ -3831,7 +3831,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("💓 【心跳检测】", sent_messages[0])
+        self.assertIn("💓 【策略运行心跳】", sent_messages[0])
         self.assertIn("🧭 策略: TQQQ 增长收益", sent_messages[0])
         self.assertIn("🧪 模拟运行模式", sent_messages[0])
         self.assertIn("📌 策略账户概览", sent_messages[0])
