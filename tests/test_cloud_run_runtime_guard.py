@@ -169,21 +169,12 @@ def test_heartbeat_activity_label_identifies_no_trade_and_rebalance():
     ) == "rebalance action recorded"
 
 
-def test_heartbeat_normal_summary_is_opt_in(monkeypatch):
+def test_heartbeat_scanner_does_not_send_delayed_success(monkeypatch):
     sent = []
     monkeypatch.setattr(heartbeat, "_send_telegram", lambda message: sent.append(message) or True)
-    monkeypatch.delenv("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", raising=False)
-
-    heartbeat._notify_normal_heartbeat("LongBridge SG", "no trade")
-    assert sent == []
-
     monkeypatch.setenv("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", "true")
     heartbeat._notify_normal_heartbeat("LongBridge SG", "no trade")
-    assert sent == ["[Execution Report Heartbeat] LongBridge SG\nStatus: normal\nno trade"]
-
-    monkeypatch.setenv("NOTIFY_LANG", "zh-CN")
-    heartbeat._notify_normal_heartbeat("LongBridge SG", "no trade@2026-09-01T00:00:00Z")
-    assert sent[-1] == "[执行回执心跳] LongBridge SG\n状态：正常\n无交易@2026-09-01T00:00:00Z"
+    assert sent == []
 
 
 def test_cloud_run_log_since_uses_latest_ready_revision(monkeypatch):

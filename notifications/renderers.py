@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import math
 
 from notifications.events import RenderedNotification
 from quant_platform_kit.common.notification_localization import (
@@ -354,6 +355,29 @@ def render_rebalance_notification(
     )
 
 
+def _append_heartbeat_account_lines(lines, *, execution, translator) -> None:
+    # Only run_strategy supplies this projection from its own broker snapshot.
+    # Dashboard equity describes the strategy subset, not the full account.
+    snapshot = execution.get("heartbeat_account_snapshot")
+    snapshot = snapshot if isinstance(snapshot, Mapping) else {}
+    currency = str(snapshot.get("currency") or "").strip()
+    observed_at = str(snapshot.get("observed_at") or "").strip()
+    for field, label in (
+        ("available_cash", "heartbeat_available_cash"),
+        ("net_assets", "heartbeat_account_equity"),
+    ):
+        amount = snapshot.get(field)
+        valid = (
+            isinstance(amount, (int, float)) and not isinstance(amount, bool)
+            and math.isfinite(amount) and bool(currency) and bool(observed_at)
+            and (field != "net_assets" or amount > 0)
+        )
+        value = f"{currency} {amount:,.2f}" if valid else translator("heartbeat_unverified")
+        lines.append(translator(label, value=value))
+    if currency and observed_at:
+        lines.append(translator("heartbeat_account_observed", value=observed_at))
+
+
 def render_heartbeat_notification(
     *,
     execution,
@@ -371,6 +395,7 @@ def render_heartbeat_notification(
     if dry_run_only:
         detailed_lines.append(translator("dry_run_banner"))
     _append_extra_notification_lines(detailed_lines, extra_notification_lines)
+    _append_heartbeat_account_lines(detailed_lines, execution=execution, translator=translator)
     _append_dashboard_block(detailed_lines, execution=execution, separator=separator, translator=translator)
     _append_timing_lines(detailed_lines, execution=execution, translator=translator)
     _append_signal_snapshot_line(detailed_lines, execution=execution, translator=translator)
@@ -407,6 +432,7 @@ def render_heartbeat_notification(
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
     _append_extra_notification_lines(compact_lines, extra_notification_lines)
+    _append_heartbeat_account_lines(compact_lines, execution=execution, translator=translator)
     _append_dashboard_block(compact_lines, execution=execution, separator=separator, translator=translator, compact=True)
     compact_lines.extend(
         [

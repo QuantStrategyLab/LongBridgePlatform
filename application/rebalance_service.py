@@ -1101,6 +1101,12 @@ def run_strategy(
     note_logs = list(execution_result.note_logs)
     action_done = execution_result.action_done
     pending_orders = tuple(getattr(execution_result, "pending_orders", ()) or ())
+    # Display-only evidence from this cycle's existing initial broker read.
+    # Share it with the cycle notification and report; never fetch another balance.
+    account_snapshot = (getattr(initial_snapshot, "metadata", {}) or {}).get("heartbeat_account_snapshot")
+    execution.pop("heartbeat_account_snapshot", None)
+    if isinstance(account_snapshot, dict):
+        execution["heartbeat_account_snapshot"] = dict(account_snapshot)
 
     if pending_orders:
         try:

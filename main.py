@@ -387,6 +387,9 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
             "quotes": [dict(snapshot) for snapshot in quote_snapshots],
         }
     execution = dict(getattr(cycle_result, "execution", {}) or {})
+    account_snapshot = execution.get("heartbeat_account_snapshot")
+    if isinstance(account_snapshot, dict):
+        summary["heartbeat_account_snapshot"] = dict(account_snapshot)
     if execution.get("execution_status") == "blocked":
         summary["execution_status"] = "blocked"
         summary["blocked_reason"] = (

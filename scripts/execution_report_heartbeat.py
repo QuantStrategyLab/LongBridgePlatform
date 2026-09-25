@@ -16,7 +16,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from quant_platform_kit.common.operational_notification_localization import (
     format_operational_alert,
-    format_operational_heartbeat_status,
     localize_operational_activity,
     operational_notification_text,
     resolve_operational_notification_locale,
@@ -1168,15 +1167,10 @@ def _localized_heartbeat_detail(detail: str) -> str:
 
 
 def _notify_normal_heartbeat(name: str, detail: str) -> None:
-    if not _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
-        return
-    message = format_operational_heartbeat_status(
-        locale=_notification_locale(),
-        name=name,
-        detail=_localized_heartbeat_detail(detail),
-    )
-    if not _send_telegram(message):
-        raise RuntimeError("Execution report heartbeat normal-summary notification was not acknowledged")
+    # Successful no-trade runs notify in run_strategy, using that cycle's broker
+    # snapshot. Scheduled scans retain alerts but never duplicate cycle success.
+    if _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
+        print(f"Execution report success notification skipped for {name}: cycle notifications belong to the runtime; scanner is alerts-only")
 
 
 def main(now: dt.datetime | None = None) -> int:
