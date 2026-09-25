@@ -360,21 +360,24 @@ def _append_heartbeat_account_lines(lines, *, execution, translator) -> None:
     # Dashboard equity describes the strategy subset, not the full account.
     snapshot = execution.get("heartbeat_account_snapshot")
     snapshot = snapshot if isinstance(snapshot, Mapping) else {}
-    currency = str(snapshot.get("currency") or "").strip()
     observed_at = str(snapshot.get("observed_at") or "").strip()
+    any_verified = False
     for field, label in (
         ("available_cash", "heartbeat_available_cash"),
         ("net_assets", "heartbeat_account_equity"),
     ):
+        currency_field = "cash_currency" if field == "available_cash" else "equity_currency"
+        currency = str(snapshot.get(currency_field) or snapshot.get("currency") or "").strip()
         amount = snapshot.get(field)
         valid = (
             isinstance(amount, (int, float)) and not isinstance(amount, bool)
             and math.isfinite(amount) and bool(currency) and bool(observed_at)
             and (field != "net_assets" or amount > 0)
         )
+        any_verified = any_verified or valid
         value = f"{currency} {amount:,.2f}" if valid else translator("heartbeat_unverified")
         lines.append(translator(label, value=value))
-    if currency and observed_at:
+    if any_verified:
         lines.append(translator("heartbeat_account_observed", value=observed_at))
 
 

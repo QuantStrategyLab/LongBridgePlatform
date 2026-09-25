@@ -220,6 +220,24 @@ class NotificationTests(unittest.TestCase):
         self.assertIn("🧪 【Strategy Dry Run】", en_rendered.compact_text)
         self.assertNotIn("💓 【Heartbeat】", en_rendered.compact_text)
 
+    def test_heartbeat_keeps_cash_and_equity_currencies_separate(self):
+        execution = {"heartbeat_account_snapshot": {
+            "available_cash": 105.25, "cash_currency": "USD",
+            "net_assets": 2500.5, "equity_currency": "SGD",
+            "observed_at": "2026-09-25T14:09:00+00:00",
+        }}
+        for language, cash, equity in (
+            ("zh", "可用现金: USD 105.25", "账户总权益: SGD 2,500.50"),
+            ("en", "Available cash: USD 105.25", "Total account equity: SGD 2,500.50"),
+        ):
+            rendered = render_heartbeat_notification(
+                execution=execution, skip_logs=(), note_logs=(),
+                translator=build_translator(language), separator="---",
+                strategy_display_name="Example", dry_run_only=False,
+            )
+            self.assertIn(cash, rendered.compact_text)
+            self.assertIn(equity, rendered.compact_text)
+
     def test_heartbeat_renders_tqqq_volatility_delever_risk_control(self):
         zh_rendered = render_heartbeat_notification(
             execution={

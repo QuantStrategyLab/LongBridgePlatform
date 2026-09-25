@@ -89,6 +89,27 @@ class LongBridgeLocalHelpersTests(unittest.TestCase):
                 state = fetch_strategy_account_state(FakeQuoteContext(), trade, [])
                 self.assertIsNone(state["broker_capital"])
 
+    def test_heartbeat_labels_cash_and_account_equity_in_their_own_currencies(self):
+        balance = types.SimpleNamespace(
+            currency="SGD", net_assets="2500.50",
+            cash_infos=[
+                types.SimpleNamespace(currency="USD", available_cash="100.25"),
+                types.SimpleNamespace(currency="USD", available_cash="5.00"),
+            ],
+        )
+        trade = types.SimpleNamespace(
+            account_balance=lambda: [balance],
+            stock_positions=lambda: types.SimpleNamespace(channels=[]),
+        )
+        state = fetch_strategy_account_state(FakeQuoteContext(), trade, [])
+        self.assertIsNone(state["broker_capital"])
+        snapshot = state["heartbeat_account_snapshot"]
+        self.assertEqual(snapshot["available_cash"], 105.25)
+        self.assertEqual(snapshot["cash_currency"], "USD")
+        self.assertEqual(snapshot["net_assets"], 2500.50)
+        self.assertEqual(snapshot["equity_currency"], "SGD")
+        self.assertIn("observed_at", snapshot)
+
     def test_fetch_strategy_account_state_rejects_account_balance_failure(self):
         class BalanceFailingTradeContext:
             def account_balance(self):
