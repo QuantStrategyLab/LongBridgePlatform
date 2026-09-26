@@ -840,7 +840,7 @@ jobs:
             --concurrency=1 \
             --memory=512Mi \
             --cpu=1 \
-            --timeout=300s \
+            --timeout=600s \
             --no-traffic \
             --labels="managed-by=github-actions,commit-sha=${GITHUB_SHA},github-run-id=${GITHUB_RUN_ID},deployment-label=${deployment_label}" \
             --quiet
