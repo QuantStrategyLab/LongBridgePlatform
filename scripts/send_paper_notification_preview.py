@@ -32,11 +32,22 @@ from scripts.send_paper_notification_canary import (
 
 _SEPARATOR = "━━━━━━━━━━━━━━━━━━"
 _MAX_PREVIEW_MESSAGES = 6
-_PREVIEW_STRATEGY_NAME = "PAPER Notification Preview"
-_PREVIEW_EXTRA_LINES = (
-    "🧪 【PREVIEW】PAPER notification preview",
-    "synthetic / 合成样例 · 不会下单 · No order will be placed",
-)
+_PREVIEW_COPY = {
+    "zh": {
+        "strategy_name": "PAPER 通知预览",
+        "extra_lines": (
+            "🧪 【PREVIEW】PAPER 通知预览",
+            "合成样例 · 不会下单",
+        ),
+    },
+    "en": {
+        "strategy_name": "PAPER Notification Preview",
+        "extra_lines": (
+            "🧪 【PREVIEW】PAPER notification preview",
+            "Synthetic example · No order will be placed",
+        ),
+    },
+}
 
 
 def _resolve_locale(raw: str | None = None) -> str:
@@ -44,47 +55,54 @@ def _resolve_locale(raw: str | None = None) -> str:
     return "en" if value.startswith("en") else "zh"
 
 
-def _synthetic_execution(*, with_dashboard: bool) -> dict:
+def _synthetic_execution(*, with_dashboard: bool, locale: str) -> dict:
+    copy = _PREVIEW_COPY[locale]
     execution: dict = {
         "cash_only_execution": True,
-        "status_display": "preview_hold",
-        "signal_display": "synthetic preview signal",
+        "status_display": "预览保持" if locale == "zh" else "preview hold",
+        "signal_display": "合成预览信号" if locale == "zh" else "synthetic preview signal",
+        "compact_supplemental_lines": copy["extra_lines"],
     }
     if with_dashboard:
         execution["dashboard_text"] = (
-            "📌 PAPER PREVIEW\n"
-            "  - 可用现金: $0.00 | 可投资现金: $0.00\n"
-            "  - synthetic positions only"
+            "📌 PAPER 预览\n  - 可用现金: $0.00 | 可投资现金: $0.00\n  - 仅含合成持仓"
+            if locale == "zh"
+            else "📌 PAPER PREVIEW\n  - Available cash: $0.00 | Investable cash: $0.00\n"
+            "  - Synthetic positions only"
         )
     return execution
 
 
 def build_preview_messages(*, locale: str | None = None) -> list[str]:
-    translator = build_translator(_resolve_locale(locale))
+    resolved_locale = _resolve_locale(locale)
+    translator = build_translator(resolved_locale)
+    preview_copy = _PREVIEW_COPY[resolved_locale]
+    strategy_name = preview_copy["strategy_name"]
+    extra_lines = preview_copy["extra_lines"]
     messages: list[str] = []
 
     heartbeat = render_heartbeat_notification(
-        execution=_synthetic_execution(with_dashboard=True),
+        execution=_synthetic_execution(with_dashboard=True, locale=resolved_locale),
         skip_logs=(),
         note_logs=(),
         translator=translator,
         separator=_SEPARATOR,
-        strategy_display_name=_PREVIEW_STRATEGY_NAME,
+        strategy_display_name=strategy_name,
         dry_run_only=True,
-        extra_notification_lines=_PREVIEW_EXTRA_LINES,
+        extra_notification_lines=extra_lines,
     )
     messages.append(heartbeat.compact_text)
 
     rebalance = render_rebalance_notification(
-        execution=_synthetic_execution(with_dashboard=True),
+        execution=_synthetic_execution(with_dashboard=True, locale=resolved_locale),
         logs=("SYNTHETIC Buy PREVIEW.US x1 @ market (preview only)",),
         skip_logs=(),
         note_logs=(),
         translator=translator,
         separator=_SEPARATOR,
-        strategy_display_name=_PREVIEW_STRATEGY_NAME,
+        strategy_display_name=strategy_name,
         dry_run_only=True,
-        extra_notification_lines=_PREVIEW_EXTRA_LINES,
+        extra_notification_lines=extra_lines,
     )
     messages.append(rebalance.compact_text)
 
@@ -109,7 +127,7 @@ def build_preview_messages(*, locale: str | None = None) -> list[str]:
             translator=translator,
         )
         body = rendered.compact_text
-        messages.append("\n".join((body, *_PREVIEW_EXTRA_LINES)))
+        messages.append("\n".join((body, *extra_lines)))
 
     if len(messages) > _MAX_PREVIEW_MESSAGES:
         raise RuntimeError(
