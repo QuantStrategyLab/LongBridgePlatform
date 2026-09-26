@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import math
 
+from notifications.compact_adapter import adapt_compact_sections
 from notifications.events import RenderedNotification
 from quant_platform_kit.common.notification_localization import (
     localize_notification_text as _base_localize_notification_text,
@@ -310,6 +311,50 @@ def _append_extra_notification_lines(lines, extra_notification_lines) -> None:
             lines.append(text)
 
 
+def _compact_total_assets_line(execution, *, translator) -> str:
+    dashboard = _format_dashboard_text(
+        execution.get("dashboard_text"),
+        translator=translator,
+        cash_only_execution=bool(execution.get("cash_only_execution", True)),
+    )
+    labels = (
+        "总资产",
+        "账户总权益",
+        "净值",
+        "total assets",
+        "total account equity",
+        "net assets",
+        "net value",
+        "equity",
+    )
+    for raw_line in dashboard.splitlines():
+        for segment in raw_line.split(" | "):
+            line = segment.strip().lstrip("- ").strip()
+            lowered = line.lower()
+            if any(label in lowered for label in labels) and ":" in line:
+                return line if line.startswith("💰") else f"💰 {line}"
+    return ""
+
+
+def _heartbeat_account_equity_line(execution, *, translator) -> str:
+    snapshot = execution.get("heartbeat_account_snapshot")
+    snapshot = snapshot if isinstance(snapshot, Mapping) else {}
+    observed_at = str(snapshot.get("observed_at") or "").strip()
+    currency = str(snapshot.get("equity_currency") or snapshot.get("currency") or "").strip()
+    amount = snapshot.get("net_assets")
+    valid = (
+        isinstance(amount, (int, float))
+        and not isinstance(amount, bool)
+        and math.isfinite(amount)
+        and amount > 0
+        and bool(currency)
+        and bool(observed_at)
+    )
+    if not valid:
+        return ""
+    return translator("heartbeat_account_equity", value=f"{currency} {amount:,.2f}")
+
+
 def render_rebalance_notification(
     *,
     execution,
@@ -345,10 +390,22 @@ def render_rebalance_notification(
     _append_strategy_line(compact_lines, strategy_display_name=strategy_display_name, translator=translator)
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
-    _append_extra_notification_lines(compact_lines, extra_notification_lines)
-    _append_dashboard_block(compact_lines, execution=execution, separator=separator, translator=translator, compact=True)
-    compact_lines.append(separator)
-    compact_lines.append(formatted_logs)
+    total_assets_line = _compact_total_assets_line(execution, translator=translator)
+    if total_assets_line:
+        compact_lines.append(total_assets_line)
+    compact_dashboard = _format_dashboard_text(
+        execution.get("dashboard_text"),
+        translator=translator,
+        cash_only_execution=bool(execution.get("cash_only_execution", True)),
+    )
+    compact_lines.extend(
+        adapt_compact_sections(
+            compact_dashboard,
+            locale="zh" if _translator_uses_zh(translator) else "en",
+            supplemental_lines=execution.get("compact_supplemental_lines", ()),
+        )
+    )
+    compact_lines.extend(str(log).strip() for log in logs if str(log).strip())
     return RenderedNotification(
         detailed_text="\n".join(detailed_lines),
         compact_text="\n".join(compact_lines),
@@ -434,21 +491,26 @@ def render_heartbeat_notification(
     _append_strategy_line(compact_lines, strategy_display_name=strategy_display_name, translator=translator)
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
-    _append_extra_notification_lines(compact_lines, extra_notification_lines)
-    _append_heartbeat_account_lines(compact_lines, execution=execution, translator=translator)
-    _append_dashboard_block(compact_lines, execution=execution, separator=separator, translator=translator, compact=True)
-    compact_lines.extend(
-        [
-            separator,
-            translator("no_executable_orders") if (skip_logs or note_logs) else translator("no_trades"),
-        ]
+    total_assets_line = _heartbeat_account_equity_line(execution, translator=translator)
+    if not total_assets_line:
+        total_assets_line = _compact_total_assets_line(execution, translator=translator)
+    if total_assets_line:
+        compact_lines.append(total_assets_line)
+    compact_dashboard = _format_dashboard_text(
+        execution.get("dashboard_text"),
+        translator=translator,
+        cash_only_execution=bool(execution.get("cash_only_execution", True)),
     )
-    if skip_logs:
-        compact_lines.extend([separator, translator("skipped_actions")])
-        compact_lines.extend(f"  - {log}" for log in skip_logs)
-    if note_logs:
-        compact_lines.extend([separator, translator("notes_title")])
-        compact_lines.extend(f"  - {log}" for log in note_logs)
+    compact_lines.extend(
+        adapt_compact_sections(
+            compact_dashboard,
+            locale="zh" if _translator_uses_zh(translator) else "en",
+            supplemental_lines=execution.get("compact_supplemental_lines", ()),
+        )
+    )
+    compact_lines.append(
+        translator("no_executable_orders") if (skip_logs or note_logs) else translator("no_trades")
+    )
 
     return RenderedNotification(
         detailed_text=detailed_text,
