@@ -405,3 +405,180 @@ def test_validation_override_still_runs_live_command_flag_validation(monkeypatch
         assert "invalid durable live execution command flag" in str(exc)
     else:
         raise AssertionError("validation override must not bypass flag validation")
+
+
+def _snapshot_env(**overrides):
+    env = {
+        "LONGPORT_APP_KEY": "app-key",
+        "LONGPORT_APP_SECRET": "app-secret",
+        "K_SERVICE": "lb-service",
+        "K_REVISION": "lb-service-00001",
+        "CLOUD_RUN_REGION": "asia-east1",
+    }
+    env.update(overrides)
+    return env
+
+
+def _snapshot_composer(*, project_id="project-1", account_region="HK", env=None, observed=None):
+    state = observed if observed is not None else {}
+
+    def fail(name):
+        def _forbidden(*_args, **_kwargs):
+            raise AssertionError(name)
+
+        return _forbidden
+
+    return runtime_composer_module.build_runtime_composer(
+        project_id=project_id,
+        secret_name="secret-1",
+        token_refresh_threshold_days=30,
+        account_prefix=account_region,
+        account_region=account_region,
+        strategy_profile="soxl_soxx_trend_income",
+        strategy_display_name="Profile",
+        strategy_display_name_localized="Profile",
+        strategy_domain="us_equity",
+        notify_lang="en",
+        tg_token=None,
+        tg_chat_id=None,
+        managed_symbols=(),
+        benchmark_symbol="QQQ",
+        signal_effective_after_trading_days=1,
+        separator="-",
+        limit_sell_discount=0.99,
+        limit_buy_premium=1.01,
+        order_poll_interval_sec=1,
+        order_poll_max_attempts=1,
+        safe_haven_cash_substitute_threshold_usd=0.0,
+        min_order_notional_usd=1.0,
+        dry_run_only=True,
+        broker_adapters=SimpleNamespace(),
+        strategy_adapters=SimpleNamespace(
+            calculate_strategy_indicators=fail("strategy indicators"),
+        ),
+        estimate_max_purchase_quantity_fn=fail("purchase estimate"),
+        fetch_order_status_fn=fail("order status"),
+        fetch_token_from_secret_fn=lambda *_args, **_kwargs: state.__setitem__("latest", True) or "latest-token",
+        refresh_token_if_needed_fn=fail("token refresh"),
+        build_contexts_fn=lambda app_key, app_secret, token: (
+            state.__setitem__("contexts", (app_key, app_secret, token)) or ("quote", "trade")
+        ),
+        run_id_builder=fail("run id"),
+        event_logger=fail("event log"),
+        report_builder=fail("report"),
+        report_persister=fail("report write"),
+        translator=lambda key, **_kwargs: key,
+        runtime_target=None,
+        env_reader=lambda name, default="": (env or _snapshot_env()).get(name, default),
+        sleeper=fail("sleep"),
+        fetch_token_with_metadata_fn=state.get("metadata_reader"),
+    )
+
+
+class _Metadata:
+    def __init__(self, value, version_name):
+        self.value = value
+        self.version_name = version_name
+
+
+def test_account_snapshot_contexts_bind_the_same_metadata_response():
+    observed = {"metadata_reads": 0}
+
+    def read_metadata(project_id, secret_name):
+        observed["metadata_reads"] += 1
+        observed["metadata_request"] = (project_id, secret_name)
+        if observed["metadata_reads"] > 1:
+            return _Metadata("rotated-token", "projects/p/secrets/token/versions/9")
+        return _Metadata("snapshot-token", "projects/p/secrets/token/versions/4")
+
+    observed["metadata_reader"] = read_metadata
+    composer = _snapshot_composer(observed=observed)
+    quote, trade, binding = composer.build_account_snapshot_broker_contexts()
+
+    assert (quote, trade) == ("quote", "trade")
+    assert observed["contexts"] == ("app-key", "app-secret", "snapshot-token")
+    assert observed["metadata_reads"] == 1
+    assert observed["metadata_request"] == ("project-1", "secret-1")
+    assert "latest" not in observed
+    assert binding["status"] == "bound"
+    assert binding["kind"] == "deployment_scope_token_version"
+
+    def same(*_args, **_kwargs):
+        return _Metadata("snapshot-token", "projects/p/secrets/token/versions/4")
+    other = _snapshot_composer(
+        observed={
+            "metadata_reader": lambda *_args, **_kwargs: _Metadata(
+                "snapshot-token", "projects/p/secrets/token/versions/5"
+            )
+        }
+    )
+    _quote, _trade, other_binding = other.build_account_snapshot_broker_contexts()
+    assert other_binding["id"] != binding["id"]
+
+    scoped = _snapshot_composer(account_region="SG", observed={"metadata_reader": same})
+    _quote, _trade, scoped_binding = scoped.build_account_snapshot_broker_contexts()
+    assert scoped_binding["id"] != binding["id"]
+
+    deployed = _snapshot_composer(
+        env=_snapshot_env(K_SERVICE="other-service"),
+        observed={"metadata_reader": same},
+    )
+    _quote, _trade, deployed_binding = deployed.build_account_snapshot_broker_contexts()
+    assert deployed_binding["id"] != binding["id"]
+    assert observed["metadata_reads"] == 1
+
+
+def test_account_snapshot_missing_deployment_keeps_token_and_stays_unbound():
+    observed = {
+        "metadata_reader": lambda *_args, **_kwargs: _Metadata("snapshot-token", None),
+    }
+    composer = _snapshot_composer(
+        env=_snapshot_env(K_REVISION=""),
+        observed=observed,
+    )
+    _quote, _trade, binding = composer.build_account_snapshot_broker_contexts()
+    assert observed["contexts"][2] == "snapshot-token"
+    assert binding == {
+        "kind": "deployment_scope_token_version",
+        "status": "unavailable",
+        "id": None,
+    }
+    assert "latest" not in observed
+
+
+def test_read_only_contexts_do_not_use_the_snapshot_metadata_reader():
+    observed = {"metadata_reads": 0, "latest_reads": 0}
+
+    def read_metadata(*_args, **_kwargs):
+        observed["metadata_reads"] += 1
+        raise AssertionError("read-only contexts must not read snapshot metadata")
+
+    observed["metadata_reader"] = read_metadata
+    composer = _snapshot_composer(observed=observed)
+
+    def read_latest(*_args, **_kwargs):
+        observed["latest_reads"] += 1
+        return "latest-token"
+
+    object.__setattr__(composer, "fetch_token_from_secret_fn", read_latest)
+    assert composer.build_read_only_broker_contexts() == ("quote", "trade")
+    assert observed["latest_reads"] == 1
+    assert observed["metadata_reads"] == 0
+    assert observed["contexts"][2] == "latest-token"
+
+
+def test_account_snapshot_cloud_read_failure_does_not_read_another_token():
+    observed = {"latest": False}
+
+    def read_metadata(*_args, **_kwargs):
+        raise RuntimeError("cloud read failed")
+
+    observed["metadata_reader"] = read_metadata
+    composer = _snapshot_composer(observed=observed)
+    try:
+        composer.build_account_snapshot_broker_contexts()
+    except RuntimeError as exc:
+        assert str(exc) == "cloud read failed"
+    else:
+        raise AssertionError("cloud read failure must not be replaced")
+    assert observed["latest"] is False

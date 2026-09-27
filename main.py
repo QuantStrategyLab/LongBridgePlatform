@@ -587,6 +587,7 @@ def build_composer(*, dry_run_only_override: bool | None = None):
         estimate_max_purchase_quantity_fn=_profile_estimate_max_purchase_quantity,
         fetch_order_status_fn=fetch_order_status,
         fetch_token_from_secret_fn=fetch_token_from_secret,
+        fetch_token_with_metadata_fn=fetch_account_snapshot_token_with_metadata,
         refresh_token_if_needed_fn=refresh_token_if_needed,
         build_contexts_fn=build_contexts,
         run_id_builder=build_run_id,
@@ -1187,13 +1188,29 @@ def run_broker_reconciliation():
     )
 
 
+def fetch_account_snapshot_token_with_metadata(project_id, secret_name):
+    """Read one configured secret-store response. A metadata failure is not reread."""
+    from types import SimpleNamespace
+
+    from quant_platform_kit.cloud import get_secret_store
+
+    store = get_secret_store()
+    read_metadata = getattr(store, "get_secret_with_metadata", None)
+    if callable(read_metadata):
+        return read_metadata(secret_name, project_id=project_id)
+    return SimpleNamespace(
+        value=store.get_secret(secret_name, project_id=project_id),
+        version_name=None,
+    )
+
+
 def run_account_snapshot():
     """Read bounded account facts through the order-port-free broker contexts."""
 
     return run_read_only_account_snapshot(
         enabled=account_snapshot_enabled(os.getenv),
         account_scope=getattr(RUNTIME_SETTINGS, "account_region", None),
-        build_read_only_contexts=lambda: build_composer().build_read_only_broker_contexts(),
+        build_read_only_contexts=lambda: build_composer().build_account_snapshot_broker_contexts(),
         collect_evidence=READ_ONLY_BROKER_RECONCILIATION_COLLECTOR,
     )
 
