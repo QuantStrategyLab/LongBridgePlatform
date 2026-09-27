@@ -20,6 +20,18 @@ if QPK_SRC.exists() and str(QPK_SRC) not in sys.path:
 from application import broker_reconciliation as reconciliation
 
 
+def _unavailable_source_binding():
+    return {
+        "kind": "deployment_scope_token_version",
+        "status": "unavailable",
+        "id": None,
+    }
+
+
+def _snapshot_contexts(context, binding=None):
+    return lambda: (object(), context, binding or _unavailable_source_binding())
+
+
 def _runtime_target():
     return SimpleNamespace(
         platform_id="longbridge",
@@ -151,7 +163,7 @@ def test_account_snapshot_returns_only_safe_partial_account_facts():
     payload, status = reconciliation.run_read_only_account_snapshot(
         enabled=True,
         account_scope="paper",
-        build_read_only_contexts=lambda: (object(), context),
+        build_read_only_contexts=_snapshot_contexts(context),
         collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
         now_reader=lambda: now,
     )
@@ -199,6 +211,7 @@ def test_account_snapshot_returns_only_safe_partial_account_facts():
         "equity": None,
         "no_order": True,
         "live_authority_granted": False,
+        "source_binding": _unavailable_source_binding(),
     }
     serialized = json.dumps(payload)
     assert "private-order-id" not in serialized
@@ -216,7 +229,7 @@ def test_account_snapshot_preserves_a_known_empty_position_list():
     payload, status = reconciliation.run_read_only_account_snapshot(
         enabled=True,
         account_scope="SG",
-        build_read_only_contexts=lambda: (object(), context),
+        build_read_only_contexts=_snapshot_contexts(context),
         collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
     )
 
@@ -247,7 +260,7 @@ def test_account_snapshot_preserves_broker_balances_without_currency_aggregation
     context.account_balance = read_balances
     payload, status = reconciliation.run_read_only_account_snapshot(
         enabled=True, account_scope=account_scope,
-        build_read_only_contexts=lambda: (object(), context),
+        build_read_only_contexts=_snapshot_contexts(context),
         collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
     )
     assert status == 200
@@ -279,7 +292,7 @@ def test_account_snapshot_rejects_invalid_broker_balance_but_reconcile_is_unchan
     assert observations.cash_complete is True
     payload, status = reconciliation.run_read_only_account_snapshot(
         enabled=True, account_scope="SG",
-        build_read_only_contexts=lambda: (object(), context),
+        build_read_only_contexts=_snapshot_contexts(context),
         collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
     )
     assert status == 503
@@ -332,7 +345,7 @@ def test_account_snapshot_rejects_missing_or_invalid_cash_without_partial_payloa
     payload, status = reconciliation.run_read_only_account_snapshot(
         enabled=True,
         account_scope="HK",
-        build_read_only_contexts=lambda: (object(), context),
+        build_read_only_contexts=_snapshot_contexts(context),
         collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
     )
 
@@ -341,13 +354,138 @@ def test_account_snapshot_rejects_missing_or_invalid_cash_without_partial_payloa
     assert "cash" not in payload
 
 
+def test_account_snapshot_source_binding_changes_with_version_deployment_or_scope():
+    common = {
+        "version_name": "projects/p/secrets/token/versions/3",
+        "project_id": "project-1",
+        "service": "lb-service",
+        "revision": "lb-service-00001",
+        "account_scope": "HK",
+        "region": "asia-east1",
+    }
+    bound = reconciliation.build_account_snapshot_source_binding(**common)
+    assert bound["status"] == "bound"
+    assert bound["kind"] == "deployment_scope_token_version"
+    assert bound["id"] != common["version_name"]
+    assert len(bound["id"]) == 64
+    assert "secrets" not in bound["id"]
+
+    changed = [
+        {**common, "version_name": "projects/p/secrets/token/versions/4"},
+        {**common, "project_id": "project-2"},
+        {**common, "service": "lb-service-b"},
+        {**common, "revision": "lb-service-00002"},
+        {**common, "account_scope": "SG"},
+        {**common, "region": "asia-southeast1"},
+    ]
+    assert len({reconciliation.build_account_snapshot_source_binding(**item)["id"] for item in changed}) == len(changed)
+    assert reconciliation.build_account_snapshot_source_binding(**common)["id"] == bound["id"]
+    without_region = dict(common)
+    without_region.pop("region")
+    assert (
+        reconciliation.build_account_snapshot_source_binding(**without_region)["id"]
+        != bound["id"]
+    )
+    assert (
+        reconciliation.build_account_snapshot_source_binding(**without_region, region="")["id"]
+        == reconciliation.build_account_snapshot_source_binding(**without_region)["id"]
+    )
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        {"version_name": None},
+        {"version_name": " "},
+        {"project_id": None},
+        {"project_id": ""},
+        {"service": None},
+        {"revision": " "},
+        {"account_scope": ""},
+    ],
+)
+def test_account_snapshot_source_binding_is_unavailable_without_required_parts(missing):
+    payload = {
+        "version_name": "projects/p/secrets/token/versions/3",
+        "project_id": "project-1",
+        "service": "lb-service",
+        "revision": "lb-service-00001",
+        "account_scope": "PAPER",
+    }
+    payload.update(missing)
+    assert reconciliation.build_account_snapshot_source_binding(**payload) == (
+        _unavailable_source_binding()
+    )
+
+
+def test_account_snapshot_keeps_assets_and_hides_raw_source_material():
+    context, _calls = _read_only_trade_context()
+    secret_path = "projects/p/secrets/token/versions/3"
+    leaked = {
+        "kind": "deployment_scope_token_version",
+        "status": "bound",
+        "id": secret_path,
+        "token": "raw-token-value",
+    }
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True,
+        account_scope="HK",
+        build_read_only_contexts=_snapshot_contexts(context, leaked),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+    )
+    assert status == 200
+    assert payload["cash"][0]["currency"] == "USD"
+    assert payload["cash"][0]["available_cash"] == "10"
+    assert payload["snapshot_atomic"] is False
+    assert payload["source_binding"] == _unavailable_source_binding()
+    serialized = json.dumps(payload)
+    assert secret_path not in serialized
+    assert "raw-token-value" not in serialized
+
+    bound = reconciliation.build_account_snapshot_source_binding(
+        version_name=secret_path,
+        project_id="project-1",
+        service="lb-service",
+        revision="lb-service-00001",
+        account_scope="HK",
+    )
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True,
+        account_scope="HK",
+        build_read_only_contexts=_snapshot_contexts(context, bound),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+    )
+    assert status == 200
+    assert payload["source_binding"] == bound
+    assert payload["broker_reported_balances"][0]["total_cash"] == "10"
+    serialized = json.dumps(payload)
+    assert secret_path not in serialized
+    assert "raw-token-value" not in serialized
+
+
+def test_account_snapshot_read_failure_does_not_echo_secret_material():
+    secret_path = "projects/p/secrets/token/versions/latest"
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True,
+        account_scope="PAPER",
+        build_read_only_contexts=lambda: (_ for _ in ()).throw(
+            RuntimeError(f"{secret_path} token=raw-token-value")
+        ),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+    )
+    assert status == 503
+    assert payload == {"status": "blocked", "reason": "account_snapshot_collection_failed"}
+    assert secret_path not in json.dumps(payload)
+    assert "raw-token-value" not in json.dumps(payload)
+
+
 def test_account_snapshot_provider_failure_is_sanitized():
     context, _calls = _read_only_trade_context(fail_surface="account_balance")
 
     payload, status = reconciliation.run_read_only_account_snapshot(
         enabled=True,
         account_scope="PAPER",
-        build_read_only_contexts=lambda: (object(), context),
+        build_read_only_contexts=_snapshot_contexts(context),
         collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
     )
 

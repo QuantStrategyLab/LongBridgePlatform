@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from application.broker_reconciliation import build_account_snapshot_source_binding
 from application.runtime_bootstrap_adapters import build_runtime_bootstrap
 from application.account_identity import observe_longbridge_account_identity
 from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
@@ -35,6 +36,15 @@ from notifications.telegram import build_prefixer
 from quant_platform_kit.notifications.cycle_channel import build_cycle_sender
 from application.longbridge_execution import fetch_live_order_status
 from runtime_execution_policy import FRACTIONAL_BUY_QUANTITY_STEP, dca_compat_mode_enabled, fractional_buy_execution_enabled
+
+
+def _trusted_cloud_run_region(env_reader: Callable[[str, str], str | None]) -> str | None:
+    """Use a platform-provided region only. Do not invent one when it is absent."""
+    for name in ("CLOUD_RUN_REGION", "GOOGLE_CLOUD_REGION"):
+        value = str(env_reader(name, "") or "").strip()
+        if value:
+            return value
+    return None
 
 
 def _resolve_configured_physical_account_id(*, env_reader) -> str:
@@ -89,6 +99,7 @@ class LongBridgeRuntimeComposer:
     estimate_max_purchase_quantity_fn: Callable[..., float] | None = None
     fetch_order_status_fn: Callable[..., Any] | None = None
     fetch_token_from_secret_fn: Callable[..., str] | None = None
+    fetch_token_with_metadata_fn: Callable[..., Any] | None = None
     refresh_token_if_needed_fn: Callable[..., str] | None = None
     build_contexts_fn: Callable[..., tuple[Any, Any]] | None = None
     run_id_builder: Callable[[], str] | None = None
@@ -272,9 +283,8 @@ class LongBridgeRuntimeComposer:
             ),
         )
 
-    def build_read_only_broker_contexts(self) -> tuple[Any, Any]:
-        """Build LongBridge read contexts without strategy evaluation or an order port."""
-        bootstrap = self.bootstrap_builder(
+    def _build_order_free_bootstrap(self):
+        return self.bootstrap_builder(
             project_id=self.project_id,
             secret_name=self.secret_name,
             token_refresh_threshold_days=self.token_refresh_threshold_days,
@@ -284,10 +294,35 @@ class LongBridgeRuntimeComposer:
             calculate_strategy_indicators_fn=lambda _quote_context: {},
             env_reader=self.env_reader,
         )
+
+    def build_read_only_broker_contexts(self) -> tuple[Any, Any]:
+        """Build LongBridge read contexts without strategy evaluation or an order port."""
+        bootstrap = self._build_order_free_bootstrap()
         build_contexts = getattr(bootstrap, "build_read_only_contexts", None)
         if not callable(build_contexts):
             raise RuntimeError("runtime bootstrap does not support read-only broker contexts")
         return build_contexts()
+
+    def build_account_snapshot_broker_contexts(self) -> tuple[Any, Any, dict[str, object]]:
+        """Bind one token-version response to this snapshot. Do not reread or refresh."""
+        reader = self.fetch_token_with_metadata_fn
+        if not callable(reader):
+            raise RuntimeError("account snapshot token metadata reader is unavailable")
+        bootstrap = self._build_order_free_bootstrap()
+        build_contexts = getattr(bootstrap, "build_account_snapshot_contexts", None)
+        if not callable(build_contexts):
+            raise RuntimeError("runtime bootstrap does not support account snapshot contexts")
+        quote_context, trade_context, version_name = build_contexts(
+            fetch_token_with_metadata_fn=reader,
+        )
+        return quote_context, trade_context, build_account_snapshot_source_binding(
+            version_name=version_name,
+            project_id=self.project_id,
+            service=self.env_reader("K_SERVICE", ""),
+            revision=self.env_reader("K_REVISION", ""),
+            account_scope=self.account_region,
+            region=_trusted_cloud_run_region(self.env_reader),
+        )
 
     def build_rebalance_config(
         self,
@@ -494,6 +529,7 @@ def build_runtime_composer(
     printer: Callable[..., Any] = print,
     extra_reporting_fields: Mapping[str, Any] | None = None,
     limit_buy_premium_by_symbol: dict[str, float] | None = None,
+    fetch_token_with_metadata_fn: Callable[..., Any] | None = None,
 ) -> LongBridgeRuntimeComposer:
     return LongBridgeRuntimeComposer(
         project_id=project_id,
@@ -532,6 +568,7 @@ def build_runtime_composer(
         estimate_max_purchase_quantity_fn=estimate_max_purchase_quantity_fn,
         fetch_order_status_fn=fetch_order_status_fn,
         fetch_token_from_secret_fn=fetch_token_from_secret_fn,
+        fetch_token_with_metadata_fn=fetch_token_with_metadata_fn,
         refresh_token_if_needed_fn=refresh_token_if_needed_fn,
         build_contexts_fn=build_contexts_fn,
         run_id_builder=run_id_builder,
