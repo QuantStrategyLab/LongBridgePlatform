@@ -355,3 +355,25 @@ jobs:
             echo
             echo "This workflow is read-only: it cannot enable a target, alter its lane, or submit an order."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-hk-stop-result:
+    name: Publish HK stop result
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Stop HK Runtime'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: longbridge-hk
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout publisher source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Publish verified stop result
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EXECUTION_EVIDENCE_SYNC_URL: ${{ vars.EXECUTION_EVIDENCE_SYNC_URL }}
+          EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+        run: python3 scripts/publish_hk_stop_result.py
