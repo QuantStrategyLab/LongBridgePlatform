@@ -70,6 +70,18 @@ projected = project_listed_reports(
 - 调度：`runtime_heartbeat_policy.classify_business_date_schedule`，复用现有 cron、市场日历、时区和 publication grace
 - `observed_at`：调用方传入的观察时间
 
-## 下一跳缺口
+## 发布到私有 GCS
 
-AAB 日报和网站还要在获准的云端身份上调用 `project_listed_reports`，读真实 GCS 执行报告。本批没有做这次读取，也没有改 heartbeat 通知或交易链。真实日投影和 bot 送达要另验。
+`scripts/publish_daily_runtime_projection.py` 可以在 22:20 UTC heartbeat 之后，把一个 PAPER 目标的原始投影写到已有私有桶。默认关闭。只有 `RUNTIME_DAILY_PROJECTION_ENABLED` 精确等于 `true`，并且同时给出末段为 `runtime_daily` 的 `gs://` 前缀、`RUNTIME_DAILY_PROJECTION_TARGET_ID=paper`、`RUNTIME_HEARTBEAT_ACCOUNT_SCOPE=PAPER` 时才读取和写入。配置不全、scope 不是 `PAPER`，或 PAPER 目标不是恰好一个，都不写对象。服务名或环境名不能代替账户范围。
+
+发布前用同一次 Cloud Run 部署读回核对实际 service、account scope 和 `runtime_target_enabled`。profile hydrate 只带回策略名，不能代替这次核对；部署里没有显式 enabled 时也不当成 true。输入候选与部署 JSON 的 service 或 scope 不一致，或部署 `runtime_target_enabled` 为 false，都不写对象，因此不会把 SG 部署或已停用部署写成 PAPER 的 `market_closed` / `complete`。
+
+业务日以该服务实际 Cloud Scheduler 的 enabled、cron 和 timezone 为准，并核对 URI 指向该服务的策略 run。模板 cron 不能单独把一天写成 `not_due` / `complete`。调度暂停记 `scheduler_paused`，缺失或冲突记 `scheduler_missing` / `scheduler_conflict`，这些都不会标成完整的正常日。
+
+报告列表和单份读取走已安装的存储客户端，带 20 秒时限、字节上限，并且 `retry=None`。列表扫描上限是 256 条，和最终保留的 20 条分开；预算内按 `updated` 取最新 20 条。扫描达到上限，或已发现超过 20 条因而只保留最新 20 条时，都记 `listing truncated`，`completeness` 为 incomplete。调度身份沿用 heartbeat 对服务主机和策略 run URI 的既有判断，读取入口是现有的 scheduler job list。
+
+对象路径是 `{prefix}/longbridge/paper/{business_date}.json`。`business_date` 和时区来自该目标的有效调度。文件内容就是 `project_listed_reports` 的原 JSON，不是资产曲线，也不是成交账本。`fills` 仍是未接通。上传使用现有存储客户端，`if_generation_match=0`、`timeout=20`、`retry=None`；同日对象已存在则不覆盖。列表或读取不完整时，对象里的 `read_errors` 和 `completeness` 保持不完整，不把这一天写成正常休市。
+
+heartbeat 的告警、返回码和交易链不变。这个步骤不调用 heartbeat 的 `main`。workflow 只在 PAPER、变量显式为 `true`、任务未取消且 Google 认证成功时运行；heartbeat 业务失败后仍可以写出异常投影。
+
+云端还没有设置这个变量，也没有新增 secret。真实报告前缀、桶权限和第一份对象要由主助手在获准身份上验收。bot 送达不在这一步。

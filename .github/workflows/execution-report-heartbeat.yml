@@ -112,6 +112,7 @@ jobs:
         run: sleep 10
 
       - name: Retry Google Cloud authentication
+        id: gcp_auth_retry
         if: ${{ steps.gcp_auth_primary.outcome == 'failure' }}
         uses: google-github-actions/auth@v3
         with:
@@ -145,3 +146,12 @@ jobs:
           ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
           GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
         run: uv run --no-sync python scripts/record_daily_account_snapshot.py
+
+      - name: Publish daily runtime projection
+        if: ${{ !cancelled() && matrix.target.label == 'PAPER' && vars.RUNTIME_DAILY_PROJECTION_ENABLED == 'true' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
+        env:
+          RUNTIME_DAILY_PROJECTION_ENABLED: ${{ vars.RUNTIME_DAILY_PROJECTION_ENABLED }}
+          RUNTIME_DAILY_PROJECTION_GCS_PREFIX: ${{ vars.RUNTIME_DAILY_PROJECTION_GCS_PREFIX }}
+          RUNTIME_DAILY_PROJECTION_TARGET_ID: ${{ vars.RUNTIME_DAILY_PROJECTION_TARGET_ID }}
+          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
+        run: uv run --no-sync python scripts/publish_daily_runtime_projection.py
