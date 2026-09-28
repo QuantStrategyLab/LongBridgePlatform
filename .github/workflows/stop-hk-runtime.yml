@@ -49,7 +49,17 @@ jobs:
           project_id: longbridgequant
           version: ">= 416.0.0"
       - name: Apply stop and verify service and Scheduler
+        env:
+          HK_STOP_RESULT_PATH: ${{ runner.temp }}/hk-stop-result/result.json
         run: python3 scripts/stop_hk_runtime.py
+      - name: Upload HK stop result
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hk-stop-result
+          path: ${{ runner.temp }}/hk-stop-result/result.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Explain stop boundary
         if: always()
         run: |
