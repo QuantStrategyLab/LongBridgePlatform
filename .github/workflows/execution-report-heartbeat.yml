@@ -134,3 +134,14 @@ jobs:
           sync-url: ${{ vars.EXECUTION_EVIDENCE_SYNC_URL }}
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+
+      - name: Record daily paper account snapshot
+        if: ${{ success() && matrix.target.label == 'PAPER' && vars.ACCOUNT_HISTORY_RECORDING_ENABLED == 'true' }}
+        env:
+          ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ vars.ACCOUNT_HISTORY_RECORDING_ENABLED }}
+          ACCOUNT_HISTORY_SERVICE_URL: ${{ vars.ACCOUNT_HISTORY_SERVICE_URL }}
+          ACCOUNT_HISTORY_GCS_PREFIX: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX }}
+          ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
+          ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
+          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
+        run: uv run --no-sync python scripts/record_daily_account_snapshot.py
