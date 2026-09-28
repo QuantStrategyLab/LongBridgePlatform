@@ -667,6 +667,157 @@ def filter_due_targets(
     return due, evaluated
 
 
+def classify_business_date_schedule(
+    target: Mapping[str, Any],
+    *,
+    now: dt.datetime,
+    business_date: dt.date | None = None,
+    publication_grace: dt.timedelta = dt.timedelta(minutes=30),
+    market_aware: bool = True,
+    session_dates_loader: SessionDatesLoader = _market_session_dates,
+    within_expected_window: bool | None = None,
+) -> dict[str, Any]:
+    """Describe one target's schedule on one business date.
+
+    This does not decide whether a report is acceptable. Heartbeat due filtering
+    stays in ``_target_due_status``; callers that only need a skip/require bit
+    should keep using ``filter_due_targets``.
+    """
+
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be timezone-aware")
+    now_utc = now.astimezone(dt.timezone.utc)
+    grace = publication_grace if publication_grace > dt.timedelta() else dt.timedelta()
+    scheduler = target.get("scheduler")
+    scheduler = scheduler if isinstance(scheduler, Mapping) else {}
+    timezone_name = (
+        str(target.get("market_timezone") or "").strip()
+        or str(scheduler.get("timezone") or "").strip()
+    )
+    expected_window = "unspecified"
+    if within_expected_window is True:
+        expected_window = "inside"
+    elif within_expected_window is False:
+        expected_window = "outside"
+    empty = {
+        "state": "unevaluable",
+        "business_date": business_date,
+        "timezone": timezone_name,
+        "latest_due_at": None,
+        "next_due_at": None,
+        "grace_ends_at": None,
+        "publication_grace_ended": None,
+        "expected_window": expected_window,
+        "reason": "",
+    }
+    if not timezone_name:
+        empty["reason"] = "missing_timezone"
+        return empty
+    try:
+        market_timezone = ZoneInfo(timezone_name)
+    except Exception:
+        empty["reason"] = "invalid_timezone"
+        return empty
+    schedule = str(scheduler.get("main_time") or "").strip()
+    if len(schedule.split()) != 5:
+        empty["timezone"] = timezone_name
+        empty["reason"] = "missing_schedule"
+        return empty
+    resolved_date = business_date or now_utc.astimezone(market_timezone).date()
+    try:
+        scheduler_timezone = ZoneInfo(str(scheduler.get("timezone") or timezone_name).strip() or timezone_name)
+    except Exception:
+        empty["business_date"] = resolved_date
+        empty["timezone"] = timezone_name
+        empty["reason"] = "invalid_timezone"
+        return empty
+
+    day_start = dt.datetime.combine(resolved_date, dt.time.min, tzinfo=market_timezone)
+    day_end = day_start + dt.timedelta(days=1)
+    cursor = day_start.astimezone(dt.timezone.utc).replace(second=0, microsecond=0)
+    if cursor < day_start.astimezone(dt.timezone.utc):
+        cursor += dt.timedelta(minutes=1)
+    stop = day_end.astimezone(dt.timezone.utc)
+    matches: list[dt.datetime] = []
+    while cursor < stop:
+        local_time = cursor.astimezone(scheduler_timezone)
+        try:
+            matched = cron_matches(schedule, local_time)
+        except (TypeError, ValueError):
+            empty["business_date"] = resolved_date
+            empty["timezone"] = timezone_name
+            empty["reason"] = "invalid_schedule"
+            return empty
+        if matched and local_time.astimezone(market_timezone).date() == resolved_date:
+            matches.append(cursor)
+        cursor += dt.timedelta(minutes=1)
+
+    occurred = [item for item in matches if item <= now_utc]
+    upcoming = [item for item in matches if item > now_utc]
+    latest_due_at = occurred[-1] if occurred else None
+    next_due_at = upcoming[0] if upcoming else None
+    result = {
+        "state": "not_due",
+        "business_date": resolved_date,
+        "timezone": timezone_name,
+        "latest_due_at": latest_due_at,
+        "next_due_at": next_due_at,
+        "grace_ends_at": None,
+        "publication_grace_ended": None,
+        "expected_window": expected_window,
+        "reason": "no_cron_on_business_date" if not matches else "before_schedule",
+    }
+    if latest_due_at is None:
+        return _apply_expected_window(result, within_expected_window)
+
+    session_open: bool | None = True
+    market_calendar = str(target.get("market_calendar") or "").strip()
+    if market_aware and not market_calendar:
+        result["state"] = "unevaluable"
+        result["reason"] = "missing_market_calendar"
+        return _apply_expected_window(result, within_expected_window)
+    if market_aware and market_calendar:
+        try:
+            session_dates = session_dates_loader(
+                market_calendar,
+                start_date=resolved_date,
+                end_date=resolved_date,
+            )
+        except Exception:
+            result["state"] = "unevaluable"
+            result["reason"] = "market_calendar_unavailable"
+            return _apply_expected_window(result, within_expected_window)
+        session_open = resolved_date in session_dates
+    if session_open is False:
+        result["state"] = "market_closed"
+        result["reason"] = "market_closed"
+        return _apply_expected_window(result, within_expected_window)
+
+    grace_ends_at = latest_due_at + grace
+    result["grace_ends_at"] = grace_ends_at
+    result["next_due_at"] = None
+    if now_utc < grace_ends_at:
+        result["state"] = "within_grace"
+        result["publication_grace_ended"] = False
+        result["reason"] = "publication_grace_open"
+        return _apply_expected_window(result, within_expected_window)
+    result["state"] = "due"
+    result["publication_grace_ended"] = True
+    result["reason"] = "publication_grace_ended"
+    return _apply_expected_window(result, within_expected_window)
+
+
+def _apply_expected_window(result: dict[str, Any], within_expected_window: bool | None) -> dict[str, Any]:
+    if within_expected_window is not False:
+        return result
+    if result["state"] not in {"not_due", "within_grace", "due"}:
+        return result
+    result["state"] = "outside_window"
+    result["publication_grace_ended"] = None
+    result["reason"] = "outside_expected_window"
+    return result
+
+
 def filter_services_for_targets(
     services: list[str],
     targets: list[dict[str, Any]],
