@@ -23,7 +23,9 @@ BINDING_A = "a" * 64
 BINDING_B = "b" * 64
 SERVICE = "https://longbridge-quant-paper-service-ab12.asia-east1.run.app"
 PREFIX = "gs://acct-history/account_snapshots"
+QRS_SYNC_URL = "https://qrs.example.test/api/account-facts/sync"
 SECRET_TOKEN = "synthetic-oidc-token"
+QRS_TOKEN = "synthetic-qrs-token"
 LEAK = "raw-secret-value"
 
 
@@ -92,14 +94,30 @@ class _Response:
             content = json.dumps(payload if payload is not None else _payload()).encode()
         self.content = content
 
+    def iter_content(self, chunk_size=8192):
+        yield self.content
+
+    def close(self):
+        pass
+
 
 class _Spies:
-    def __init__(self, response=None, created=True, explode_store=False):
+    def __init__(self, response=None, created=True, explode_store=False, post_response=None):
         self.calls = []
         self.response = response or _Response(200)
         self.created = created
         self.explode_store = explode_store
         self.stored = []
+        self.post_response = post_response or _Response(
+            200,
+            {
+                "ok": True,
+                "stored": True,
+                "target_id": "paper",
+                "observation_date": "2026-09-28",
+                "observed_finished_at": (NOW - timedelta(minutes=1)).isoformat(),
+            },
+        )
 
     def fetch_id_token(self, audience):
         self.calls.append(("token", audience))
@@ -110,6 +128,12 @@ class _Spies:
         if isinstance(self.response, Exception):
             raise self.response
         return self.response
+
+    def http_post(self, url, *, headers, data, timeout, allow_redirects, stream):
+        self.calls.append(("post", url, headers, data, timeout, allow_redirects, stream))
+        if isinstance(self.post_response, Exception):
+            raise self.post_response
+        return self.post_response
 
     def open_store(self, project_id):
         self.calls.append(("store", project_id))
@@ -134,6 +158,7 @@ def _record(env=None, spies=None, now=NOW, now_reader=None):
         env if env is not None else _env(),
         fetch_id_token=spies.fetch_id_token,
         http_get=spies.http_get,
+        http_post=spies.http_post,
         open_store=spies.open_store,
         now_reader=now_reader or (lambda: now),
     )
@@ -282,6 +307,219 @@ def test_record_stores_only_whitelisted_multi_currency_fields():
     assert "net_assets_total" not in saved
 
 
+def test_publishes_exact_created_history_body_once_to_qrs():
+    result, spies = _record(
+        env=_env(
+            ACCOUNT_FACTS_SYNC_ENABLED="true",
+            ACCOUNT_FACTS_SYNC_URL=QRS_SYNC_URL,
+            ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+        )
+    )
+
+    assert result.status == "recorded"
+    assert result.publish_status == "published"
+    assert [name for name, *_ in spies.calls].count("http") == 1
+    posts = [call for call in spies.calls if call[0] == "post"]
+    assert len(posts) == 1
+    _, url, headers, body, timeout, allow_redirects, stream = posts[0]
+    assert url == QRS_SYNC_URL
+    assert headers == {
+        "Authorization": f"Bearer {QRS_TOKEN}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    assert body.decode("utf-8") == spies.stored[0][1]
+    assert timeout > 0
+    assert allow_redirects is False
+    assert stream is True
+    posted_body = body.decode("utf-8")
+    assert SECRET_TOKEN not in posted_body
+    assert QRS_TOKEN not in posted_body
+    assert LEAK not in posted_body
+
+
+def test_qrs_publish_is_off_by_default():
+    result, spies = _record()
+
+    assert result.status == "recorded"
+    assert result.publish_status == "disabled"
+    assert [name for name, *_ in spies.calls].count("post") == 0
+
+
+def test_store_unknown_never_posts_to_qrs():
+    spies = _Spies(created=None)
+    result, spies = _record(
+        env=_env(
+            ACCOUNT_FACTS_SYNC_ENABLED="true",
+            ACCOUNT_FACTS_SYNC_URL=QRS_SYNC_URL,
+            ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+        ),
+        spies=spies,
+    )
+
+    assert result.category == "store_unknown"
+    assert [name for name, *_ in spies.calls].count("post") == 0
+
+
+def test_already_recorded_does_not_publish_newly_fetched_body():
+    spies = _Spies(created=False)
+    result, spies = _record(
+        env=_env(
+            ACCOUNT_FACTS_SYNC_ENABLED="true",
+            ACCOUNT_FACTS_SYNC_URL=QRS_SYNC_URL,
+            ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+        ),
+        spies=spies,
+    )
+
+    assert result.status == "already_recorded"
+    assert result.publish_status == "skipped_already_recorded"
+    assert [name for name, *_ in spies.calls].count("post") == 0
+
+
+def test_qrs_redirect_is_not_followed_or_treated_as_published():
+    spies = _Spies(post_response=_Response(302, {"Location": "https://other.example.test"}))
+    result, spies = _record(
+        env=_env(
+            ACCOUNT_FACTS_SYNC_ENABLED="true",
+            ACCOUNT_FACTS_SYNC_URL=QRS_SYNC_URL,
+            ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+        ),
+        spies=spies,
+    )
+
+    assert result.status == "recorded"
+    assert result.publish_status == "rejected"
+    assert [name for name, *_ in spies.calls].count("post") == 1
+    assert spies.calls[-1][5] is False
+
+
+def test_qrs_timeout_is_unknown_and_never_retried():
+    spies = _Spies(post_response=TimeoutError(f"{QRS_TOKEN} {LEAK}"))
+    result, spies = _record(
+        env=_env(
+            ACCOUNT_FACTS_SYNC_ENABLED="true",
+            ACCOUNT_FACTS_SYNC_URL=QRS_SYNC_URL,
+            ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+        ),
+        spies=spies,
+    )
+
+    assert result.status == "recorded"
+    assert result.publish_status == "unknown"
+    assert [name for name, *_ in spies.calls].count("post") == 1
+    assert QRS_TOKEN not in result.publish_category
+    assert LEAK not in result.publish_category
+
+
+def test_qrs_error_response_is_sanitized_and_record_stays_recorded():
+    spies = _Spies(post_response=_Response(401, {"error": f"bad token {QRS_TOKEN} {LEAK}"}))
+    result, spies = _record(
+        env=_env(
+            ACCOUNT_FACTS_SYNC_ENABLED="true",
+            ACCOUNT_FACTS_SYNC_URL=QRS_SYNC_URL,
+            ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+        ),
+        spies=spies,
+    )
+
+    assert result.status == "recorded"
+    assert result.publish_status == "rejected"
+    assert result.publish_category == "qrs_http_rejected"
+    assert QRS_TOKEN not in result.publish_category
+    assert LEAK not in result.publish_category
+
+
+def test_qrs_oversized_response_is_unknown_without_retry():
+    spies = _Spies(post_response=_Response(200, content=b"x" * (64 * 1024 + 1)))
+    result, spies = _record(
+        env=_env(
+            ACCOUNT_FACTS_SYNC_ENABLED="true",
+            ACCOUNT_FACTS_SYNC_URL=QRS_SYNC_URL,
+            ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+        ),
+        spies=spies,
+    )
+
+    assert result.status == "recorded"
+    assert result.publish_status == "unknown"
+    assert result.publish_category == "qrs_response_too_large"
+    assert [name for name, *_ in spies.calls].count("post") == 1
+
+
+def test_qrs_oversized_payload_is_not_sent():
+    large_payload = _payload(
+        cash=[
+            {
+                "currency": "USD",
+                "available_cash": "1" * (64 * 1024),
+                "frozen_cash": "0",
+                "settling_cash": "0",
+            }
+        ]
+    )
+    spies = _Spies(response=_Response(200, large_payload))
+    result, spies = _record(
+        env=_env(
+            ACCOUNT_FACTS_SYNC_ENABLED="true",
+            ACCOUNT_FACTS_SYNC_URL=QRS_SYNC_URL,
+            ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+        ),
+        spies=spies,
+    )
+
+    assert result.status == "recorded"
+    assert result.publish_status == "rejected"
+    assert result.publish_category == "qrs_payload_too_large"
+    assert [name for name, *_ in spies.calls].count("post") == 0
+
+
+def test_cli_reports_qrs_failure_without_erasing_record_success(capsys):
+    spies = _Spies(post_response=TimeoutError(f"{QRS_TOKEN} {LEAK}"))
+    code = main(
+        [],
+        environ=_env(
+            ACCOUNT_FACTS_SYNC_ENABLED="true",
+            ACCOUNT_FACTS_SYNC_URL=QRS_SYNC_URL,
+            ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+        ),
+        fetch_id_token=spies.fetch_id_token,
+        http_get=spies.http_get,
+        http_post=spies.http_post,
+        open_store=spies.open_store,
+        now_reader=lambda: NOW,
+    )
+
+    output = capsys.readouterr().out
+    assert code == 1
+    assert output.strip() == "record=recorded account_facts_publish=unknown"
+    assert QRS_TOKEN not in output
+    assert LEAK not in output
+
+
+def test_qrs_sync_url_must_be_exact_https_endpoint():
+    for bad_url in (
+        "http://qrs.example.test/api/account-facts/sync",
+        "https://qrs.example.test/api/account-facts/sync/",
+        "https://qrs.example.test/api/account-facts/sync?next=https://evil.test",
+        "https://user:pass@qrs.example.test/api/account-facts/sync",
+        "https://qrs.example.test:443/api/account-facts/sync",
+        "https://qrs.example.test/other",
+    ):
+        spies = _Spies()
+        result, spies = _record(
+            env=_env(
+                ACCOUNT_FACTS_SYNC_ENABLED="true",
+                ACCOUNT_FACTS_SYNC_URL=bad_url,
+                ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+            ),
+            spies=spies,
+        )
+        assert result.status == "recorded"
+        assert result.publish_status == "rejected"
+        assert [name for name, *_ in spies.calls].count("post") == 0
+
+
 def test_new_source_or_utc_day_uses_a_new_object_segment():
     late = datetime(2026, 9, 28, 0, 5, tzinfo=timezone.utc)
     previous_start = datetime(2026, 9, 27, 23, 55, tzinfo=timezone.utc)
@@ -343,7 +581,7 @@ def test_cli_disabled_and_success_use_injected_dependencies(capsys):
         now_reader=lambda: NOW,
     )
     assert disabled == 0
-    assert capsys.readouterr().out.strip() == "disabled"
+    assert capsys.readouterr().out.strip() == "record=disabled account_facts_publish=disabled"
 
     spies = _Spies()
     code = main(
@@ -356,7 +594,7 @@ def test_cli_disabled_and_success_use_injected_dependencies(capsys):
     )
     captured = capsys.readouterr()
     assert code == 0
-    assert captured.out.strip() == "recorded"
+    assert captured.out.strip() == "record=recorded account_facts_publish=disabled"
     assert SECRET_TOKEN not in captured.out
 
 
@@ -370,7 +608,7 @@ def test_cli_error_is_a_short_category(capsys):
         now_reader=lambda: NOW,
     )
     assert code == 1
-    assert capsys.readouterr().out.strip() == "error: config_invalid"
+    assert capsys.readouterr().out.strip() == "record=error:config_invalid account_facts_publish=disabled"
 
 
 def test_gcloud_token_wrapper_success_failure_and_timeout(monkeypatch, capsys):
@@ -457,7 +695,7 @@ def test_cli_uses_the_gcloud_wrapper_and_keeps_stderr_private(monkeypatch, capsy
     )
     captured = capsys.readouterr()
     assert code == 0
-    assert captured.out.strip() == "recorded"
+    assert captured.out.strip() == "record=recorded account_facts_publish=disabled"
     assert LEAK not in captured.out
     assert LEAK not in captured.err
     assert spies.calls[0][2]["Authorization"] == "Bearer synthetic-oidc-token"
@@ -547,7 +785,7 @@ def test_malformed_url_cli_stays_a_short_category(capsys):
         )
         captured = capsys.readouterr()
         assert code == 1
-        assert captured.out.strip() == "error: config_invalid"
+        assert captured.out.strip() == "record=error:config_invalid account_facts_publish=disabled"
         assert "Traceback" not in captured.err
         assert "Port out of range" not in captured.err
         assert "IPv6" not in captured.err
