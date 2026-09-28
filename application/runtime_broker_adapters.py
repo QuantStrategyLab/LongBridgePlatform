@@ -186,6 +186,7 @@ class LongBridgeBrokerAdapters:
                 "account_hash": self.account_hash,
                 "broker_capital": account_state.get("broker_capital"),
                 "heartbeat_account_snapshot": account_state.get("heartbeat_account_snapshot"),
+                "position_currency_by_symbol": account_state.get("position_currency_by_symbol"),
             },
         )
 

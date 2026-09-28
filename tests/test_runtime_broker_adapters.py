@@ -142,6 +142,7 @@ def test_build_portfolio_and_execution_ports_adapt_runtime_calls():
                 "available_cash": 500.0,
                 "total_strategy_equity": 2500.0,
                 "cash_by_currency": {"USD": 500.0},
+                "position_currency_by_symbol": {"SOXL": "USD", "BOXX": None},
                 "sellable_quantities": {"SOXL": 10, "BOXX": 7},
             },
         )[-1],
@@ -175,6 +176,7 @@ def test_build_portfolio_and_execution_ports_adapt_runtime_calls():
     assert snapshot.buying_power == 500.0
     assert snapshot.metadata["account_hash"] == "HK-001"
     assert snapshot.metadata["cash_by_currency"] == {"USD": 500.0}
+    assert snapshot.metadata["position_currency_by_symbol"] == {"SOXL": "USD", "BOXX": None}
     assert observed["orders"] == [
         (
             "trade-context",

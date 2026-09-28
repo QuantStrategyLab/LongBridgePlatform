@@ -657,20 +657,37 @@ def run_strategy(
             except ValueError as exc:
                 if str(exc) not in _LIVE_COMMAND_BINDING_ERRORS:
                     raise
-                message = "Durable live execution command binding is invalid; broker orders blocked"
-                runtime.notify_issue("Durable live execution blocked", message)
+                message = config.translator("issue_durable_execution_binding_invalid")
+                runtime.notify_issue(
+                    config.translator("issue_durable_execution_blocked_title"), message
+                )
+                blocked_execution = {
+                    "execution_status": "blocked",
+                    "blocked_reason": "durable_live_execution_command_binding_invalid",
+                    "heartbeat_execution_state": "blocked",
+                    "durable_live_execution_command": {
+                        "command_id": command.command_id,
+                        "status": "BLOCKED_INVALID_BINDING",
+                        "effective_date": command.effective_date,
+                    },
+                }
+                notification_publisher.publish(
+                    notification_renderers.render_heartbeat_notification(
+                        execution=blocked_execution,
+                        skip_logs=(),
+                        note_logs=(),
+                        translator=config.translator,
+                        separator=config.separator,
+                        strategy_display_name=config.strategy_display_name,
+                        dry_run_only=config.dry_run_only,
+                        extra_notification_lines=config.extra_notification_lines,
+                        title_key=config.notification_title_key or "heartbeat_title",
+                    )
+                )
                 return ExecutionCycleResult(
                     plan={},
                     portfolio={},
-                    execution={
-                        "execution_status": "blocked",
-                        "blocked_reason": "durable_live_execution_command_binding_invalid",
-                        "durable_live_execution_command": {
-                            "command_id": command.command_id,
-                            "status": "BLOCKED_INVALID_BINDING",
-                            "effective_date": command.effective_date,
-                        },
-                    },
+                    execution=blocked_execution,
                     allocation={},
                     logs=(),
                     skip_logs=(),
@@ -870,6 +887,15 @@ def run_strategy(
     if direct_live_routing_blocked:
         execution["direct_live_routing_blocked"] = True
         execution["direct_live_routing_block_reason"] = "durable_execution_command_required"
+    if (
+        account_identity_blocked
+        or (direct_live_routing_blocked and not live_command_waiting)
+        or (live_command_blocked and not live_command_waiting)
+        or str(execution.get("execution_status") or "").strip().lower() == "blocked"
+    ):
+        execution["heartbeat_execution_state"] = "blocked"
+    elif live_command_waiting:
+        execution["heartbeat_execution_state"] = "waiting_window"
     execution_already_recorded = (
         direct_live_routing_blocked or account_identity_blocked or live_command_blocked
     )
@@ -934,8 +960,10 @@ def run_strategy(
         elif live_command_waiting:
             message = "Durable live execution command queued; waiting for its effective trading session"
         elif live_command_blocked:
-            message = "Durable live execution command is unresolved; broker orders blocked"
-            runtime.notify_issue("Durable live execution blocked", message)
+            message = config.translator("issue_durable_execution_unresolved")
+            runtime.notify_issue(
+                config.translator("issue_durable_execution_blocked_title"), message
+            )
         elif direct_live_routing_blocked:
             message = _durable_command_required_message(execution=execution)
             runtime.notify_issue("Next-session execution blocked", message)
@@ -1107,6 +1135,11 @@ def run_strategy(
     execution.pop("heartbeat_account_snapshot", None)
     if isinstance(account_snapshot, dict):
         execution["heartbeat_account_snapshot"] = dict(account_snapshot)
+    position_currency_by_symbol = (getattr(initial_snapshot, "metadata", {}) or {}).get(
+        "position_currency_by_symbol"
+    )
+    if isinstance(position_currency_by_symbol, dict):
+        execution["position_currency_by_symbol"] = dict(position_currency_by_symbol)
 
     if pending_orders:
         try:

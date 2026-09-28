@@ -238,6 +238,87 @@ class NotificationTests(unittest.TestCase):
             self.assertNotIn(cash, rendered.compact_text)
             self.assertIn(equity, rendered.compact_text)
 
+    def test_heartbeat_distinguishes_blocked_queued_and_normal_cycles_in_both_locales(self):
+        cases = (
+            (
+                {
+                    "execution_status": "blocked",
+                    "blocked_reason": "durable_binding_invalid",
+                    "heartbeat_execution_state": "waiting_window",
+                },
+                "⚠️ 执行受阻，本轮未提交新订单",
+                "⚠️ Execution blocked; no new orders submitted this cycle",
+                (),
+            ),
+            (
+                {
+                    "heartbeat_execution_state": "waiting_window",
+                    "direct_live_routing_blocked": True,
+                },
+                "⏳ 等待执行时段",
+                "⏳ Waiting for the execution window",
+                (),
+            ),
+            (
+                {},
+                "✅ 无交易，无需调仓",
+                "✅ No trade; no rebalance needed",
+                (),
+            ),
+            (
+                {},
+                "⚠️ 本轮没有可执行订单",
+                "⚠️ No executable orders this cycle",
+                ("Durable live execution command blocked",),
+            ),
+        )
+        for execution, zh_text, en_text, note_logs in cases:
+            with self.subTest(execution=execution):
+                for language, expected in (("zh", zh_text), ("en", en_text)):
+                    rendered = render_heartbeat_notification(
+                        execution=execution,
+                        skip_logs=(),
+                        note_logs=note_logs,
+                        translator=build_translator(language),
+                        separator="---",
+                        strategy_display_name="Example",
+                        dry_run_only=False,
+                    )
+                    self.assertIn(expected, rendered.detailed_text)
+                    self.assertIn(expected, rendered.compact_text)
+
+    def test_heartbeat_labels_holding_amounts_only_with_position_currency_source(self):
+        execution = {
+            "heartbeat_account_snapshot": {
+                "net_assets": 2500.5,
+                "equity_currency": "SGD",
+                "observed_at": "2026-09-25T14:09:00+00:00",
+            },
+            "dashboard_text": (
+                "💼 Strategy holdings\n"
+                "  - SOXL: $100.00 / 1 share\n"
+                "  - 00700: $320.00 / 1 share"
+            ),
+            "position_currency_by_symbol": {"SOXL": "USD", "00700": None},
+        }
+        zh_rendered = render_heartbeat_notification(
+            execution=execution, skip_logs=(), note_logs=(),
+            translator=build_translator("zh"), separator="---",
+            strategy_display_name="Example", dry_run_only=False,
+        )
+        en_rendered = render_heartbeat_notification(
+            execution=execution, skip_logs=(), note_logs=(),
+            translator=build_translator("en"), separator="---",
+            strategy_display_name="Example", dry_run_only=False,
+        )
+        self.assertIn("SOXL: USD 100.00", zh_rendered.detailed_text)
+        self.assertIn("00700: 币种未核实 320.00", zh_rendered.detailed_text)
+        self.assertIn("账户总权益: SGD 2,500.50", zh_rendered.detailed_text)
+        self.assertNotIn("$100.00", zh_rendered.detailed_text)
+        self.assertIn("SOXL: USD 100.00", en_rendered.compact_text)
+        self.assertIn("00700: Currency unverified 320.00", en_rendered.compact_text)
+        self.assertNotIn("$320.00", en_rendered.compact_text)
+
     def test_compact_heartbeat_keeps_nonzero_holdings_and_omits_noise(self):
         rendered = render_heartbeat_notification(
             execution={
