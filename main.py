@@ -37,6 +37,13 @@ from application.paper_execution_command_consumer import (
 from application.runtime_strategy_adapters import build_runtime_strategy_adapters
 from application.longbridge_execution import submit_order
 from runtime_execution_policy import fractional_buy_execution_enabled, FRACTIONAL_BUY_QUANTITY_STEP
+from application.account_snapshot import (
+    begin_natural_cycle_history,
+    current_cycle_token_version,
+    cycle_history_observation,
+    end_natural_cycle_history,
+    read_cycle_token,
+)
 from application.longbridge_portfolio import fetch_strategy_account_state
 from entrypoints.cloud_run import is_market_open_now
 from runtime_execution_policy import dca_execution_unsupported_reason
@@ -583,7 +590,7 @@ def build_composer(*, dry_run_only_override: bool | None = None):
         strategy_adapters=STRATEGY_ADAPTERS,
         estimate_max_purchase_quantity_fn=_profile_estimate_max_purchase_quantity,
         fetch_order_status_fn=fetch_order_status,
-        fetch_token_from_secret_fn=fetch_token_from_secret,
+        fetch_token_from_secret_fn=fetch_cycle_token,
         refresh_token_if_needed_fn=refresh_token_if_needed,
         build_contexts_fn=build_contexts,
         run_id_builder=build_run_id,
@@ -602,6 +609,41 @@ def build_composer(*, dry_run_only_override: bool | None = None):
             "symbol_suffix": SYMBOL_SUFFIX,
             "trading_currency": TRADING_CURRENCY,
         },
+    )
+
+
+def fetch_cycle_token(project_id, secret_name):
+    """Read the cycle token once. A metadata failure is not followed by another read."""
+
+    from quant_platform_kit.cloud import get_secret_store
+
+    return read_cycle_token(
+        project_id,
+        secret_name,
+        store=get_secret_store(),
+        fetch_token=fetch_token_from_secret,
+    )
+
+
+def _record_natural_cycle_account_history(composer) -> None:
+    """After a finished cycle, optionally create one daily object. Failures stay local."""
+
+    from quant_platform_kit.cloud import get_object_store
+    from scripts.record_daily_account_snapshot import record_projected_daily_account
+
+    observation = cycle_history_observation()
+    if observation is None:
+        print("account_history status=skipped category=no_observation", flush=True)
+        return
+    record_projected_daily_account(
+        os.environ,
+        account_scope=composer.account_region,
+        source_binding=composer.natural_cycle_source_binding(current_cycle_token_version()),
+        balances=observation["projection"]["broker_reported_balances"],
+        cash=observation["projection"]["cash"],
+        started=observation["started"],
+        finished=observation["finished"],
+        open_store=lambda _project_id: get_object_store(),
     )
 
 
@@ -742,6 +784,8 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         error=strategy_plugin_error,
     )
     failure_phase = "market_hours"
+    history_capture = begin_natural_cycle_history()
+    record_history = False
     try:
         reporting_adapters.log_event(
             log_context,
@@ -901,6 +945,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             "strategy_cycle_completed",
             message="Strategy execution completed",
         )
+        record_history = not validation_only and not force_run and not bool(composer.dry_run_only)
         return True
 
     except Exception as exc:
@@ -972,6 +1017,12 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 print(f"execution_report {report_path}", flush=True)
             except Exception as persist_exc:
                 print(f"failed to persist execution report: {type(persist_exc).__name__}", flush=True)
+        if record_history:
+            try:
+                _record_natural_cycle_account_history(composer)
+            except Exception:
+                print("account_history status=error category=store_unknown", flush=True)
+        end_natural_cycle_history(history_capture)
 
 
 def run_probe(*, response_body: str = "Probe OK"):

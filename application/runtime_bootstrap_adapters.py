@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import os
 from typing import Any
 
+from application.account_snapshot import note_cycle_token_version, split_cycle_token
+
 
 @dataclass(frozen=True)
 class LongBridgeRuntimeBootstrap:
@@ -30,20 +32,28 @@ class LongBridgeRuntimeBootstrap:
     def build_contexts(self) -> tuple[Any, Any]:
         """Build broker contexts for a normal runtime bootstrap."""
         app_key, app_secret = self._read_app_credentials()
-        token = self.refresh_token_if_needed_fn(
-            self.fetch_token_from_secret_fn(self.project_id, self.secret_name),
+        token, version_name = split_cycle_token(
+            self.fetch_token_from_secret_fn(self.project_id, self.secret_name)
+        )
+        refreshed = self.refresh_token_if_needed_fn(
+            token,
             project_id=self.project_id,
             secret_name=self.secret_name,
             app_key=app_key,
             app_secret=app_secret,
             refresh_threshold_days=self.token_refresh_threshold_days,
         )
-        return self.build_contexts_fn(app_key, app_secret, token)
+        if refreshed != token:
+            version_name = None
+        note_cycle_token_version(version_name)
+        return self.build_contexts_fn(app_key, app_secret, refreshed)
 
     def build_read_only_contexts(self) -> tuple[Any, Any]:
         """Build broker read contexts without refreshing or mutating a token secret."""
         app_key, app_secret = self._read_app_credentials()
-        token = self.fetch_token_from_secret_fn(self.project_id, self.secret_name)
+        token, _version_name = split_cycle_token(
+            self.fetch_token_from_secret_fn(self.project_id, self.secret_name)
+        )
         return self.build_contexts_fn(app_key, app_secret, token)
 
     def __call__(self) -> tuple[Any, Any, Any]:

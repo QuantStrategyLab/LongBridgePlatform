@@ -5,6 +5,10 @@ from datetime import datetime, timezone
 import math
 from typing import Any
 
+from application.account_snapshot import (
+    note_cycle_history_observation,
+    project_cycle_history_balances,
+)
 from quant_platform_kit.common.broker_reconciliation import calculate_broker_observation_sha256
 
 
@@ -88,6 +92,11 @@ def fetch_strategy_account_state(
             f"error_type={type(exc).__name__}"
         )
         raise RuntimeError("LongBridge account balance unavailable") from exc
+    note_cycle_history_observation(
+        project_cycle_history_balances(account_balance),
+        observed_at,
+        datetime.now(timezone.utc),
+    )
     for account in account_balance:
         for cash_info in getattr(account, "cash_infos", []):
             currency = str(getattr(cash_info, "currency", "") or "").strip().upper()

@@ -272,6 +272,23 @@ class LongBridgeRuntimeComposer:
             ),
         )
 
+    def natural_cycle_source_binding(self, version_name: str | None) -> dict[str, object]:
+        """Bind the token version already read for this cycle. Config target is not a source."""
+
+        from application.account_snapshot import (
+            build_account_snapshot_source_binding,
+            trusted_cloud_run_region,
+        )
+
+        return build_account_snapshot_source_binding(
+            version_name=version_name,
+            project_id=self.project_id,
+            service=self.env_reader("K_SERVICE", ""),
+            revision=self.env_reader("K_REVISION", ""),
+            account_scope=self.account_region,
+            region=trusted_cloud_run_region(self.env_reader),
+        )
+
     def build_read_only_broker_contexts(self) -> tuple[Any, Any]:
         """Build LongBridge read contexts without strategy evaluation or an order port."""
         bootstrap = self.bootstrap_builder(
