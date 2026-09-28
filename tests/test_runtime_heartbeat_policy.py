@@ -6,6 +6,7 @@ import json
 import pytest
 
 from scripts.runtime_heartbeat_policy import (
+    classify_business_date_schedule,
     filter_due_targets,
     load_runtime_targets,
     match_payload_target,
@@ -562,3 +563,52 @@ def test_runtime_target_configuration_presence_is_preserved_when_all_disabled() 
     assert runtime_target_configuration_present(environ) is True
     assert load_runtime_targets(environ) == []
     assert load_runtime_targets(environ, include_disabled=True)[0]["enabled"] is False
+
+
+def test_business_date_schedule_separates_grace_closed_and_not_due() -> None:
+    targets = load_runtime_targets(
+        {
+            "RUNTIME_TARGET_JSON": json.dumps(
+                {
+                    "service_name": "lb-hk",
+                    "strategy_profile": "hk-profile",
+                    "account_scope": "HK",
+                    "market": "HK",
+                    "market_calendar": "XHKG",
+                    "market_timezone": "Asia/Hong_Kong",
+                    "scheduler": {"main_time": "5 16 * * 1-5", "timezone": "Asia/Hong_Kong"},
+                }
+            )
+        }
+    )
+    target = targets[0]
+    before = classify_business_date_schedule(
+        target,
+        now=dt.datetime(2026, 9, 28, 2, 0, tzinfo=dt.timezone.utc),
+        session_dates_loader=lambda calendar, **_kwargs: {dt.date(2026, 9, 28)},
+    )
+    within_grace = classify_business_date_schedule(
+        target,
+        now=dt.datetime(2026, 9, 28, 8, 20, tzinfo=dt.timezone.utc),
+        session_dates_loader=lambda calendar, **_kwargs: {dt.date(2026, 9, 28)},
+    )
+    closed = classify_business_date_schedule(
+        target,
+        now=dt.datetime(2026, 9, 28, 8, 40, tzinfo=dt.timezone.utc),
+        session_dates_loader=lambda calendar, **_kwargs: set(),
+    )
+    outside = classify_business_date_schedule(
+        target,
+        now=dt.datetime(2026, 9, 28, 8, 40, tzinfo=dt.timezone.utc),
+        within_expected_window=False,
+        session_dates_loader=lambda calendar, **_kwargs: {dt.date(2026, 9, 28)},
+    )
+
+    assert before["state"] == "not_due"
+    assert before["publication_grace_ended"] is None
+    assert within_grace["state"] == "within_grace"
+    assert within_grace["publication_grace_ended"] is False
+    assert within_grace["latest_due_at"] == dt.datetime(2026, 9, 28, 8, 5, tzinfo=dt.timezone.utc)
+    assert closed["state"] == "market_closed"
+    assert outside["state"] == "outside_window"
+    assert outside["publication_grace_ended"] is None
