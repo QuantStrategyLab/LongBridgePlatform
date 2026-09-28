@@ -145,6 +145,9 @@ jobs:
           ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
           ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
           GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
+          ACCOUNT_FACTS_SYNC_ENABLED: ${{ vars.ACCOUNT_FACTS_SYNC_ENABLED }}
+          ACCOUNT_FACTS_SYNC_URL: ${{ vars.ACCOUNT_FACTS_SYNC_URL }}
+          ACCOUNT_FACTS_SYNC_TOKEN: ${{ vars.ACCOUNT_FACTS_SYNC_ENABLED == 'true' && secrets.ACCOUNT_FACTS_SYNC_TOKEN || '' }}
         run: uv run --no-sync python scripts/record_daily_account_snapshot.py
 
       - name: Publish daily runtime projection
