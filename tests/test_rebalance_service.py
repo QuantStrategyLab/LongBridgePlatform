@@ -1605,7 +1605,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         clock = {"day": "2026-07-17", "status": "New"}
         next_days = {"2026-07-17": "2026-07-20", "2026-07-20": "2026-07-21", "2026-07-21": "2026-07-22", "2026-07-22": "2026-07-23"}
         targets = {"2026-07-17": 400.0, "2026-07-20": 300.0, "2026-07-21": 200.0, "2026-07-22": 200.0}
-        resolved_new_signals, orders, alerts, frozen_targets = [], [], [], []
+        resolved_new_signals, orders, alerts, frozen_targets, messages = [], [], [], [], []
 
         def new_plan(**_kwargs):
             resolved_new_signals.append(clock["day"])
@@ -1622,7 +1622,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             market_data_port_factory=lambda _context: CallableMarketDataPort(
                 quote_loader=lambda symbol: QuoteSnapshot(symbol=symbol, as_of=clock["day"], last_price=100.0)),
             estimate_max_purchase_quantity=lambda *_args, **_kwargs: 5,
-            notifications=CallableNotificationPort(lambda _message: None),
+            notifications=CallableNotificationPort(messages.append),
             notify_issue=lambda title, detail: alerts.append((title, detail)),
             portfolio_port_factory=lambda *_contexts: CallablePortfolioPort(
                 lambda: replace(_build_snapshot(plan), as_of=clock["day"])),
@@ -1636,13 +1636,17 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             limit_sell_discount=0.995, limit_buy_premium=1.005, separator="-",
             translator=build_translator("en"), with_prefix=lambda message: message,
             strategy_profile="russell_top50_leader_rotation", execution_state_account_scope="SG",
-            physical_account_id="lb-sg-001", dry_run_only=False, notify_no_trade_cycles=False,
+            physical_account_id="lb-sg-001", dry_run_only=False, notify_no_trade_cycles=True,
             execution_dedup_enabled=True, execution_state_store=marker_store,
             durable_execution_command_live_enabled=True, execution_command_store=command_store,
             durable_live_execution_session_authorized=True,
             durable_execution_runtime_identity_digest="a" * 64,
         )
         first = rebalance_service.run_strategy(runtime=runtime, config=config)
+        self.assertEqual(first.execution["heartbeat_execution_state"], "waiting_window")
+        self.assertIn("Waiting for the execution window", messages[0])
+        self.assertEqual(orders, [])
+        self.assertIs(command_store.current_state(command_store.list_due("2026-07-20")[0]), ExecutionCommandState.QUEUED)
         rebalance_service.run_strategy(runtime=runtime, config=config)
         self.assertFalse(first.action_done)
         self.assertEqual(first.execution["durable_live_execution_command"]["status"], "QUEUED")
@@ -1658,6 +1662,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         clock["day"] = "2026-07-21"
         blocked = rebalance_service.run_strategy(runtime=runtime, config=config)
         self.assertFalse(blocked.action_done)
+        self.assertEqual(blocked.execution["heartbeat_execution_state"], "blocked")
         self.assertEqual(len(orders), 1)  # Yesterday's unresolved order blocks today's due command.
         clock["status"] = "Filled"
         resumed = rebalance_service.run_strategy(runtime=runtime, config=config)
@@ -1836,13 +1841,14 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertTrue(command_store.enqueue(valid))
         self.assertTrue(command_store.enqueue(stale))
         issues = []
+        messages = []
         runtime = LongBridgeRebalanceRuntime(
             bootstrap=lambda: ("quote", "trade", {"trend": "ok"}),
             resolve_rebalance_plan=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not evaluate")),
             market_data_port_factory=lambda _context: CallableMarketDataPort(
                 quote_loader=lambda _symbol: (_ for _ in ()).throw(AssertionError("must not load quote"))),
             estimate_max_purchase_quantity=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not estimate")),
-            notifications=CallableNotificationPort(lambda _message: None),
+            notifications=CallableNotificationPort(messages.append),
             notify_issue=lambda title, detail: issues.append((title, detail)),
             portfolio_port_factory=lambda *_contexts: CallablePortfolioPort(
                 lambda: (_ for _ in ()).throw(AssertionError("must not load snapshot"))),
@@ -1869,6 +1875,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(result.execution["blocked_reason"], "durable_live_execution_command_binding_invalid")
         self.assertEqual(result.execution["durable_live_execution_command"]["status"], "BLOCKED_INVALID_BINDING")
         self.assertEqual(issues, [("Durable live execution blocked", "Durable live execution command binding is invalid; broker orders blocked")])
+        self.assertEqual(len(messages), 1)
+        self.assertIn("Execution blocked; no new orders submitted this cycle", messages[0])
         reconcile.assert_not_called()
         self.assertIs(command_store.current_state(valid), ExecutionCommandState.QUEUED)
         self.assertIs(command_store.current_state(stale), ExecutionCommandState.QUEUED)
@@ -3107,7 +3115,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(sent_messages), 1)
         self.assertNotIn("账户现金", sent_messages[0])
         self.assertNotIn("可用现金: $3065.61 | 可投资现金: $0.00", sent_messages[0])
-        self.assertIn("BOXX: $24,880.00 / 214股", sent_messages[0])
+        self.assertIn("BOXX: 币种未核实 24,880.00 / 214股", sent_messages[0])
+        self.assertNotIn("BOXX: $24,880.00", sent_messages[0])
         self.assertIn("✅ 无交易，无需调仓", sent_messages[0])
         self.assertNotIn("本轮没有可执行订单", sent_messages[0])
         self.assertNotIn("说明", sent_messages[0])

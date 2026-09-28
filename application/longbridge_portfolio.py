@@ -145,6 +145,7 @@ def fetch_strategy_account_state(
     filter_enabled = bool(assets)
 
     position_rows: list[tuple[str, str, Any, Any]] = []
+    position_currency_by_symbol: dict[str, str | None] = {}
     try:
         positions_response = t_ctx.stock_positions()
     except Exception as exc:
@@ -176,6 +177,13 @@ def fetch_strategy_account_state(
                 raise RuntimeError("LongBridge position quantity missing")
             if raw_available_quantity is None:
                 raw_available_quantity = raw_quantity
+            raw_currency = str(getattr(position, "currency", "") or "").strip().upper()
+            position_currency = raw_currency if len(raw_currency) == 3 and raw_currency.isalpha() else None
+            if root_symbol in position_currency_by_symbol:
+                if position_currency_by_symbol[root_symbol] != position_currency:
+                    position_currency_by_symbol[root_symbol] = None
+            else:
+                position_currency_by_symbol[root_symbol] = position_currency
             if position_log_fn is not None:
                 position_log_fn(
                     "[position_snapshot] raw "
@@ -185,7 +193,10 @@ def fetch_strategy_account_state(
 
             position_rows.append((root_symbol, full_symbol, raw_quantity, raw_available_quantity))
 
-    prices = _fetch_last_prices(q_ctx, [full_symbol for _root_symbol, full_symbol, _quantity, _available in position_rows])
+    prices = _fetch_last_prices(
+        q_ctx,
+        [full_symbol for _root_symbol, full_symbol, _quantity, _available in position_rows],
+    )
     for root_symbol, full_symbol, raw_quantity, raw_available_quantity in position_rows:
         try:
             quantity = float(raw_quantity)
@@ -215,6 +226,7 @@ def fetch_strategy_account_state(
     return {
         "broker_capital": broker_capital,
         "heartbeat_account_snapshot": _heartbeat_account_snapshot(account_balance, trading_currency, observed_at),
+        "position_currency_by_symbol": position_currency_by_symbol,
         "available_cash": available_cash,
         "cash_by_currency": cash_by_currency,
         "market_values": market_values,

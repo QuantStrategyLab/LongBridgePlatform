@@ -15,6 +15,8 @@ _HOLDINGS_HEADERS = {
     "💼 Strategy holdings",
 }
 _NUMBER_RE = re.compile(r"[-+]?\d[\d,]*(?:\.\d+)?")
+_ISO_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+_DOLLAR_AMOUNT_RE = re.compile(r"\$\s*(?=[-+]?\d)")
 
 
 def _contains_nonzero_number(text: str) -> bool:
@@ -40,6 +42,41 @@ def _localize_holding_detail(detail: str, *, locale: str) -> str:
         return f"{quantity} {unit}"
 
     return re.sub(r"([-+]?\d[\d,]*(?:\.\d+)?)\s*股", replace_share, detail)
+
+
+def label_holding_currencies(
+    dashboard_text: str,
+    *,
+    position_currency_by_symbol: object,
+    unknown_currency_label: str,
+) -> str:
+    """Label dollar-denominated holding amounts only from same-cycle position metadata."""
+    currencies = position_currency_by_symbol if isinstance(position_currency_by_symbol, dict) else {}
+    normalized_currencies = {
+        str(symbol).strip().upper(): str(currency).strip().upper()
+        for symbol, currency in currencies.items()
+        if isinstance(currency, str) and _ISO_CURRENCY_RE.fullmatch(currency.strip().upper())
+    }
+    output: list[str] = []
+    in_holdings = False
+    for raw_line in str(dashboard_text or "").splitlines():
+        line = raw_line
+        stripped = line.strip()
+        if stripped in _HOLDINGS_HEADERS:
+            in_holdings = True
+            output.append(line)
+            continue
+        if in_holdings and (not stripped or stripped.startswith(("━", "📌", "💵", "📊", "🎯", "🧾", "⏱", "🧩"))):
+            in_holdings = False
+        if in_holdings and (":" in line or "：" in line):
+            separator = "：" if "：" in line else ":"
+            prefix, remainder = line.split(separator, 1)
+            symbol = prefix.strip().lstrip("-• ").strip().upper()
+            currency = normalized_currencies.get(symbol, unknown_currency_label)
+            remainder = _DOLLAR_AMOUNT_RE.sub(f"{currency} ", remainder)
+            line = f"{prefix}{separator}{remainder}"
+        output.append(line)
+    return "\n".join(output)
 
 
 def adapt_compact_sections(
