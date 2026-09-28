@@ -440,7 +440,15 @@ assert job.index("name: Validate image-only dispatch") < job.index("uses: google
 assert job.index("name: Verify exact image-only source") < job.index("uses: google-github-actions/auth@")
 # The isolated job cannot bind broker/runtime credentials or run legacy helpers.
 assert re.findall(r"secrets\.([A-Z_]+)", job) == ["CLOUD_RUN_SERVICE"]
-for forbidden in ("scripts/", "sync_plan", "scheduler", "cleanup", "retire", "update-traffic"):
+assert "scripts/verify_deployed_runtime_target_admission.py" in job
+assert "record_daily_account_snapshot" not in job
+assert "git checkout" not in job
+assert 'git archive "${SOURCE_COMMIT}"' not in job
+assert "git archive ${{" not in job
+assert "0b939723c1db3ef59175535998b470cbcd4b8824" in job
+assert '[ "${GITHUB_REPOSITORY:-}" != "QuantStrategyLab/LongBridgePlatform" ]' in job
+assert '[ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] || [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]' not in job
+for forbidden in ("sync_plan", "scheduler", "cleanup", "retire", "update-traffic"):
     assert forbidden not in job.lower(), forbidden
 
 
@@ -463,17 +471,147 @@ command = Path(sys.argv[0]).name
 args = sys.argv[1:]
 with open(os.environ["STUB_LOG"], "a") as stream:
     stream.write(json.dumps([command, *args]) + "\\n")
+approved = "0b939723c1db3ef59175535998b470cbcd4b8824"
+serving_sha = "1" * 40
+ues = "e" * 40
+
+def declaration(name, pin):
+    if name == "uv.lock":
+        return (
+            '[[package]]\\nname = "us-equity-strategies"\\n'
+            'source = { git = "https://github.com/QuantStrategyLab/UsEquityStrategies.git?rev=%s#%s" }\\n' % (pin, pin)
+        )
+    if name == "pyproject.toml":
+        return (
+            "[project]\\ndependencies = ["
+            '"us-equity-strategies @ git+https://github.com/QuantStrategyLab/UsEquityStrategies.git@%s"'
+            "]\\n" % pin
+        )
+    if name == "qsl.toml":
+        return '[qsl.requires]\\nus_equity_strategies = "%s"\\n' % pin
+    raise SystemExit("unexpected declaration")
+
+def base_env():
+    service = os.environ["CLOUD_RUN_SERVICE"]
+    scope = os.environ.get("TARGET_ACCOUNT_SCOPE", "PAPER")
+    target = {
+        "platform_id": "longbridge",
+        "service_name": service,
+        "account_scope": scope,
+        "account_selector": ["PAPER"],
+        "strategy_profile": "russell_top50_leader_rotation",
+        "execution_mode": "live",
+        "dry_run_only": False,
+    }
+    return [
+        {"name": "RUNTIME_TARGET_JSON", "value": json.dumps(target)},
+        {"name": "STRATEGY_PROFILE", "value": "russell_top50_leader_rotation"},
+        {"name": "LONGBRIDGE_DRY_RUN_ONLY", "value": "false"},
+        {"name": "RUNTIME_TARGET_ENABLED", "value": "true"},
+    ]
+
+def service_document(ingress):
+    return {
+        "metadata": {
+            "name": os.environ["CLOUD_RUN_SERVICE"],
+            "annotations": {"run.googleapis.com/ingress": ingress},
+        },
+        "spec": {"template": {"spec": {
+            "serviceAccountName": "runtime@example.invalid",
+            "containers": [{"env": base_env(), "image": "serving-image"}],
+        }}},
+        "status": {"traffic": [{"revisionName": "serving-rev", "percent": 100}], "latestReadyRevisionName": "ignored-latest"},
+    }
+
+def serving_revision():
+    return {
+        "metadata": {"name": "serving-rev", "labels": {"commit-sha": serving_sha}},
+        "spec": {
+            "serviceAccountName": "runtime@example.invalid",
+            "containers": [{"env": base_env(), "image": "serving-image"}],
+        },
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+
+def staged_revision():
+    service = os.environ["CLOUD_RUN_SERVICE"]
+    image_repo = "registry.invalid/synthetic-project/synthetic-images/longbridgeplatform/" + service
+    env = base_env()
+    if os.environ.get("HISTORY_OMITTED") != "1":
+        for key in (
+            "ACCOUNT_HISTORY_RECORDING_ENABLED",
+            "ACCOUNT_HISTORY_GCS_PREFIX",
+            "ACCOUNT_HISTORY_TARGET_ID",
+            "ACCOUNT_HISTORY_EXPECTED_SCOPE",
+        ):
+            env.append({"name": key, "value": os.environ.get(key, "")})
+    if os.environ.get("CONFIG_DRIFT") == "1":
+        env.append({"name": "UNRELATED_SETTING", "value": "1"})
+    ready = [] if os.environ.get("NOT_READY") == "1" else [{"type": "Ready", "status": "True"}]
+    return {
+        "metadata": {
+            "name": service + "-r" + os.environ["GITHUB_RUN_ID"],
+            "labels": {"commit-sha": os.environ["SOURCE_COMMIT"]},
+        },
+        "spec": {
+            "serviceAccountName": "runtime@example.invalid",
+            "containers": [{"env": env, "image": image_repo + "@" + os.environ["IMAGE_DIGEST"]}],
+        },
+        "status": {"conditions": ready, "latestReadyRevisionName": "ignored-latest"},
+    }
+
 if command == "git" and args == ["rev-parse", "HEAD"]:
     print(os.environ["CHECKOUT_SHA"])
+elif command == "git" and args == ["fetch", "--depth", "1", "origin", approved]:
+    pass
+elif command == "git" and args == ["cat-file", "-t", approved]:
+    print("commit")
+elif command == "git" and args == ["rev-parse", approved + "^{commit}"]:
+    print(approved)
 elif command == "git" and args == ["archive", "HEAD"]:
     print("synthetic tracked source archive")
+elif command == "git" and args == ["archive", approved]:
+    print("synthetic candidate archive")
+elif command == "git" and args[:1] == ["show"] and len(args) == 2 and ":" in args[1]:
+    sha, name = args[1].split(":", 1)
+    if name not in ("uv.lock", "pyproject.toml", "qsl.toml"):
+        raise SystemExit("unexpected git show")
+    if sha == "a" * 40:
+        raise SystemExit("admission read the main checkout lock")
+    pin = ("f" * 40) if sha == serving_sha and os.environ.get("BAD_SERVING_LOCK") == "1" else ues
+    print(declaration(name, pin), end="")
+elif command == "uv" and args[:3] == ["run", "--no-sync", "python"]:
+    expected = os.environ["GITHUB_WORKSPACE"] + "/scripts/verify_deployed_runtime_target_admission.py"
+    if args[3] != expected or any("record_daily" in part for part in args):
+        raise SystemExit("refusing to execute a candidate script")
+    os.execv(os.environ["ADMISSION_PYTHON"], [os.environ["ADMISSION_PYTHON"], *args[3:]])
+elif command == "python3":
+    os.execv(sys.executable, [sys.executable, *args])
 elif command == "docker" and args[0] in ("build", "push"):
     if args[0] == "build":
         sys.stdin.buffer.read()
 elif command == "gcloud" and args[:3] == ["run", "services", "describe"]:
     if os.environ.get("SERVICE_MISSING") == "1":
         sys.exit(1)
-    print(os.environ["CLOUD_RUN_SERVICE"])
+    if "--format=json" in args:
+        count_path = Path(os.environ["HOME"]) / "service-json-count"
+        count = int(count_path.read_text()) + 1 if count_path.exists() else 1
+        count_path.write_text(str(count))
+        ingress = "all" if os.environ.get("INGRESS_DRIFT") == "1" and count > 1 else "internal"
+        document = service_document(ingress)
+        if os.environ.get("TRAFFIC_CHANGED") == "1" and count > 1:
+            document["status"]["traffic"] = [{"revisionName": "other-rev", "percent": 100}]
+        print(json.dumps(document))
+    else:
+        print(os.environ["CLOUD_RUN_SERVICE"])
+elif command == "gcloud" and args[:3] == ["run", "revisions", "describe"]:
+    revision_name = args[3]
+    if os.environ.get("UNKNOWN_READBACK") == "1" and revision_name.endswith("-r" + os.environ["GITHUB_RUN_ID"]):
+        sys.exit(1)
+    if revision_name.endswith("-r" + os.environ["GITHUB_RUN_ID"]):
+        print(json.dumps(staged_revision()))
+    else:
+        print(json.dumps(serving_revision()))
 elif command == "gcloud" and args[:2] == ["auth", "configure-docker"]:
     pass
 elif command == "gcloud" and args[:4] == ["artifacts", "docker", "images", "describe"]:
@@ -484,7 +622,7 @@ elif command == "gcloud" and args[:3] == ["run", "services", "update"]:
 else:
     raise SystemExit("unexpected command in image-only workflow")
 '''
-    for command in ("git", "docker", "gcloud"):
+    for command in ("git", "docker", "gcloud", "uv", "python3"):
         path = root / command
         path.write_text(stub)
         path.chmod(0o700)
@@ -494,16 +632,28 @@ else:
         "APPROVED_REF": "main", "SOURCE_COMMIT": "a" * 40,
         "GITHUB_REF_NAME": "main", "GITHUB_SHA": "a" * 40, "CHECKOUT_SHA": "a" * 40,
         "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_RUN_ID": "123",
-        "GITHUB_REPOSITORY": "synthetic/repository", "GITHUB_REF": "refs/heads/main",
+        "GITHUB_REPOSITORY": "QuantStrategyLab/LongBridgePlatform", "GITHUB_REF": "refs/heads/main",
         "GITHUB_WORKFLOW_SHA": "a" * 40,
-        "GITHUB_WORKFLOW_REF": "synthetic/repository/.github/workflows/sync-cloud-run-env.yml@refs/heads/main",
+        "GITHUB_WORKFLOW_REF": "QuantStrategyLab/LongBridgePlatform/.github/workflows/sync-cloud-run-env.yml@refs/heads/main",
         "CLOUD_RUN_SERVICE": "synthetic-paper", "CLOUD_RUN_REGION": "synthetic-region",
         "GCP_PROJECT_ID": "synthetic-project", "GCP_ARTIFACT_REGISTRY_HOSTNAME": "registry.invalid",
         "GCP_ARTIFACT_REGISTRY_REPOSITORY": "synthetic-images", "IMAGE_DIGEST": "sha256:" + "b" * 64,
+        "GITHUB_WORKSPACE": str(Path(sys.argv[1]).resolve().parents[2]),
+        "ADMISSION_PYTHON": str(Path(sys.argv[1]).resolve().parents[2] / ".venv" / "bin" / "python"),
+    }
+    candidate = "0b939723c1db3ef59175535998b470cbcd4b8824"
+    history = {
+        "ACCOUNT_HISTORY_RECORDING_ENABLED": "true",
+        "ACCOUNT_HISTORY_GCS_PREFIX": "gs://paper-bucket/account_snapshots",
+        "ACCOUNT_HISTORY_TARGET_ID": "paper",
+        "ACCOUNT_HISTORY_EXPECTED_SCOPE": "PAPER",
     }
 
     def execute(**overrides):
         log.write_text("")
+        count_path = root / "service-json-count"
+        if count_path.exists():
+            count_path.unlink()
         result = subprocess.run(
             ["bash", "-c", "\n".join(blocks)], env={**base, **overrides},
             text=True, capture_output=True, cwd=root,
@@ -529,6 +679,7 @@ else:
             ["docker", "build", "--pull", "-t", f"{image_repo}:{base['SOURCE_COMMIT']}-123", "-"],
         ]
         assert ["git", "archive", "HEAD"] in calls
+        assert not any(call[0] == "uv" for call in calls)
         cases += 1
     for overrides in (
         {"WORKFLOW_TARGET": "configured"}, {"WORKFLOW_TARGET": "hk-verify"},
@@ -551,6 +702,76 @@ else:
     assert code != 0
     assert sum(call[:4] == ["gcloud", "run", "services", "update"] for call in calls) == 1
     cases += 1
+    code, calls = execute(SOURCE_COMMIT=candidate, CHECKOUT_SHA="a" * 40, **history)
+    assert code == 0, (code, calls)
+    updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
+    assert len(updates) == 1
+    assert "--no-traffic" in updates[0]
+    assert "--update-env-vars=" + ",".join(f"{key}={history[key]}" for key in (
+        "ACCOUNT_HISTORY_RECORDING_ENABLED",
+        "ACCOUNT_HISTORY_GCS_PREFIX",
+        "ACCOUNT_HISTORY_TARGET_ID",
+        "ACCOUNT_HISTORY_EXPECTED_SCOPE",
+    )) in updates[0]
+    assert updates[0][-1] == "--revision-suffix=r123"
+    assert f"--update-labels=commit-sha={candidate},github-run-id=123" in updates[0]
+    assert ["git", "archive", candidate] in calls
+    assert ["git", "archive", "HEAD"] not in calls
+    assert ["git", "fetch", "--depth", "1", "origin", candidate] in calls
+    assert not any(call[:2] == ["git", "show"] and call[2].startswith("a" * 40) for call in calls)
+    assert any(call[:2] == ["git", "show"] and call[2].startswith(candidate + ":") for call in calls)
+    assert not any("record_daily" in part for call in calls for part in call)
+    assert sum(call[:4] == ["gcloud", "run", "services", "update"] for call in calls) == 1
+    cases += 1
+    for overrides in (
+        {
+            "GITHUB_REF": "refs/heads/codex/natural-cycle-history-20260928",
+            "GITHUB_REF_NAME": "codex/natural-cycle-history-20260928",
+            "APPROVED_REF": "codex/natural-cycle-history-20260928",
+            "SOURCE_COMMIT": candidate,
+            "GITHUB_SHA": candidate,
+            "GITHUB_WORKFLOW_SHA": candidate,
+            "CHECKOUT_SHA": candidate,
+            "GITHUB_WORKFLOW_REF": "synthetic/repository/.github/workflows/sync-cloud-run-env.yml@refs/heads/codex/natural-cycle-history-20260928",
+            **history,
+        },
+        {"GITHUB_WORKFLOW_REF": "other/repo/.github/workflows/sync-cloud-run-env.yml@refs/heads/main"},
+        {
+            "GITHUB_REPOSITORY": "other/LongBridgePlatform",
+            "GITHUB_WORKFLOW_REF": "other/LongBridgePlatform/.github/workflows/sync-cloud-run-env.yml@refs/heads/main",
+        },
+        {"SOURCE_COMMIT": "a" * 40, **history},
+        {"SOURCE_COMMIT": "d" * 40, **history},
+        {"WORKFLOW_TARGET": "HK", "SOURCE_COMMIT": candidate, "CLOUD_RUN_SERVICE": "synthetic-hk", **history},
+        {"SOURCE_COMMIT": candidate},
+        {"SOURCE_COMMIT": candidate, "ACCOUNT_HISTORY_RECORDING_ENABLED": "true"},
+        {"SOURCE_COMMIT": candidate, **{**history, "ACCOUNT_HISTORY_GCS_PREFIX": "gs://paper-bucket/account_snapshots,evil"}},
+    ):
+        code, calls = execute(**overrides)
+        assert code != 0 and calls == [], overrides
+        cases += 1
+    for overrides in (
+        {"SOURCE_COMMIT": candidate, "ACCOUNT_HISTORY_GCS_PREFIX": "gs://paper-bucket/other", **{key: history[key] for key in history if key != "ACCOUNT_HISTORY_GCS_PREFIX"}},
+        {"SOURCE_COMMIT": candidate, "BAD_SERVING_LOCK": "1", **history},
+        {"SOURCE_COMMIT": candidate, "TARGET_ACCOUNT_SCOPE": "SG", **history},
+    ):
+        code, calls = execute(**overrides)
+        assert code != 0, overrides
+        assert not any(call[:2] == ["docker", "build"] for call in calls)
+        assert not any(call[:4] == ["gcloud", "run", "services", "update"] for call in calls)
+        cases += 1
+    for overrides in (
+        {"SOURCE_COMMIT": candidate, "INGRESS_DRIFT": "1", **history},
+        {"SOURCE_COMMIT": candidate, "CONFIG_DRIFT": "1", **history},
+        {"SOURCE_COMMIT": candidate, "HISTORY_OMITTED": "1", **history},
+        {"SOURCE_COMMIT": candidate, "NOT_READY": "1", **history},
+        {"SOURCE_COMMIT": candidate, "UNKNOWN_READBACK": "1", **history},
+        {"SOURCE_COMMIT": candidate, "TRAFFIC_CHANGED": "1", **history},
+    ):
+        code, calls = execute(**overrides)
+        assert code != 0, overrides
+        assert sum(call[:4] == ["gcloud", "run", "services", "update"] for call in calls) == 1
+        cases += 1
     print(f"image-only no-traffic shell cases: {cases} passed")
 PY
 
@@ -590,10 +811,61 @@ if names != {"Dockerfile", "tracked.txt"}:
     raise SystemExit("build context must contain only the approved tracked source")
 ''')
     docker.chmod(0o700)
-    env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", image="synthetic:test")
+    env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", image="synthetic:test", archive_ref="HEAD")
     for index, build_command in enumerate(build_commands, 1):
         result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + build_command], cwd=checkout, env=env, capture_output=True)
         if result.returncode:
             raise SystemExit(f"FAIL: build {index} admits a workspace context instead of tracked source")
 print("PASS: both tracked-source builds exclude generated authentication files")
+PY
+
+# The history image archives the approved candidate commit, not the main checkout.
+python3 - "$workflow_file" <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+workflow = Path(sys.argv[1]).read_text().splitlines()
+build_commands = [line.strip() for line in workflow if "docker build --pull" in line and "archive_ref" in line]
+assert len(build_commands) == 1
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory)
+    checkout = root / "checkout"
+    checkout.mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(root), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=checkout, env=env, check=True, capture_output=True, text=True)
+    git("init", "-q")
+    (checkout / "Dockerfile").write_text("FROM scratch\n")
+    (checkout / "only-main.txt").write_text("main checkout\n")
+    git("add", "Dockerfile", "only-main.txt")
+    git("-c", "user.name=synthetic", "-c", "user.email=synthetic@example.invalid", "-c", "commit.gpgSign=false", "commit", "-qm", "main")
+    (checkout / "only-main.txt").unlink()
+    (checkout / "only-candidate.txt").write_text("candidate source\n")
+    git("add", "-A")
+    git("-c", "user.name=synthetic", "-c", "user.email=synthetic@example.invalid", "-c", "commit.gpgSign=false", "commit", "-qm", "candidate")
+    candidate = git("rev-parse", "HEAD").stdout.strip()
+    (checkout / "gha-creds-synthetic.json").write_text('{"synthetic":true}\n')
+    bin_dir = root / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(f"#!{sys.executable}\n" + r'''import sys, tarfile
+names = set()
+payload = b""
+with tarfile.open(fileobj=sys.stdin.buffer, mode="r|*") as archive:
+    for member in archive:
+        names.add(member.name)
+        if member.name == "only-candidate.txt":
+            payload = archive.extractfile(member).read()
+if names != {"Dockerfile", "only-candidate.txt"} or payload != b"candidate source\n":
+    raise SystemExit("archive was not the approved candidate commit")
+''')
+    docker.chmod(0o700)
+    env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", image="synthetic:test", archive_ref=candidate)
+    result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + build_commands[0]], cwd=checkout, env=env, capture_output=True)
+    if result.returncode:
+        raise SystemExit("FAIL: image archive did not use the candidate commit")
+print("PASS: history image archive is the candidate commit")
 PY
