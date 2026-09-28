@@ -127,7 +127,7 @@ jobs:
 
       - name: Publish read-only runtime execution evidence
         if: matrix.target.label == 'PAPER'
-        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@bbacba04baccbca91e4ba59c4dcaf460847e29f7
+        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@c87355fed83dc60e051244f7c7fbd5c9c3968f2b
         with:
           source-id: runtime-reports-longbridge
           report-platform: longbridge
