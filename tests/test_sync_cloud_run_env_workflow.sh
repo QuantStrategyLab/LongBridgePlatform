@@ -370,7 +370,14 @@ assert job.index("name: Validate image-only dispatch") < job.index("uses: google
 assert job.index("name: Verify exact image-only source") < job.index("uses: google-github-actions/auth@")
 # The isolated job cannot bind broker/runtime credentials or run legacy helpers.
 assert re.findall(r"secrets\.([A-Z_]+)", job) == ["CLOUD_RUN_SERVICE"]
-for forbidden in ("scripts/", "sync_plan", "scheduler", "cleanup", "retire", "update-traffic"):
+assert "fetch-depth: 0" in job
+assert "scripts/verify_deployed_runtime_target_admission.py" in job
+assert "--image-only-staging" in job and "--image-only-readback" in job and "--no-traffic" in job
+assert "uv sync --frozen --no-dev" in job and "uv run --no-sync python" in job
+install = job.split("name: Install frozen image-only admission dependencies\n", 1)[1].split("\n      - ", 1)[0]
+assert "if: inputs.target == 'PAPER'" in install
+assert job.index("name: Install frozen image-only admission dependencies") < job.index("name: Build and stage image without traffic")
+for forbidden in ("sync_plan", "scheduler", "cleanup", "retire", "update-traffic", "ensure-latest-traffic", "--set-env-vars"):
     assert forbidden not in job.lower(), forbidden
 
 
@@ -380,30 +387,126 @@ def run_block(name):
 
 
 blocks = [run_block(name) for name in (
-    "Validate image-only dispatch", "Verify exact image-only source", "Build and stage image without traffic",
+    "Validate image-only dispatch",
+    "Verify exact image-only source",
+    "Install frozen image-only admission dependencies",
+    "Build and stage image without traffic",
 )]
 
 with tempfile.TemporaryDirectory(prefix="lb-no-traffic-test-") as directory:
     root = Path(directory)
     log = root / "calls.jsonl"
-    stub = "#!" + sys.executable + "\n" + '''
+    stub = "#!" + sys.executable + "\n" + r'''
 import json, os, sys
 from pathlib import Path
 command = Path(sys.argv[0]).name
 args = sys.argv[1:]
 with open(os.environ["STUB_LOG"], "a") as stream:
-    stream.write(json.dumps([command, *args]) + "\\n")
+    stream.write(json.dumps([command, *args]) + "\n")
+
+def base_env():
+    scope = os.environ.get("TARGET_ACCOUNT_SCOPE", "PAPER")
+    live_other_scope = scope != "PAPER"
+    runtime = {
+        "account_scope": scope,
+        "dry_run_only": not live_other_scope,
+        "execution_mode": "live" if live_other_scope else "paper",
+        "platform_id": "longbridge",
+        "service_name": os.environ["CLOUD_RUN_SERVICE"],
+        "strategy_profile": "russell_top50_leader_rotation",
+    }
+    if scope == "PAPER":
+        runtime["account_selector"] = ["PAPER"]
+    else:
+        runtime["deployment_selector"] = scope
+        runtime["account_selectors"] = [scope]
+    return [
+        {"name": "LONGBRIDGE_DRY_RUN_ONLY", "value": "false" if live_other_scope else "true"},
+        {"name": "RUNTIME_TARGET_ENABLED", "value": "true"},
+        {"name": "RUNTIME_TARGET_JSON", "value": json.dumps(runtime, sort_keys=True)},
+        {"name": "STRATEGY_PROFILE", "value": "russell_top50_leader_rotation"},
+    ]
+
+def service_document():
+    service = os.environ["CLOUD_RUN_SERVICE"]
+    ingress = "internal"
+    counter = Path(os.environ["STUB_LOG"]).with_name("describe.count")
+    if os.environ.get("INGRESS_CHANGED") == "1" and counter.exists() and int(counter.read_text() or "0") > 1:
+        ingress = "all"
+    return json.dumps({
+        "metadata": {"annotations": {"run.googleapis.com/ingress": ingress}, "name": service},
+        "spec": {"template": {
+            "metadata": {},
+            "spec": {"containers": [{"env": base_env()}], "serviceAccountName": "runtime@example.invalid"},
+        }},
+        "status": {
+            "latestCreatedRevisionName": service + "-old-same-sha",
+            "latestReadyRevisionName": service + "-serving",
+            "traffic": [{"percent": 100, "revisionName": service + "-serving"}],
+        },
+    })
+
+def revision_document(name):
+    service = os.environ["CLOUD_RUN_SERVICE"]
+    bound = service + "-r" + os.environ["GITHUB_RUN_ID"]
+    decoy = name == service + "-old-same-sha"
+    staged = name == bound or decoy
+    env = base_env()
+    if not staged and os.environ.get("SERVING_IDENTITY_DRIFT") == "1":
+        env = [dict(item) for item in env]
+        for item in env:
+            if item["name"] == "LONGBRIDGE_DRY_RUN_ONLY":
+                item["value"] = "false"
+    if name == bound:
+        history_keys = (
+            "ACCOUNT_HISTORY_RECORDING_ENABLED",
+            "ACCOUNT_HISTORY_GCS_PREFIX",
+            "ACCOUNT_HISTORY_TARGET_ID",
+            "ACCOUNT_HISTORY_EXPECTED_SCOPE",
+        )
+        if all(os.environ.get(key) for key in history_keys):
+            env = [*env, *({"name": key, "value": os.environ[key]} for key in history_keys)]
+    image = (
+        f"{os.environ['GCP_ARTIFACT_REGISTRY_HOSTNAME']}/{os.environ['GCP_PROJECT_ID']}/"
+        f"{os.environ['GCP_ARTIFACT_REGISTRY_REPOSITORY']}/longbridgeplatform/{service}@"
+        f"{os.environ['IMAGE_DIGEST']}"
+    )
+    if name == bound and os.environ.get("OLD_SHA_REVISION") == "1":
+        image = "old"
+    if staged:
+        commit = os.environ["SOURCE_COMMIT"]
+    else:
+        image = "old"
+        commit = os.environ["SERVING_COMMIT"]
+    return json.dumps({
+        "metadata": {"labels": {"commit-sha": commit}, "name": name},
+        "spec": {"containers": [{"env": env, "image": image}], "serviceAccountName": "runtime@example.invalid"},
+        "status": {"conditions": [{"status": "True", "type": "Ready"}]},
+    })
+
 if command == "git" and args == ["rev-parse", "HEAD"]:
     print(os.environ["CHECKOUT_SHA"])
 elif command == "git" and args == ["archive", "HEAD"]:
     print("synthetic tracked source archive")
+elif command == "git" and len(args) >= 2 and args[0] == "show" and args[1].endswith(":uv.lock"):
+    print(Path(os.environ["SERVING_LOCK_PATH"]).read_text())
 elif command == "docker" and args[0] in ("build", "push"):
     if args[0] == "build":
         sys.stdin.buffer.read()
 elif command == "gcloud" and args[:3] == ["run", "services", "describe"]:
     if os.environ.get("SERVICE_MISSING") == "1":
         sys.exit(1)
-    print(os.environ["CLOUD_RUN_SERVICE"])
+    if "--format=json" in args:
+        counter = Path(os.environ["STUB_LOG"]).with_name("describe.count")
+        count = int(counter.read_text() or "0") + 1 if counter.exists() else 1
+        counter.write_text(str(count))
+        if os.environ.get("READBACK_FAIL") == "1" and count > 1:
+            sys.exit(1)
+        print(service_document())
+    else:
+        print(os.environ["CLOUD_RUN_SERVICE"])
+elif command == "gcloud" and args[:3] == ["run", "revisions", "describe"]:
+    print(revision_document(args[3]))
 elif command == "gcloud" and args[:2] == ["auth", "configure-docker"]:
     pass
 elif command == "gcloud" and args[:4] == ["artifacts", "docker", "images", "describe"]:
@@ -418,6 +521,35 @@ else:
         path = root / command
         path.write_text(stub)
         path.chmod(0o700)
+    repo = Path(sys.argv[1]).resolve().parents[2]
+    interpreter = repo / ".venv" / "bin" / "python"
+    if not interpreter.exists():
+        interpreter = Path(sys.executable)
+    (root / "python").write_text("#!/bin/sh\nexit 0\n")
+    (root / "python").chmod(0o700)
+    (root / "python3").write_text(f"#!/bin/sh\nexec {interpreter} \"$@\"\n")
+    (root / "python3").chmod(0o700)
+    (root / "uv").write_text(
+        "#!" + str(interpreter) + "\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "with open(os.environ['STUB_LOG'], 'a') as stream:\n"
+        "    stream.write(json.dumps([Path(sys.argv[0]).name, *sys.argv[1:]]) + '\\n')\n"
+        "if sys.argv[1:4] == ['sync', '--frozen', '--no-dev']:\n"
+        "    raise SystemExit(1 if os.environ.get('MISSING_DEPS') == '1' else 0)\n"
+        "if sys.argv[1:4] != ['run', '--no-sync', 'python']:\n"
+        "    raise SystemExit('unexpected uv command')\n"
+        "if os.environ.get('UV_RUN_FAIL') == '1':\n"
+        "    sys.stderr.write(\"ModuleNotFoundError: No module named 'us_equity_strategies'\\n\")\n"
+        "    raise SystemExit(1)\n"
+        "python3 = str(Path(sys.argv[0]).with_name('python3'))\n"
+        "os.execv(python3, [python3, *sys.argv[4:]])\n"
+    )
+    (root / "uv").chmod(0o700)
+    bad_lock = root / "serving-mismatch.lock"
+    bad_lock.write_text(
+        (repo / "uv.lock").read_text().replace("4a3943883cd6b5bbfe32a559e56a91b40a81b7ce", "c" * 40)
+    )
     base = {
         "PATH": f"{root}:/usr/bin:/bin", "HOME": str(root), "STUB_LOG": str(log),
         "DEPLOYMENT_MODE": "image-only-no-traffic", "WORKFLOW_TARGET": "PAPER",
@@ -427,6 +559,8 @@ else:
         "GITHUB_REPOSITORY": "synthetic/repository", "GITHUB_REF": "refs/heads/main",
         "GITHUB_WORKFLOW_SHA": "a" * 40,
         "GITHUB_WORKFLOW_REF": "synthetic/repository/.github/workflows/sync-cloud-run-env.yml@refs/heads/main",
+        "GITHUB_WORKSPACE": str(repo), "SERVING_LOCK_PATH": str(repo / "uv.lock"),
+        "SERVING_COMMIT": "1" * 40,
         "CLOUD_RUN_SERVICE": "synthetic-paper", "CLOUD_RUN_REGION": "synthetic-region",
         "GCP_PROJECT_ID": "synthetic-project", "GCP_ARTIFACT_REGISTRY_HOSTNAME": "registry.invalid",
         "GCP_ARTIFACT_REGISTRY_REPOSITORY": "synthetic-images", "IMAGE_DIGEST": "sha256:" + "b" * 64,
@@ -434,16 +568,19 @@ else:
 
     def execute(**overrides):
         log.write_text("")
+        counter = log.with_name("describe.count")
+        if counter.exists():
+            counter.unlink()
         result = subprocess.run(
             ["bash", "-c", "\n".join(blocks)], env={**base, **overrides},
             text=True, capture_output=True, cwd=root,
         )
-        return result.returncode, [json.loads(line) for line in log.read_text().splitlines()]
+        return result.returncode, [json.loads(line) for line in log.read_text().splitlines()], result.stderr
 
     cases = 0
-    for label in ("PAPER", "HK", "SG"):
-        code, calls = execute(WORKFLOW_TARGET=label, CLOUD_RUN_SERVICE=f"synthetic-{label.lower()}")
-        assert code == 0, label
+    for label in ("HK", "SG"):
+        code, calls, errors = execute(WORKFLOW_TARGET=label, CLOUD_RUN_SERVICE=f"synthetic-{label.lower()}")
+        assert code == 0, (label, errors)
         updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
         assert len(updates) == 1
         service = f"synthetic-{label.lower()}"
@@ -454,12 +591,33 @@ else:
             f"--image={image_repo}@{base['IMAGE_DIGEST']}", "--no-traffic",
             f"--update-labels=commit-sha={base['SOURCE_COMMIT']},github-run-id=123", "--quiet",
         ]
+        assert not any(call[0] == "uv" or call[:2] == ["git", "show"] for call in calls)
         assert sum(call[:2] == ["docker", "push"] for call in calls) == 1
-        assert [call for call in calls if call[:2] == ["docker", "build"]] == [
-            ["docker", "build", "--pull", "-t", f"{image_repo}:{base['SOURCE_COMMIT']}-123", "-"],
-        ]
-        assert ["git", "archive", "HEAD"] in calls
         cases += 1
+    code, calls, errors = execute()
+    assert code == 0, errors
+    updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
+    assert len(updates) == 1
+    image_repo = "registry.invalid/synthetic-project/synthetic-images/longbridgeplatform/synthetic-paper"
+    assert updates[0] == [
+        "gcloud", "run", "services", "update", "synthetic-paper",
+        "--project=synthetic-project", "--region=synthetic-region",
+        f"--image={image_repo}@{base['IMAGE_DIGEST']}", "--no-traffic",
+        f"--update-labels=commit-sha={base['SOURCE_COMMIT']},github-run-id=123", "--quiet",
+        "--revision-suffix=r123",
+    ]
+    assert ["uv", "sync", "--frozen", "--no-dev"] in calls
+    assert calls.index(["uv", "sync", "--frozen", "--no-dev"]) < calls.index(updates[0])
+    assert ["uv", "run", "--no-sync", "python", f"{repo}/scripts/verify_deployed_runtime_target_admission.py"] in [
+        call[:5] for call in calls
+    ]
+    assert any(call[:5] == ["gcloud", "run", "revisions", "describe", "synthetic-paper-r123"] for call in calls)
+    assert not any(
+        call[:5] == ["gcloud", "run", "revisions", "describe", "synthetic-paper-old-same-sha"] for call in calls
+    )
+    assert ["git", "show", f"{'1' * 40}:uv.lock"] in calls
+    assert sum(call[:2] == ["docker", "push"] for call in calls) == 1
+    cases += 1
     for overrides in (
         {"WORKFLOW_TARGET": "configured"}, {"WORKFLOW_TARGET": "hk-verify"},
         {"WORKFLOW_TARGET": "paper-command-verify"}, {"WORKFLOW_TARGET": ""},
@@ -469,17 +627,83 @@ else:
         {"GITHUB_WORKFLOW_SHA": "c" * 40}, {"GITHUB_WORKFLOW_REF": "other-workflow"},
         {"CLOUD_RUN_SERVICE": ""}, {"CLOUD_RUN_REGION": ""},
     ):
-        code, calls = execute(**overrides)
+        code, calls, _errors = execute(**overrides)
         assert code != 0 and calls == [], overrides
         cases += 1
     for overrides in ({"CHECKOUT_SHA": "c" * 40}, {"SERVICE_MISSING": "1"}, {"IMAGE_DIGEST": "not-a-digest"}):
-        code, calls = execute(**overrides)
+        code, calls, _errors = execute(**overrides)
         assert code != 0, overrides
         assert not any(call[:4] == ["gcloud", "run", "services", "update"] for call in calls)
         cases += 1
-    code, calls = execute(UPDATE_FAIL="1")
+    code, calls, _errors = execute(UPDATE_FAIL="1")
     assert code != 0
     assert sum(call[:4] == ["gcloud", "run", "services", "update"] for call in calls) == 1
+    cases += 1
+    history = {
+        "ACCOUNT_HISTORY_RECORDING_ENABLED": "true",
+        "ACCOUNT_HISTORY_GCS_PREFIX": "gs://paper-bucket/account_snapshots",
+        "ACCOUNT_HISTORY_TARGET_ID": "paper",
+        "ACCOUNT_HISTORY_EXPECTED_SCOPE": "PAPER",
+    }
+    code, calls, errors = execute(**history)
+    assert code == 0, errors
+    updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
+    assert len(updates) == 1
+    assert updates[0][-2] == (
+        "--update-env-vars=ACCOUNT_HISTORY_RECORDING_ENABLED=true,"
+        "ACCOUNT_HISTORY_GCS_PREFIX=gs://paper-bucket/account_snapshots,"
+        "ACCOUNT_HISTORY_TARGET_ID=paper,ACCOUNT_HISTORY_EXPECTED_SCOPE=PAPER"
+    )
+    assert updates[0][-1] == "--revision-suffix=r123"
+    assert ["git", "show", f"{'1' * 40}:uv.lock"] in calls
+    assert ["git", "show", f"{'a' * 40}:uv.lock"] not in calls
+    cases += 1
+    for overrides in (
+        {"WORKFLOW_TARGET": "HK", "ACCOUNT_HISTORY_GCS_PREFIX": "gs://paper-bucket/account_snapshots"},
+        {"ACCOUNT_HISTORY_RECORDING_ENABLED": "true"},
+        {"ACCOUNT_HISTORY_GCS_PREFIX": "gs://paper-bucket/account_snapshots,injected"},
+        {**history, "ACCOUNT_HISTORY_GCS_PREFIX": "-gs://paper-bucket/account_snapshots"},
+    ):
+        code, calls, _errors = execute(**overrides)
+        assert code != 0 and calls == [], overrides
+        cases += 1
+    for overrides in (
+        {**history, "ACCOUNT_HISTORY_GCS_PREFIX": "gs://paper-bucket/other"},
+        {"SERVING_LOCK_PATH": str(bad_lock)},
+        {"SERVING_IDENTITY_DRIFT": "1"},
+        {**history, "TARGET_ACCOUNT_SCOPE": "SG"},
+    ):
+        code, calls, _errors = execute(**overrides)
+        assert code != 0, overrides
+        assert not any(call[:4] == ["gcloud", "run", "services", "update"] for call in calls), overrides
+        cases += 1
+    code, calls, _errors = execute(READBACK_FAIL="1")
+    assert code != 0
+    assert sum(call[:4] == ["gcloud", "run", "services", "update"] for call in calls) == 1
+    cases += 1
+    for overrides in ({"OLD_SHA_REVISION": "1"}, {"INGRESS_CHANGED": "1"}):
+        code, calls, _errors = execute(**overrides)
+        assert code != 0, overrides
+        assert sum(call[:4] == ["gcloud", "run", "services", "update"] for call in calls) == 1
+        assert not any(
+            call[:5] == ["gcloud", "run", "revisions", "describe", "synthetic-paper-old-same-sha"] for call in calls
+        )
+        cases += 1
+    for overrides in ({"MISSING_DEPS": "1"}, {"UV_RUN_FAIL": "1"}):
+        code, calls, errors = execute(**overrides)
+        assert code != 0, (overrides, errors)
+        assert not any(call[:4] == ["gcloud", "run", "services", "update"] for call in calls)
+        cases += 1
+    clean = subprocess.run(
+        [sys.executable, "-S", str(repo / "scripts/verify_deployed_runtime_target_admission.py"), "--help"],
+        capture_output=True, text=True,
+    )
+    assert clean.returncode != 0 and "ModuleNotFoundError" in clean.stderr
+    locked = subprocess.run(
+        ["uv", "run", "--no-sync", "python", "-c", "import strategy_registry, google.api_core"],
+        cwd=repo, capture_output=True, text=True,
+    )
+    assert locked.returncode == 0, locked.stderr
     cases += 1
     print(f"image-only no-traffic shell cases: {cases} passed")
 PY

@@ -269,5 +269,55 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
         )
 
 
+class ReadTrafficTest(unittest.TestCase):
+    def test_read_traffic_returns_serving_rows_without_moving_them(self) -> None:
+        traffic = reconcile.read_traffic(
+            {"status": {"traffic": [{"revisionName": "rev-b", "percent": 25}, {"revisionName": "rev-a", "percent": 75}]}}
+        )
+
+        self.assertEqual(
+            traffic,
+            [{"revisionName": "rev-a", "percent": 75}, {"revisionName": "rev-b", "percent": 25}],
+        )
+
+    def test_read_traffic_rejects_missing_or_contradictory_rows(self) -> None:
+        for service in (
+            {},
+            {"status": {"traffic": []}},
+            {"status": {"traffic": [{"revisionName": "rev-a", "percent": 80}]}},
+            {"status": {"traffic": [{"revisionName": "rev-a", "percent": True}]}},
+            {
+                "status": {
+                    "traffic": [
+                        {"revisionName": "rev-a", "percent": 50},
+                        {"revisionName": "rev-a", "percent": 50},
+                    ]
+                }
+            },
+        ):
+            with self.assertRaisesRegex(reconcile.ReconcileError, "serving traffic"):
+                reconcile.read_traffic(service)
+
+    def test_observe_ready_revision_requires_ready_commit_and_image(self) -> None:
+        observed = reconcile.observe_ready_revision(
+            {
+                "metadata": {"name": "rev-new", "labels": {"commit-sha": "a" * 40}},
+                "spec": {"containers": [{"image": "repo@sha256:" + "b" * 64}]},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            }
+        )
+
+        self.assertEqual(observed["revision"], "rev-new")
+        self.assertEqual(observed["commit"], "a" * 40)
+        with self.assertRaisesRegex(reconcile.ReconcileError, "not Ready"):
+            reconcile.observe_ready_revision(
+                {
+                    "metadata": {"name": "rev-new", "labels": {"commit-sha": "a" * 40}},
+                    "spec": {"containers": [{"image": "repo@sha256:" + "b" * 64}]},
+                    "status": {"conditions": [{"type": "Ready", "status": "False"}]},
+                }
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

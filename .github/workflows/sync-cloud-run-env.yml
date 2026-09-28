@@ -20,6 +20,26 @@ on:
         description: "Full approved source SHA; must equal the dispatched workflow SHA."
         required: false
         type: string
+      account_history_recording_enabled:
+        description: "Optional PAPER history switch. Leave blank to keep the current service value."
+        required: false
+        type: string
+        default: ""
+      account_history_gcs_prefix:
+        description: "Optional PAPER history prefix. Required only when history recording is explicitly enabled."
+        required: false
+        type: string
+        default: ""
+      account_history_target_id:
+        description: "Optional PAPER history object label. Required only when history recording is explicitly enabled."
+        required: false
+        type: string
+        default: ""
+      account_history_expected_scope:
+        description: "Optional PAPER history scope. Required only when history recording is explicitly enabled."
+        required: false
+        type: string
+        default: ""
       target:
         description: "Legacy: configured or isolated verify targets. Image-only: exactly PAPER, HK, or SG."
         required: true
@@ -127,6 +147,10 @@ jobs:
       WORKFLOW_TARGET: ${{ inputs.target }}
       APPROVED_REF: ${{ inputs.approved_ref }}
       SOURCE_COMMIT: ${{ inputs.source_commit }}
+      ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ inputs.account_history_recording_enabled }}
+      ACCOUNT_HISTORY_GCS_PREFIX: ${{ inputs.account_history_gcs_prefix }}
+      ACCOUNT_HISTORY_TARGET_ID: ${{ inputs.account_history_target_id }}
+      ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ inputs.account_history_expected_scope }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
       GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
@@ -153,11 +177,37 @@ jobs:
             echo "Configured service and region are required." >&2
             exit 1
           fi
+          history_count=0
+          for history_value in \
+            "${ACCOUNT_HISTORY_RECORDING_ENABLED:-}" \
+            "${ACCOUNT_HISTORY_GCS_PREFIX:-}" \
+            "${ACCOUNT_HISTORY_TARGET_ID:-}" \
+            "${ACCOUNT_HISTORY_EXPECTED_SCOPE:-}"
+          do
+            if [ -n "${history_value}" ]; then
+              history_count=$((history_count + 1))
+              case "${history_value}" in
+                *","*|*"="*|*[[:space:]]*|-*|*"$"*|*"\`"*)
+                  echo "History settings are invalid." >&2
+                  exit 1
+                  ;;
+              esac
+            fi
+          done
+          if [ "${history_count}" -ne 0 ] && [ "${WORKFLOW_TARGET}" != "PAPER" ]; then
+            echo "History settings are only admitted for PAPER." >&2
+            exit 1
+          fi
+          if [ "${history_count}" -ne 0 ] && [ "${history_count}" -ne 4 ]; then
+            echo "History settings are invalid." >&2
+            exit 1
+          fi
 
       - name: Checkout exact image-only source
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Verify exact image-only source
@@ -166,6 +216,21 @@ jobs:
           if [ "$(git rev-parse HEAD)" != "${SOURCE_COMMIT}" ]; then
             echo "Checked-out source does not match the approved SHA." >&2
             exit 1
+          fi
+
+      - name: Set up Python for image-only admission
+        if: inputs.target == 'PAPER'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install frozen image-only admission dependencies
+        if: inputs.target == 'PAPER'
+        run: |
+          set -euo pipefail
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ]; then
+            python -m pip install --upgrade pip uv
+            uv sync --frozen --no-dev
           fi
 
       - name: Authenticate selected image-only target
@@ -190,6 +255,17 @@ jobs:
             echo "Configured service readback did not match." >&2
             exit 1
           fi
+          history_arg=""
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ]; then
+            plan="$(mktemp)"
+            uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_deployed_runtime_target_admission.py" \
+              --project="${GCP_PROJECT_ID}" \
+              --region="${CLOUD_RUN_REGION}" \
+              --service="${CLOUD_RUN_SERVICE}" \
+              --image-only-staging \
+              --plan-out="${plan}"
+            history_arg="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("history_arg") or "")' "${plan}")"
+          fi
           artifact_registry_hostname="${GCP_ARTIFACT_REGISTRY_HOSTNAME:-${CLOUD_RUN_REGION}-docker.pkg.dev}"
           image_repo="${artifact_registry_hostname}/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY_REPOSITORY}/longbridgeplatform/${CLOUD_RUN_SERVICE}"
           image="${image_repo}:${SOURCE_COMMIT}-${GITHUB_RUN_ID}"
@@ -204,10 +280,37 @@ jobs:
           fi
           # Preserve existing configuration and serving revisions. --no-traffic
           # pins an existing LATEST selector to its current revision, without moving traffic.
-          gcloud run services update "${CLOUD_RUN_SERVICE}" \
-            --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
-            --image="${image_repo}@${digest}" --no-traffic \
+          update_command=(
+            gcloud run services update "${CLOUD_RUN_SERVICE}"
+            --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}"
+            --image="${image_repo}@${digest}" --no-traffic
             --update-labels="commit-sha=${SOURCE_COMMIT},github-run-id=${GITHUB_RUN_ID}" --quiet
+          )
+          if [ -n "${history_arg}" ]; then
+            update_command+=(--update-env-vars="${history_arg}")
+          fi
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ]; then
+            revision_suffix="r${GITHUB_RUN_ID}"
+            revision_name="${CLOUD_RUN_SERVICE}-${revision_suffix}"
+            if [[ ! "${GITHUB_RUN_ID}" =~ ^[0-9]+$ ]] \
+              || [[ ! "${revision_name}" =~ ^[a-z][a-z0-9-]{0,61}[a-z0-9]$ ]]; then
+              echo "Staged revision name is invalid." >&2
+              exit 1
+            fi
+            update_command+=(--revision-suffix="${revision_suffix}")
+          fi
+          "${update_command[@]}"
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ]; then
+            uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_deployed_runtime_target_admission.py" \
+              --project="${GCP_PROJECT_ID}" \
+              --region="${CLOUD_RUN_REGION}" \
+              --service="${CLOUD_RUN_SERVICE}" \
+              --image-only-readback \
+              --plan="${plan}" \
+              --expected-image="${image_repo}@${digest}" \
+              --expected-commit="${SOURCE_COMMIT}" \
+              --expected-revision="${revision_name}"
+          fi
 
   sync:
     name: Deploy / Sync ${{ matrix.target.label }} Cloud Run
