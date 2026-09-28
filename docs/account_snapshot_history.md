@@ -25,6 +25,12 @@ OIDC 使用 heartbeat 里已经配置的 gcloud：`gcloud auth print-identity-to
 
 这份记录不是 TWR，不是收益率，也不授予 live 权限。
 
+## main 上的 PAPER 镜像暂存
+
+`sync-cloud-run-env.yml` 的 image-only 入口仍由同仓 main workflow 控制。PAPER 可以额外把已审查候选 `0b939723c1db3ef59175535998b470cbcd4b8824` 做成无流量镜像，并只更新 image、commit、run 标签和四个 history 环境变量。HK/SG 不接受这个候选。准入读取候选的 `uv.lock`、`pyproject.toml` 和 `qsl.toml`，不执行候选脚本。本轮只改源码和离线测试，没有执行云端暂存，也没有切流。
+
+该固定候选使用自然运行周期中已经读取的余额生成记录，与上文 main 的 HTTP heartbeat 快照入口不同。无流量暂存不会启用 HTTP 快照链，不设置 `ACCOUNT_HISTORY_SERVICE_URL`，也不调用 `/run` 或产生首个样本。上文 HTTP 入口条件不能作为该候选的启用步骤；正式采用及自然周期首样本需要分别核验。
+
 ## 尚未启用
 
 本轮没有打开 GitHub variable，没有新增 secret 或 IAM，也没有真实采样。以后若要启用，需要先确认 paper 服务上的部署版本、来源读取权限、bucket 保留策略和上述变量，并读回第一份对象。在那之前，仓库里的步骤保持关闭。

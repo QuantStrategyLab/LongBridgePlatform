@@ -8,15 +8,23 @@ checker never reads Secret Manager values and never mutates a service.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
 import tomllib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from scripts.reconcile_cloud_runtime import ReconcileError, observe_ready_revision, serving_traffic_rows
+from scripts.record_daily_account_snapshot import _PROJECT_ID, _Rejected, _TARGET_ID, _gcs_prefix
 from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
 
 
@@ -25,6 +33,17 @@ class AdmissionError(ValueError):
 
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+# Reviewed PAPER history image. Workflow control stays on main; this constant is the only other archive input.
+APPROVED_PAPER_HISTORY_CANDIDATE = "0b939723c1db3ef59175535998b470cbcd4b8824"
+_HISTORY_KEYS = (
+    "ACCOUNT_HISTORY_RECORDING_ENABLED",
+    "ACCOUNT_HISTORY_GCS_PREFIX",
+    "ACCOUNT_HISTORY_TARGET_ID",
+    "ACCOUNT_HISTORY_EXPECTED_SCOPE",
+)
+_UNSAFE_HISTORY = re.compile(r"[,=\s'\"`$\\|&<>]|^\-")
+_INGRESS = "run.googleapis.com/ingress"
+_SOURCE_DECLARATIONS = ("uv.lock", "pyproject.toml", "qsl.toml")
 
 
 def _locked_ues_revision(lock_text: str) -> str:
@@ -66,24 +85,75 @@ def _candidate_ues_revision() -> str:
     return candidate
 
 
-def _serving_ues_revisions(*, service: str, project: str, region: str, service_json: Mapping[str, Any]) -> set[str]:
+def ues_revision_from_declarations(*, lock_text: str, project_text: str, qsl_text: str) -> str:
+    """Agree uv.lock, pyproject.toml, and qsl.toml. These texts are data, not code."""
+
+    candidate = _locked_ues_revision(lock_text)
+    try:
+        project = tomllib.loads(project_text)
+        dependencies = project.get("project", {}).get("dependencies", [])
+    except tomllib.TOMLDecodeError as exc:
+        raise AdmissionError("UES pyproject and uv.lock revisions differ") from exc
+    refs = [
+        match.group(1)
+        for dependency in dependencies
+        if (match := re.match(
+            r"^us-equity-strategies\s*@\s*git\+https://github\.com/QuantStrategyLab/UsEquityStrategies\.git@([0-9a-f]{40})$",
+            dependency,
+        ))
+    ]
+    if refs != [candidate]:
+        raise AdmissionError("UES pyproject and uv.lock revisions differ")
+    try:
+        qsl = tomllib.loads(qsl_text)
+    except tomllib.TOMLDecodeError as exc:
+        raise AdmissionError("UES QSL contract and uv.lock revisions differ") from exc
+    if qsl.get("qsl", {}).get("requires", {}).get("us_equity_strategies") != candidate:
+        raise AdmissionError("UES QSL contract and uv.lock revisions differ")
+    return candidate
+
+
+def ues_revision_at(commit: str, run: Callable[[Sequence[str]], str]) -> str:
+    """Read one commit's lock declarations with git show. Do not import or run its scripts."""
+
+    if not _SHA.fullmatch(commit):
+        raise AdmissionError("image source is not an exact commit")
+    texts: dict[str, str] = {}
+    for name in _SOURCE_DECLARATIONS:
+        texts[name] = run(["git", "show", f"{commit}:{name}"])
+    return ues_revision_from_declarations(
+        lock_text=texts["uv.lock"],
+        project_text=texts["pyproject.toml"],
+        qsl_text=texts["qsl.toml"],
+    )
+
+
+def _serving_ues_revisions(
+    *,
+    service: str,
+    project: str,
+    region: str,
+    service_json: Mapping[str, Any],
+    run: Callable[[Sequence[str]], str] | None = None,
+) -> set[str]:
     traffic = service_json.get("status", {}).get("traffic", [])
     if not isinstance(traffic, list):
         raise AdmissionError(f"{service}: serving traffic is unavailable")
     serving = [entry.get("revisionName") for entry in traffic if isinstance(entry, Mapping) and entry.get("percent", 0) > 0]
     if not serving or any(not isinstance(revision, str) or not revision for revision in serving):
         raise AdmissionError(f"{service}: serving revisions are unavailable")
+    invoke = run or _run
     revisions = set()
     for revision in serving:
         try:
-            revision_json = json.loads(_run([
+            revision_json = json.loads(invoke([
                 "gcloud", "run", "revisions", "describe", revision,
                 f"--project={project}", f"--region={region}", "--format=json",
             ]))
             source_sha = revision_json["metadata"]["labels"]["commit-sha"]
             if not isinstance(source_sha, str) or not _SHA.fullmatch(source_sha):
                 raise ValueError("invalid source SHA")
-            lock_text = _run(["git", "show", f"{source_sha}:uv.lock"])
+            lock_text = invoke(["git", "show", f"{source_sha}:uv.lock"])
             revisions.add(_locked_ues_revision(lock_text))
         except (KeyError, TypeError, ValueError, AdmissionError) as exc:
             raise AdmissionError(f"{service}: serving UES revision cannot be independently verified") from exc
@@ -220,12 +290,429 @@ def verify_service(*, service: str, service_json: Mapping[str, Any]) -> dict[str
     }
 
 
-def main() -> int:
+def _load_object(payload: str) -> Mapping[str, Any]:
+    loaded = json.loads(payload)
+    if not isinstance(loaded, Mapping):
+        raise AdmissionError("cloud read failed")
+    return loaded
+
+
+def _run_quiet(command: Sequence[str]) -> str:
+    try:
+        return _run(command)
+    except AdmissionError:
+        raise AdmissionError("cloud read failed") from None
+
+
+def _pod_spec(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    spec = payload.get("spec")
+    if not isinstance(spec, Mapping):
+        raise AdmissionError("container environment is malformed")
+    containers = spec.get("containers")
+    if isinstance(containers, list):
+        return spec
+    template = spec.get("template")
+    if isinstance(template, Mapping) and isinstance(template.get("spec"), Mapping):
+        return template["spec"]
+    raise AdmissionError("container environment is malformed")
+
+
+def _env_material(spec: Mapping[str, Any]) -> list[dict[str, str]]:
+    containers = spec.get("containers")
+    if not isinstance(containers, list) or not containers or not isinstance(containers[0], Mapping):
+        raise AdmissionError("container environment is malformed")
+    entries = containers[0].get("env", [])
+    if not isinstance(entries, list):
+        raise AdmissionError("container environment is malformed")
+    material: list[dict[str, str]] = []
+    names: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            raise AdmissionError("container environment is malformed")
+        name = entry.get("name")
+        if not isinstance(name, str) or not name or name != name.strip() or name in names:
+            raise AdmissionError("container environment is malformed")
+        names.add(name)
+        if "value" in entry and "valueFrom" not in entry:
+            value = entry.get("value")
+            if not isinstance(value, str):
+                raise AdmissionError("container environment is malformed")
+            material.append({"name": name, "value": value})
+            continue
+        secret = ((entry.get("valueFrom") or {}) if isinstance(entry.get("valueFrom"), Mapping) else {}).get(
+            "secretKeyRef"
+        )
+        if not isinstance(secret, Mapping) or "value" in entry:
+            raise AdmissionError("container environment is malformed")
+        secret_name = secret.get("name")
+        secret_key = secret.get("key")
+        if not isinstance(secret_name, str) or not secret_name or not isinstance(secret_key, str) or not secret_key:
+            raise AdmissionError("container environment is malformed")
+        material.append({"key": secret_key, "name": name.strip(), "secret": secret_name})
+    material.sort(key=lambda item: item["name"])
+    return material
+
+
+def _ingress(metadata: object) -> str:
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, Mapping):
+        raise AdmissionError("container environment is malformed")
+    annotations = metadata.get("annotations") or {}
+    if not isinstance(annotations, Mapping):
+        raise AdmissionError("container environment is malformed")
+    return str(annotations.get(_INGRESS) or "")
+
+
+def _configuration(payload: Mapping[str, Any], *, template: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    spec = _pod_spec(payload if template is None else template)
+    return {
+        "env": _env_material(spec),
+        "serviceAccountName": str(spec.get("serviceAccountName") or ""),
+    }
+
+
+def _config_digest(configuration: Mapping[str, Any], *, skip: set[str] | None = None) -> str:
+    omitted = skip or set()
+    body = {
+        "env": [item for item in configuration["env"] if item["name"] not in omitted],
+        "serviceAccountName": configuration["serviceAccountName"],
+    }
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _literal_values(configuration: Mapping[str, Any]) -> dict[str, str]:
+    return {item["name"]: item["value"] for item in configuration["env"] if "value" in item}
+
+
+def history_update(env: Mapping[str, str], *, workflow_target: str, project_id: str) -> dict[str, str] | None:
+    """Return an explicit PAPER history update, or None when the four inputs were omitted."""
+
+    values = {key: str(env.get(key) or "") for key in _HISTORY_KEYS}
+    if all(value == "" for value in values.values()):
+        return None
+    if workflow_target != "PAPER":
+        raise AdmissionError("history settings are only admitted for PAPER")
+    if any(not value or _UNSAFE_HISTORY.search(value) for value in values.values()):
+        raise AdmissionError("history settings are invalid")
+    if values["ACCOUNT_HISTORY_RECORDING_ENABLED"] != "true":
+        raise AdmissionError("history settings are invalid")
+    if values["ACCOUNT_HISTORY_EXPECTED_SCOPE"] != "PAPER" or values["ACCOUNT_HISTORY_TARGET_ID"] != "paper":
+        raise AdmissionError("history settings are only admitted for PAPER")
+    if _PROJECT_ID.fullmatch(project_id) is None or _TARGET_ID.fullmatch(values["ACCOUNT_HISTORY_TARGET_ID"]) is None:
+        raise AdmissionError("history settings are invalid")
+    try:
+        prefix = _gcs_prefix(values["ACCOUNT_HISTORY_GCS_PREFIX"])
+    except _Rejected:
+        raise AdmissionError("history settings are invalid") from None
+    if prefix != values["ACCOUNT_HISTORY_GCS_PREFIX"]:
+        raise AdmissionError("history settings are invalid")
+    return values
+
+
+def _history_arg(values: Mapping[str, str] | None) -> str:
+    if not values:
+        return ""
+    return ",".join(f"{key}={values[key]}" for key in _HISTORY_KEYS)
+
+
+def _paper_selector(value: object) -> tuple[str, ...] | None:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)) or not value:
+        return None
+    return tuple(str(item).strip().upper() for item in value)
+
+
+def _require_paper_target_identity(*, service: str, service_json: Mapping[str, Any]) -> None:
+    env = _container_env(service_json)
+    try:
+        target = json.loads(env.get("RUNTIME_TARGET_JSON") or env.get("QSL_RUNTIME_TARGET_JSON") or "{}")
+    except json.JSONDecodeError as exc:
+        raise AdmissionError(f"{service}: runtime target identity does not match PAPER") from exc
+    if not isinstance(target, Mapping):
+        raise AdmissionError(f"{service}: runtime target identity does not match PAPER")
+    if (
+        str(target.get("platform_id") or "").strip().lower() != "longbridge"
+        or str(target.get("service_name") or "").strip() != service
+        or str(target.get("account_scope") or "").strip().upper() != "PAPER"
+        or _paper_selector(target.get("account_selector")) != ("PAPER",)
+    ):
+        raise AdmissionError(f"{service}: runtime target identity does not match PAPER")
+    if "deployment_selector" in target and str(target.get("deployment_selector") or "").strip().upper() != "PAPER":
+        raise AdmissionError(f"{service}: runtime target identity does not match PAPER")
+    if "account_selectors" in target and _paper_selector(target.get("account_selectors")) != ("PAPER",):
+        raise AdmissionError(f"{service}: runtime target identity does not match PAPER")
+
+
+def verify_template_matches_serving(
+    *, service: str, service_json: Mapping[str, Any], serving_revisions: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    template = service_json.get("spec", {}).get("template")
+    if not isinstance(template, Mapping) or not serving_revisions:
+        raise AdmissionError(f"{service}: template does not match the serving revision")
+    template_configuration = _configuration(service_json, template=template)
+    for revision in serving_revisions:
+        if _configuration(revision) != template_configuration:
+            raise AdmissionError(f"{service}: template does not match the serving revision")
+    return template_configuration
+
+
+def _require_candidate_release_binding(
+    *, service: str, service_json: Mapping[str, Any], profile: str, ues_revision: str
+) -> None:
+    """Match strategy_release and the soxl risk pin to the candidate declaration, not the main lock."""
+
+    env = _container_env(service_json)
+    try:
+        target = json.loads(env.get("RUNTIME_TARGET_JSON") or env.get("QSL_RUNTIME_TARGET_JSON") or "{}")
+    except json.JSONDecodeError as exc:
+        raise AdmissionError(f"{service}: candidate UES revision does not match approved target binding") from exc
+    if not isinstance(target, Mapping):
+        raise AdmissionError(f"{service}: candidate UES revision does not match approved target binding")
+    release = target.get("strategy_release") or {}
+    risk_binding = (target.get("runtime_risk_limits") or {}).get("binding") or {}
+    if not isinstance(release, Mapping) or not isinstance(risk_binding, Mapping):
+        raise AdmissionError(f"{service}: candidate UES revision does not match approved target binding")
+    approved = release.get("strategy_revision")
+    risk_pin = risk_binding.get("ues_revision")
+    if approved is None and risk_pin is None:
+        return
+    if approved != ues_revision or (profile == "soxl_soxx_trend_income" and risk_pin != ues_revision):
+        raise AdmissionError(f"{service}: candidate UES revision does not match approved target binding")
+
+
+def prepare_image_only_staging(
+    *,
+    service: str,
+    project: str,
+    region: str,
+    service_json: Mapping[str, Any],
+    env: Mapping[str, str],
+    image_commit: str,
+    run: Callable[[Sequence[str]], str],
+) -> dict[str, Any]:
+    """Admit one PAPER no-traffic image. Lock texts come from image_commit, not the main worktree."""
+
+    if image_commit != APPROVED_PAPER_HISTORY_CANDIDATE:
+        raise AdmissionError("image source is not approved")
+    image_commit = APPROVED_PAPER_HISTORY_CANDIDATE
+    admission = verify_service(service=service, service_json=service_json)
+    _require_paper_target_identity(service=service, service_json=service_json)
+    try:
+        traffic = serving_traffic_rows(service_json)
+    except ReconcileError:
+        raise AdmissionError(f"{service}: serving revisions are unavailable") from None
+    revisions: list[Mapping[str, Any]] = []
+    for row in traffic:
+        if int(row["percent"]) <= 0:
+            continue
+        revisions.append(
+            _load_object(
+                run(
+                    [
+                        "gcloud",
+                        "run",
+                        "revisions",
+                        "describe",
+                        str(row["revisionName"]),
+                        f"--project={project}",
+                        f"--region={region}",
+                        "--format=json",
+                    ]
+                )
+            )
+        )
+    configuration = verify_template_matches_serving(
+        service=service, service_json=service_json, serving_revisions=revisions
+    )
+    source_revision = ues_revision_at(image_commit, run)
+    _require_candidate_release_binding(
+        service=service,
+        service_json=service_json,
+        profile=str(admission["profile"]),
+        ues_revision=source_revision,
+    )
+    serving = _serving_ues_revisions(
+        service=service, project=project, region=region, service_json=service_json, run=run
+    )
+    if serving != {source_revision}:
+        raise AdmissionError(f"{service}: candidate UES revision differs from serving image")
+    history = history_update(env, workflow_target=str(env.get("WORKFLOW_TARGET") or ""), project_id=project)
+    return {
+        "history_arg": _history_arg(history),
+        "history_values": history or {},
+        "image_commit": image_commit,
+        "service_ingress": _ingress(service_json.get("metadata")),
+        "serving_traffic": traffic,
+        "template_digest": _config_digest(configuration, skip=set(history or ())),
+    }
+
+
+def confirm_image_only_readback(
+    *,
+    service: str,
+    project: str,
+    region: str,
+    plan: Mapping[str, Any],
+    expected_image: str,
+    expected_commit: str,
+    expected_revision: str,
+    run: Callable[[Sequence[str]], str],
+) -> None:
+    """Read the named revision once. A failed or unknown read is not a retry."""
+
+    if (
+        not _SHA.fullmatch(expected_commit)
+        or not re.fullmatch(r".+@sha256:[0-9a-f]{64}", expected_image)
+        or not re.fullmatch(r"[a-z][a-z0-9-]{0,61}[a-z0-9]", expected_revision)
+        or not isinstance(plan.get("service_ingress"), str)
+    ):
+        raise AdmissionError("staged readback is incomplete")
+    service_json = _load_object(
+        run(
+            [
+                "gcloud",
+                "run",
+                "services",
+                "describe",
+                service,
+                f"--project={project}",
+                f"--region={region}",
+                "--format=json",
+            ]
+        )
+    )
+    try:
+        traffic = serving_traffic_rows(service_json)
+    except ReconcileError:
+        raise AdmissionError("staged readback is incomplete") from None
+    if traffic != plan.get("serving_traffic"):
+        raise AdmissionError("serving traffic changed")
+    if _ingress(service_json.get("metadata")) != plan.get("service_ingress"):
+        raise AdmissionError("service ingress changed")
+    if any(row["revisionName"] == expected_revision and int(row["percent"]) > 0 for row in traffic):
+        raise AdmissionError("staged revision is serving traffic")
+    revision = _load_object(
+        run(
+            [
+                "gcloud",
+                "run",
+                "revisions",
+                "describe",
+                expected_revision,
+                f"--project={project}",
+                f"--region={region}",
+                "--format=json",
+            ]
+        )
+    )
+    try:
+        observed = observe_ready_revision(revision)
+    except ReconcileError:
+        raise AdmissionError("staged revision was not observed") from None
+    if (
+        observed["revision"] != expected_revision
+        or observed["commit"] != expected_commit
+        or observed["image"] != expected_image
+    ):
+        raise AdmissionError("staged revision does not match the approved image")
+    history = plan.get("history_values") or {}
+    if not isinstance(history, Mapping):
+        raise AdmissionError("staged readback is incomplete")
+    configuration = _configuration(revision)
+    if _config_digest(configuration, skip=set(history)) != plan.get("template_digest"):
+        raise AdmissionError("staged revision configuration changed")
+    literals = _literal_values(configuration)
+    for key, value in history.items():
+        if literals.get(str(key)) != value:
+            raise AdmissionError("staged history settings do not match")
+
+
+def _history_count(env: Mapping[str, str]) -> int:
+    return sum(1 for key in _HISTORY_KEYS if str(env.get(key) or ""))
+
+
+def _write_plan(path: str, plan: Mapping[str, Any]) -> None:
+    Path(path).write_text(json.dumps(plan, sort_keys=True), encoding="utf-8")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", required=True)
     parser.add_argument("--region", required=True)
     parser.add_argument("--service", required=True)
-    args = parser.parse_args()
+    parser.add_argument("--image-only-staging", action="store_true")
+    parser.add_argument("--plan-out", default="")
+    parser.add_argument("--image-only-readback", action="store_true")
+    parser.add_argument("--plan", default="")
+    parser.add_argument("--expected-image", default="")
+    parser.add_argument("--expected-commit", default="")
+    parser.add_argument("--expected-revision", default="")
+    args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.image_only_staging and args.image_only_readback:
+        print("Image-only staging admission failed.", file=sys.stderr)
+        return 1
+    if args.image_only_staging:
+        if not args.plan_out:
+            print("Image-only staging admission failed.", file=sys.stderr)
+            return 1
+        try:
+            if (
+                str(os.environ.get("WORKFLOW_TARGET") or "") != "PAPER"
+                or _history_count(os.environ) != 4
+                or str(os.environ.get("SOURCE_COMMIT") or "") != APPROVED_PAPER_HISTORY_CANDIDATE
+            ):
+                raise AdmissionError("image source is not approved")
+            image_commit = APPROVED_PAPER_HISTORY_CANDIDATE
+            service_json = _load_object(
+                _run_quiet(
+                    [
+                        "gcloud",
+                        "run",
+                        "services",
+                        "describe",
+                        args.service,
+                        f"--project={args.project}",
+                        f"--region={args.region}",
+                        "--format=json",
+                    ]
+                )
+            )
+            plan = prepare_image_only_staging(
+                service=args.service,
+                project=args.project,
+                region=args.region,
+                service_json=service_json,
+                env=os.environ,
+                image_commit=image_commit,
+                run=_run_quiet,
+            )
+            _write_plan(args.plan_out, plan)
+        except (AdmissionError, OSError):
+            print("Image-only staging admission failed.", file=sys.stderr)
+            return 1
+        return 0
+    if args.image_only_readback:
+        try:
+            plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+            if not isinstance(plan, Mapping):
+                raise AdmissionError("staged readback is incomplete")
+            confirm_image_only_readback(
+                service=args.service,
+                project=args.project,
+                region=args.region,
+                plan=plan,
+                expected_image=args.expected_image,
+                expected_commit=args.expected_commit,
+                expected_revision=args.expected_revision,
+                run=_run_quiet,
+            )
+        except (AdmissionError, OSError, json.JSONDecodeError):
+            print("Image-only staging readback failed.", file=sys.stderr)
+            return 1
+        return 0
     try:
         service_json = _describe_service(service=args.service, project=args.project, region=args.region)
         result = verify_service(

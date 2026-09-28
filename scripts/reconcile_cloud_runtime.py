@@ -191,6 +191,37 @@ def _traffic_entries(service: Mapping[str, Any]) -> list[dict[str, Any]]:
     return entries
 
 
+def serving_traffic_rows(service: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return serving revision rows. This read does not move traffic or guess latest."""
+
+    status = service.get("status")
+    if not isinstance(status, Mapping):
+        raise ReconcileError("serving traffic is unavailable")
+    traffic = status.get("traffic")
+    if not isinstance(traffic, list) or not traffic:
+        raise ReconcileError("serving traffic is unavailable")
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in traffic:
+        if not isinstance(item, Mapping):
+            raise ReconcileError("serving traffic is unavailable")
+        name = item.get("revisionName")
+        percent = item.get("percent")
+        if not isinstance(name, str) or not name.strip():
+            raise ReconcileError("serving traffic is unavailable")
+        if isinstance(percent, bool) or not isinstance(percent, int) or percent < 0 or percent > 100:
+            raise ReconcileError("serving traffic is unavailable")
+        revision_name = name.strip()
+        if revision_name in seen:
+            raise ReconcileError("serving traffic is contradictory")
+        seen.add(revision_name)
+        rows.append({"revisionName": revision_name, "percent": percent})
+    if sum(row["percent"] for row in rows) != 100 or not any(row["percent"] > 0 for row in rows):
+        raise ReconcileError("serving traffic is contradictory")
+    rows.sort(key=lambda row: str(row["revisionName"]))
+    return rows
+
+
 def _traffic_on_revision(service: Mapping[str, Any], revision_name: str) -> bool:
     for item in _traffic_entries(service):
         if item["percent"] == 100 and item["revisionName"] == revision_name:
@@ -224,6 +255,18 @@ def _revision_identity_from_payload(payload: Mapping[str, Any]) -> tuple[str, st
         str(labels.get("release-set") or labels.get("release_set") or "").strip(),
         image,
     )
+
+
+def observe_ready_revision(revision: Mapping[str, Any]) -> dict[str, str]:
+    """Return the Ready revision name, commit label, and image. Do not infer latest."""
+
+    if not _revision_is_ready(revision):
+        raise ReconcileError("staged revision is not Ready")
+    commit, _release_set, image = _revision_identity_from_payload(revision)
+    name = str((revision.get("metadata") or {}).get("name") or "").strip()
+    if not name or not commit or not image:
+        raise ReconcileError("staged revision identity is incomplete")
+    return {"revision": name, "commit": commit, "image": image}
 
 
 def _resolve_revision_for_commit(
