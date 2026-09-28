@@ -82,6 +82,8 @@ projected = project_listed_reports(
 
 对象路径是 `{prefix}/longbridge/paper/{business_date}.json`。`business_date` 和时区来自该目标的有效调度。文件内容就是 `project_listed_reports` 的原 JSON，不是资产曲线，也不是成交账本。`fills` 仍是未接通。上传使用现有存储客户端，`if_generation_match=0`、`timeout=20`、`retry=None`；同日对象已存在则不覆盖。列表或读取不完整时，对象里的 `read_errors` 和 `completeness` 保持不完整，不把这一天写成正常休市。
 
+可选的 QRS 日报同步另由 `RUNTIME_DAILY_SYNC_ENABLED` 精确等于 `true` 才开启，并要求 HTTPS 精确路径 `/api/runtime-daily/sync`。它复用既有 `EXECUTION_EVIDENCE_SYNC_TOKEN`，不增加 token 类型；workflow 仅在该开关开启时把 secret 送入当前 step。只允许固定 QRS PAPER 目标 `longbridge-quant-paper-service|russell_top50_leader_rotation|paper`，不由调用者指定或推导账户 key。只有本次 GCS 明确新建后才 POST 与 GCS 完全相同的 JSON；`already_recorded` 与写入结果未知均不 POST。POST 不跟随重定向、不重试，限制超时和响应大小。同步状态独立输出为 `qrs_sync=disabled|recorded|rejected|unknown`；网络结果未知或 QRS 拒绝不会撤销已保存的 GCS 记录，也不表示网页已经展示。成功响应必须回显同一 `business_date` 和 `target_key`，且包含服务端解析出的非空 `account_key` 才报告 `recorded`，但不会记录或输出该账户 key。
+
 heartbeat 的告警、返回码和交易链不变。这个步骤不调用 heartbeat 的 `main`。workflow 只在 PAPER、变量显式为 `true`、任务未取消且 Google 认证成功时运行；heartbeat 业务失败后仍可以写出异常投影。
 
-云端还没有设置这个变量，也没有新增 secret。真实报告前缀、桶权限和第一份对象要由主助手在获准身份上验收。bot 送达不在这一步。
+该同步仍默认关闭；本地只读核验发现 LongBridge PAPER 环境尚无 `RUNTIME_DAILY_SYNC_ENABLED` 或 `RUNTIME_DAILY_SYNC_URL` variable。它复用已有 execution-evidence secret 名称，不新增 secret。真实报告前缀、桶权限及第一份对象仍需在获准身份上验收。bot 送达不在这一步。

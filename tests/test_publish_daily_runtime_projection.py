@@ -7,7 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from google.api_core.exceptions import PreconditionFailed
+from google.api_core.exceptions import GoogleAPICallError, PreconditionFailed
 
 from scripts import execution_report_heartbeat as heartbeat
 from scripts import publish_daily_runtime_projection as publisher
@@ -52,6 +52,17 @@ class _Client:
         return []
 
 
+class _SyncResponse:
+    def __init__(self, status_code=200, payload=None, *, redirect=False):
+        self.status_code = status_code
+        self.is_redirect = redirect
+        self.content = json.dumps(payload or {}).encode()
+
+    def iter_content(self, *, chunk_size):
+        del chunk_size
+        yield self.content
+
+
 def _open_calendar(calendar: str, **kwargs) -> set[dt.date]:
     del calendar
     return {kwargs["start_date"]}
@@ -87,6 +98,35 @@ def _env(**overrides: str) -> dict[str, str]:
     }
     env.update(overrides)
     return env
+
+
+def _sync_env(**overrides: str) -> dict[str, str]:
+    target = _target(service="longbridge-quant-paper-service")
+    target.update(
+        strategy_profile="russell_top50_leader_rotation",
+        market_timezone="America/New_York",
+        scheduler={"main_time": "5 16 * * 1-5", "timezone": "America/New_York"},
+    )
+    env = _env(
+        RUNTIME_TARGET_JSON=json.dumps(target),
+        RUNTIME_DAILY_SYNC_ENABLED="true",
+        RUNTIME_DAILY_SYNC_URL="https://qrs.example.com/api/runtime-daily/sync",
+        EXECUTION_EVIDENCE_SYNC_TOKEN="synthetic-test-token",
+    )
+    env.update(overrides)
+    return env
+
+
+def _sync_describe(service: str, *, project: str | None) -> dict:
+    del project
+    return _cloud_run(
+        {
+            "strategy_profile": "russell_top50_leader_rotation",
+            "account_scope": "PAPER",
+            "service_name": service,
+            "runtime_target_enabled": True,
+        }
+    )
 
 
 def _report(**changes) -> dict:
@@ -176,6 +216,8 @@ def _publish(
     list_error=False,
     limit=None,
     jobs="default",
+    http_post=None,
+    describe=_describe,
 ):
     blob = blob or _Blob()
     client = _Client(blob)
@@ -203,9 +245,9 @@ def _publish(
         del project
         return selected
 
-    monkeypatch.setattr(heartbeat, "_describe_cloud_run_service", _describe)
+    monkeypatch.setattr(heartbeat, "_describe_cloud_run_service", describe)
     monkeypatch.setattr(heartbeat, "_list_scheduler_jobs", list_jobs)
-    status, business_date = publisher.publish(
+    status, business_date, sync_status = publisher.publish(
         env,
         now=OBSERVED,
         session_dates_loader=calendar,
@@ -213,7 +255,9 @@ def _publish(
         list_objects=list_objects,
         read_payload=read_payload,
         report_globs=lambda since, now: ["gs://reports/longbridge/**/2026-09/*.json"],
+        http_post=http_post,
     )
+    calls["sync_status"] = sync_status
     return status, business_date, blob, client, calls
 
 
@@ -237,9 +281,10 @@ def test_disabled_switch_performs_no_io(monkeypatch) -> None:
     monkeypatch.setattr(heartbeat, "_list_gcs_objects", boom)
     monkeypatch.setattr(heartbeat, "_cat_gcs_json", boom)
     monkeypatch.setattr(publisher, "_storage_client", boom)
-    status, business_date = publisher.publish({"RUNTIME_DAILY_PROJECTION_ENABLED": "false"}, now=OBSERVED)
+    status, business_date, sync_status = publisher.publish({"RUNTIME_DAILY_PROJECTION_ENABLED": "false"}, now=OBSERVED)
     assert status == "disabled"
     assert business_date == ""
+    assert sync_status == "disabled"
 
 
 def test_bad_config_and_cross_scope_do_not_write(monkeypatch) -> None:
@@ -595,7 +640,7 @@ def test_report_listing_and_reads_stop_at_the_bound(monkeypatch) -> None:
     monkeypatch.setattr(heartbeat, "_list_scheduler_jobs", lambda *, project: _jobs_for_env(_env()))
     upload = _Blob()
     client, scanner, listed = bind(reports, upload)
-    status, _ = publisher.publish(
+    status, _, _ = publisher.publish(
         _env(),
         now=OBSERVED,
         session_dates_loader=_closed_calendar,
@@ -622,7 +667,7 @@ def test_report_listing_and_reads_stop_at_the_bound(monkeypatch) -> None:
     huge_upload = _Blob()
     huge_client, _, _ = bind([huge], huge_upload)
     monkeypatch.setattr(heartbeat, "_list_scheduler_jobs", lambda *, project: _jobs_for_env(_env()))
-    huge_status, _ = publisher.publish(
+    huge_status, _, _ = publisher.publish(
         _env(),
         now=OBSERVED,
         session_dates_loader=_closed_calendar,
@@ -644,7 +689,7 @@ def test_report_listing_and_reads_stop_at_the_bound(monkeypatch) -> None:
     )
     broken_upload = _Blob()
     broken_client, _, _ = bind([broken], broken_upload)
-    broken_status, _ = publisher.publish(
+    broken_status, _, _ = publisher.publish(
         _env(),
         now=OBSERVED,
         session_dates_loader=_closed_calendar,
@@ -865,7 +910,157 @@ def test_disabled_target_is_still_projected(monkeypatch) -> None:
     assert _stored(blob)["records"][0]["status"] == "missing_report"
 
 
-def test_workflow_adds_a_paper_projection_after_auth_without_new_secrets() -> None:
+def test_runtime_daily_sync_posts_only_new_projection_and_checks_qrs_contract(monkeypatch) -> None:
+    requests = []
+
+    def post(url, **kwargs):
+        requests.append((url, kwargs))
+        payload = json.loads(kwargs["data"])
+        record = payload["records"][0]
+        return _SyncResponse(payload={
+            "ok": True,
+            "stored": True,
+            "business_date": record["business_date"],
+            "target_key": "longbridge-quant-paper-service|russell_top50_leader_rotation|paper",
+            "account_key": "synthetic-account-key",
+        })
+
+    status, business_date, blob, _, calls = _publish(
+        monkeypatch,
+        _sync_env(),
+        [],
+        http_post=post,
+        describe=_sync_describe,
+    )
+    assert status == "recorded"
+    assert business_date == "2026-09-28"
+    assert calls["sync_status"] == "recorded"
+    assert len(requests) == 1
+    stored_projection = json.loads(blob.uploads[0]["data"])
+    assert stored_projection["records"][0]["target"]["account_scope"] == "paper"
+    url, kwargs = requests[0]
+    assert url == "https://qrs.example.com/api/runtime-daily/sync"
+    assert kwargs["allow_redirects"] is False
+    assert kwargs["timeout"] == publisher._RUNTIME_DAILY_SYNC_TIMEOUT_SECONDS
+    assert kwargs["stream"] is True
+    assert kwargs["data"] == blob.uploads[0]["data"].encode("utf-8")
+    assert kwargs["headers"]["Authorization"] == "Bearer synthetic-test-token"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"EXECUTION_EVIDENCE_SYNC_TOKEN": ""},
+        {"RUNTIME_DAILY_SYNC_URL": ""},
+        {"RUNTIME_DAILY_SYNC_URL": "https://qrs.example.com/wrong"},
+    ],
+)
+def test_runtime_daily_sync_missing_or_invalid_auth_config_does_not_post(monkeypatch, overrides) -> None:
+    requests = []
+    status, _, blob, _, calls = _publish(
+        monkeypatch,
+        _sync_env(**overrides),
+        [],
+        http_post=lambda *args, **kwargs: requests.append((args, kwargs)),
+        describe=_sync_describe,
+    )
+    assert status == "recorded"
+    assert calls["sync_status"] == "rejected"
+    assert blob.uploads
+    assert requests == []
+
+
+def test_runtime_daily_sync_skips_existing_object_and_unknown_store(monkeypatch) -> None:
+    requests = []
+    existing = _Blob(fail=PreconditionFailed("already exists"))
+    status, _, _, _, calls = _publish(
+        monkeypatch,
+        _sync_env(),
+        [],
+        blob=existing,
+        http_post=lambda *args, **kwargs: requests.append((args, kwargs)),
+        describe=_sync_describe,
+    )
+    assert status == "already_recorded"
+    assert calls["sync_status"] == "skipped_existing"
+    assert requests == []
+
+    unknown = _Blob(fail=GoogleAPICallError("synthetic write failure"))
+    with pytest.raises(RuntimeError, match="write_unknown"):
+        _publish(
+            monkeypatch,
+            _sync_env(),
+            [],
+            blob=unknown,
+            http_post=lambda *args, **kwargs: requests.append((args, kwargs)),
+            describe=_sync_describe,
+        )
+    assert requests == []
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [
+        (TimeoutError("synthetic timeout"), "unknown"),
+        (_SyncResponse(status_code=302, redirect=True), "rejected"),
+        (_SyncResponse(payload={"ok": True, "stored": True, "business_date": "wrong", "target_key": "wrong", "account_key": "synthetic"}), "unknown"),
+        (_SyncResponse(status_code=401, payload={"error": "unauthorized"}), "rejected"),
+    ],
+)
+def test_runtime_daily_sync_failure_is_separate_and_never_retried(monkeypatch, response, expected) -> None:
+    requests = []
+
+    def post(*args, **kwargs):
+        requests.append((args, kwargs))
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    status, _, blob, _, calls = _publish(
+        monkeypatch,
+        _sync_env(),
+        [],
+        http_post=post,
+        describe=_sync_describe,
+    )
+    assert status == "recorded"
+    assert calls["sync_status"] == expected
+    assert blob.uploads
+    assert len(requests) == 1
+
+
+def test_runtime_daily_sync_stays_off_by_default(monkeypatch) -> None:
+    requests = []
+    status, _, blob, _, calls = _publish(
+        monkeypatch,
+        _env(),
+        [],
+        http_post=lambda *args, **kwargs: requests.append((args, kwargs)),
+    )
+    assert status == "recorded"
+    assert calls["sync_status"] == "disabled"
+    assert blob.uploads
+    assert requests == []
+
+
+def test_runtime_daily_sync_rejects_noncontract_paper_target_locally(monkeypatch) -> None:
+    requests = []
+    target = _target(service="other-paper-service")
+    target.update(strategy_profile="russell_top50_leader_rotation", market_timezone="America/New_York")
+    status, _, blob, _, calls = _publish(
+        monkeypatch,
+        _sync_env(RUNTIME_TARGET_JSON=json.dumps(target)),
+        [],
+        http_post=lambda *args, **kwargs: requests.append((args, kwargs)),
+        describe=_sync_describe,
+    )
+    assert status == "recorded"
+    assert calls["sync_status"] == "rejected"
+    assert blob.uploads
+    assert requests == []
+
+
+def test_workflow_adds_a_paper_projection_after_auth_with_existing_sync_token() -> None:
     workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text(encoding="utf-8")
     heartbeat_step = workflow.index("name: Check recent execution report")
     projection = workflow.index("name: Publish daily runtime projection")
@@ -878,5 +1073,7 @@ def test_workflow_adds_a_paper_projection_after_auth_without_new_secrets() -> No
     assert "!cancelled()" in step
     assert "steps.gcp_auth_primary.outcome == 'success'" in step
     assert "steps.gcp_auth_retry.outcome == 'success'" in step
-    assert "secrets." not in step
     assert "RUNTIME_DAILY_PROJECTION_ENABLED: ${{ vars.RUNTIME_DAILY_PROJECTION_ENABLED }}" in step
+    assert "RUNTIME_DAILY_SYNC_ENABLED: ${{ vars.RUNTIME_DAILY_SYNC_ENABLED }}" in step
+    assert "RUNTIME_DAILY_SYNC_URL: ${{ vars.RUNTIME_DAILY_SYNC_URL }}" in step
+    assert "EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ vars.RUNTIME_DAILY_SYNC_ENABLED == 'true' && secrets.EXECUTION_EVIDENCE_SYNC_TOKEN || '' }}" in step
