@@ -121,3 +121,25 @@ def test_heartbeat_script_does_not_import_project_runtime_dependencies() -> None
     script = (ROOT / "scripts/execution_report_heartbeat.py").read_text()
 
     assert "from runtime_config_support import" not in script
+
+
+def test_paper_snapshot_sync_uses_internal_probe_and_preserves_heartbeat_failure():
+    workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+    script = (ROOT / "scripts/record_daily_account_snapshot.py").read_text()
+    account_step = workflow.index("id: account_history")
+    gcloud_setup = workflow.index("- name: Set up gcloud")
+    heartbeat = workflow.index("- name: Check recent execution report")
+    final_failure = workflow.index("- name: Fail after completing heartbeat checks")
+
+    assert 'cron: "20 22 * * *"' in workflow
+    assert gcloud_setup < account_step < heartbeat < final_failure
+    assert "continue-on-error: true" in workflow[account_step:heartbeat]
+    assert "if: ${{ !cancelled() && matrix.target.label == 'PAPER' && vars.ACCOUNT_HISTORY_RECORDING_ENABLED == 'true' }}" in workflow
+    assert "ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}" in workflow
+    assert "matrix.target.service" not in workflow
+    assert "matrix.target.region" not in workflow
+    assert "steps.account_history.outcome == 'failure'" in workflow[final_failure:]
+    assert "https://cloudscheduler.googleapis.com/v1/" in script
+    assert "{config.service_url}/probe" in script
+    assert "config.scheduler_resource}:run" in script
+    assert 'ACCOUNT_HISTORY_SERVICE_URL' in workflow

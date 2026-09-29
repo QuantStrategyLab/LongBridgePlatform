@@ -37,6 +37,8 @@ _SHA = re.compile(r"^[0-9a-f]{40}$")
 APPROVED_PAPER_HISTORY_CANDIDATE = "0b939723c1db3ef59175535998b470cbcd4b8824"
 # Reviewed PAPER HTTP snapshot image. Distinct from the natural-cycle history archive above.
 APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
+# Reviewed PAPER internal-probe snapshot producer. It carries no history or snapshot env update.
+APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE = "a2921d157efb887e9210fad6734ca040ea6e5293"
 # One already-staged PAPER revision that may hold history env while serving still runs an older image.
 _PAPER_HTTP_STAGED_SOURCE_REVISION = "longbridge-quant-paper-service-r36423178119"
 _PAPER_HTTP_STAGED_SOURCE_COMMIT = APPROVED_PAPER_HISTORY_CANDIDATE
@@ -413,7 +415,7 @@ def history_update(env: Mapping[str, str], *, workflow_target: str, project_id: 
     if _PROJECT_ID.fullmatch(project_id) is None or _TARGET_ID.fullmatch(values["ACCOUNT_HISTORY_TARGET_ID"]) is None:
         raise AdmissionError("history settings are invalid")
     try:
-        prefix = _gcs_prefix(values["ACCOUNT_HISTORY_GCS_PREFIX"])
+        prefix, _, _ = _gcs_prefix(values["ACCOUNT_HISTORY_GCS_PREFIX"])
     except _Rejected:
         raise AdmissionError("history settings are invalid") from None
     if prefix != values["ACCOUNT_HISTORY_GCS_PREFIX"]:
@@ -752,6 +754,13 @@ def _validate_image_only_source(
             raise AdmissionError("image source is not approved")
     elif image_commit == APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE:
         if str(env.get("WORKFLOW_TARGET") or "") != "PAPER" or history is not None:
+            raise AdmissionError("image source is not approved")
+    elif image_commit == APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE:
+        if (
+            str(env.get("WORKFLOW_TARGET") or "") != "PAPER"
+            or history is not None
+            or snapshot_value is not None
+        ):
             raise AdmissionError("image source is not approved")
     elif _is_exact_main_image(image_commit, env):
         if history is not None:

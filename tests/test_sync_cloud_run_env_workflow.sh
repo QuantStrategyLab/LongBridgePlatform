@@ -447,6 +447,7 @@ assert 'git archive "${SOURCE_COMMIT}"' not in job
 assert "git archive ${{" not in job
 assert "0b939723c1db3ef59175535998b470cbcd4b8824" in job
 assert "d8314a61df697cae1dd03a78ddc5c2fc4179ec67" in job
+assert "a2921d157efb887e9210fad6734ca040ea6e5293" in job
 assert '[ "${GITHUB_REPOSITORY:-}" != "QuantStrategyLab/LongBridgePlatform" ]' in job
 assert '[ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] || [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]' not in job
 for forbidden in ("sync_plan", "scheduler", "cleanup", "retire", "update-traffic"):
@@ -474,6 +475,7 @@ with open(os.environ["STUB_LOG"], "a") as stream:
     stream.write(json.dumps([command, *args]) + "\\n")
 approved = "0b939723c1db3ef59175535998b470cbcd4b8824"
 http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
+probe_snapshot_candidate = "a2921d157efb887e9210fad6734ca040ea6e5293"
 staged_source_revision = "longbridge-quant-paper-service-r36423178119"
 staged_source_image = (
     "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/synthetic-paper"
@@ -602,11 +604,11 @@ def staged_revision():
 
 if command == "git" and args == ["rev-parse", "HEAD"]:
     print(os.environ["CHECKOUT_SHA"])
-elif command == "git" and args[:4] == ["fetch", "--depth", "1", "origin"] and args[4] in (approved, http_snapshot_candidate):
+elif command == "git" and args[:4] == ["fetch", "--depth", "1", "origin"] and args[4] in (approved, http_snapshot_candidate, probe_snapshot_candidate):
     pass
-elif command == "git" and args[:2] == ["cat-file", "-t"] and args[2] in (approved, http_snapshot_candidate):
+elif command == "git" and args[:2] == ["cat-file", "-t"] and args[2] in (approved, http_snapshot_candidate, probe_snapshot_candidate):
     print("commit")
-elif command == "git" and args[:1] == ["rev-parse"] and len(args) == 2 and args[1] in (approved + "^{commit}", http_snapshot_candidate + "^{commit}"):
+elif command == "git" and args[:1] == ["rev-parse"] and len(args) == 2 and args[1] in (approved + "^{commit}", http_snapshot_candidate + "^{commit}", probe_snapshot_candidate + "^{commit}"):
     print(args[1].split("^", 1)[0])
 elif command == "git" and args == ["archive", "HEAD"]:
     print("synthetic tracked source archive")
@@ -614,11 +616,13 @@ elif command == "git" and args == ["archive", approved]:
     print("synthetic candidate archive")
 elif command == "git" and args == ["archive", http_snapshot_candidate]:
     print("synthetic HTTP snapshot candidate archive")
+elif command == "git" and args == ["archive", probe_snapshot_candidate]:
+    print("synthetic internal probe snapshot candidate archive")
 elif command == "git" and args[:1] == ["show"] and len(args) == 2 and ":" in args[1]:
     sha, name = args[1].split(":", 1)
     if name not in ("uv.lock", "pyproject.toml", "qsl.toml"):
         raise SystemExit("unexpected git show")
-    if sha not in ("a" * 40, serving_sha, approved, http_snapshot_candidate):
+    if sha not in ("a" * 40, serving_sha, approved, http_snapshot_candidate, probe_snapshot_candidate):
         raise SystemExit("admission read an unapproved source lock")
     pin = ("f" * 40) if sha == serving_sha and os.environ.get("BAD_SERVING_LOCK") == "1" else ues
     print(declaration(name, pin), end="")
@@ -698,6 +702,7 @@ else:
     }
     candidate = "0b939723c1db3ef59175535998b470cbcd4b8824"
     http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
+    probe_snapshot_candidate = "a2921d157efb887e9210fad6734ca040ea6e5293"
     staged_source_revision = "longbridge-quant-paper-service-r36423178119"
     staged_source_image = (
         "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/"
@@ -832,6 +837,34 @@ else:
     for overrides in (
         {"SOURCE_COMMIT": http_snapshot_candidate, "WORKFLOW_TARGET": "HK"},
         {"SOURCE_COMMIT": http_snapshot_candidate, **history},
+    ):
+        code, calls = execute(**overrides)
+        assert code != 0 and calls == [], overrides
+        cases += 1
+    code, calls = execute(SOURCE_COMMIT=probe_snapshot_candidate, CHECKOUT_SHA="a" * 40)
+    assert code == 0, (code, calls)
+    updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
+    assert len(updates) == 1
+    assert "--no-traffic" in updates[0]
+    assert "--update-env-vars=" not in " ".join(updates[0])
+    assert updates[0][-1] == "--revision-suffix=r123"
+    assert f"--image=registry.invalid/synthetic-project/synthetic-images/longbridgeplatform/synthetic-paper@{base['IMAGE_DIGEST']}" in updates[0]
+    assert f"--update-labels=commit-sha={probe_snapshot_candidate},github-run-id=123" in updates[0]
+    assert ["docker", "build", "--pull", "-t",
+            f"registry.invalid/synthetic-project/synthetic-images/longbridgeplatform/synthetic-paper:{probe_snapshot_candidate}-123", "-"] in calls
+    assert ["git", "fetch", "--depth", "1", "origin", probe_snapshot_candidate] in calls
+    assert ["git", "archive", probe_snapshot_candidate] in calls
+    assert ["git", "archive", "HEAD"] not in calls
+    assert not any(call[:4] == ["gcloud", "run", "revisions", "describe"]
+                   and call[4] == staged_source_revision for call in calls)
+    cases += 1
+    for overrides in (
+        {"SOURCE_COMMIT": probe_snapshot_candidate, "WORKFLOW_TARGET": "HK"},
+        {"SOURCE_COMMIT": probe_snapshot_candidate, "WORKFLOW_TARGET": "SG"},
+        {"SOURCE_COMMIT": "c" * 40},
+        {"SOURCE_COMMIT": probe_snapshot_candidate, **history},
+        {"SOURCE_COMMIT": probe_snapshot_candidate, "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true"},
+        {"SOURCE_COMMIT": probe_snapshot_candidate, "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false"},
     ):
         code, calls = execute(**overrides)
         assert code != 0 and calls == [], overrides
