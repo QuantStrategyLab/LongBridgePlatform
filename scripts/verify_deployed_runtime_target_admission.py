@@ -33,8 +33,16 @@ class AdmissionError(ValueError):
 
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
-# Reviewed PAPER history image. Workflow control stays on main; this constant is the only other archive input.
+# Reviewed PAPER history image. Workflow control stays on main; only fixed reviewed candidates may be archived.
 APPROVED_PAPER_HISTORY_CANDIDATE = "0b939723c1db3ef59175535998b470cbcd4b8824"
+# Reviewed PAPER HTTP snapshot image. Distinct from the natural-cycle history archive above.
+APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
+# One already-staged PAPER revision that may hold history env while serving still runs an older image.
+_PAPER_HTTP_STAGED_SOURCE_REVISION = "longbridge-quant-paper-service-r36423178119"
+_PAPER_HTTP_STAGED_SOURCE_COMMIT = APPROVED_PAPER_HISTORY_CANDIDATE
+_PAPER_HTTP_STAGED_SOURCE_IMAGE_DIGEST = (
+    "sha256:9a3260ca8255873309b1c27cd2fd7403e6006a4e9088241e6f89a4e5e65f7a10"
+)
 _HISTORY_KEYS = (
     "ACCOUNT_HISTORY_RECORDING_ENABLED",
     "ACCOUNT_HISTORY_GCS_PREFIX",
@@ -461,6 +469,163 @@ def verify_template_matches_serving(
     return template_configuration
 
 
+def _template_container_image(service_json: Mapping[str, Any]) -> str:
+    template = service_json.get("spec", {}).get("template")
+    if not isinstance(template, Mapping):
+        raise AdmissionError("container environment is malformed")
+    containers = (template.get("spec") or {}).get("containers") if isinstance(template.get("spec"), Mapping) else None
+    if not isinstance(containers, list) or not containers or not isinstance(containers[0], Mapping):
+        raise AdmissionError("container environment is malformed")
+    image = str(containers[0].get("image") or "").strip()
+    if not image:
+        raise AdmissionError("container environment is malformed")
+    return image
+
+
+def _revision_container_image(revision: Mapping[str, Any]) -> str:
+    containers = (revision.get("spec") or {}).get("containers") if isinstance(revision.get("spec"), Mapping) else None
+    if not isinstance(containers, list) or not containers or not isinstance(containers[0], Mapping):
+        raise AdmissionError("staged source revision is incomplete")
+    image = str(containers[0].get("image") or "").strip()
+    if not image:
+        raise AdmissionError("staged source revision is incomplete")
+    return image
+
+
+def _image_digest(image: str) -> str:
+    _, separator, digest = image.partition("@")
+    if separator != "@" or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise AdmissionError("staged source revision image digest is invalid")
+    return digest
+
+
+def _retained_history_values(
+    configuration: Mapping[str, Any], *, project_id: str
+) -> dict[str, str]:
+    """Keep the exact literal PAPER history quartet already on the template."""
+
+    literals = _literal_values(configuration)
+    values = {key: str(literals.get(key) or "") for key in _HISTORY_KEYS}
+    if any(not values[key] for key in _HISTORY_KEYS):
+        raise AdmissionError("retained history settings are incomplete")
+    try:
+        retained = history_update(values, workflow_target="PAPER", project_id=project_id)
+    except AdmissionError as exc:
+        raise AdmissionError("retained history settings are invalid") from exc
+    if retained is None:
+        raise AdmissionError("retained history settings are incomplete")
+    return retained
+
+
+def _optional_retained_history_values(
+    configuration: Mapping[str, Any], *, project_id: str
+) -> dict[str, str]:
+    present = {item["name"] for item in configuration["env"]}
+    if not present.intersection(_HISTORY_KEYS):
+        return {}
+    return _retained_history_values(configuration, project_id=project_id)
+
+
+def _admit_http_snapshot_template_via_staged_source(
+    *,
+    service: str,
+    project: str,
+    region: str,
+    service_json: Mapping[str, Any],
+    serving_revisions: Sequence[Mapping[str, Any]],
+    run: Callable[[Sequence[str]], str],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Allow one known staged history revision to differ from serving only on history keys."""
+
+    if not serving_revisions:
+        raise AdmissionError(f"{service}: serving revisions are unavailable")
+    staged = _load_object(
+        run(
+            [
+                "gcloud",
+                "run",
+                "revisions",
+                "describe",
+                _PAPER_HTTP_STAGED_SOURCE_REVISION,
+                f"--project={project}",
+                f"--region={region}",
+                "--format=json",
+            ]
+        )
+    )
+    try:
+        observed = observe_ready_revision(staged)
+    except ReconcileError as exc:
+        raise AdmissionError("staged source revision was not observed") from exc
+    staged_image = _revision_container_image(staged)
+    if (
+        observed["revision"] != _PAPER_HTTP_STAGED_SOURCE_REVISION
+        or observed["commit"] != _PAPER_HTTP_STAGED_SOURCE_COMMIT
+        or _image_digest(staged_image) != _PAPER_HTTP_STAGED_SOURCE_IMAGE_DIGEST
+        or observed["image"] != staged_image
+    ):
+        raise AdmissionError("staged source revision does not match the approved source")
+    status = service_json.get("status")
+    if not isinstance(status, Mapping):
+        raise AdmissionError(f"{service}: template does not match the staged source revision")
+    template = service_json.get("spec", {}).get("template")
+    template_metadata = template.get("metadata") if isinstance(template, Mapping) else None
+    if (
+        not isinstance(template_metadata, Mapping)
+        or str(template_metadata.get("name") or "").strip() != _PAPER_HTTP_STAGED_SOURCE_REVISION
+    ):
+        raise AdmissionError(f"{service}: template does not match the staged source revision")
+    if str(status.get("latestCreatedRevisionName") or "").strip() != _PAPER_HTTP_STAGED_SOURCE_REVISION:
+        raise AdmissionError(f"{service}: template does not match the staged source revision")
+    template_configuration = _configuration(service_json)
+    staged_configuration = _configuration(staged)
+    if template_configuration != staged_configuration:
+        raise AdmissionError(f"{service}: template does not match the staged source revision")
+    if _template_container_image(service_json) != staged_image:
+        raise AdmissionError(f"{service}: template does not match the staged source revision")
+    retained = _retained_history_values(template_configuration, project_id=project)
+    for revision in serving_revisions:
+        serving_configuration = _configuration(revision)
+        if _config_digest(template_configuration, skip=set(_HISTORY_KEYS)) != _config_digest(
+            serving_configuration, skip=set(_HISTORY_KEYS)
+        ):
+            raise AdmissionError(f"{service}: template does not match the serving revision")
+    return template_configuration, retained
+
+
+def _resolve_paper_template_configuration(
+    *,
+    service: str,
+    project: str,
+    region: str,
+    service_json: Mapping[str, Any],
+    serving_revisions: Sequence[Mapping[str, Any]],
+    image_commit: str,
+    run: Callable[[Sequence[str]], str],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    if image_commit != APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE:
+        return (
+            verify_template_matches_serving(
+                service=service, service_json=service_json, serving_revisions=serving_revisions
+            ),
+            {},
+        )
+    try:
+        configuration = verify_template_matches_serving(
+            service=service, service_json=service_json, serving_revisions=serving_revisions
+        )
+    except AdmissionError:
+        return _admit_http_snapshot_template_via_staged_source(
+            service=service,
+            project=project,
+            region=region,
+            service_json=service_json,
+            serving_revisions=serving_revisions,
+            run=run,
+        )
+    return configuration, _optional_retained_history_values(configuration, project_id=project)
+
+
 def _require_candidate_release_binding(
     *, service: str, service_json: Mapping[str, Any], profile: str, ues_revision: str
 ) -> None:
@@ -495,7 +660,7 @@ def prepare_image_only_staging(
     image_commit: str,
     run: Callable[[Sequence[str]], str],
 ) -> dict[str, Any]:
-    """Admit a fixed history candidate or the signed main image for PAPER staging."""
+    """Admit a fixed PAPER candidate or the signed main image for image-only staging."""
 
     history, snapshot_value = _validate_image_only_source(
         image_commit=image_commit, env=env, project=project
@@ -526,9 +691,21 @@ def prepare_image_only_staging(
                 )
             )
         )
-    configuration = verify_template_matches_serving(
-        service=service, service_json=service_json, serving_revisions=revisions
-    )
+    if image_commit == APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE:
+        configuration, retained_history = _resolve_paper_template_configuration(
+            service=service,
+            project=project,
+            region=region,
+            service_json=service_json,
+            serving_revisions=revisions,
+            image_commit=image_commit,
+            run=run,
+        )
+    else:
+        configuration = verify_template_matches_serving(
+            service=service, service_json=service_json, serving_revisions=revisions
+        )
+        retained_history = {}
     source_revision = ues_revision_at(image_commit, run)
     _require_candidate_release_binding(
         service=service,
@@ -553,6 +730,7 @@ def prepare_image_only_staging(
     return {
         "history_arg": history_arg,
         "history_values": history or {},
+        "retained_history_values": retained_history,
         "snapshot_arg": snapshot_arg,
         "snapshot_value": snapshot_value,
         "image_commit": image_commit,
@@ -571,6 +749,9 @@ def _validate_image_only_source(
     snapshot_value = _account_snapshot_update(env, workflow_target=str(env.get("WORKFLOW_TARGET") or ""))
     if image_commit == APPROVED_PAPER_HISTORY_CANDIDATE:
         if history is None or snapshot_value is not None:
+            raise AdmissionError("image source is not approved")
+    elif image_commit == APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE:
+        if str(env.get("WORKFLOW_TARGET") or "") != "PAPER" or history is not None:
             raise AdmissionError("image source is not approved")
     elif _is_exact_main_image(image_commit, env):
         if history is not None:
@@ -675,7 +856,8 @@ def confirm_image_only_readback(
     ):
         raise AdmissionError("staged revision does not match the approved image")
     history = plan.get("history_values") or {}
-    if not isinstance(history, Mapping):
+    retained_history = plan.get("retained_history_values") or {}
+    if not isinstance(history, Mapping) or not isinstance(retained_history, Mapping):
         raise AdmissionError("staged readback is incomplete")
     snapshot_value = plan.get("snapshot_value")
     if snapshot_value not in {None, "true", "false"}:
@@ -690,6 +872,9 @@ def confirm_image_only_readback(
     for key, value in history.items():
         if literals.get(str(key)) != value:
             raise AdmissionError("staged history settings do not match")
+    for key, value in retained_history.items():
+        if literals.get(str(key)) != value:
+            raise AdmissionError("retained history settings do not match")
     if snapshot_value is not None and literals.get(_ACCOUNT_SNAPSHOT_ENV) != snapshot_value:
         raise AdmissionError("staged account snapshot setting does not match")
 

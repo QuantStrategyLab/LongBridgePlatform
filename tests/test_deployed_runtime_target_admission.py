@@ -82,6 +82,12 @@ HISTORY = {
     "WORKFLOW_TARGET": "PAPER",
 }
 MAIN_SHA = "a" * 40
+HTTP_SNAPSHOT_CANDIDATE = admission.APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE
+STAGED_SOURCE_REVISION = "longbridge-quant-paper-service-r36423178119"
+STAGED_SOURCE_IMAGE = (
+    "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/paper-service"
+    "@sha256:9a3260ca8255873309b1c27cd2fd7403e6006a4e9088241e6f89a4e5e65f7a10"
+)
 
 
 def _main_env(*, snapshot_setting: str = "") -> dict[str, str]:
@@ -492,3 +498,257 @@ def test_readback_rejects_ingress_config_history_and_unknown_revision():
         confirm(_service(), _revision("paper-service-r123", CANDIDATE, image, ready=False, extra_env=history_env))
     with pytest.raises(admission.AdmissionError):
         confirm(_service(), _revision("paper-service-r123", CANDIDATE, image, extra_env=history_env), run_error=True)
+
+
+def _http_snapshot_service(*, history: dict[str, str] | None = None) -> dict:
+    service = _service()
+    template = service["spec"]["template"]
+    template["metadata"] = {"name": STAGED_SOURCE_REVISION}
+    container = template["spec"]["containers"][0]
+    container["image"] = STAGED_SOURCE_IMAGE
+    if history is not None:
+        container["env"].extend({"name": key, "value": value} for key, value in history.items())
+    service["status"]["latestCreatedRevisionName"] = STAGED_SOURCE_REVISION
+    return service
+
+
+def _http_snapshot_run(service: dict, *, staged_mutation=None):
+    serving = _revision("serving-rev", SERVING, "serving-image")
+    staged = _revision(
+        STAGED_SOURCE_REVISION,
+        CANDIDATE,
+        STAGED_SOURCE_IMAGE,
+        extra_env=[{"name": key, "value": value} for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"],
+    )
+    if staged_mutation:
+        staged_mutation(staged)
+
+    def run(command):
+        if command[:3] == ["gcloud", "run", "revisions"]:
+            name = command[4]
+            if name == STAGED_SOURCE_REVISION:
+                return json.dumps(staged)
+            assert name == "serving-rev"
+            return json.dumps(serving)
+        if command[:2] == ["git", "show"]:
+            sha, name = command[2].split(":", 1)
+            assert sha in {HTTP_SNAPSHOT_CANDIDATE, SERVING}
+            return _declaration(name, UES)
+        raise AssertionError(command)
+
+    return run
+
+
+def _prepare_http_snapshot(*, service=None, env=None, staged_mutation=None):
+    service = service or _http_snapshot_service(history={key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"})
+    return admission.prepare_image_only_staging(
+        service="paper-service",
+        project="synthetic-project",
+        region="synthetic-region",
+        service_json=service,
+        env=env or {**_main_env(), "SOURCE_COMMIT": HTTP_SNAPSHOT_CANDIDATE},
+        image_commit=HTTP_SNAPSHOT_CANDIDATE,
+        run=_http_snapshot_run(service, staged_mutation=staged_mutation),
+    )
+
+
+def test_http_snapshot_candidate_retains_exact_staged_history_and_digest():
+    service = _http_snapshot_service(history={key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"})
+    env = {**_main_env(snapshot_setting="true"), "SOURCE_COMMIT": HTTP_SNAPSHOT_CANDIDATE}
+    plan = _prepare_http_snapshot(service=service, env=env)
+
+    assert plan["image_commit"] == HTTP_SNAPSHOT_CANDIDATE
+    assert plan["history_arg"] == ""
+    assert plan["history_values"] == {}
+    assert plan["retained_history_values"] == {
+        key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"
+    }
+    assert plan["snapshot_arg"] == "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED=true"
+    assert plan["template_digest"] == admission._config_digest(
+        admission._configuration(service), skip={admission._ACCOUNT_SNAPSHOT_ENV}
+    )
+
+
+def test_http_snapshot_uses_strict_serving_match_when_template_already_matches():
+    service = _service()
+    calls = []
+
+    def run(command):
+        calls.append(list(command))
+        if command[:3] == ["gcloud", "run", "revisions"]:
+            return json.dumps(_revision("serving-rev", SERVING, "serving-image"))
+        sha, name = command[2].split(":", 1)
+        assert sha in {HTTP_SNAPSHOT_CANDIDATE, SERVING}
+        return _declaration(name, UES)
+
+    plan = admission.prepare_image_only_staging(
+        service="paper-service", project="synthetic-project", region="synthetic-region",
+        service_json=service,
+        env={**_main_env(), "SOURCE_COMMIT": HTTP_SNAPSHOT_CANDIDATE},
+        image_commit=HTTP_SNAPSHOT_CANDIDATE,
+        run=run,
+    )
+    assert plan["retained_history_values"] == {}
+    assert not any(
+        command[:4] == ["gcloud", "run", "revisions", "describe"]
+        and command[4] == STAGED_SOURCE_REVISION
+        for command in calls
+    )
+
+
+@pytest.mark.parametrize(
+    "env_overrides",
+    [
+        {"WORKFLOW_TARGET": "HK"},
+        {"WORKFLOW_TARGET": "SG"},
+        {"SOURCE_COMMIT": CANDIDATE},
+        {"SOURCE_COMMIT": "c" * 40},
+        {key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"},
+    ],
+)
+def test_http_snapshot_source_requires_exact_candidate_paper_and_no_history(env_overrides):
+    env = {**_main_env(), "SOURCE_COMMIT": HTTP_SNAPSHOT_CANDIDATE}
+    env.update(env_overrides)
+    calls = []
+    with pytest.raises(admission.AdmissionError, match="not approved"):
+        admission.prepare_image_only_staging(
+            service="paper-service", project="synthetic-project", region="synthetic-region",
+            service_json={}, env=env, image_commit=env["SOURCE_COMMIT"],
+            run=lambda command: calls.append(command) or "",
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda revision: revision["metadata"].update(name="wrong-revision"),
+        lambda revision: revision["metadata"]["labels"].update({"commit-sha": "f" * 40}),
+        lambda revision: revision["spec"]["containers"][0].update(
+            image="repo@sha256:" + "f" * 64
+        ),
+    ],
+)
+def test_http_snapshot_rejects_wrong_staged_revision_commit_or_digest(mutation):
+    with pytest.raises(admission.AdmissionError):
+        _prepare_http_snapshot(staged_mutation=mutation)
+
+
+def test_http_snapshot_accepts_ready_staged_revision_when_not_active():
+    def mark_inactive(revision):
+        revision["status"]["conditions"].extend(
+            [
+                {"type": "Active", "status": "False"},
+                {"type": "Retired", "status": "True"},
+            ]
+        )
+
+    assert _prepare_http_snapshot(staged_mutation=mark_inactive)["history_arg"] == ""
+
+
+def test_http_snapshot_rejects_template_that_does_not_match_staged_source():
+    wrong_revision = _http_snapshot_service(
+        history={key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"}
+    )
+    wrong_revision["status"]["latestCreatedRevisionName"] = "other-revision"
+    with pytest.raises(admission.AdmissionError, match="template does not match"):
+        _prepare_http_snapshot(service=wrong_revision)
+
+    wrong_image = _http_snapshot_service(
+        history={key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"}
+    )
+    wrong_image["spec"]["template"]["spec"]["containers"][0]["image"] = "repo@sha256:" + "f" * 64
+    with pytest.raises(admission.AdmissionError, match="template does not match"):
+        _prepare_http_snapshot(service=wrong_image)
+
+    wrong_template_name = _http_snapshot_service(
+        history={key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"}
+    )
+    wrong_template_name["spec"]["template"]["metadata"]["name"] = "other-revision"
+    with pytest.raises(admission.AdmissionError, match="template does not match"):
+        _prepare_http_snapshot(service=wrong_template_name)
+
+
+def test_http_snapshot_rejects_history_prefix_that_differs_from_immutable_revision():
+    service = _http_snapshot_service(
+        history={**{key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"},
+                 "ACCOUNT_HISTORY_GCS_PREFIX": "gs://paper-bucket/other"}
+    )
+    with pytest.raises(admission.AdmissionError, match="template does not match the staged source"):
+        _prepare_http_snapshot(service=service)
+
+
+@pytest.mark.parametrize("case", ["missing", "secret"])
+def test_http_snapshot_requires_four_literal_retained_history_values(case):
+    service = _http_snapshot_service(
+        history={key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"}
+    )
+    if case == "missing":
+        service["spec"]["template"]["spec"]["containers"][0]["env"] = [
+            item for item in service["spec"]["template"]["spec"]["containers"][0]["env"]
+            if item["name"] != "ACCOUNT_HISTORY_TARGET_ID"
+        ]
+    else:
+        entry = next(
+            item for item in service["spec"]["template"]["spec"]["containers"][0]["env"]
+            if item["name"] == "ACCOUNT_HISTORY_GCS_PREFIX"
+        )
+        entry.pop("value")
+        entry["valueFrom"] = {"secretKeyRef": {"name": "history-config", "key": "prefix"}}
+    with pytest.raises(admission.AdmissionError):
+        _prepare_http_snapshot(service=service)
+
+
+def test_http_snapshot_rejects_nonhistory_environment_and_service_identity_drift():
+    service = _http_snapshot_service(
+        history={key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"}
+    )
+    service["spec"]["template"]["spec"]["serviceAccountName"] = "other@example.invalid"
+    with pytest.raises(admission.AdmissionError):
+        _prepare_http_snapshot(service=service)
+
+    service = _http_snapshot_service(
+        history={key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"}
+    )
+    target = json.loads(service["spec"]["template"]["spec"]["containers"][0]["env"][0]["value"])
+    target["service_name"] = "other-service"
+    service["spec"]["template"]["spec"]["containers"][0]["env"][0]["value"] = json.dumps(target)
+    with pytest.raises(admission.AdmissionError, match="does not match the deployed service"):
+        _prepare_http_snapshot(service=service)
+
+
+def test_http_snapshot_readback_preserves_retained_history_values():
+    service = _http_snapshot_service(
+        history={key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"}
+    )
+    plan = _prepare_http_snapshot(service=service)
+    image = "repo@sha256:" + "b" * 64
+    history_env = [
+        {"name": key, "value": value}
+        for key, value in HISTORY.items()
+        if key != "WORKFLOW_TARGET"
+    ]
+    staged = _revision(
+        "paper-service-r123", HTTP_SNAPSHOT_CANDIDATE, image,
+        extra_env=history_env + [{"name": admission._ACCOUNT_SNAPSHOT_ENV, "value": "false"}],
+    )
+    plan["snapshot_value"] = "false"
+
+    def confirm(revision):
+        def run(command):
+            if command[:3] == ["gcloud", "run", "services"]:
+                return json.dumps(service)
+            return json.dumps(revision)
+        admission.confirm_image_only_readback(
+            service="paper-service", project="synthetic-project", region="synthetic-region",
+            plan=plan, expected_image=image, expected_commit=HTTP_SNAPSHOT_CANDIDATE,
+            expected_revision="paper-service-r123", run=run,
+        )
+
+    confirm(staged)
+    for key in admission._HISTORY_KEYS:
+        changed = json.loads(json.dumps(staged))
+        entry = next(item for item in changed["spec"]["containers"][0]["env"] if item["name"] == key)
+        entry["value"] = "gs://paper-bucket/tampered" if key.endswith("GCS_PREFIX") else "false"
+        with pytest.raises(admission.AdmissionError):
+            confirm(changed)
