@@ -40,6 +40,11 @@ on:
         required: false
         type: string
         default: ""
+      account_snapshot_enabled:
+        description: "Optional PAPER account-snapshot endpoint switch. Blank preserves the current value."
+        required: false
+        type: string
+        default: ""
       target:
         description: "Legacy: configured or isolated verify targets. Image-only: exactly PAPER, HK, or SG."
         required: true
@@ -165,6 +170,7 @@ jobs:
       ACCOUNT_HISTORY_GCS_PREFIX: ${{ inputs.account_history_gcs_prefix }}
       ACCOUNT_HISTORY_TARGET_ID: ${{ inputs.account_history_target_id }}
       ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ inputs.account_history_expected_scope }}
+      ACCOUNT_SNAPSHOT_ENABLED_INPUT: ${{ inputs.account_snapshot_enabled }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
       GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
@@ -222,6 +228,21 @@ jobs:
             echo "History settings are invalid." >&2
             exit 1
           fi
+          snapshot_setting="${ACCOUNT_SNAPSHOT_ENABLED_INPUT:-}"
+          if [ -n "${snapshot_setting}" ] \
+            && [ "${snapshot_setting}" != "true" ] \
+            && [ "${snapshot_setting}" != "false" ]; then
+            echo "Account snapshot setting is invalid." >&2
+            exit 1
+          fi
+          if [ -n "${snapshot_setting}" ] && [ "${WORKFLOW_TARGET}" != "PAPER" ]; then
+            echo "Account snapshot setting is only admitted for PAPER." >&2
+            exit 1
+          fi
+          if [ -n "${snapshot_setting}" ] && [ "${history_count}" -ne 0 ]; then
+            echo "Account snapshot and history updates must be staged separately." >&2
+            exit 1
+          fi
           if [ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] && [ "${history_count}" -eq 0 ]; then
             image_mode=same
           elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 4 ] \
@@ -251,13 +272,13 @@ jobs:
           fi
 
       - name: Set up Python for image-only admission
-        if: inputs.target == 'PAPER' && inputs.account_history_gcs_prefix != ''
+        if: inputs.target == 'PAPER'
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install frozen image-only admission dependencies
-        if: inputs.target == 'PAPER' && inputs.account_history_gcs_prefix != ''
+        if: inputs.target == 'PAPER'
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip uv
@@ -314,6 +335,8 @@ jobs:
             exit 1
           fi
           history_arg=""
+          snapshot_arg=""
+          plan=""
           if [ "${archive_ref}" = "${approved_candidate}" ]; then
             git fetch --depth 1 origin "${approved_candidate}"
             if [ "$(git cat-file -t "${approved_candidate}")" != "commit" ] \
@@ -322,7 +345,7 @@ jobs:
               exit 1
             fi
           fi
-          if [ "${image_mode}" = "history" ]; then
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ]; then
             plan="$(mktemp)"
             uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_deployed_runtime_target_admission.py" \
               --project="${GCP_PROJECT_ID}" \
@@ -331,8 +354,9 @@ jobs:
               --image-only-staging \
               --plan-out="${plan}"
             history_arg="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("history_arg") or "")' "${plan}")"
-            if [ -z "${history_arg}" ]; then
-              echo "History settings are required for this image." >&2
+            snapshot_arg="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("snapshot_arg") or "")' "${plan}")"
+            if [ -n "${history_arg}" ] && [ -n "${snapshot_arg}" ]; then
+              echo "Image-only environment update plan is invalid." >&2
               exit 1
             fi
           fi
@@ -356,10 +380,11 @@ jobs:
             --image="${image_repo}@${digest}" --no-traffic
             --update-labels="commit-sha=${image_tag},github-run-id=${GITHUB_RUN_ID}" --quiet
           )
-          if [ -n "${history_arg}" ]; then
-            update_command+=(--update-env-vars="${history_arg}")
+          env_update_arg="${history_arg:-${snapshot_arg}}"
+          if [ -n "${env_update_arg}" ]; then
+            update_command+=(--update-env-vars="${env_update_arg}")
           fi
-          if [ "${image_mode}" = "history" ]; then
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ]; then
             revision_suffix="r${GITHUB_RUN_ID}"
             revision_name="${CLOUD_RUN_SERVICE}-${revision_suffix}"
             if [[ ! "${GITHUB_RUN_ID}" =~ ^[0-9]+$ ]] \
@@ -370,7 +395,7 @@ jobs:
             update_command+=(--revision-suffix="${revision_suffix}")
           fi
           "${update_command[@]}"
-          if [ "${image_mode}" = "history" ]; then
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ]; then
             uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_deployed_runtime_target_admission.py" \
               --project="${GCP_PROJECT_ID}" \
               --region="${CLOUD_RUN_REGION}" \

@@ -81,6 +81,22 @@ HISTORY = {
     "ACCOUNT_HISTORY_EXPECTED_SCOPE": "PAPER",
     "WORKFLOW_TARGET": "PAPER",
 }
+MAIN_SHA = "a" * 40
+
+
+def _main_env(*, snapshot_setting: str = "") -> dict[str, str]:
+    return {
+        "WORKFLOW_TARGET": "PAPER",
+        "SOURCE_COMMIT": MAIN_SHA,
+        "APPROVED_REF": "main",
+        "GITHUB_REPOSITORY": "QuantStrategyLab/LongBridgePlatform",
+        "GITHUB_REF_NAME": "main",
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_SHA": MAIN_SHA,
+        "GITHUB_WORKFLOW_SHA": MAIN_SHA,
+        "GITHUB_WORKFLOW_REF": "QuantStrategyLab/LongBridgePlatform/.github/workflows/sync-cloud-run-env.yml@refs/heads/main",
+        "ACCOUNT_SNAPSHOT_ENABLED_INPUT": snapshot_setting,
+    }
 
 
 def _declaration(name: str, pin: str) -> str:
@@ -303,6 +319,133 @@ def test_prepare_accepts_live_paper_when_candidate_matches_serving():
     assert plan["image_commit"] == CANDIDATE
     assert plan["history_values"]["ACCOUNT_HISTORY_TARGET_ID"] == "paper"
     assert "secret" not in json.dumps(plan)
+
+
+@pytest.mark.parametrize("snapshot_setting", ["", "true", "false"])
+def test_prepare_main_image_is_exact_workflow_sha_and_plans_only_snapshot_key(snapshot_setting):
+    calls = []
+    env = _main_env(snapshot_setting=snapshot_setting)
+
+    def run(command):
+        calls.append(list(command))
+        if command[:3] == ["gcloud", "run", "revisions"]:
+            return json.dumps(_revision("serving-rev", SERVING, "serving-image"))
+        sha, name = command[2].split(":", 1)
+        assert sha in {MAIN_SHA, SERVING}
+        return _declaration(name, UES)
+
+    plan = admission.prepare_image_only_staging(
+        service="paper-service",
+        project="synthetic-project",
+        region="synthetic-region",
+        service_json=_service(),
+        env=env,
+        image_commit=MAIN_SHA,
+        run=run,
+    )
+
+    assert plan["image_commit"] == MAIN_SHA
+    assert plan["history_values"] == {}
+    assert plan["snapshot_value"] == (snapshot_setting or None)
+    assert plan["snapshot_arg"] == (
+        f"LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED={snapshot_setting}"
+        if snapshot_setting
+        else ""
+    )
+    assert plan["serving_traffic"] == [{"revisionName": "serving-rev", "percent": 100}]
+    assert sum(command[:3] == ["gcloud", "run", "revisions"] for command in calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("env_overrides", "image_commit"),
+    [
+        ({"ACCOUNT_SNAPSHOT_ENABLED_INPUT": "yes"}, MAIN_SHA),
+        ({"WORKFLOW_TARGET": "HK", "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true"}, MAIN_SHA),
+        ({"GITHUB_WORKFLOW_SHA": "b" * 40}, MAIN_SHA),
+        ({"GITHUB_REF": "refs/heads/other"}, MAIN_SHA),
+        ({"SOURCE_COMMIT": "c" * 40}, MAIN_SHA),
+        ({**HISTORY, "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true"}, MAIN_SHA),
+        ({"ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true"}, CANDIDATE),
+    ],
+)
+def test_invalid_main_or_snapshot_dispatch_is_rejected_before_cloud_reads(env_overrides, image_commit):
+    env = _main_env(snapshot_setting="true")
+    env.update(env_overrides)
+    calls = []
+
+    with pytest.raises(admission.AdmissionError):
+        admission.prepare_image_only_staging(
+            service="paper-service",
+            project="synthetic-project",
+            region="synthetic-region",
+            service_json={},
+            env=env,
+            image_commit=image_commit,
+            run=lambda command: calls.append(list(command)) or "",
+        )
+    assert calls == []
+
+
+def test_main_image_readback_preserves_traffic_and_all_other_environment():
+    image = "repo@sha256:" + "b" * 64
+    configuration = admission._configuration(_service())
+    plan = {
+        "history_values": {},
+        "snapshot_value": "true",
+        "service_ingress": "internal",
+        "serving_traffic": [{"revisionName": "serving-rev", "percent": 100}],
+        "template_digest": admission._config_digest(configuration),
+    }
+    service = _service()
+    revision = _revision(
+        "paper-service-r123",
+        MAIN_SHA,
+        image,
+        extra_env=[{"name": "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED", "value": "true"}],
+    )
+
+    def confirm(service_payload, revision_payload):
+        def run(command):
+            if command[:3] == ["gcloud", "run", "services"]:
+                return json.dumps(service_payload)
+            return json.dumps(revision_payload)
+
+        admission.confirm_image_only_readback(
+            service="paper-service",
+            project="synthetic-project",
+            region="synthetic-region",
+            plan=plan,
+            expected_image=image,
+            expected_commit=MAIN_SHA,
+            expected_revision="paper-service-r123",
+            run=run,
+        )
+
+    assert configuration["serviceAccountName"] == "runtime@example.invalid"
+    confirm(service, revision)
+    changed_traffic = json.loads(json.dumps(service))
+    changed_traffic["status"]["traffic"] = [{"revisionName": "paper-service-r123", "percent": 100}]
+    with pytest.raises(admission.AdmissionError, match="traffic"):
+        confirm(changed_traffic, revision)
+    changed_env = _revision(
+        "paper-service-r123",
+        MAIN_SHA,
+        image,
+        extra_env=[
+            {"name": "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED", "value": "true"},
+            {"name": "UNEXPECTED", "value": "1"},
+        ],
+    )
+    with pytest.raises(admission.AdmissionError, match="configuration"):
+        confirm(service, changed_env)
+    wrong_flag = _revision(
+        "paper-service-r123",
+        MAIN_SHA,
+        image,
+        extra_env=[{"name": "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED", "value": "false"}],
+    )
+    with pytest.raises(admission.AdmissionError, match="setting"):
+        confirm(service, wrong_flag)
 
 
 def test_readback_rejects_ingress_config_history_and_unknown_revision():

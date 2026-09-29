@@ -166,7 +166,14 @@ def _record(env=None, spies=None, now=NOW, now_reader=None):
 
 
 def test_disabled_switch_does_not_touch_token_http_or_store():
-    result, spies = _record(_env(ACCOUNT_HISTORY_RECORDING_ENABLED="false"))
+    result, spies = _record(
+        _env(
+            ACCOUNT_HISTORY_RECORDING_ENABLED="false",
+            ACCOUNT_FACTS_SYNC_ENABLED="true",
+            ACCOUNT_FACTS_SYNC_URL="",
+            ACCOUNT_FACTS_SYNC_TOKEN="",
+        )
+    )
 
     assert result.status == "disabled"
     assert spies.calls == []
@@ -515,9 +522,37 @@ def test_qrs_sync_url_must_be_exact_https_endpoint():
             ),
             spies=spies,
         )
-        assert result.status == "recorded"
+        assert result.status == "error"
+        assert result.category == "qrs_config_invalid"
         assert result.publish_status == "rejected"
-        assert [name for name, *_ in spies.calls].count("post") == 0
+        assert spies.calls == []
+        assert spies.stored == []
+
+
+@pytest.mark.parametrize(
+    "bad_config",
+    [
+        {"ACCOUNT_FACTS_SYNC_URL": ""},
+        {"ACCOUNT_FACTS_SYNC_URL": "https://qrs.example.test/other"},
+        {"ACCOUNT_FACTS_SYNC_TOKEN": ""},
+        {"ACCOUNT_FACTS_SYNC_TOKEN": " synthetic-qrs-token"},
+    ],
+)
+def test_enabled_qrs_invalid_config_is_rejected_before_snapshot_io(bad_config):
+    env = _env(
+        ACCOUNT_FACTS_SYNC_ENABLED="true",
+        ACCOUNT_FACTS_SYNC_URL=QRS_SYNC_URL,
+        ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+    )
+    env.update(bad_config)
+    result, spies = _record(env=env)
+
+    assert result.status == "error"
+    assert result.category == "qrs_config_invalid"
+    assert result.publish_status == "rejected"
+    assert result.publish_category == "qrs_config_invalid"
+    assert spies.calls == []
+    assert spies.stored == []
 
 
 def test_new_source_or_utc_day_uses_a_new_object_segment():

@@ -13,7 +13,7 @@
 
 `PAPER` 只表示这份清单配置的范围，不能据此推断券商账户身份。脚本再要求期望 scope 精确为 `PAPER`，服务根必须是没有 userinfo、query、fragment 和额外 path 的 HTTPS `*.run.app`，并且只 GET 该源站的 `/account-snapshot`。GCS 前缀最后一段必须是 `account_snapshots`，不能落在 execution report 路径上。缺任何一项就失败，不补默认值。
 
-可选 QRS 发布仍默认关闭；只有 `ACCOUNT_FACTS_SYNC_ENABLED` 精确为 `true` 时才使用 `ACCOUNT_FACTS_SYNC_URL` 与专用 `ACCOUNT_FACTS_SYNC_TOKEN`。URL 必须是 HTTPS 的精确 `/api/account-facts/sync`，不接受 userinfo、端口、query、fragment 或其他路径；POST 不跟随重定向，设置超时并限制响应体大小。token 只作为该 workflow step 的环境变量和 Authorization header 使用，不打印。
+可选 QRS 发布仍默认关闭；只有 `ACCOUNT_FACTS_SYNC_ENABLED` 精确为 `true` 时才使用 `ACCOUNT_FACTS_SYNC_URL` 与专用 `ACCOUNT_FACTS_SYNC_TOKEN`。启用时会先校验 URL 和非空、无首尾空白的 token；配置错误在读取快照或创建日对象前失败，不消耗该日的 create-only 名额。URL 必须是 HTTPS 的精确 `/api/account-facts/sync`，不接受 userinfo、端口、query、fragment 或其他路径；POST 不跟随重定向，设置超时并限制响应体大小。token 只作为该 workflow step 的环境变量和 Authorization header 使用，不打印。
 
 OIDC 使用 heartbeat 里已经配置的 gcloud：`gcloud auth print-identity-token --audiences=<服务根> --quiet`。stdout 只留在内存，不打印，也不放进参数；失败只报短类别。HTTP 有超时、不跟随重定向、不重试。观察时钟在响应收齐之后读取。
 
@@ -25,7 +25,7 @@ OIDC 使用 heartbeat 里已经配置的 gcloud：`gcloud auth print-identity-to
 
 路径是 `{prefix}/{target_id}/{source_binding_id}/{YYYY-MM-DD}.json`。目标与来源绑定分成不同路径段，不把两段来源拼进同一个对象。`create_text` 只创建：已有对象时结果是 `already_recorded`，不覆盖、不重新拉取。存储结果不明则停止，不写占位点，也不重试。错误输出只有短类别。
 
-仅当本次 `create_text` 明确返回新建成功时，脚本才把完全相同的历史 JSON body POST 到 QRS。`already_recorded` 明确跳过发布，不能把这次新读取的内容冒充为已保存对象；`store_unknown` 不 POST。QRS 发布状态与历史记录状态分开输出：发布拒绝或结果未知不会撤销已写入历史；未知 POST 不自动重试。QRS `ok=true` 且回读的目标、观察日、观察结束时间匹配，只表示接收端确认保存，不证明页面已经展示或数据完成物理账户身份核验。接收端按其可信配置绑定目标与来源，调用方不传账户 key 或身份结论。
+仅当本次 `create_text` 明确返回新建成功时，脚本才把完全相同的历史 JSON body POST 到 QRS。`already_recorded` 明确跳过发布，不能把这次新读取的内容冒充为已保存对象；`store_unknown` 不 POST。QRS 发布状态与历史记录状态分开输出：发布拒绝或结果未知不会撤销已写入历史；未知 POST 不自动重试。现有流程没有已存对象的补送入口，且接收端默认拒绝超过 15 分钟观察窗口的记录，因此不能靠下一次日常运行可靠补送；配置预检不解决请求结果未知的情况。QRS `ok=true` 且回读的目标、观察日、观察结束时间匹配，只表示接收端确认保存，不证明页面已经展示或数据完成物理账户身份核验。接收端按其可信配置绑定目标与来源，调用方不传账户 key 或身份结论。
 
 这份记录不是 TWR，不是收益率，也不授予 live 权限。
 

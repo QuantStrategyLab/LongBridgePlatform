@@ -79,6 +79,12 @@ def record_daily_account_snapshot(
     if str(env.get("ACCOUNT_HISTORY_RECORDING_ENABLED") or "").strip() != "true":
         return DailyAccountRecordResult("disabled", publish_status="disabled")
     try:
+        sync_config = _account_facts_sync_config(env)
+    except _Rejected as rejected:
+        return DailyAccountRecordResult(
+            "error", rejected.category, "rejected", rejected.category
+        )
+    try:
         config = _config(env)
     except _Rejected as rejected:
         return DailyAccountRecordResult("error", rejected.category)
@@ -111,7 +117,7 @@ def record_daily_account_snapshot(
         )
     if created is True:
         publish_status, publish_category = _publish_account_facts(
-            env, body, http_post=http_post or _http_post
+            sync_config, body, http_post=http_post or _http_post
         )
         return DailyAccountRecordResult(
             "recorded", "", publish_status, publish_category
@@ -126,20 +132,14 @@ def record_daily_account_snapshot(
 
 
 def _publish_account_facts(
-    env: Mapping[str, str],
+    sync_config: tuple[str, str] | None,
     body: str,
     *,
     http_post: Callable[..., Any],
 ) -> tuple[str, str]:
-    if str(env.get("ACCOUNT_FACTS_SYNC_ENABLED") or "").strip() != "true":
+    if sync_config is None:
         return "disabled", ""
-    try:
-        url = _account_facts_sync_url(str(env.get("ACCOUNT_FACTS_SYNC_URL") or ""))
-        token = str(env.get("ACCOUNT_FACTS_SYNC_TOKEN") or "")
-        if not token or token != token.strip():
-            raise _Rejected("qrs_config_invalid")
-    except _Rejected as rejected:
-        return "rejected", rejected.category
+    url, token = sync_config
 
     encoded_body = body.encode("utf-8")
     if len(encoded_body) > MAX_ACCOUNT_FACTS_SYNC_BODY_BYTES:
@@ -221,6 +221,16 @@ def _account_facts_sync_url(value: str) -> str:
     ):
         raise _Rejected("qrs_config_invalid")
     return f"https://{host}{ACCOUNT_FACTS_SYNC_PATH}"
+
+
+def _account_facts_sync_config(env: Mapping[str, str]) -> tuple[str, str] | None:
+    if str(env.get("ACCOUNT_FACTS_SYNC_ENABLED") or "").strip() != "true":
+        return None
+    url = _account_facts_sync_url(str(env.get("ACCOUNT_FACTS_SYNC_URL") or ""))
+    token = str(env.get("ACCOUNT_FACTS_SYNC_TOKEN") or "")
+    if not token or token != token.strip():
+        raise _Rejected("qrs_config_invalid")
+    return url, token
 
 
 def _bounded_response_json(response: Any, max_bytes: int) -> Any:
