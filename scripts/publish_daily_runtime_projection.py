@@ -411,15 +411,26 @@ def _read_bounded(client: Any, uri: str) -> tuple[dict[str, Any] | None, str | N
     return parsed, None
 
 
-def _object_uri(prefix: str, business_date: str) -> tuple[str, str, str]:
+def _object_uri(
+    prefix: str,
+    business_date: str,
+    observed_at: dt.datetime,
+) -> tuple[str, str, str]:
     root = prefix[len("gs://") :]
     bucket, _, base = root.partition("/")
-    name = f"{base}/longbridge/paper/{business_date}.json"
+    observation_version = observed_at.astimezone(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    name = f"{base}/longbridge/paper/{business_date}/{observation_version}.json"
     return bucket, name, f"gs://{bucket}/{name}"
 
 
-def _upload(client: Any, prefix: str, business_date: str, body: str) -> str:
-    bucket_name, object_name, uri = _object_uri(prefix, business_date)
+def _upload(
+    client: Any,
+    prefix: str,
+    business_date: str,
+    observed_at: dt.datetime,
+    body: str,
+) -> str:
+    bucket_name, object_name, uri = _object_uri(prefix, business_date, observed_at)
     blob = client.bucket(bucket_name).blob(object_name)
     try:
         blob.upload_from_string(
@@ -668,7 +679,7 @@ def publish(
     if records[0].get("target_key") == _RUNTIME_DAILY_SYNC_TARGET_KEY:
         records[0]["target"]["account_scope"] = "paper"
     body = json.dumps(projected, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    uploaded = _upload(store, prefix, business_date, body)
+    uploaded = _upload(store, prefix, business_date, observed, body)
     if uploaded == "already_recorded":
         return "already_recorded", business_date, "skipped_existing"
     sync_status = _sync_runtime_daily(
