@@ -245,7 +245,8 @@ def load_module(*, notify_lang="en"):
 
 
 def _run_history_probe(
-    scope, *, enabled=True, failure=None, source_status="bound", incomplete=False
+    scope, *, enabled=True, failure=None, source_status="bound", incomplete=False,
+    balance_currency="USD",
 ):
     from decimal import Decimal
 
@@ -275,15 +276,16 @@ def _run_history_probe(
         settling_cash=None if incomplete else Decimal("14.25"),
     )
     account = types.SimpleNamespace(
-        currency="USD",
+        currency=balance_currency,
         net_assets=Decimal("1234.50"),
         total_cash=Decimal("234.50"),
         cash_infos=[cash],
     )
 
     class TradeContext:
-        def account_balance(self):
+        def account_balance(self, **kwargs):
             observed["balances"] += 1
+            observed["balance_args"] = kwargs
             return [account]
 
         def stock_positions(self):
@@ -386,6 +388,7 @@ class RequestHandlingTests(unittest.TestCase):
                 self.assertEqual(result, ("Probe OK", 200))
                 self.assertEqual(observed["metadata"], 1)
                 self.assertEqual(observed["balances"], 1)
+                self.assertEqual(observed["balance_args"], {"currency": "USD"})
                 self.assertEqual(observed["indicators"], 1)
                 self.assertEqual(observed["portfolio"], 1)
                 self.assertEqual(observed["writes"], 1)
@@ -394,9 +397,26 @@ class RequestHandlingTests(unittest.TestCase):
                 self.assertEqual(record["account_scope"], scope)
                 self.assertEqual(record["target_id"], scope.lower())
                 self.assertEqual(record["broker_reported_balances"][0]["net_assets"], "1234.5")
+                self.assertEqual(record["broker_reported_balances"][0]["currency"], "USD")
+                self.assertEqual(record["cash"][0]["currency"], "HKD")
                 self.assertEqual(record["cash"][0]["available_cash"], "200.25")
                 self.assertNotIn("positions", record)
                 submit.assert_not_called()
+
+    def test_history_probe_rejects_non_usd_aggregate_without_archiving(self):
+        from application.account_snapshot import cycle_history_observation
+
+        for scope in ("SG", "HK"):
+            for currency in ("SGD", "HKD"):
+                with self.subTest(scope=scope, currency=currency):
+                    result, observed, submit = _run_history_probe(scope, balance_currency=currency)
+                    self.assertEqual(result, ("Error", 500))
+                    self.assertEqual(observed["balances"], 1)
+                    self.assertEqual(observed["balance_args"], {"currency": "USD"})
+                    self.assertEqual(observed["writes"], 0)
+                    self.assertEqual(observed["portfolio"], 0)
+                    self.assertIsNone(cycle_history_observation())
+                    submit.assert_not_called()
 
     def test_history_probe_archives_before_indicator_failure_and_stays_failed(self):
         for failure in ("indicator_none", "indicator_exception"):
@@ -434,6 +454,7 @@ class RequestHandlingTests(unittest.TestCase):
                 self.assertEqual(observed["balances"], 1)
                 self.assertEqual(observed["writes"], 0)
                 self.assertEqual(observed["bootstrap"], 1)
+                self.assertEqual(observed["balance_args"], {})
                 submit.assert_not_called()
 
     def test_cloud_run_route_contracts_are_registered(self):

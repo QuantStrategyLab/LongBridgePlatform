@@ -47,6 +47,8 @@ live-trading, order, token-refresh, notification, or reporting authority.
 Access retains the service's existing Cloud Run IAM and internal ingress
 protection; deploying and enabling this endpoint is a separate operational step.
 
+When SG/HK probe history recording is explicitly enabled, its single balance read requests USD aggregate values, rejects non-USD aggregate responses before archiving, and preserves cash rows in every original currency; ordinary probes and trading balance reads keep their existing behavior.
+
 ## Direct vs snapshot-backed profiles
 
 Direct runtime profiles can usually run from market history or portfolio state. Snapshot-backed profiles need a current artifact bundle from the matching snapshot pipeline before this platform should execute them. The platform should not invent strategy eligibility; it should consume the status and artifacts published by the strategy and snapshot repositories.
