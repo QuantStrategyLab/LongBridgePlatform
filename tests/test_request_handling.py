@@ -244,6 +244,134 @@ def load_module(*, notify_lang="en"):
             return importlib.import_module("main")
 
 
+def _run_paper_history_probe(*, failure=None, source_status="bound", incomplete=False):
+    from decimal import Decimal
+
+    from application.account_snapshot import cycle_history_observation
+    from application.longbridge_portfolio import fetch_strategy_account_state
+
+    module = load_module()
+    module.ACCOUNT_REGION = "PAPER"
+    module._v7_application_candidate_bound = lambda: False
+    observed = {"balances": 0, "metadata": 0, "indicators": 0, "portfolio": 0, "writes": 0}
+    source = {
+        "kind": "deployment_scope_token_version",
+        "status": source_status,
+        "id": "a" * 64 if source_status == "bound" else None,
+    }
+    cash = types.SimpleNamespace(
+        currency="USD",
+        available_cash=Decimal("200.25"),
+        frozen_cash=Decimal("20"),
+        settling_cash=None if incomplete else Decimal("14.25"),
+    )
+    account = types.SimpleNamespace(
+        currency="USD",
+        net_assets=Decimal("1234.50"),
+        total_cash=Decimal("234.50"),
+        cash_infos=[cash],
+    )
+
+    class TradeContext:
+        def account_balance(self):
+            observed["balances"] += 1
+            return [account]
+
+        def stock_positions(self):
+            positions = []
+            if failure == "portfolio_valuation":
+                positions.append(
+                    types.SimpleNamespace(
+                        symbol="SOXL.US", currency="USD", quantity=Decimal("1"), available_quantity=Decimal("1")
+                    )
+                )
+            return types.SimpleNamespace(channels=[types.SimpleNamespace(positions=positions)])
+
+    trade = TradeContext()
+
+    class QuoteContext:
+        def quote(self, _symbols):
+            return []
+
+    quote = QuoteContext()
+
+    class FakePort:
+        def get_portfolio_snapshot(self):
+            observed["portfolio"] += 1
+            state = fetch_strategy_account_state(quote, trade, [])
+            return types.SimpleNamespace(
+                buying_power=state["available_cash"],
+                total_equity=state["broker_capital"]["net_assets"],
+                positions=(),
+            )
+
+    class FakeRuntime:
+        def bootstrap(self):
+            raise AssertionError("history probe must use metadata contexts, not refresh bootstrap")
+
+        portfolio_port_factory = lambda self, *_args: FakePort()
+
+    def calculate_indicators(_context):
+        observed["indicators"] += 1
+        if failure == "indicator_exception":
+            raise RuntimeError("synthetic indicator failure")
+        return None if failure == "indicator_none" else {}
+
+    class FakeComposer:
+        strategy_adapters = types.SimpleNamespace(calculate_strategy_indicators=calculate_indicators)
+
+        def build_reporting_adapters(self):
+            return types.SimpleNamespace(
+                start_run=lambda: (None, {"status": "pending"}),
+                log_event=lambda *_args, **_kwargs: None,
+                persist_execution_report=lambda _report: None,
+            )
+
+        def build_rebalance_runtime(self, **_kwargs):
+            return FakeRuntime()
+
+        def build_account_snapshot_broker_contexts(self):
+            observed["metadata"] += 1
+            return quote, trade, source
+
+        def build_notification_adapters(self):
+            return types.SimpleNamespace(publish_cycle_notification=lambda **_kwargs: None)
+
+    class Blob:
+        def upload_from_string(self, data, **kwargs):
+            observed["writes"] += 1
+            observed["stored"] = (data, kwargs)
+
+    class Store:
+        client = None
+
+        def __init__(self):
+            self.client = self
+
+        def _parse_uri(self, uri):
+            observed["uri"] = uri
+            return "paper-history", uri.removeprefix("gs://paper-history/")
+
+        def bucket(self, _bucket):
+            return self
+
+        def blob(self, _name):
+            return Blob()
+
+    module.build_composer = lambda **_kwargs: FakeComposer()
+    module._open_account_history_store = lambda _project: Store()
+    env = {
+        "ACCOUNT_HISTORY_RECORDING_ENABLED": "true",
+        "ACCOUNT_HISTORY_GCS_PREFIX": "gs://paper-history/longbridge/account_snapshots",
+        "ACCOUNT_HISTORY_TARGET_ID": "paper",
+        "ACCOUNT_HISTORY_EXPECTED_SCOPE": "PAPER",
+        "GOOGLE_CLOUD_PROJECT": "longbridgequant",
+    }
+    with patch.dict(os.environ, env, clear=False), patch.object(module, "submit_order") as submit:
+        result = module.run_probe()
+    return result, observed, submit, cycle_history_observation()
+
+
 class RequestHandlingTests(unittest.TestCase):
     def test_cloud_run_route_contracts_are_registered(self):
         module = load_module()
@@ -1142,8 +1270,10 @@ class RequestHandlingTests(unittest.TestCase):
 
         module.build_composer = lambda *, dry_run_only_override=None: observed.__setitem__("override", dry_run_only_override) or FakeComposer()
 
-        with module.app.test_request_context("/probe", method="POST"):
-            body, status = module.handle_probe()
+        module.ACCOUNT_REGION = "PAPER"
+        with patch.dict(os.environ, {"ACCOUNT_HISTORY_RECORDING_ENABLED": "false"}, clear=False):
+            with module.app.test_request_context("/probe", method="POST"):
+                body, status = module.handle_probe()
 
         self.assertEqual(status, 200)
         self.assertEqual(body, "Probe OK")
@@ -1158,6 +1288,54 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(observed["report"]["summary"]["buying_power"], 123.0)
         self.assertEqual(observed["report"]["summary"]["total_equity"], 456.0)
         self.assertEqual(observed["report"]["summary"]["positions_count"], 1)
+
+    def test_paper_probe_records_same_balance_read_with_metadata_contexts(self):
+        from application.account_snapshot import cycle_history_observation
+
+        result, observed, submit, observation = _run_paper_history_probe()
+        self.assertEqual(result, ("Probe OK", 200))
+        self.assertEqual(observed["metadata"], 1)
+        self.assertEqual(observed["balances"], 1)
+        self.assertEqual(observed["indicators"], 1)
+        self.assertEqual(observed["portfolio"], 1)
+        self.assertEqual(observed["writes"], 1)
+        stored = json.loads(observed["stored"][0])
+        self.assertEqual(stored["snapshot_schema_version"], "longbridge_account_snapshot.v1")
+        self.assertEqual(stored["broker_reported_balances"][0]["net_assets"], "1234.5")
+        self.assertEqual(stored["cash"][0]["available_cash"], "200.25")
+        self.assertNotIn("positions", stored)
+        self.assertTrue(observed["uri"].endswith("Z.json"))
+        self.assertIsNone(observation)
+        self.assertIsNone(cycle_history_observation())
+        submit.assert_not_called()
+
+    def test_paper_probe_archive_conflict_is_error_and_capture_is_cleaned(self):
+        result, observed, submit, observation = _run_paper_history_probe(source_status="unbound")
+        self.assertEqual(result, ("Error", 500))
+        self.assertEqual(observed["balances"], 1)
+        self.assertEqual(observed["writes"], 0)
+        self.assertIsNone(observation)
+        submit.assert_not_called()
+
+        result, observed, submit, observation = _run_paper_history_probe(incomplete=True)
+        self.assertEqual(result, ("Error", 500))
+        self.assertEqual(observed["writes"], 0)
+        self.assertIsNone(observation)
+        submit.assert_not_called()
+
+    def test_paper_probe_archives_before_strategy_health_failure(self):
+        for failure in ("indicator_none", "indicator_exception", "portfolio_valuation"):
+            with self.subTest(failure=failure):
+                result, observed, submit, observation = _run_paper_history_probe(failure=failure)
+                self.assertEqual(result, ("Error", 500))
+                self.assertEqual(observed["writes"], 1)
+                self.assertEqual(observed["balances"], 1)
+                self.assertIsNone(observation)
+                submit.assert_not_called()
+                if failure.startswith("indicator"):
+                    self.assertEqual(observed["portfolio"], 0)
+                else:
+                    self.assertEqual(observed["portfolio"], 1)
 
     def test_handle_probe_rejects_get_without_running_broker_probe(self):
         module = load_module()

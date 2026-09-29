@@ -28,6 +28,13 @@ from application.execution_receipt_adapter import (
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_composer import build_runtime_composer
 from application.rebalance_service import run_strategy as run_rebalance_cycle
+from application.account_snapshot import (
+    begin_natural_cycle_history,
+    cycle_history_observation,
+    end_natural_cycle_history,
+    read_cycle_account_balance,
+)
+from scripts.record_daily_account_snapshot import record_projected_daily_account
 from application.durable_execution_commands import (
     resolve_paper_execution_command_consumer_enabled,
 )
@@ -978,6 +985,11 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
 def run_probe(*, response_body: str = "Probe OK"):
     if _v7_application_candidate_bound():
         return response_body, 200
+    record_paper_history = (
+        str(ACCOUNT_REGION or "").strip() == "PAPER"
+        and str(os.getenv("ACCOUNT_HISTORY_RECORDING_ENABLED") or "").strip() == "true"
+    )
+    history_capture = begin_natural_cycle_history() if record_paper_history else None
     composer = None
     reporting_adapters = None
     log_context = None
@@ -993,7 +1005,35 @@ def run_probe(*, response_body: str = "Probe OK"):
             execution_window="probe",
         )
         runtime = composer.build_rebalance_runtime(silent_cycle_notifications=True)
-        quote_context, trade_context, _indicators = runtime.bootstrap()
+        if record_paper_history:
+            quote_context, trade_context, source_binding = (
+                composer.build_account_snapshot_broker_contexts()
+            )
+            read_cycle_account_balance(trade_context.account_balance)
+            observation = cycle_history_observation()
+            if observation is None:
+                raise RuntimeError("account history observation incomplete")
+            result = record_projected_daily_account(
+                os.environ,
+                account_scope=ACCOUNT_REGION,
+                source_binding=source_binding,
+                balances=observation["projection"]["broker_reported_balances"],
+                cash=observation["projection"]["cash"],
+                started=observation["started"],
+                finished=observation["finished"],
+                open_store=_open_account_history_store,
+            )
+            print(
+                f"account_history status={result.status} category={result.category or '-'}",
+                flush=True,
+            )
+            if result.status != "recorded":
+                raise RuntimeError("account history write was not confirmed")
+            indicators = composer.strategy_adapters.calculate_strategy_indicators(quote_context)
+            if indicators is None:
+                raise RuntimeError("probe indicators unavailable")
+        else:
+            quote_context, trade_context, _indicators = runtime.bootstrap()
         snapshot = runtime.portfolio_port_factory(
             quote_context,
             trade_context,
@@ -1062,6 +1102,8 @@ def run_probe(*, response_body: str = "Probe OK"):
                 print(f"execution_report {report_path}", flush=True)
         except Exception as persist_exc:
             print(f"failed to persist execution report: {type(persist_exc).__name__}", flush=True)
+        if history_capture is not None:
+            end_natural_cycle_history(history_capture)
 
 
 def _paper_command_consumer_session_date() -> str:
@@ -1199,6 +1241,12 @@ def fetch_account_snapshot_token_with_metadata(project_id, secret_name):
         value=store.get_secret(secret_name, project_id=project_id),
         version_name=None,
     )
+
+
+def _open_account_history_store(project_id):
+    from quant_platform_kit.cloud import get_object_store
+
+    return get_object_store(project_id=project_id)
 
 
 def run_account_snapshot():

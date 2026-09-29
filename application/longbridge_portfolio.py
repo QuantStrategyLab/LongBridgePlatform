@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import math
 from typing import Any
 
+from application.account_snapshot import read_cycle_account_balance
 from quant_platform_kit.common.broker_reconciliation import calculate_broker_observation_sha256
 
 
@@ -81,7 +82,7 @@ def fetch_strategy_account_state(
     cash_by_currency: dict[str, float] = {}
     observed_at = datetime.now(timezone.utc)
     try:
-        account_balance = t_ctx.account_balance()
+        account_balance = read_cycle_account_balance(t_ctx.account_balance)
     except Exception as exc:
         warn(
             "[longbridge_account_balance_failed] "
