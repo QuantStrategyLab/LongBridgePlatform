@@ -41,6 +41,8 @@ _HISTORY_KEYS = (
     "ACCOUNT_HISTORY_TARGET_ID",
     "ACCOUNT_HISTORY_EXPECTED_SCOPE",
 )
+_ACCOUNT_SNAPSHOT_INPUT = "ACCOUNT_SNAPSHOT_ENABLED_INPUT"
+_ACCOUNT_SNAPSHOT_ENV = "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED"
 _UNSAFE_HISTORY = re.compile(r"[,=\s'\"`$\\|&<>]|^\-")
 _INGRESS = "run.googleapis.com/ingress"
 _SOURCE_DECLARATIONS = ("uv.lock", "pyproject.toml", "qsl.toml")
@@ -493,11 +495,11 @@ def prepare_image_only_staging(
     image_commit: str,
     run: Callable[[Sequence[str]], str],
 ) -> dict[str, Any]:
-    """Admit one PAPER no-traffic image. Lock texts come from image_commit, not the main worktree."""
+    """Admit a fixed history candidate or the signed main image for PAPER staging."""
 
-    if image_commit != APPROVED_PAPER_HISTORY_CANDIDATE:
-        raise AdmissionError("image source is not approved")
-    image_commit = APPROVED_PAPER_HISTORY_CANDIDATE
+    history, snapshot_value = _validate_image_only_source(
+        image_commit=image_commit, env=env, project=project
+    )
     admission = verify_service(service=service, service_json=service_json)
     _require_paper_target_identity(service=service, service_json=service_json)
     try:
@@ -539,15 +541,69 @@ def prepare_image_only_staging(
     )
     if serving != {source_revision}:
         raise AdmissionError(f"{service}: candidate UES revision differs from serving image")
-    history = history_update(env, workflow_target=str(env.get("WORKFLOW_TARGET") or ""), project_id=project)
+    history_arg = _history_arg(history)
+    snapshot_arg = (
+        f"{_ACCOUNT_SNAPSHOT_ENV}={snapshot_value}"
+        if snapshot_value is not None
+        else ""
+    )
+    changed_keys = set(history or ())
+    if snapshot_value is not None:
+        changed_keys.add(_ACCOUNT_SNAPSHOT_ENV)
     return {
-        "history_arg": _history_arg(history),
+        "history_arg": history_arg,
         "history_values": history or {},
+        "snapshot_arg": snapshot_arg,
+        "snapshot_value": snapshot_value,
         "image_commit": image_commit,
         "service_ingress": _ingress(service_json.get("metadata")),
         "serving_traffic": traffic,
-        "template_digest": _config_digest(configuration, skip=set(history or ())),
+        "template_digest": _config_digest(configuration, skip=changed_keys),
     }
+
+
+def _validate_image_only_source(
+    *, image_commit: str, env: Mapping[str, str], project: str
+) -> tuple[dict[str, str] | None, str | None]:
+    history = history_update(
+        env, workflow_target=str(env.get("WORKFLOW_TARGET") or ""), project_id=project
+    )
+    snapshot_value = _account_snapshot_update(env, workflow_target=str(env.get("WORKFLOW_TARGET") or ""))
+    if image_commit == APPROVED_PAPER_HISTORY_CANDIDATE:
+        if history is None or snapshot_value is not None:
+            raise AdmissionError("image source is not approved")
+    elif _is_exact_main_image(image_commit, env):
+        if history is not None:
+            raise AdmissionError("image source is not approved")
+    else:
+        raise AdmissionError("image source is not approved")
+    return history, snapshot_value
+
+
+def _account_snapshot_update(
+    env: Mapping[str, str], *, workflow_target: str
+) -> str | None:
+    value = str(env.get(_ACCOUNT_SNAPSHOT_INPUT) or "")
+    if value not in {"", "true", "false"}:
+        raise AdmissionError("account snapshot setting is invalid")
+    if value and workflow_target != "PAPER":
+        raise AdmissionError("account snapshot setting is only admitted for PAPER")
+    return value or None
+
+
+def _is_exact_main_image(image_commit: str, env: Mapping[str, str]) -> bool:
+    workflow_sha = str(env.get("GITHUB_SHA") or "")
+    return (
+        _SHA.fullmatch(image_commit) is not None
+        and image_commit == workflow_sha
+        and image_commit == str(env.get("GITHUB_WORKFLOW_SHA") or "")
+        and str(env.get("GITHUB_REPOSITORY") or "") == "QuantStrategyLab/LongBridgePlatform"
+        and str(env.get("APPROVED_REF") or "") == "main"
+        and str(env.get("GITHUB_REF_NAME") or "") == "main"
+        and str(env.get("GITHUB_REF") or "") == "refs/heads/main"
+        and str(env.get("GITHUB_WORKFLOW_REF") or "")
+        == "QuantStrategyLab/LongBridgePlatform/.github/workflows/sync-cloud-run-env.yml@refs/heads/main"
+    )
 
 
 def confirm_image_only_readback(
@@ -621,17 +677,21 @@ def confirm_image_only_readback(
     history = plan.get("history_values") or {}
     if not isinstance(history, Mapping):
         raise AdmissionError("staged readback is incomplete")
+    snapshot_value = plan.get("snapshot_value")
+    if snapshot_value not in {None, "true", "false"}:
+        raise AdmissionError("staged readback is incomplete")
+    skipped_keys = set(history)
+    if snapshot_value is not None:
+        skipped_keys.add(_ACCOUNT_SNAPSHOT_ENV)
     configuration = _configuration(revision)
-    if _config_digest(configuration, skip=set(history)) != plan.get("template_digest"):
+    if _config_digest(configuration, skip=skipped_keys) != plan.get("template_digest"):
         raise AdmissionError("staged revision configuration changed")
     literals = _literal_values(configuration)
     for key, value in history.items():
         if literals.get(str(key)) != value:
             raise AdmissionError("staged history settings do not match")
-
-
-def _history_count(env: Mapping[str, str]) -> int:
-    return sum(1 for key in _HISTORY_KEYS if str(env.get(key) or ""))
+    if snapshot_value is not None and literals.get(_ACCOUNT_SNAPSHOT_ENV) != snapshot_value:
+        raise AdmissionError("staged account snapshot setting does not match")
 
 
 def _write_plan(path: str, plan: Mapping[str, Any]) -> None:
@@ -659,13 +719,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("Image-only staging admission failed.", file=sys.stderr)
             return 1
         try:
-            if (
-                str(os.environ.get("WORKFLOW_TARGET") or "") != "PAPER"
-                or _history_count(os.environ) != 4
-                or str(os.environ.get("SOURCE_COMMIT") or "") != APPROVED_PAPER_HISTORY_CANDIDATE
-            ):
-                raise AdmissionError("image source is not approved")
-            image_commit = APPROVED_PAPER_HISTORY_CANDIDATE
+            image_commit = str(os.environ.get("SOURCE_COMMIT") or "")
+            _validate_image_only_source(
+                image_commit=image_commit, env=os.environ, project=args.project
+            )
             service_json = _load_object(
                 _run_quiet(
                     [

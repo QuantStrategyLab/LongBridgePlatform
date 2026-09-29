@@ -537,16 +537,22 @@ def staged_revision():
     service = os.environ["CLOUD_RUN_SERVICE"]
     image_repo = "registry.invalid/synthetic-project/synthetic-images/longbridgeplatform/" + service
     env = base_env()
-    if os.environ.get("HISTORY_OMITTED") != "1":
-        for key in (
-            "ACCOUNT_HISTORY_RECORDING_ENABLED",
-            "ACCOUNT_HISTORY_GCS_PREFIX",
-            "ACCOUNT_HISTORY_TARGET_ID",
-            "ACCOUNT_HISTORY_EXPECTED_SCOPE",
-        ):
-            env.append({"name": key, "value": os.environ.get(key, "")})
+    history_keys = (
+        "ACCOUNT_HISTORY_RECORDING_ENABLED",
+        "ACCOUNT_HISTORY_GCS_PREFIX",
+        "ACCOUNT_HISTORY_TARGET_ID",
+        "ACCOUNT_HISTORY_EXPECTED_SCOPE",
+    )
     if os.environ.get("CONFIG_DRIFT") == "1":
         env.append({"name": "UNRELATED_SETTING", "value": "1"})
+    update_path = Path(os.environ["HOME"]) / "updated-env.json"
+    updated_env = json.loads(update_path.read_text()) if update_path.exists() else {}
+    if os.environ.get("HISTORY_OMITTED") == "1":
+        updated_env = {key: value for key, value in updated_env.items() if key not in history_keys}
+    elif not updated_env:
+        updated_env = {key: os.environ[key] for key in history_keys if os.environ.get(key)}
+    for key, value in updated_env.items():
+        env.append({"name": key, "value": value})
     ready = [] if os.environ.get("NOT_READY") == "1" else [{"type": "Ready", "status": "True"}]
     return {
         "metadata": {
@@ -576,8 +582,8 @@ elif command == "git" and args[:1] == ["show"] and len(args) == 2 and ":" in arg
     sha, name = args[1].split(":", 1)
     if name not in ("uv.lock", "pyproject.toml", "qsl.toml"):
         raise SystemExit("unexpected git show")
-    if sha == "a" * 40:
-        raise SystemExit("admission read the main checkout lock")
+    if sha not in ("a" * 40, serving_sha, approved):
+        raise SystemExit("admission read an unapproved source lock")
     pin = ("f" * 40) if sha == serving_sha and os.environ.get("BAD_SERVING_LOCK") == "1" else ues
     print(declaration(name, pin), end="")
 elif command == "uv" and args[:3] == ["run", "--no-sync", "python"]:
@@ -585,6 +591,8 @@ elif command == "uv" and args[:3] == ["run", "--no-sync", "python"]:
     if args[3] != expected or any("record_daily" in part for part in args):
         raise SystemExit("refusing to execute a candidate script")
     os.execv(os.environ["ADMISSION_PYTHON"], [os.environ["ADMISSION_PYTHON"], *args[3:]])
+elif command == "uv" and args == ["sync", "--frozen", "--no-dev"]:
+    pass
 elif command == "python3":
     os.execv(sys.executable, [sys.executable, *args])
 elif command == "docker" and args[0] in ("build", "push"):
@@ -619,6 +627,15 @@ elif command == "gcloud" and args[:4] == ["artifacts", "docker", "images", "desc
 elif command == "gcloud" and args[:3] == ["run", "services", "update"]:
     if os.environ.get("UPDATE_FAIL") == "1":
         sys.exit(1)
+    update = next((arg.partition("=")[2] for arg in args if arg.startswith("--update-env-vars=")), "")
+    values = {}
+    for pair in update.split(","):
+        if pair:
+            key, separator, value = pair.partition("=")
+            if not separator:
+                raise SystemExit("invalid synthetic environment update")
+            values[key] = value
+    (Path(os.environ["HOME"]) / "updated-env.json").write_text(json.dumps(values))
 else:
     raise SystemExit("unexpected command in image-only workflow")
 '''
@@ -651,6 +668,9 @@ else:
 
     def execute(**overrides):
         log.write_text("")
+        updated_env_path = root / "updated-env.json"
+        if updated_env_path.exists():
+            updated_env_path.unlink()
         count_path = root / "service-json-count"
         if count_path.exists():
             count_path.unlink()
@@ -658,28 +678,36 @@ else:
             ["bash", "-c", "\n".join(blocks)], env={**base, **overrides},
             text=True, capture_output=True, cwd=root,
         )
+        if result.returncode:
+            print(result.stderr, file=sys.stderr)
         return result.returncode, [json.loads(line) for line in log.read_text().splitlines()]
 
     cases = 0
     for label in ("PAPER", "HK", "SG"):
         code, calls = execute(WORKFLOW_TARGET=label, CLOUD_RUN_SERVICE=f"synthetic-{label.lower()}")
-        assert code == 0, label
+        assert code == 0, (label, calls)
         updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
         assert len(updates) == 1
         service = f"synthetic-{label.lower()}"
         image_repo = f"registry.invalid/synthetic-project/synthetic-images/longbridgeplatform/{service}"
-        assert updates[0] == [
+        expected_update = [
             "gcloud", "run", "services", "update", service,
             "--project=synthetic-project", "--region=synthetic-region",
             f"--image={image_repo}@{base['IMAGE_DIGEST']}", "--no-traffic",
-            f"--update-labels=commit-sha={base['SOURCE_COMMIT']},github-run-id=123", "--quiet",
+            f"--update-labels=commit-sha={base['SOURCE_COMMIT']},github-run-id=123",
         ]
+        if label == "PAPER":
+            expected_update.extend(["--quiet", "--revision-suffix=r123"])
+            assert any(call[:3] == ["uv", "run", "--no-sync"] for call in calls)
+        else:
+            expected_update.append("--quiet")
+            assert not any(call[0] == "uv" for call in calls)
+        assert updates[0] == expected_update
         assert sum(call[:2] == ["docker", "push"] for call in calls) == 1
         assert [call for call in calls if call[:2] == ["docker", "build"]] == [
             ["docker", "build", "--pull", "-t", f"{image_repo}:{base['SOURCE_COMMIT']}-123", "-"],
         ]
         assert ["git", "archive", "HEAD"] in calls
-        assert not any(call[0] == "uv" for call in calls)
         cases += 1
     for overrides in (
         {"WORKFLOW_TARGET": "configured"}, {"WORKFLOW_TARGET": "hk-verify"},
@@ -692,6 +720,15 @@ else:
     ):
         code, calls = execute(**overrides)
         assert code != 0 and calls == [], overrides
+        cases += 1
+    for setting in ("true", "false"):
+        code, calls = execute(ACCOUNT_SNAPSHOT_ENABLED_INPUT=setting)
+        assert code == 0, (setting, code, calls)
+        updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
+        assert len(updates) == 1
+        assert f"--update-env-vars=LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED={setting}" in updates[0]
+        assert updates[0][-1] == "--revision-suffix=r123"
+        assert any(call[:4] == ["gcloud", "run", "revisions", "describe"] for call in calls)
         cases += 1
     for overrides in ({"CHECKOUT_SHA": "c" * 40}, {"SERVICE_MISSING": "1"}, {"IMAGE_DIGEST": "not-a-digest"}):
         code, calls = execute(**overrides)
