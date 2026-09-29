@@ -20,7 +20,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
-from google.api_core.exceptions import GoogleAPICallError, PreconditionFailed
+from google.api_core.exceptions import Forbidden, GoogleAPICallError, PreconditionFailed
 
 from scripts import execution_report_heartbeat as heartbeat
 from scripts.daily_runtime_projection import project_listed_reports
@@ -44,6 +44,20 @@ _RUNTIME_DAILY_SYNC_TARGET_KEY = "longbridge-quant-paper-service|russell_top50_l
 
 class _Rejected(Exception):
     """The projection was not published. Nothing was written."""
+
+
+class _KnownFailure(RuntimeError):
+    """A safe, fixed diagnostic category for a known failure phase."""
+
+    _CODES = frozenset(
+        {"schedule_unavailable", "storage_write_permission_denied", "write_unknown"}
+    )
+
+    def __init__(self, code: str) -> None:
+        if code not in self._CODES:
+            raise ValueError("invalid diagnostic code")
+        self.code = code
+        super().__init__(code)
 
 
 def _prefix(value: str) -> str:
@@ -417,8 +431,12 @@ def _upload(client: Any, prefix: str, business_date: str, body: str) -> str:
         )
     except PreconditionFailed:
         return "already_recorded"
-    except GoogleAPICallError as exc:
-        raise RuntimeError("write_unknown") from exc
+    except Forbidden:
+        raise _KnownFailure("storage_write_permission_denied") from None
+    except GoogleAPICallError:
+        raise _KnownFailure("write_unknown") from None
+    except Exception:
+        raise _KnownFailure("write_unknown") from None
     return uri
 
 
@@ -574,12 +592,12 @@ def publish(
     try:
         payload = heartbeat._describe_cloud_run_service(service, project=project)
         if not isinstance(payload, dict):
-            raise RuntimeError("schedule_unavailable")
+            raise _KnownFailure("schedule_unavailable")
         deployed = heartbeat._deployed_runtime_target(payload)
         hydrated = _profiles_from_same_readback(target, payload, project=project)
         hydrated = heartbeat._hydrate_runtime_target_schedules(hydrated, project=project)
     except RuntimeError as exc:
-        raise RuntimeError("schedule_unavailable") from exc
+        raise _KnownFailure("schedule_unavailable") from None
     if not _deployment_matches_paper(target, deployed) or not _deployment_enabled(payload, deployed):
         raise _Rejected("deployed_target_rejected")
     if len(hydrated) != 1:
@@ -587,7 +605,7 @@ def publish(
     try:
         hydrated[0], scheduler_error = _confirmed_scheduler(hydrated[0], project=project)
     except RuntimeError as exc:
-        raise RuntimeError("schedule_unavailable") from exc
+        raise _KnownFailure("schedule_unavailable") from None
     since = observed - dt.timedelta(hours=lookback)
     globs = (report_globs or heartbeat._report_globs)(since, observed)
     if not globs:
@@ -643,7 +661,7 @@ def publish(
         raise _Rejected("target_not_unique")
     business_date = records[0].get("business_date")
     if not isinstance(business_date, str) or not business_date:
-        raise RuntimeError("schedule_unavailable")
+        raise _KnownFailure("schedule_unavailable")
     # QRS stores the fixed PAPER target with its canonical lower-case scope.
     # Keep the actual scope check above case-insensitive and serialize this
     # normalized representation once so GCS and the optional POST share bytes.
@@ -673,6 +691,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     del argv
     try:
         status, business_date, sync_status = publish(os.environ, now=dt.datetime.now(dt.timezone.utc))
+    except _KnownFailure as exc:
+        print(f"daily runtime projection failed; category={exc.code}")
+        return 1
     except _Rejected:
         print("daily runtime projection rejected")
         return 2
