@@ -244,7 +244,198 @@ def load_module(*, notify_lang="en"):
             return importlib.import_module("main")
 
 
+def _run_history_probe(
+    scope, *, enabled=True, failure=None, source_status="bound", incomplete=False
+):
+    from decimal import Decimal
+
+    from application.longbridge_portfolio import fetch_strategy_account_state
+
+    module = load_module()
+    module.ACCOUNT_REGION = scope
+    module.RUNTIME_SETTINGS.runtime_target_enabled = scope != "HK"
+    module._v7_application_candidate_bound = lambda: False
+    observed = {
+        "balances": 0,
+        "metadata": 0,
+        "indicators": 0,
+        "portfolio": 0,
+        "writes": 0,
+        "bootstrap": 0,
+    }
+    source = {
+        "kind": "deployment_scope_token_version",
+        "status": source_status,
+        "id": "a" * 64 if source_status == "bound" else None,
+    }
+    cash = types.SimpleNamespace(
+        currency="HKD",
+        available_cash=Decimal("200.25"),
+        frozen_cash=Decimal("20"),
+        settling_cash=None if incomplete else Decimal("14.25"),
+    )
+    account = types.SimpleNamespace(
+        currency="USD",
+        net_assets=Decimal("1234.50"),
+        total_cash=Decimal("234.50"),
+        cash_infos=[cash],
+    )
+
+    class TradeContext:
+        def account_balance(self):
+            observed["balances"] += 1
+            return [account]
+
+        def stock_positions(self):
+            return types.SimpleNamespace(channels=[])
+
+    trade = TradeContext()
+
+    class QuoteContext:
+        def quote(self, _symbols):
+            return []
+
+    quote = QuoteContext()
+
+    class FakePort:
+        def get_portfolio_snapshot(self):
+            observed["portfolio"] += 1
+            state = fetch_strategy_account_state(quote, trade, [])
+            return types.SimpleNamespace(
+                buying_power=state["available_cash"],
+                total_equity=state["broker_capital"]["net_assets"],
+                positions=(),
+            )
+
+    class FakeRuntime:
+        def bootstrap(self):
+            observed["bootstrap"] += 1
+            if enabled:
+                raise AssertionError("history probe must use metadata contexts, not refreshing bootstrap")
+            return quote, trade, {}
+
+        def portfolio_port_factory(self, *_args):
+            return FakePort()
+
+    def calculate_indicators(_context):
+        observed["indicators"] += 1
+        if failure == "indicator_exception":
+            raise RuntimeError("synthetic indicator failure")
+        return None if failure == "indicator_none" else {}
+
+    class FakeComposer:
+        strategy_adapters = types.SimpleNamespace(calculate_strategy_indicators=calculate_indicators)
+
+        def build_reporting_adapters(self):
+            return types.SimpleNamespace(
+                start_run=lambda: (None, {"status": "pending"}),
+                log_event=lambda *_args, **_kwargs: None,
+                persist_execution_report=lambda _report: None,
+            )
+
+        def build_rebalance_runtime(self, **_kwargs):
+            return FakeRuntime()
+
+        def build_account_snapshot_broker_contexts(self):
+            observed["metadata"] += 1
+            return quote, trade, source
+
+        def build_notification_adapters(self):
+            return types.SimpleNamespace(publish_cycle_notification=lambda **_kwargs: None)
+
+    class Blob:
+        def upload_from_string(self, data, **kwargs):
+            observed["writes"] += 1
+            observed["stored"] = (data, kwargs)
+
+    class Store:
+        def __init__(self):
+            self.client = self
+
+        def _parse_uri(self, uri):
+            observed["uri"] = uri
+            return "history-bucket", uri.removeprefix("gs://history-bucket/")
+
+        def bucket(self, _bucket):
+            return self
+
+        def blob(self, _name):
+            return Blob()
+
+    module.build_composer = lambda **_kwargs: FakeComposer()
+    module._open_account_history_store = lambda _project: Store()
+    env = {
+        "ACCOUNT_HISTORY_GCS_PREFIX": "gs://history-bucket/longbridge/account_snapshots",
+        "ACCOUNT_HISTORY_TARGET_ID": scope.lower(),
+        "ACCOUNT_HISTORY_EXPECTED_SCOPE": scope,
+        "GOOGLE_CLOUD_PROJECT": "longbridgequant",
+    }
+    if enabled is not None:
+        env["ACCOUNT_HISTORY_RECORDING_ENABLED"] = "true" if enabled else "false"
+    with patch.dict(os.environ, env, clear=False), patch.object(module, "submit_order") as submit:
+        with module.app.test_request_context("/probe", method="POST"):
+            result = module.handle_probe()
+    return result, observed, submit
+
+
 class RequestHandlingTests(unittest.TestCase):
+    def test_sg_and_hk_history_probe_archive_exact_account_facts_once_without_orders(self):
+        for scope in ("SG", "HK"):
+            with self.subTest(scope=scope):
+                result, observed, submit = _run_history_probe(scope)
+                self.assertEqual(result, ("Probe OK", 200))
+                self.assertEqual(observed["metadata"], 1)
+                self.assertEqual(observed["balances"], 1)
+                self.assertEqual(observed["indicators"], 1)
+                self.assertEqual(observed["portfolio"], 1)
+                self.assertEqual(observed["writes"], 1)
+                self.assertEqual(observed["bootstrap"], 0)
+                record = json.loads(observed["stored"][0])
+                self.assertEqual(record["account_scope"], scope)
+                self.assertEqual(record["target_id"], scope.lower())
+                self.assertEqual(record["broker_reported_balances"][0]["net_assets"], "1234.5")
+                self.assertEqual(record["cash"][0]["available_cash"], "200.25")
+                self.assertNotIn("positions", record)
+                submit.assert_not_called()
+
+    def test_history_probe_archives_before_indicator_failure_and_stays_failed(self):
+        for failure in ("indicator_none", "indicator_exception"):
+            with self.subTest(failure=failure):
+                result, observed, submit = _run_history_probe("SG", failure=failure)
+                self.assertEqual(result, ("Error", 500))
+                self.assertEqual(observed["writes"], 1)
+                self.assertEqual(observed["balances"], 1)
+                self.assertEqual(observed["portfolio"], 0)
+                submit.assert_not_called()
+
+    def test_history_probe_unbound_source_writes_nothing_and_cleans_capture(self):
+        from application.account_snapshot import cycle_history_observation
+
+        result, observed, submit = _run_history_probe("HK", source_status="unbound")
+        self.assertEqual(result, ("Error", 500))
+        self.assertEqual(observed["balances"], 1)
+        self.assertEqual(observed["writes"], 0)
+        self.assertIsNone(cycle_history_observation())
+        submit.assert_not_called()
+
+    def test_history_probe_incomplete_raw_balance_writes_nothing(self):
+        result, observed, submit = _run_history_probe("SG", incomplete=True)
+        self.assertEqual(result, ("Error", 500))
+        self.assertEqual(observed["balances"], 1)
+        self.assertEqual(observed["writes"], 0)
+        submit.assert_not_called()
+
+    def test_disabled_hk_probe_preserves_old_bootstrap_and_never_submits(self):
+        for scope in ("HK", "PAPER"):
+            with self.subTest(scope=scope):
+                result, observed, submit = _run_history_probe(scope, enabled=None)
+                self.assertEqual(result, ("Probe OK", 200))
+                self.assertEqual(observed["metadata"], 0)
+                self.assertEqual(observed["balances"], 1)
+                self.assertEqual(observed["writes"], 0)
+                self.assertEqual(observed["bootstrap"], 1)
+                submit.assert_not_called()
+
     def test_cloud_run_route_contracts_are_registered(self):
         module = load_module()
 

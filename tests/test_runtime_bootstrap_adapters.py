@@ -100,3 +100,60 @@ def test_build_runtime_bootstrap_can_build_read_only_contexts_without_indicators
 
     assert bootstrap.build_read_only_contexts() == ("quote-context", "trade-context")
     assert observed["contexts"] == ("app-key", "app-secret", "refresh-token")
+
+
+def test_account_snapshot_context_uses_metadata_token_once_without_refresh():
+    observed = {"metadata_reads": 0, "latest_reads": 0, "refreshes": 0}
+    version_name = "projects/project-1/secrets/secret-1/versions/4"
+
+    def read_metadata(project_id, secret_name):
+        observed["metadata_reads"] += 1
+        assert (project_id, secret_name) == ("project-1", "secret-1")
+        return type("Metadata", (), {"value": "snapshot-token\n", "version_name": version_name})()
+
+    bootstrap = build_runtime_bootstrap(
+        project_id="project-1",
+        secret_name="secret-1",
+        token_refresh_threshold_days=30,
+        fetch_token_from_secret_fn=lambda *_args, **_kwargs: (
+            observed.__setitem__("latest_reads", observed["latest_reads"] + 1) or "latest-token"
+        ),
+        refresh_token_if_needed_fn=lambda *_args, **_kwargs: (
+            observed.__setitem__("refreshes", observed["refreshes"] + 1)
+        ),
+        build_contexts_fn=lambda app_key, app_secret, token: (
+            observed.setdefault("contexts", (app_key, app_secret, token)),
+            ("quote", "trade"),
+        )[-1],
+        calculate_strategy_indicators_fn=lambda _quote: None,
+        env_reader=lambda name, default="": {
+            "LONGPORT_APP_KEY": "app-key",
+            "LONGPORT_APP_SECRET": "app-secret",
+        }.get(name, default),
+    )
+
+    assert bootstrap.build_account_snapshot_contexts(
+        fetch_token_with_metadata_fn=read_metadata,
+    ) == ("quote", "trade", version_name)
+    assert observed["metadata_reads"] == 1
+    assert observed["latest_reads"] == observed["refreshes"] == 0
+    assert observed["contexts"] == ("app-key", "app-secret", "snapshot-token")
+
+
+def test_account_snapshot_context_without_version_fails_closed_at_binding_layer():
+    bootstrap = build_runtime_bootstrap(
+        project_id="project-1",
+        secret_name="secret-1",
+        token_refresh_threshold_days=30,
+        fetch_token_from_secret_fn=lambda *_args, **_kwargs: "must-not-read",
+        refresh_token_if_needed_fn=lambda *_args, **_kwargs: "must-not-refresh",
+        build_contexts_fn=lambda _key, _secret, token: (token, "trade"),
+        calculate_strategy_indicators_fn=lambda _quote: None,
+        env_reader=lambda _name, default="": default,
+    )
+
+    assert bootstrap.build_account_snapshot_contexts(
+        fetch_token_with_metadata_fn=lambda *_args, **_kwargs: type(
+            "Metadata", (), {"value": "snapshot-token", "version_name": None}
+        )(),
+    ) == ("snapshot-token", "trade", None)

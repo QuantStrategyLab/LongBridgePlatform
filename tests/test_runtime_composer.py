@@ -405,3 +405,57 @@ def test_validation_override_still_runs_live_command_flag_validation(monkeypatch
         assert "invalid durable live execution command flag" in str(exc)
     else:
         raise AssertionError("validation override must not bypass flag validation")
+
+
+def test_account_snapshot_context_binds_one_metadata_response_to_target_deployment():
+    composer, _legacy_order_status, _notification_calls = _build_live_command_test_composer(
+        dry_run_only=True,
+    )
+    observed = {"metadata": 0, "latest": 0, "refresh": 0}
+    version_name = "projects/p/secrets/token/versions/4"
+    object.__setattr__(
+        composer,
+        "fetch_token_with_metadata_fn",
+        lambda project, secret: (
+            observed.__setitem__("metadata", observed["metadata"] + 1)
+            or SimpleNamespace(value="snapshot-token\n", version_name=version_name)
+        ),
+    )
+    object.__setattr__(
+        composer,
+        "fetch_token_from_secret_fn",
+        lambda *_args, **_kwargs: observed.__setitem__("latest", observed["latest"] + 1),
+    )
+    object.__setattr__(
+        composer,
+        "refresh_token_if_needed_fn",
+        lambda *_args, **_kwargs: observed.__setitem__("refresh", observed["refresh"] + 1),
+    )
+    object.__setattr__(
+        composer,
+        "build_contexts_fn",
+        lambda key, secret, token: (observed.setdefault("contexts", (key, secret, token)), ("quote", "trade"))[-1],
+    )
+    object.__setattr__(
+        composer,
+        "env_reader",
+        lambda name, default="": {
+            "LONGPORT_APP_KEY": "app-key",
+            "LONGPORT_APP_SECRET": "app-secret",
+            "K_SERVICE": "sg-service",
+            "K_REVISION": "sg-service-00004",
+            "CLOUD_RUN_REGION": "asia-southeast1",
+        }.get(name, default),
+    )
+
+    quote, trade, binding = composer.build_account_snapshot_broker_contexts()
+
+    assert (quote, trade) == ("quote", "trade")
+    assert observed == {
+        "metadata": 1,
+        "latest": 0,
+        "refresh": 0,
+        "contexts": ("app-key", "app-secret", "snapshot-token"),
+    }
+    assert binding["status"] == "bound"
+    assert binding["kind"] == "deployment_scope_token_version"

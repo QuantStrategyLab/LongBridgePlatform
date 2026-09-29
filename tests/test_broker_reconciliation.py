@@ -110,6 +110,47 @@ def test_disabled_reconciliation_does_not_build_contexts():
     assert payload["reason"] == "broker_reconciliation_disabled"
 
 
+@pytest.mark.parametrize("scope", ["HK", "SG"])
+def test_account_snapshot_source_binding_hashes_exact_scope_and_token_version(scope):
+    bound = reconciliation.build_account_snapshot_source_binding(
+        version_name="projects/p/secrets/token/versions/7",
+        project_id="p",
+        service="lb-service",
+        revision="lb-service-00007",
+        account_scope=scope,
+        region="asia-east1",
+    )
+    changed_scope = reconciliation.build_account_snapshot_source_binding(
+        version_name="projects/p/secrets/token/versions/7",
+        project_id="p",
+        service="lb-service",
+        revision="lb-service-00007",
+        account_scope="SG" if scope == "HK" else "HK",
+        region="asia-east1",
+    )
+    assert bound["kind"] == "deployment_scope_token_version"
+    assert bound["status"] == "bound"
+    assert len(bound["id"]) == 64
+    assert changed_scope["id"] != bound["id"]
+
+
+def test_account_snapshot_source_binding_stays_unavailable_for_missing_provenance():
+    for missing in ("version_name", "project_id", "service", "revision"):
+        arguments = {
+            "version_name": "projects/p/secrets/token/versions/7",
+            "project_id": "p",
+            "service": "lb-service",
+            "revision": "lb-service-00007",
+            "account_scope": "SG",
+        }
+        arguments[missing] = None
+        assert reconciliation.build_account_snapshot_source_binding(**arguments) == {
+            "kind": "deployment_scope_token_version",
+            "status": "unavailable",
+            "id": None,
+        }
+
+
 def test_account_snapshot_disabled_or_bad_scope_does_not_build_contexts():
     for enabled, scope, reason in (
         (False, "PAPER", "account_snapshot_disabled"),

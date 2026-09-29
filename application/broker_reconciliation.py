@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from decimal import Decimal, InvalidOperation
 import re
@@ -23,6 +24,7 @@ from quant_platform_kit.common.execution_state import build_execution_marker_sto
 
 ENABLED_ENV_NAME = "LONGBRIDGE_BROKER_RECONCILIATION_ENABLED"
 ACCOUNT_SNAPSHOT_ENABLED_ENV_NAME = "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED"
+ACCOUNT_SNAPSHOT_SOURCE_BINDING_KIND = "deployment_scope_token_version"
 EXPECTED_DIGESTS_ENV_NAME = "LONGBRIDGE_RECONCILIATION_EXPECTED_DIGESTS_JSON"
 SUPPORTED_ACCOUNT_SCOPES = frozenset({"PAPER", "HK", "SG"})
 _EXPECTED_DIGEST_KEYS = (
@@ -64,6 +66,42 @@ def account_snapshot_enabled(env_reader: Callable[[str, str], str | None]) -> bo
         str(env_reader(ACCOUNT_SNAPSHOT_ENABLED_ENV_NAME, "") or "").strip().lower()
         == "true"
     )
+
+
+def build_account_snapshot_source_binding(
+    *,
+    version_name: str | None,
+    project_id: str | None,
+    service: str | None,
+    revision: str | None,
+    account_scope: str,
+    region: str | None = None,
+) -> dict[str, object]:
+    """Bind an observation to its exact deployment, account scope, and token version."""
+    version = _text(version_name)
+    project = _text(project_id)
+    service_name = _text(service)
+    revision_name = _text(revision)
+    scope = _text(account_scope).upper()
+    if (
+        not version or not project or not service_name or not revision_name
+        or scope not in {"HK", "SG"}
+    ):
+        return {"kind": ACCOUNT_SNAPSHOT_SOURCE_BINDING_KIND, "status": "unavailable", "id": None}
+    payload = {
+        "account_scope": scope,
+        "project_id": project,
+        "revision": revision_name,
+        "service": service_name,
+        "version_name": version,
+    }
+    region_name = _text(region)
+    if region_name:
+        payload["region"] = region_name
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return {"kind": ACCOUNT_SNAPSHOT_SOURCE_BINDING_KIND, "status": "bound", "id": digest}
 
 
 def _text(value: object) -> str:
