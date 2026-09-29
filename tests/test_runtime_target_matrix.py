@@ -240,6 +240,20 @@ def test_render_script_writes_github_output_and_rejects_bad_manifest(
     assert written.startswith("matrix=")
     assert json.loads(written.removeprefix("matrix=")) == {"target": EXPECTED_GUARD}
 
+    assert module.main(["--profile", "heartbeat"]) == 0
+    complete = json.loads(capsys.readouterr().out)
+    assert complete == {"target": EXPECTED_HEARTBEAT}
+
+    assert module.main(["--profile", "heartbeat", "--target", "hk"]) == 0
+    selected = json.loads(capsys.readouterr().out)
+    assert selected == {"target": [EXPECTED_HEARTBEAT[1]]}
+
+    assert module.main(["--profile", "heartbeat", "--target", "unknown"]) == 1
+    assert "unknown" in capsys.readouterr().err
+
+    assert module.main(["--profile", "heartbeat", "--target", ""]) == 1
+    assert capsys.readouterr().err
+
     bad = tmp_path / "bad.json"
     bad.write_text(
         json.dumps({"schema_version": 1, "platform_id": "longbridge", "targets": []}),
@@ -262,7 +276,10 @@ def test_monitor_and_deploy_workflows_consume_validated_matrix_output():
         text = (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
         assert "jobs:" in text
         assert "resolve-matrix:" in text
-        assert f"render_runtime_target_matrix.py --profile {profile} --github-output" in text
+        if name == "execution-report-heartbeat.yml":
+            assert 'render_runtime_target_matrix.py --profile heartbeat --target "$MATRIX_TARGET" --github-output' in text
+        else:
+            assert f"render_runtime_target_matrix.py --profile {profile} --github-output" in text
         assert "needs: resolve-matrix" in text
         assert "matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}" in text
         assert "vars.RUNTIME_TARGET_ENABLED" in text

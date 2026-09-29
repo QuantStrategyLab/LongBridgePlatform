@@ -321,7 +321,7 @@ def test_projections_cover_quiet_closed_missing_and_prior_unknown(monkeypatch) -
     assert status == "recorded"
     assert business_date == "2026-09-28"
     assert client.buckets == ["paper-bucket"]
-    assert client._bucket.names == ["runtime_daily/longbridge/paper/2026-09-28.json"]
+    assert client._bucket.names == ["runtime_daily/longbridge/paper/2026-09-28/20260928T084000000000Z.json"]
     assert stored["records"][0]["status"] == "no_submission"
     assert stored["records"][0]["runs"][0]["run_id"] == "run-1"
     assert "secret" not in json.dumps(stored)
@@ -390,6 +390,18 @@ def test_list_read_and_truncation_stay_incomplete(monkeypatch, capsys) -> None:
     assert "listing truncated" in truncated["read_errors"]
     assert truncated["records"][0]["status"] == "read_incomplete"
     assert truncated["completeness"] == "incomplete"
+
+
+def test_observation_paths_are_versioned_by_utc_timestamp() -> None:
+    first = dt.datetime(2026, 9, 28, 16, 40, tzinfo=HK)
+    next_observation = first + dt.timedelta(minutes=1)
+
+    _, first_name, _ = publisher._object_uri("gs://paper-bucket/runtime_daily", "2026-09-28", first)
+    _, next_name, _ = publisher._object_uri("gs://paper-bucket/runtime_daily", "2026-09-28", next_observation)
+
+    assert first_name == "runtime_daily/longbridge/paper/2026-09-28/20260928T084000000000Z.json"
+    assert next_name == "runtime_daily/longbridge/paper/2026-09-28/20260928T084100000000Z.json"
+    assert first_name != next_name
 
 
 def test_existing_object_is_not_overwritten_and_unknown_write_is_not_retried(monkeypatch) -> None:

@@ -80,9 +80,9 @@ projected = project_listed_reports(
 
 报告列表和单份读取走已安装的存储客户端，带 20 秒时限、字节上限，并且 `retry=None`。列表扫描上限是 256 条，和最终保留的 20 条分开；预算内按 `updated` 取最新 20 条。扫描达到上限，或已发现超过 20 条因而只保留最新 20 条时，都记 `listing truncated`，`completeness` 为 incomplete。调度身份沿用 heartbeat 对服务主机和策略 run URI 的既有判断，读取入口是现有的 scheduler job list。
 
-对象路径是 `{prefix}/longbridge/paper/{business_date}.json`。`business_date` 和时区来自该目标的有效调度。文件内容就是 `project_listed_reports` 的原 JSON，不是资产曲线，也不是成交账本。`fills` 仍是未接通。上传使用现有存储客户端，`if_generation_match=0`、`timeout=20`、`retry=None`；同日对象已存在则不覆盖。列表或读取不完整时，对象里的 `read_errors` 和 `completeness` 保持不完整，不把这一天写成正常休市。
+新观测对象路径是 `{prefix}/longbridge/paper/{business_date}/{observedUTC}.json`，其中 `observedUTC` 为 `YYYYMMDDTHHMMSSffffffZ`。既有 `{business_date}.json` 对象作为旧记录保留，不读取、覆盖或删除。`business_date` 和时区来自该目标的有效调度；观测版本使用本次投影的 UTC `observed_at`。文件内容就是 `project_listed_reports` 的原 JSON，不是资产曲线，也不是成交账本。`fills` 仍是未接通。上传使用现有存储客户端，`if_generation_match=0`、`timeout=20`、`retry=None`；同一观测版本冲突时不 POST。每次新观测独立保存，保留当时的 `read_errors` 和 `completeness`，不把不完整日写成正常休市。
 
-可选的 QRS 日报同步另由 `RUNTIME_DAILY_SYNC_ENABLED` 精确等于 `true` 才开启，并要求 HTTPS 精确路径 `/api/runtime-daily/sync`。它复用既有 `EXECUTION_EVIDENCE_SYNC_TOKEN`，不增加 token 类型；workflow 仅在该开关开启时把 secret 送入当前 step。只允许固定 QRS PAPER 目标 `longbridge-quant-paper-service|russell_top50_leader_rotation|paper`，不由调用者指定或推导账户 key。只有本次 GCS 明确新建后才 POST 与 GCS 完全相同的 JSON；`already_recorded` 与写入结果未知均不 POST。POST 不跟随重定向、不重试，限制超时和响应大小。同步状态独立输出为 `qrs_sync=disabled|recorded|rejected|unknown`；网络结果未知或 QRS 拒绝不会撤销已保存的 GCS 记录，也不表示网页已经展示。成功响应必须回显同一 `business_date` 和 `target_key`，且包含服务端解析出的非空 `account_key` 才报告 `recorded`，但不会记录或输出该账户 key。
+可选的 QRS 日报同步另由 `RUNTIME_DAILY_SYNC_ENABLED` 精确等于 `true` 才开启，并要求 HTTPS 精确路径 `/api/runtime-daily/sync`。它复用既有 `EXECUTION_EVIDENCE_SYNC_TOKEN`，不增加 token 类型；workflow 仅在该开关开启时把 secret 送入当前 step。只允许固定 QRS PAPER 目标 `longbridge-quant-paper-service|russell_top50_leader_rotation|paper`，不由调用者指定或推导账户 key。只有本次 GCS 明确新建后才 POST 与该对象完全相同的 JSON；同一观测版本冲突及 GCS 写入结果未知均不 POST。POST 不跟随重定向、不重试，限制超时和响应大小。同步状态独立输出为 `qrs_sync=disabled|recorded|rejected|unknown`；网络结果未知或 QRS 拒绝不会撤销已保存的 GCS 记录，也不表示网页已经展示。成功响应必须回显同一 `business_date` 和 `target_key`，且包含服务端解析出的非空 `account_key` 才报告 `recorded`，但不会记录或输出该账户 key。
 
 heartbeat 的告警、返回码和交易链不变。这个步骤不调用 heartbeat 的 `main`。workflow 只在 PAPER、变量显式为 `true`、任务未取消且 Google 认证成功时运行；heartbeat 业务失败后仍可以写出异常投影。
 

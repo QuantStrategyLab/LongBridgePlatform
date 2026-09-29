@@ -42,6 +42,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Workflow matrix shape to render.",
     )
     parser.add_argument(
+        "--target",
+        default="all",
+        help="Render all targets (default) or exactly one manifest target ID.",
+    )
+    parser.add_argument(
         "--github-output",
         action="store_true",
         help="Append compact matrix=... to $GITHUB_OUTPUT for workflow jobs.",
@@ -51,6 +56,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         manifest = load_runtime_target_manifest(args.path or default_manifest_path())
         matrix = build_github_actions_matrix(manifest, profile=args.profile)
+        if args.target != "all":
+            selected = [row for row in matrix["target"] if row["id"] == args.target]
+            if not selected:
+                raise RuntimeTargetManifestError(
+                    f"Unknown target {args.target!r}; expected 'all' or a manifest target ID"
+                )
+            matrix["target"] = selected
     except RuntimeTargetManifestError as exc:
         print(f"runtime-target matrix render failed: {exc}", file=sys.stderr)
         return 1

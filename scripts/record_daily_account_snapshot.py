@@ -298,7 +298,7 @@ def _validate_scheduler_job(job: Mapping[str, Any], config: _Config) -> None:
         body_empty = body is None
     if (
         job.get("name") != config.scheduler_resource
-        or job.get("state") not in ({"ENABLED", "PAUSED"} if config.target_id == "hk" else {"ENABLED"})
+        or job.get("state") != "ENABLED"
         or target.get("httpMethod") != "POST"
         or target.get("uri") != f"{config.service_url}/probe"
         or not body_empty
