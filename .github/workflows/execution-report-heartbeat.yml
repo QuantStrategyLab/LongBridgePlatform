@@ -122,9 +122,9 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
 
-      - name: Record and sync daily paper account snapshot
+      - name: Record and sync daily account snapshot
         id: account_history
-        if: ${{ !cancelled() && matrix.target.label == 'PAPER' && vars.ACCOUNT_HISTORY_RECORDING_ENABLED == 'true' }}
+        if: ${{ !cancelled() && contains(fromJSON('["PAPER","HK","SG"]'), matrix.target.label) && vars.ACCOUNT_HISTORY_RECORDING_ENABLED == 'true' }}
         continue-on-error: true
         env:
           ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ vars.ACCOUNT_HISTORY_RECORDING_ENABLED }}

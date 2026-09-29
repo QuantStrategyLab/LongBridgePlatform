@@ -448,6 +448,7 @@ assert "git archive ${{" not in job
 assert "0b939723c1db3ef59175535998b470cbcd4b8824" in job
 assert "d8314a61df697cae1dd03a78ddc5c2fc4179ec67" in job
 assert "a2921d157efb887e9210fad6734ca040ea6e5293" in job
+assert "922f338fea7c46391b50bb8316ac88154596916f" in job
 assert '[ "${GITHUB_REPOSITORY:-}" != "QuantStrategyLab/LongBridgePlatform" ]' in job
 assert '[ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] || [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]' not in job
 for forbidden in ("sync_plan", "scheduler", "cleanup", "retire", "update-traffic"):
@@ -476,6 +477,7 @@ with open(os.environ["STUB_LOG"], "a") as stream:
 approved = "0b939723c1db3ef59175535998b470cbcd4b8824"
 http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
 probe_snapshot_candidate = "a2921d157efb887e9210fad6734ca040ea6e5293"
+sghk_snapshot_candidate = "922f338fea7c46391b50bb8316ac88154596916f"
 staged_source_revision = "longbridge-quant-paper-service-r36423178119"
 staged_source_image = (
     "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/synthetic-paper"
@@ -508,19 +510,22 @@ def declaration(name, pin):
 
 def base_env():
     service = os.environ["CLOUD_RUN_SERVICE"]
-    scope = os.environ.get("TARGET_ACCOUNT_SCOPE", "PAPER")
+    label = os.environ.get("WORKFLOW_TARGET", "PAPER")
+    scope = os.environ.get("TARGET_ACCOUNT_SCOPE", label)
+    profile = "tqqq_growth_income" if label == "HK" else "soxl_soxx_trend_income" if label == "SG" else "russell_top50_leader_rotation"
     target = {
         "platform_id": "longbridge",
         "service_name": service,
         "account_scope": scope,
-        "account_selector": ["PAPER"],
-        "strategy_profile": "russell_top50_leader_rotation",
+        "account_selector": [scope],
+        "deployment_selector": "HK" if label == "HK" else "SG" if label == "SG" else "PAPER",
+        "strategy_profile": profile,
         "execution_mode": "live",
         "dry_run_only": False,
     }
     return [
         {"name": "RUNTIME_TARGET_JSON", "value": json.dumps(target)},
-        {"name": "STRATEGY_PROFILE", "value": "russell_top50_leader_rotation"},
+        {"name": "STRATEGY_PROFILE", "value": profile},
         {"name": "LONGBRIDGE_DRY_RUN_ONLY", "value": "false"},
         {"name": "RUNTIME_TARGET_ENABLED", "value": "true"},
     ]
@@ -569,7 +574,10 @@ def staged_source_revision_payload():
 
 def staged_revision():
     service = os.environ["CLOUD_RUN_SERVICE"]
-    image_repo = "registry.invalid/synthetic-project/synthetic-images/longbridgeplatform/" + service
+    image_repo = (
+        "registry.invalid/" + os.environ["GCP_PROJECT_ID"] + "/"
+        + os.environ["GCP_ARTIFACT_REGISTRY_REPOSITORY"] + "/longbridgeplatform/" + service
+    )
     env = base_env()
     history_keys = (
         "ACCOUNT_HISTORY_RECORDING_ENABLED",
@@ -604,11 +612,11 @@ def staged_revision():
 
 if command == "git" and args == ["rev-parse", "HEAD"]:
     print(os.environ["CHECKOUT_SHA"])
-elif command == "git" and args[:4] == ["fetch", "--depth", "1", "origin"] and args[4] in (approved, http_snapshot_candidate, probe_snapshot_candidate):
+elif command == "git" and args[:4] == ["fetch", "--depth", "1", "origin"] and args[4] in (approved, http_snapshot_candidate, probe_snapshot_candidate, sghk_snapshot_candidate):
     pass
-elif command == "git" and args[:2] == ["cat-file", "-t"] and args[2] in (approved, http_snapshot_candidate, probe_snapshot_candidate):
+elif command == "git" and args[:2] == ["cat-file", "-t"] and args[2] in (approved, http_snapshot_candidate, probe_snapshot_candidate, sghk_snapshot_candidate):
     print("commit")
-elif command == "git" and args[:1] == ["rev-parse"] and len(args) == 2 and args[1] in (approved + "^{commit}", http_snapshot_candidate + "^{commit}", probe_snapshot_candidate + "^{commit}"):
+elif command == "git" and args[:1] == ["rev-parse"] and len(args) == 2 and args[1] in (approved + "^{commit}", http_snapshot_candidate + "^{commit}", probe_snapshot_candidate + "^{commit}", sghk_snapshot_candidate + "^{commit}"):
     print(args[1].split("^", 1)[0])
 elif command == "git" and args == ["archive", "HEAD"]:
     print("synthetic tracked source archive")
@@ -618,11 +626,13 @@ elif command == "git" and args == ["archive", http_snapshot_candidate]:
     print("synthetic HTTP snapshot candidate archive")
 elif command == "git" and args == ["archive", probe_snapshot_candidate]:
     print("synthetic internal probe snapshot candidate archive")
+elif command == "git" and args == ["archive", sghk_snapshot_candidate]:
+    print("synthetic SG/HK account snapshot candidate archive")
 elif command == "git" and args[:1] == ["show"] and len(args) == 2 and ":" in args[1]:
     sha, name = args[1].split(":", 1)
     if name not in ("uv.lock", "pyproject.toml", "qsl.toml"):
         raise SystemExit("unexpected git show")
-    if sha not in ("a" * 40, serving_sha, approved, http_snapshot_candidate, probe_snapshot_candidate):
+    if sha not in ("a" * 40, serving_sha, approved, http_snapshot_candidate, probe_snapshot_candidate, sghk_snapshot_candidate):
         raise SystemExit("admission read an unapproved source lock")
     pin = ("f" * 40) if sha == serving_sha and os.environ.get("BAD_SERVING_LOCK") == "1" else ues
     print(declaration(name, pin), end="")
@@ -703,6 +713,7 @@ else:
     candidate = "0b939723c1db3ef59175535998b470cbcd4b8824"
     http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
     probe_snapshot_candidate = "a2921d157efb887e9210fad6734ca040ea6e5293"
+    sghk_snapshot_candidate = "922f338fea7c46391b50bb8316ac88154596916f"
     staged_source_revision = "longbridge-quant-paper-service-r36423178119"
     staged_source_image = (
         "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/"
@@ -714,6 +725,10 @@ else:
         "ACCOUNT_HISTORY_TARGET_ID": "paper",
         "ACCOUNT_HISTORY_EXPECTED_SCOPE": "PAPER",
     }
+    sghk_history = {
+        "ACCOUNT_HISTORY_RECORDING_ENABLED": "true",
+        "ACCOUNT_HISTORY_GCS_PREFIX": "gs://qsl-runtime-logs-shared/longbridge/account_snapshots",
+    }
 
     def execute(**overrides):
         log.write_text("")
@@ -723,13 +738,23 @@ else:
         count_path = root / "service-json-count"
         if count_path.exists():
             count_path.unlink()
-        result = subprocess.run(
-            ["bash", "-c", "\n".join(blocks)], env={**base, **overrides},
-            text=True, capture_output=True, cwd=root,
-        )
-        if result.returncode:
-            print(result.stderr, file=sys.stderr)
-        return result.returncode, [json.loads(line) for line in log.read_text().splitlines()]
+        step_env_path = root / "github-env"
+        step_env_path.write_text("")
+        step_env = {**base, **overrides, "GITHUB_ENV": str(step_env_path)}
+        for block in blocks:
+            result = subprocess.run(
+                ["bash", "-c", block], env=step_env,
+                text=True, capture_output=True, cwd=root,
+            )
+            if result.returncode:
+                print(result.stderr, file=sys.stderr)
+                return result.returncode, [json.loads(line) for line in log.read_text().splitlines()]
+            # GitHub exposes values appended to GITHUB_ENV only to later steps.
+            for line in step_env_path.read_text().splitlines():
+                name, separator, value = line.partition("=")
+                if separator:
+                    step_env[name] = value
+        return 0, [json.loads(line) for line in log.read_text().splitlines()]
 
     cases = 0
     for label in ("PAPER", "HK", "SG"):
@@ -865,6 +890,68 @@ else:
         {"SOURCE_COMMIT": probe_snapshot_candidate, **history},
         {"SOURCE_COMMIT": probe_snapshot_candidate, "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true"},
         {"SOURCE_COMMIT": probe_snapshot_candidate, "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false"},
+    ):
+        code, calls = execute(**overrides)
+        assert code != 0 and calls == [], overrides
+        cases += 1
+    for label, region in (("HK", "asia-east2"), ("SG", "asia-southeast1")):
+        target_history = {
+            **sghk_history,
+            "ACCOUNT_HISTORY_TARGET_ID": label.lower(),
+            "ACCOUNT_HISTORY_EXPECTED_SCOPE": label,
+        }
+        service = f"longbridge-quant-{label.lower()}-service"
+        code, calls = execute(
+            SOURCE_COMMIT=sghk_snapshot_candidate,
+            CHECKOUT_SHA="a" * 40,
+            WORKFLOW_TARGET=label,
+            CLOUD_RUN_SERVICE=service,
+            CLOUD_RUN_REGION=region,
+            GCP_PROJECT_ID="longbridgequant",
+            **target_history,
+        )
+        assert code == 0, (label, code, calls)
+        updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
+        image_repo = f"registry.invalid/longbridgequant/synthetic-images/longbridgeplatform/{service}"
+        assert len(updates) == 1
+        assert "--no-traffic" in updates[0]
+        assert updates[0][-1] == "--revision-suffix=r123"
+        assert f"--update-labels=commit-sha={sghk_snapshot_candidate},github-run-id=123" in updates[0]
+        assert f"--image={image_repo}@{base['IMAGE_DIGEST']}" in updates[0]
+        assert "--update-env-vars=" + ",".join(f"{key}={value}" for key, value in target_history.items()) in updates[0]
+        assert ["git", "fetch", "--depth", "1", "origin", sghk_snapshot_candidate] in calls
+        assert ["git", "archive", sghk_snapshot_candidate] in calls
+        assert ["git", "archive", "HEAD"] not in calls
+        assert any(call[:2] == ["git", "show"] and call[2].startswith(sghk_snapshot_candidate + ":") for call in calls)
+        assert any(call[:3] == ["uv", "run", "--no-sync"] for call in calls)
+        assert not any("ACCOUNT_SNAPSHOT_ENABLED_INPUT" in part for call in calls for part in call)
+        cases += 1
+    for overrides in (
+        {
+            "SOURCE_COMMIT": sghk_snapshot_candidate,
+            "WORKFLOW_TARGET": "HK",
+            "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
+            "CLOUD_RUN_REGION": "asia-east2",
+            "GCP_PROJECT_ID": "longbridgequant",
+            **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "sg", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK"},
+        },
+        {
+            "SOURCE_COMMIT": sghk_snapshot_candidate,
+            "WORKFLOW_TARGET": "HK",
+            "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
+            "CLOUD_RUN_REGION": "asia-east2",
+            "GCP_PROJECT_ID": "longbridgequant",
+            **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "hk", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "SG"},
+        },
+        {
+            "SOURCE_COMMIT": sghk_snapshot_candidate,
+            "WORKFLOW_TARGET": "HK",
+            "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
+            "CLOUD_RUN_REGION": "asia-east2",
+            "GCP_PROJECT_ID": "longbridgequant",
+            "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false",
+            **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "hk", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK"},
+        },
     ):
         code, calls = execute(**overrides)
         assert code != 0 and calls == [], overrides

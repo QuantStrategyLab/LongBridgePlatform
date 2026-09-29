@@ -84,6 +84,8 @@ HISTORY = {
 MAIN_SHA = "a" * 40
 HTTP_SNAPSHOT_CANDIDATE = admission.APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE
 PROBE_SNAPSHOT_CANDIDATE = admission.APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE
+SGHK_SNAPSHOT_CANDIDATE = admission.APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE
+SGHK_PREFIX = "gs://qsl-runtime-logs-shared/longbridge/account_snapshots"
 STAGED_SOURCE_REVISION = "longbridge-quant-paper-service-r36423178119"
 STAGED_SOURCE_IMAGE = (
     "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/paper-service"
@@ -326,6 +328,151 @@ def test_prepare_accepts_live_paper_when_candidate_matches_serving():
     assert plan["image_commit"] == CANDIDATE
     assert plan["history_values"]["ACCOUNT_HISTORY_TARGET_ID"] == "paper"
     assert "secret" not in json.dumps(plan)
+
+
+def _sghk_target(target_label: str) -> dict:
+    target_id = target_label.lower()
+    scope = target_label
+    service = f"longbridge-quant-{target_id}-service"
+    return {
+        "platform_id": "longbridge",
+        "service_name": service,
+        "account_scope": scope,
+        "account_selector": scope,
+        "deployment_selector": "HK" if target_id == "hk" else "SG",
+        "strategy_profile": "tqqq_growth_income" if target_id == "hk" else "soxl_soxx_trend_income",
+        "execution_mode": "live",
+        "dry_run_only": False,
+    }
+
+
+def _sghk_history(target_label: str) -> dict[str, str]:
+    target_id = target_label.lower()
+    return {
+        "WORKFLOW_TARGET": target_label,
+        "ACCOUNT_HISTORY_RECORDING_ENABLED": "true",
+        "ACCOUNT_HISTORY_GCS_PREFIX": SGHK_PREFIX,
+        "ACCOUNT_HISTORY_TARGET_ID": target_id,
+        "ACCOUNT_HISTORY_EXPECTED_SCOPE": target_label,
+    }
+
+
+def _prepare_sghk(target_label: str, *, target_overrides=None, history_overrides=None, project="longbridgequant", region=None):
+    target = _sghk_target(target_label)
+    target.update(target_overrides or {})
+    service = target["service_name"]
+    target_id = target_label.lower()
+    if region is None:
+        region = {"hk": "asia-east2", "sg": "asia-southeast1"}[target_id]
+    env = [
+        {"name": "RUNTIME_TARGET_JSON", "value": json.dumps(target)},
+        {"name": "STRATEGY_PROFILE", "value": target["strategy_profile"]},
+        {"name": "LONGBRIDGE_DRY_RUN_ONLY", "value": "false"},
+        {"name": "RUNTIME_TARGET_ENABLED", "value": "false"},
+    ]
+    service_json = {
+        "metadata": {"annotations": {"run.googleapis.com/ingress": "internal"}},
+        "spec": {"template": {"spec": {"serviceAccountName": "runtime@example.invalid", "containers": [{"env": env}]}}},
+        "status": {"traffic": [{"revisionName": "serving-rev", "percent": 100}]},
+    }
+    candidate_env = _sghk_history(target_label)
+    candidate_env.update(history_overrides or {})
+
+    def run(command):
+        if command[:3] == ["gcloud", "run", "revisions"]:
+            return json.dumps({
+                "metadata": {"name": "serving-rev", "labels": {"commit-sha": SERVING}},
+                "spec": {"serviceAccountName": "runtime@example.invalid", "containers": [{"env": env, "image": "serving-image"}]},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            })
+        sha, name = command[2].split(":", 1)
+        return _declaration(name, UES)
+
+    plan = admission.prepare_image_only_staging(
+        service=service,
+        project=project,
+        region=region,
+        service_json=service_json,
+        env=candidate_env,
+        image_commit=SGHK_SNAPSHOT_CANDIDATE,
+        run=run,
+    )
+    return plan, candidate_env
+
+
+@pytest.mark.parametrize("target_label", ["HK", "SG"])
+def test_sghk_snapshot_candidate_requires_exact_target_and_history_quartet(target_label):
+    plan, env = _prepare_sghk(target_label)
+    assert plan["image_commit"] == SGHK_SNAPSHOT_CANDIDATE
+    assert plan["history_values"]["ACCOUNT_HISTORY_TARGET_ID"] == target_label.lower()
+    assert plan["history_values"]["ACCOUNT_HISTORY_EXPECTED_SCOPE"] == target_label
+    assert plan["snapshot_value"] is None and plan["snapshot_arg"] == ""
+    assert plan["history_arg"] == ",".join(
+        f"{key}={env[key]}" for key in admission._HISTORY_KEYS
+    )
+    assert plan["serving_traffic"] == [{"revisionName": "serving-rev", "percent": 100}]
+
+
+@pytest.mark.parametrize(
+    ("target_label", "history_overrides", "target_overrides", "project", "region"),
+    [
+        ("HK", {"ACCOUNT_HISTORY_TARGET_ID": "sg"}, None, "longbridgequant", "asia-east2"),
+        ("HK", {"ACCOUNT_HISTORY_EXPECTED_SCOPE": "SG"}, None, "longbridgequant", "asia-east2"),
+        ("HK", {"ACCOUNT_HISTORY_GCS_PREFIX": "gs://other-bucket/longbridge/account_snapshots"}, None, "longbridgequant", "asia-east2"),
+        ("SG", {"ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false"}, None, "longbridgequant", "asia-southeast1"),
+        ("HK", None, {"account_scope": "SG"}, "longbridgequant", "asia-east2"),
+        ("HK", None, {"account_selector": "hk"}, "longbridgequant", "asia-east2"),
+        ("SG", None, {"deployment_selector": "sg"}, "longbridgequant", "asia-southeast1"),
+        ("SG", None, None, "other-project", "asia-southeast1"),
+        ("HK", None, None, "longbridgequant", "asia-east1"),
+    ],
+)
+def test_sghk_candidate_rejects_wrong_scope_selector_or_environment(
+    target_label, history_overrides, target_overrides, project, region
+):
+    with pytest.raises(admission.AdmissionError):
+        _prepare_sghk(
+            target_label,
+            history_overrides=history_overrides,
+            target_overrides=target_overrides,
+            project=project,
+            region=region,
+        )
+
+
+def test_sghk_candidate_rejects_arbitrary_sha_and_template_drift():
+    env = _sghk_history("HK")
+    with pytest.raises(admission.AdmissionError):
+        admission._validate_image_only_source(image_commit="b" * 40, env=env, project="longbridgequant")
+
+    target = _sghk_target("HK")
+    service_json = {
+        "metadata": {"annotations": {"run.googleapis.com/ingress": "internal"}},
+        "spec": {"template": {"spec": {"serviceAccountName": "runtime@example.invalid", "containers": [{"env": [
+            {"name": "RUNTIME_TARGET_JSON", "value": json.dumps(target)},
+            {"name": "STRATEGY_PROFILE", "value": target["strategy_profile"]},
+            {"name": "LONGBRIDGE_DRY_RUN_ONLY", "value": "false"},
+            {"name": "RUNTIME_TARGET_ENABLED", "value": "false"},
+        ]}]}}},
+        "status": {"traffic": [{"revisionName": "serving-rev", "percent": 100}]},
+    }
+    drifted_env = list(service_json["spec"]["template"]["spec"]["containers"][0]["env"])
+    drifted_env.append({"name": "UNEXPECTED", "value": "1"})
+
+    def run(command):
+        if command[:3] == ["gcloud", "run", "revisions"]:
+            return json.dumps({
+                "metadata": {"name": "serving-rev", "labels": {"commit-sha": SERVING}},
+                "spec": {"serviceAccountName": "runtime@example.invalid", "containers": [{"env": drifted_env, "image": "serving-image"}]},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            })
+        return _declaration(command[2].split(":", 1)[1], UES)
+
+    with pytest.raises(admission.AdmissionError, match="template does not match"):
+        admission.prepare_image_only_staging(
+            service=target["service_name"], project="longbridgequant", region="asia-east2",
+            service_json=service_json, env=env, image_commit=SGHK_SNAPSHOT_CANDIDATE, run=run,
+        )
 
 
 @pytest.mark.parametrize("snapshot_setting", ["", "true", "false"])

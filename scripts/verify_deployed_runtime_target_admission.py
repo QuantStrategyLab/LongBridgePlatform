@@ -39,6 +39,8 @@ APPROVED_PAPER_HISTORY_CANDIDATE = "0b939723c1db3ef59175535998b470cbcd4b8824"
 APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
 # Reviewed PAPER internal-probe snapshot producer. It carries no history or snapshot env update.
 APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE = "a2921d157efb887e9210fad6734ca040ea6e5293"
+# Reviewed read-only SG/HK account-snapshot producer. It is not a PAPER candidate.
+APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE = "922f338fea7c46391b50bb8316ac88154596916f"
 # One already-staged PAPER revision that may hold history env while serving still runs an older image.
 _PAPER_HTTP_STAGED_SOURCE_REVISION = "longbridge-quant-paper-service-r36423178119"
 _PAPER_HTTP_STAGED_SOURCE_COMMIT = APPROVED_PAPER_HISTORY_CANDIDATE
@@ -398,20 +400,26 @@ def _literal_values(configuration: Mapping[str, Any]) -> dict[str, str]:
     return {item["name"]: item["value"] for item in configuration["env"] if "value" in item}
 
 
-def history_update(env: Mapping[str, str], *, workflow_target: str, project_id: str) -> dict[str, str] | None:
-    """Return an explicit PAPER history update, or None when the four inputs were omitted."""
+def history_update(
+    env: Mapping[str, str], *, workflow_target: str, project_id: str, allow_sghk: bool = False
+) -> dict[str, str] | None:
+    """Return one exact target history update, or None when the four inputs were omitted."""
 
     values = {key: str(env.get(key) or "") for key in _HISTORY_KEYS}
     if all(value == "" for value in values.values()):
         return None
-    if workflow_target != "PAPER":
-        raise AdmissionError("history settings are only admitted for PAPER")
     if any(not value or _UNSAFE_HISTORY.search(value) for value in values.values()):
         raise AdmissionError("history settings are invalid")
     if values["ACCOUNT_HISTORY_RECORDING_ENABLED"] != "true":
         raise AdmissionError("history settings are invalid")
-    if values["ACCOUNT_HISTORY_EXPECTED_SCOPE"] != "PAPER" or values["ACCOUNT_HISTORY_TARGET_ID"] != "paper":
-        raise AdmissionError("history settings are only admitted for PAPER")
+    target_pairs = {"PAPER": ("paper", "PAPER")}
+    if allow_sghk:
+        target_pairs.update({"HK": ("hk", "HK"), "SG": ("sg", "SG")})
+    expected = target_pairs.get(workflow_target)
+    if expected is None:
+        raise AdmissionError("history settings are only admitted for approved targets")
+    if (values["ACCOUNT_HISTORY_TARGET_ID"], values["ACCOUNT_HISTORY_EXPECTED_SCOPE"]) != expected:
+        raise AdmissionError("history settings do not match the selected target")
     if _PROJECT_ID.fullmatch(project_id) is None or _TARGET_ID.fullmatch(values["ACCOUNT_HISTORY_TARGET_ID"]) is None:
         raise AdmissionError("history settings are invalid")
     try:
@@ -420,7 +428,49 @@ def history_update(env: Mapping[str, str], *, workflow_target: str, project_id: 
         raise AdmissionError("history settings are invalid") from None
     if prefix != values["ACCOUNT_HISTORY_GCS_PREFIX"]:
         raise AdmissionError("history settings are invalid")
+    if allow_sghk and prefix != "gs://qsl-runtime-logs-shared/longbridge/account_snapshots":
+        raise AdmissionError("history settings are not admitted for this candidate")
     return values
+
+
+def _require_sghk_candidate_identity(
+    *, target_label: str, service: str, project: str, region: str, service_json: Mapping[str, Any]
+) -> None:
+    expected = {"HK": ("hk", "HK"), "SG": ("sg", "SG")}.get(target_label)
+    if expected is None or project != "longbridgequant":
+        raise AdmissionError("candidate target does not match the approved account")
+    target_id, scope = expected
+    try:
+        from application.runtime_target_manifest import load_runtime_target_manifest
+
+        matches = [item for item in load_runtime_target_manifest().targets if item.id == target_id]
+    except Exception:
+        raise AdmissionError("candidate target does not match the approved account") from None
+    if (
+        len(matches) != 1
+        or matches[0].mode != "live"
+        or matches[0].account_scope != scope
+        or matches[0].service != service
+        or matches[0].region != region
+    ):
+        raise AdmissionError("candidate target does not match the approved account")
+    env = _container_env(service_json)
+    try:
+        runtime_target = json.loads(env.get("RUNTIME_TARGET_JSON") or env.get("QSL_RUNTIME_TARGET_JSON") or "{}")
+    except json.JSONDecodeError:
+        raise AdmissionError("runtime target identity does not match the approved account") from None
+    selector = runtime_target.get("account_selector") if isinstance(runtime_target, Mapping) else None
+    selectors = (selector,) if isinstance(selector, str) else tuple(selector) if isinstance(selector, list) else None
+    deployment_selector = str(runtime_target.get("deployment_selector") or "") if isinstance(runtime_target, Mapping) else ""
+    if (
+        not isinstance(runtime_target, Mapping)
+        or runtime_target.get("platform_id") != "longbridge"
+        or runtime_target.get("service_name") != service
+        or runtime_target.get("account_scope") != scope
+        or selectors != (scope,)
+        or deployment_selector != ("HK" if target_id == "hk" else "SG")
+    ):
+        raise AdmissionError("runtime target identity does not match the approved account")
 
 
 def _history_arg(values: Mapping[str, str] | None) -> str:
@@ -668,7 +718,16 @@ def prepare_image_only_staging(
         image_commit=image_commit, env=env, project=project
     )
     admission = verify_service(service=service, service_json=service_json)
-    _require_paper_target_identity(service=service, service_json=service_json)
+    if image_commit == APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE:
+        _require_sghk_candidate_identity(
+            target_label=str(env.get("WORKFLOW_TARGET") or ""),
+            service=service,
+            project=project,
+            region=region,
+            service_json=service_json,
+        )
+    else:
+        _require_paper_target_identity(service=service, service_json=service_json)
     try:
         traffic = serving_traffic_rows(service_json)
     except ReconcileError:
@@ -746,7 +805,10 @@ def _validate_image_only_source(
     *, image_commit: str, env: Mapping[str, str], project: str
 ) -> tuple[dict[str, str] | None, str | None]:
     history = history_update(
-        env, workflow_target=str(env.get("WORKFLOW_TARGET") or ""), project_id=project
+        env,
+        workflow_target=str(env.get("WORKFLOW_TARGET") or ""),
+        project_id=project,
+        allow_sghk=image_commit == APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE,
     )
     snapshot_value = _account_snapshot_update(env, workflow_target=str(env.get("WORKFLOW_TARGET") or ""))
     if image_commit == APPROVED_PAPER_HISTORY_CANDIDATE:
@@ -759,6 +821,13 @@ def _validate_image_only_source(
         if (
             str(env.get("WORKFLOW_TARGET") or "") != "PAPER"
             or history is not None
+            or snapshot_value is not None
+        ):
+            raise AdmissionError("image source is not approved")
+    elif image_commit == APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE:
+        if (
+            str(env.get("WORKFLOW_TARGET") or "") not in {"HK", "SG"}
+            or history is None
             or snapshot_value is not None
         ):
             raise AdmissionError("image source is not approved")

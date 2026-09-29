@@ -205,6 +205,7 @@ jobs:
           approved_candidate=0b939723c1db3ef59175535998b470cbcd4b8824
           approved_http_snapshot_candidate=d8314a61df697cae1dd03a78ddc5c2fc4179ec67
           approved_probe_snapshot_candidate=a2921d157efb887e9210fad6734ca040ea6e5293
+          approved_sghk_snapshot_candidate=922f338fea7c46391b50bb8316ac88154596916f
           history_count=0
           for history_value in \
             "${ACCOUNT_HISTORY_RECORDING_ENABLED:-}" \
@@ -222,13 +223,28 @@ jobs:
               esac
             fi
           done
-          if [ "${history_count}" -ne 0 ] && [ "${WORKFLOW_TARGET}" != "PAPER" ]; then
-            echo "History settings are only admitted for PAPER." >&2
+          if [ "${history_count}" -ne 0 ] && [ "${WORKFLOW_TARGET}" != "PAPER" ] \
+            && [ "${WORKFLOW_TARGET}" != "HK" ] && [ "${WORKFLOW_TARGET}" != "SG" ]; then
+            echo "History settings are not admitted for this target." >&2
             exit 1
           fi
           if [ "${history_count}" -ne 0 ] && [ "${history_count}" -ne 4 ]; then
             echo "History settings are invalid." >&2
             exit 1
+          fi
+          if [ "${history_count}" -eq 4 ] && [ "${WORKFLOW_TARGET}" != "PAPER" ]; then
+            case "${WORKFLOW_TARGET}" in
+              HK) expected_target=hk ;;
+              SG) expected_target=sg ;;
+              *) echo "History settings are not admitted for this target." >&2; exit 1 ;;
+            esac
+            if [ "${ACCOUNT_HISTORY_RECORDING_ENABLED}" != "true" ] \
+              || [ "${ACCOUNT_HISTORY_TARGET_ID}" != "${expected_target}" ] \
+              || [ "${ACCOUNT_HISTORY_EXPECTED_SCOPE}" != "${WORKFLOW_TARGET}" ] \
+              || [ "${ACCOUNT_HISTORY_GCS_PREFIX}" != "gs://qsl-runtime-logs-shared/longbridge/account_snapshots" ]; then
+              echo "History settings do not match the approved account." >&2
+              exit 1
+            fi
           fi
           snapshot_setting="${ACCOUNT_SNAPSHOT_ENABLED_INPUT:-}"
           if [ -n "${snapshot_setting}" ] \
@@ -257,6 +273,10 @@ jobs:
             && [ -z "${snapshot_setting}" ] \
             && [ "${SOURCE_COMMIT}" = "${approved_probe_snapshot_candidate}" ]; then
             image_mode=probe
+          elif { [ "${WORKFLOW_TARGET}" = "HK" ] || [ "${WORKFLOW_TARGET}" = "SG" ]; } \
+            && [ "${history_count}" -eq 4 ] && [ -z "${snapshot_setting}" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_sghk_snapshot_candidate}" ]; then
+            image_mode=account-history
           else
             echo "Image source is not approved." >&2
             exit 1
@@ -281,13 +301,13 @@ jobs:
           fi
 
       - name: Set up Python for image-only admission
-        if: inputs.target == 'PAPER'
+        if: inputs.target == 'PAPER' || inputs.target == 'HK' || inputs.target == 'SG'
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install frozen image-only admission dependencies
-        if: inputs.target == 'PAPER'
+        if: inputs.target == 'PAPER' || inputs.target == 'HK' || inputs.target == 'SG'
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip uv
@@ -311,6 +331,12 @@ jobs:
           approved_candidate=0b939723c1db3ef59175535998b470cbcd4b8824
           approved_http_snapshot_candidate=d8314a61df697cae1dd03a78ddc5c2fc4179ec67
           approved_probe_snapshot_candidate=a2921d157efb887e9210fad6734ca040ea6e5293
+          approved_sghk_snapshot_candidate=922f338fea7c46391b50bb8316ac88154596916f
+          case "${WORKFLOW_TARGET}" in
+            HK) expected_sghk_target=hk ;;
+            SG) expected_sghk_target=sg ;;
+            *) expected_sghk_target="" ;;
+          esac
           history_count=0
           for history_value in \
             "${ACCOUNT_HISTORY_RECORDING_ENABLED:-}" \
@@ -335,6 +361,14 @@ jobs:
             && [ -z "${snapshot_setting}" ] \
             && [ "${SOURCE_COMMIT}" = "${approved_probe_snapshot_candidate}" ]; then
             image_mode=probe
+          elif { [ "${WORKFLOW_TARGET}" = "HK" ] || [ "${WORKFLOW_TARGET}" = "SG" ]; } \
+            && [ "${history_count}" -eq 4 ] && [ -z "${snapshot_setting}" ] \
+            && [ "${ACCOUNT_HISTORY_RECORDING_ENABLED}" = "true" ] \
+            && [ "${ACCOUNT_HISTORY_TARGET_ID}" = "${expected_sghk_target}" ] \
+            && [ "${ACCOUNT_HISTORY_EXPECTED_SCOPE}" = "${WORKFLOW_TARGET}" ] \
+            && [ "${ACCOUNT_HISTORY_GCS_PREFIX}" = "gs://qsl-runtime-logs-shared/longbridge/account_snapshots" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_sghk_snapshot_candidate}" ]; then
+            image_mode=account-history
           else
             echo "Image source is not approved." >&2
             exit 1
@@ -348,6 +382,9 @@ jobs:
           elif [ "${image_mode}" = "probe" ]; then
             archive_ref="${approved_probe_snapshot_candidate}"
             image_tag="${approved_probe_snapshot_candidate}"
+          elif [ "${image_mode}" = "account-history" ]; then
+            archive_ref="${approved_sghk_snapshot_candidate}"
+            image_tag="${approved_sghk_snapshot_candidate}"
           else
             archive_ref="${approved_candidate}"
             image_tag="${approved_candidate}"
@@ -370,7 +407,7 @@ jobs:
               exit 1
             fi
           fi
-          if [ "${WORKFLOW_TARGET}" = "PAPER" ]; then
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ]; then
             plan="$(mktemp)"
             uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_deployed_runtime_target_admission.py" \
               --project="${GCP_PROJECT_ID}" \
@@ -409,7 +446,7 @@ jobs:
           if [ -n "${env_update_arg}" ]; then
             update_command+=(--update-env-vars="${env_update_arg}")
           fi
-          if [ "${WORKFLOW_TARGET}" = "PAPER" ]; then
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ]; then
             revision_suffix="r${GITHUB_RUN_ID}"
             revision_name="${CLOUD_RUN_SERVICE}-${revision_suffix}"
             if [[ ! "${GITHUB_RUN_ID}" =~ ^[0-9]+$ ]] \
@@ -420,7 +457,7 @@ jobs:
             update_command+=(--revision-suffix="${revision_suffix}")
           fi
           "${update_command[@]}"
-          if [ "${WORKFLOW_TARGET}" = "PAPER" ]; then
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ]; then
             uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_deployed_runtime_target_admission.py" \
               --project="${GCP_PROJECT_ID}" \
               --region="${CLOUD_RUN_REGION}" \
