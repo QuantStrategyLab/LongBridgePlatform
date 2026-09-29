@@ -204,8 +204,8 @@ jobs:
           # Trusted control code stays on this main checkout. The application archive is chosen below.
           approved_candidate=0b939723c1db3ef59175535998b470cbcd4b8824
           approved_http_snapshot_candidate=d8314a61df697cae1dd03a78ddc5c2fc4179ec67
-          approved_probe_snapshot_candidate=a2921d157efb887e9210fad6734ca040ea6e5293
-          approved_sghk_snapshot_candidate=922f338fea7c46391b50bb8316ac88154596916f
+          approved_probe_snapshot_candidate=318bf0419ec91002fd0f0dfd1bc80a0664a85e79
+          approved_sghk_snapshot_candidate=df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f
           history_count=0
           for history_value in \
             "${ACCOUNT_HISTORY_RECORDING_ENABLED:-}" \
@@ -330,8 +330,8 @@ jobs:
           set -euo pipefail
           approved_candidate=0b939723c1db3ef59175535998b470cbcd4b8824
           approved_http_snapshot_candidate=d8314a61df697cae1dd03a78ddc5c2fc4179ec67
-          approved_probe_snapshot_candidate=a2921d157efb887e9210fad6734ca040ea6e5293
-          approved_sghk_snapshot_candidate=922f338fea7c46391b50bb8316ac88154596916f
+          approved_probe_snapshot_candidate=318bf0419ec91002fd0f0dfd1bc80a0664a85e79
+          approved_sghk_snapshot_candidate=df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f
           case "${WORKFLOW_TARGET}" in
             HK) expected_sghk_target=hk ;;
             SG) expected_sghk_target=sg ;;
