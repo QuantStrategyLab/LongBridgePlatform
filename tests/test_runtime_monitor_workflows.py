@@ -123,7 +123,7 @@ def test_heartbeat_script_does_not_import_project_runtime_dependencies() -> None
     assert "from runtime_config_support import" not in script
 
 
-def test_paper_snapshot_sync_uses_internal_probe_and_preserves_heartbeat_failure():
+def test_account_snapshot_sync_uses_matrix_identity_and_preserves_heartbeat_failure():
     workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
     script = (ROOT / "scripts/record_daily_account_snapshot.py").read_text()
     account_step = workflow.index("id: account_history")
@@ -134,7 +134,9 @@ def test_paper_snapshot_sync_uses_internal_probe_and_preserves_heartbeat_failure
     assert 'cron: "20 22 * * *"' in workflow
     assert gcloud_setup < account_step < heartbeat < final_failure
     assert "continue-on-error: true" in workflow[account_step:heartbeat]
-    assert "if: ${{ !cancelled() && matrix.target.label == 'PAPER' && vars.ACCOUNT_HISTORY_RECORDING_ENABLED == 'true' }}" in workflow
+    assert "contains(fromJSON('[\"PAPER\",\"HK\",\"SG\"]'), matrix.target.label)" in workflow
+    assert "ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}" in workflow
+    assert "ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}" in workflow
     assert "ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}" in workflow
     assert "matrix.target.service" not in workflow
     assert "matrix.target.region" not in workflow

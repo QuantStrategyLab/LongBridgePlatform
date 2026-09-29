@@ -18,19 +18,25 @@ T0 = datetime(2026, 9, 28, 12, 0, tzinfo=timezone.utc)
 BINDING = "a" * 64
 OTHER_BINDING = "b" * 64
 SERVICE_URL = "https://longbridge-quant-paper-service-kcc3gcgmwq-de.a.run.app"
-PREFIX = "gs://acct-history/longbridge/account_snapshots"
+PREFIX = "gs://qsl-runtime-logs-shared/longbridge/account_snapshots"
 QRS_URL = "https://qrs.example.test/api/account-facts/sync"
 QRS_TOKEN = "synthetic-qrs-token"
 SECRET = "synthetic-secret-value"
 
 
-def _env(**overrides):
+def _env(target_id="paper", **overrides):
+    scope = {"paper": "PAPER", "hk": "HK", "sg": "SG"}[target_id]
+    service_url = {
+        "paper": SERVICE_URL,
+        "hk": "https://longbridge-quant-hk-service-kcc3gcgmwq-de.a.run.app",
+        "sg": "https://longbridge-quant-sg-service-kcc3gcgmwq-de.a.run.app",
+    }[target_id]
     result = {
         "ACCOUNT_HISTORY_RECORDING_ENABLED": "true",
-        "ACCOUNT_HISTORY_SERVICE_URL": SERVICE_URL,
+        "ACCOUNT_HISTORY_SERVICE_URL": service_url,
         "ACCOUNT_HISTORY_GCS_PREFIX": PREFIX,
-        "ACCOUNT_HISTORY_TARGET_ID": "paper",
-        "ACCOUNT_HISTORY_EXPECTED_SCOPE": "PAPER",
+        "ACCOUNT_HISTORY_TARGET_ID": target_id,
+        "ACCOUNT_HISTORY_EXPECTED_SCOPE": scope,
         "ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID": BINDING,
         "GOOGLE_CLOUD_PROJECT": "longbridgequant",
     }
@@ -38,16 +44,23 @@ def _env(**overrides):
     return result
 
 
-def _job(**overrides):
+def _job(target_id="paper", *, state="ENABLED", service_url=None, region=None, **overrides):
+    service = {
+        "paper": "longbridge-quant-paper-service",
+        "hk": "longbridge-quant-hk-service",
+        "sg": "longbridge-quant-sg-service",
+    }[target_id]
+    region = region or {"paper": "asia-east1", "hk": "asia-east2", "sg": "asia-southeast1"}[target_id]
+    service_url = service_url or _env(target_id)["ACCOUNT_HISTORY_SERVICE_URL"]
     job = {
-        "name": "projects/longbridgequant/locations/asia-east1/jobs/longbridge-quant-paper-service-probe-scheduler",
-        "state": "ENABLED",
+        "name": f"projects/longbridgequant/locations/{region}/jobs/{service}-probe-scheduler",
+        "state": state,
         "httpTarget": {
             "httpMethod": "POST",
-            "uri": f"{SERVICE_URL}/probe",
+            "uri": f"{service_url}/probe",
             "oidcToken": {
                 "serviceAccountEmail": "longbridge-platform-scheduler@longbridgequant.iam.gserviceaccount.com",
-                "audience": SERVICE_URL,
+                "audience": service_url,
             },
         },
         "retryConfig": {"retryCount": 0, "maxRetryDuration": "0s"},
@@ -56,14 +69,14 @@ def _job(**overrides):
     return job
 
 
-def _history(started=None, finished=None, *, binding=BINDING, balances=None, cash=None):
+def _history(started=None, finished=None, *, target_id="paper", binding=BINDING, scope=None, balances=None, cash=None):
     started = started or T0 + timedelta(seconds=1)
     finished = finished or T0 + timedelta(seconds=2)
     return {
         "schema_version": "longbridge_account_snapshot_history.v1",
         "snapshot_schema_version": "longbridge_account_snapshot.v1",
-        "account_scope": "PAPER",
-        "target_id": "paper",
+        "account_scope": scope or {"paper": "PAPER", "hk": "HK", "sg": "SG"}[target_id],
+        "target_id": target_id,
         "source_binding": {
             "kind": "deployment_scope_token_version",
             "status": "bound",
@@ -92,7 +105,7 @@ def _object(payload, *, path_date=None, raw=None, generation=7, size=None, error
     finished = datetime.fromisoformat(payload["observed_finished_at"])
     day = path_date or started.date().isoformat()
     object_name = (
-        f"longbridge/account_snapshots/paper/{BINDING}/{day}/"
+        f"longbridge/account_snapshots/{payload['target_id']}/{payload['source_binding']['id']}/{day}/"
         f"{finished.astimezone(timezone.utc).strftime('%H%M%S%fZ.json')}"
     )
     raw_bytes = raw if raw is not None else json.dumps(payload, separators=(",", ":")).encode()
@@ -150,7 +163,7 @@ class _Storage:
         )
 
     def bucket(self, bucket):
-        assert bucket == "acct-history"
+        assert bucket == "qsl-runtime-logs-shared"
         return self
 
     def blob(self, name, *, generation):
@@ -310,6 +323,61 @@ def test_scheduler_zero_retry_protobuf_defaults_are_accepted():
     result, spies = _record(spies=_Spies(objects=[_object(_history())]))
     assert result.status == "recorded"
     assert [call[0] for call in spies.session.calls] == ["get", "post"]
+
+
+@pytest.mark.parametrize(("target_id", "state"), [("hk", "PAUSED"), ("sg", "ENABLED")])
+def test_sghk_targets_use_exact_manifest_identity_and_publish_matching_history(target_id, state):
+    payload = _history(target_id=target_id)
+    job = _job(target_id, state=state)
+    spies = _Spies(objects=[_object(payload)], job=job)
+    result, spies = _record(
+        _env(
+            target_id,
+            ACCOUNT_FACTS_SYNC_ENABLED="true",
+            ACCOUNT_FACTS_SYNC_URL=QRS_URL,
+            ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+        ),
+        spies,
+    )
+
+    assert result.status == "recorded"
+    assert result.publish_status == "published"
+    expected_region = {"hk": "asia-east2", "sg": "asia-southeast1"}[target_id]
+    expected_service = {"hk": "longbridge-quant-hk-service", "sg": "longbridge-quant-sg-service"}[target_id]
+    assert spies.session.calls[0][1] == (
+        f"https://cloudscheduler.googleapis.com/v1/projects/longbridgequant/locations/"
+        f"{expected_region}/jobs/{expected_service}-probe-scheduler"
+    )
+    assert spies.session.calls[1][1].endswith(f"/{expected_service}-probe-scheduler:run")
+    assert spies.storage.list_calls[0][1]["prefix"].startswith(
+        f"longbridge/account_snapshots/{target_id}/{BINDING}/"
+    )
+    assert json.loads(spies.posts[0][1]["data"])["account_scope"] == {"hk": "HK", "sg": "SG"}[target_id]
+
+
+def test_paused_hk_probe_is_the_only_paused_scheduler_accepted():
+    hk_job = _job("hk", state="PAUSED")
+    hk_result, hk_spies = _record(_env("hk"), _Spies(objects=[_object(_history(target_id="hk"))], job=hk_job))
+    assert hk_result.status == "recorded"
+    assert [call[0] for call in hk_spies.session.calls] == ["get", "post"]
+
+    sg_job = _job("sg", state="PAUSED")
+    sg_result, sg_spies = _record(_env("sg"), _Spies(job=sg_job))
+    assert sg_result.category == "scheduler_job_mismatch"
+    assert [call[0] for call in sg_spies.session.calls] == ["get"]
+    assert sg_spies.open_calls == []
+
+
+@pytest.mark.parametrize(("target_id", "wrong_scope"), [("hk", "SG"), ("sg", "HK")])
+def test_cross_scope_snapshot_is_never_published(monkeypatch, target_id, wrong_scope):
+    monkeypatch.setattr(snapshots, "WAIT_SECONDS", 1)
+    payload = _history(target_id=target_id, scope=wrong_scope)
+    result, spies = _record(
+        _env(target_id),
+        _Spies(objects=[_object(payload)], job=_job(target_id, state="PAUSED" if target_id == "hk" else "ENABLED")),
+    )
+    assert result.category == "observation_timeout"
+    assert spies.posts == []
 
 
 def test_unknown_scheduler_trigger_is_attempted_once_and_never_lists():

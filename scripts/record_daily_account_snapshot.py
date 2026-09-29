@@ -20,7 +20,8 @@ HISTORY_SCHEMA = "longbridge_account_snapshot_history.v1"
 SNAPSHOT_SCHEMA = "longbridge_account_snapshot.v1"
 SOURCE_KIND = "deployment_scope_token_version"
 ACCOUNT_FACTS_SYNC_PATH = "/api/account-facts/sync"
-EXPECTED_SCOPE = "PAPER"
+_EXPECTED_TARGETS = {"paper": ("PAPER", "paper"), "hk": ("HK", "live"), "sg": ("SG", "live")}
+_EXPECTED_GCS_PREFIX = "gs://qsl-runtime-logs-shared/longbridge/account_snapshots"
 SCHEDULER_SERVICE_ACCOUNT = "longbridge-platform-scheduler@longbridgequant.iam.gserviceaccount.com"
 OBSERVATION_WINDOW = timedelta(minutes=15)
 WAIT_SECONDS = 180.0
@@ -68,6 +69,7 @@ class _Config:
     bucket: str
     prefix_path: str
     target_id: str
+    expected_scope: str
     source_binding_id: str
     scheduler_job: str
     scheduler_resource: str
@@ -154,21 +156,28 @@ def _config(env: Mapping[str, str]) -> _Config:
     target_id = str(env.get("ACCOUNT_HISTORY_TARGET_ID") or "").strip()
     expected_scope = str(env.get("ACCOUNT_HISTORY_EXPECTED_SCOPE") or "").strip()
     source_binding_id = str(env.get("ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID") or "").strip()
+    target_contract = _EXPECTED_TARGETS.get(target_id)
     if (
         _PROJECT_ID.fullmatch(project_id) is None
-        or target_id != "paper"
+        or project_id != "longbridgequant"
+        or target_contract is None
         or _TARGET_ID.fullmatch(target_id) is None
-        or expected_scope != EXPECTED_SCOPE
+        or expected_scope != target_contract[0]
+        or prefix != _EXPECTED_GCS_PREFIX
         or _BINDING_ID.fullmatch(source_binding_id) is None
     ):
         raise _Rejected("config_invalid")
     try:
         from application.runtime_target_manifest import load_runtime_target_manifest
 
-        matches = [target for target in load_runtime_target_manifest().targets if target.id == "paper"]
+        matches = [target for target in load_runtime_target_manifest().targets if target.id == target_id]
     except Exception:
         raise _Rejected("config_invalid") from None
-    if len(matches) != 1 or matches[0].mode != "paper":
+    if (
+        len(matches) != 1
+        or matches[0].mode != target_contract[1]
+        or matches[0].account_scope != expected_scope
+    ):
         raise _Rejected("config_invalid")
     service = matches[0].service
     region = matches[0].region
@@ -186,6 +195,7 @@ def _config(env: Mapping[str, str]) -> _Config:
         bucket=bucket,
         prefix_path=prefix_path,
         target_id=target_id,
+        expected_scope=expected_scope,
         source_binding_id=source_binding_id,
         scheduler_job=scheduler_job,
         scheduler_resource=scheduler_resource,
@@ -288,7 +298,7 @@ def _validate_scheduler_job(job: Mapping[str, Any], config: _Config) -> None:
         body_empty = body is None
     if (
         job.get("name") != config.scheduler_resource
-        or job.get("state") != "ENABLED"
+        or job.get("state") not in ({"ENABLED", "PAUSED"} if config.target_id == "hk" else {"ENABLED"})
         or target.get("httpMethod") != "POST"
         or target.get("uri") != f"{config.service_url}/probe"
         or not body_empty
@@ -394,7 +404,7 @@ def _list_candidates(
         remaining = deadline - monotonic()
         if remaining <= 0:
             raise _Rejected("observation_timeout")
-        prefix = f"{config.prefix_path}/paper/{config.source_binding_id}/{day.isoformat()}/"
+        prefix = f"{config.prefix_path}/{config.target_id}/{config.source_binding_id}/{day.isoformat()}/"
         try:
             blobs = client.list_blobs(
                 config.bucket,
@@ -497,7 +507,7 @@ def _validate_history_object(
         set(payload) != expected_fields
         or payload.get("schema_version") != HISTORY_SCHEMA
         or payload.get("snapshot_schema_version") != SNAPSHOT_SCHEMA
-        or payload.get("account_scope") != EXPECTED_SCOPE
+        or payload.get("account_scope") != config.expected_scope
         or payload.get("target_id") != config.target_id
         or payload.get("snapshot_atomic") is not False
         or not isinstance(binding, Mapping)
@@ -509,7 +519,7 @@ def _validate_history_object(
     started = _aware(payload.get("observed_started_at"))
     finished = _aware(payload.get("observed_finished_at"))
     expected_name = (
-        f"{config.prefix_path}/paper/{config.source_binding_id}/"
+        f"{config.prefix_path}/{config.target_id}/{config.source_binding_id}/"
         f"{started.date().isoformat()}/{_filename_for(finished)}"
     )
     if (
