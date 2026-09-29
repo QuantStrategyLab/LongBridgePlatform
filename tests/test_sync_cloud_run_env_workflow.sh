@@ -447,8 +447,8 @@ assert 'git archive "${SOURCE_COMMIT}"' not in job
 assert "git archive ${{" not in job
 assert "0b939723c1db3ef59175535998b470cbcd4b8824" in job
 assert "d8314a61df697cae1dd03a78ddc5c2fc4179ec67" in job
-assert "a2921d157efb887e9210fad6734ca040ea6e5293" in job
-assert "922f338fea7c46391b50bb8316ac88154596916f" in job
+assert "318bf0419ec91002fd0f0dfd1bc80a0664a85e79" in job
+assert "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f" in job
 assert '[ "${GITHUB_REPOSITORY:-}" != "QuantStrategyLab/LongBridgePlatform" ]' in job
 assert '[ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] || [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]' not in job
 for forbidden in ("sync_plan", "scheduler", "cleanup", "retire", "update-traffic"):
@@ -476,8 +476,8 @@ with open(os.environ["STUB_LOG"], "a") as stream:
     stream.write(json.dumps([command, *args]) + "\\n")
 approved = "0b939723c1db3ef59175535998b470cbcd4b8824"
 http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
-probe_snapshot_candidate = "a2921d157efb887e9210fad6734ca040ea6e5293"
-sghk_snapshot_candidate = "922f338fea7c46391b50bb8316ac88154596916f"
+probe_snapshot_candidate = "318bf0419ec91002fd0f0dfd1bc80a0664a85e79"
+sghk_snapshot_candidate = "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f"
 staged_source_revision = "longbridge-quant-paper-service-r36423178119"
 staged_source_image = (
     "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/synthetic-paper"
@@ -712,8 +712,8 @@ else:
     }
     candidate = "0b939723c1db3ef59175535998b470cbcd4b8824"
     http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
-    probe_snapshot_candidate = "a2921d157efb887e9210fad6734ca040ea6e5293"
-    sghk_snapshot_candidate = "922f338fea7c46391b50bb8316ac88154596916f"
+    probe_snapshot_candidate = "318bf0419ec91002fd0f0dfd1bc80a0664a85e79"
+    sghk_snapshot_candidate = "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f"
     staged_source_revision = "longbridge-quant-paper-service-r36423178119"
     staged_source_image = (
         "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/"
