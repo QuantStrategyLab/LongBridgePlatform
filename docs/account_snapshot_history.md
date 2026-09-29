@@ -1,6 +1,6 @@
 # 日频账户资产记录
 
-这是关闭默认的工程记录，不是已启用的资产曲线。每日 `execution-report-heartbeat` 在原有检查之后可以多跑一步；前面的 heartbeat 步骤失败时，这一步按 `success()` 跳过。不新增 Cloud Scheduler，也不改 `/run`、`/probe`、`/dry-run`。
+这是关闭默认的工程记录，不是已启用的资产曲线。每日 `execution-report-heartbeat` 在现有 Google Cloud 认证后单独运行 PAPER 采样步骤，随后继续原 heartbeat 检查。采样失败会保留失败状态但不跳过原检查，最后再使整个 workflow 失败。不新增 Cloud Scheduler，也不改 `/run`、`/probe`、`/dry-run`。
 
 ## 何时会写
 
@@ -8,14 +8,14 @@
 
 - 当前 matrix 目标的 `label` 是 `PAPER`
 - GitHub variable `ACCOUNT_HISTORY_RECORDING_ENABLED` 精确等于 `true`
-- 同一步提供 `ACCOUNT_HISTORY_SERVICE_URL`、`ACCOUNT_HISTORY_GCS_PREFIX`
+- 同一步提供 `ACCOUNT_HISTORY_SERVICE_URL`、`ACCOUNT_HISTORY_GCS_PREFIX` 和非敏感 `ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID`
 - 目标 ID 来自 `matrix.target.id`，期望 scope 来自 `matrix.target.label`，项目来自已有 `GCP_PROJECT_ID`
 
-`PAPER` 只表示这份清单配置的范围，不能据此推断券商账户身份。脚本再要求期望 scope 精确为 `PAPER`，服务根必须是没有 userinfo、query、fragment 和额外 path 的 HTTPS `*.run.app`，并且只 GET 该源站的 `/account-snapshot`。GCS 前缀最后一段必须是 `account_snapshots`，不能落在 execution report 路径上。缺任何一项就失败，不补默认值。
+`PAPER` 只表示这份清单配置的范围，不能据此推断券商账户身份。脚本从已校验的 runtime target manifest 读取准确 PAPER service/region，并先读回 `{service}-probe-scheduler` 的完整 job。只有 job 完整资源名、`ENABLED`、`POST {service_url}/probe`、空 body、Scheduler OIDC service account/audience 及零重试配置全部匹配时，才调用一次 Cloud Scheduler `jobs:run`。不直连 internal Cloud Run，也不使用 `/account-snapshot`。Scheduler 请求结果未知时不重触发。缺任何配置就失败，不补默认值。
 
-可选 QRS 发布仍默认关闭；只有 `ACCOUNT_FACTS_SYNC_ENABLED` 精确为 `true` 时才使用 `ACCOUNT_FACTS_SYNC_URL` 与专用 `ACCOUNT_FACTS_SYNC_TOKEN`。启用时会先校验 URL 和非空、无首尾空白的 token；配置错误在读取快照或创建日对象前失败，不消耗该日的 create-only 名额。URL 必须是 HTTPS 的精确 `/api/account-facts/sync`，不接受 userinfo、端口、query、fragment 或其他路径；POST 不跟随重定向，设置超时并限制响应体大小。token 只作为该 workflow step 的环境变量和 Authorization header 使用，不打印。
+`ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID` 必须由部署后的可信读回提供，并与 QRS 的预期绑定完全相同；不能从第一个 GCS 对象反推信任。GCS 前缀最后一段必须是 `account_snapshots`，不能落在 execution report 路径上。脚本只查本次触发 UTC 日期与当前 UTC 日期下准确的 target/source 前缀，限单页和 64KiB 对象。列举与固定 generation 读取都带超时、`retry=None`；若分页截断、对象变大或 generation 改变则失败，不把部分结果当完整结果。
 
-OIDC 使用 heartbeat 里已经配置的 gcloud：`gcloud auth print-identity-token --audiences=<服务根> --quiet`。stdout 只留在内存，不打印，也不放进参数；失败只报短类别。HTTP 有超时、不跟随重定向、不重试。观察时钟在响应收齐之后读取。
+接受 `jobs:run` 后，最多等待 180 秒，每 5 秒只读查询 GCS。候选必须是本次触发之后开始、15 分钟内的完整同源观察；取最新合法对象。若没有可信新鲜对象就失败，不追加 Scheduler 触发。QRS POST 前再次检查观察起始时间仍在 15 分钟窗口内。
 
 ## 保存什么
 
@@ -23,9 +23,9 @@ OIDC 使用 heartbeat 里已经配置的 gcloud：`gcloud auth print-identity-to
 
 对象只保留分币种 `broker_reported_balances`（`currency`、`net_assets`、`total_cash`）和 `cash`（`currency`、`available_cash`、`frozen_cash`、`settling_cash`）。金额必须是有限十进制字符串；负数保持原值，不改成零，也不把币种加总。不保存持仓、订单、token、secret 或完整响应。
 
-路径是 `{prefix}/{target_id}/{source_binding_id}/{YYYY-MM-DD}.json`。目标与来源绑定分成不同路径段，不把两段来源拼进同一个对象。`create_text` 只创建：已有对象时结果是 `already_recorded`，不覆盖、不重新拉取。存储结果不明则停止，不写占位点，也不重试。错误输出只有短类别。
+producer 为每次观察写入 `{prefix}/paper/{source_binding_id}/{observation_date}/{HHMMSSffffffZ.json}`，其中日期来自 `observed_started_at`，文件名使用 `observed_finished_at`。consumer 固定读取 listing 返回的 generation、保留原字节，并在 POST 前重新验证合同、路径、来源、UTC日期和时间，不改写时间或拼接来源。
 
-仅当本次 `create_text` 明确返回新建成功时，脚本才把完全相同的历史 JSON body POST 到 QRS。`already_recorded` 明确跳过发布，不能把这次新读取的内容冒充为已保存对象；`store_unknown` 不 POST。QRS 发布状态与历史记录状态分开输出：发布拒绝或结果未知不会撤销已写入历史；未知 POST 不自动重试。现有流程没有已存对象的补送入口，且接收端默认拒绝超过 15 分钟观察窗口的记录，因此不能靠下一次日常运行可靠补送；配置预检不解决请求结果未知的情况。QRS `ok=true` 且回读的目标、观察日、观察结束时间匹配，只表示接收端确认保存，不证明页面已经展示或数据完成物理账户身份核验。接收端按其可信配置绑定目标与来源，调用方不传账户 key 或身份结论。
+只有从该受限 GCS listing 选出的同一对象才会被 POST 到 QRS，发送 body 是读取到的原始字节，不重新序列化。QRS 发布状态与观察读取状态分开输出；发布拒绝或结果未知不会改变原对象，未知 POST 不自动重试。QRS `ok=true` 且回读的目标、观察日、观察结束时间匹配，只表示接收端确认保存，不证明页面已经展示或数据完成物理账户身份核验。接收端按其可信配置绑定目标与来源，调用方不传账户 key 或身份结论。
 
 这份记录不是 TWR，不是收益率，也不授予 live 权限。
 
@@ -33,7 +33,7 @@ OIDC 使用 heartbeat 里已经配置的 gcloud：`gcloud auth print-identity-to
 
 `sync-cloud-run-env.yml` 的 image-only 入口仍由同仓 main workflow 控制。PAPER 可以额外把已审查候选 `0b939723c1db3ef59175535998b470cbcd4b8824` 做成无流量镜像，并只更新 image、commit、run 标签和四个 history 环境变量。HK/SG 不接受这个候选。准入读取候选的 `uv.lock`、`pyproject.toml` 和 `qsl.toml`，不执行候选脚本。本轮只改源码和离线测试，没有执行云端暂存，也没有切流。
 
-该固定候选使用自然运行周期中已经读取的余额生成记录，与上文 main 的 HTTP heartbeat 快照入口不同。无流量暂存不会启用 HTTP 快照链，不设置 `ACCOUNT_HISTORY_SERVICE_URL`，也不调用 `/run` 或产生首个样本。上文 HTTP 入口条件不能作为该候选的启用步骤；正式采用及自然周期首样本需要分别核验。
+已审固定候选 `a2921d157efb887e9210fad6734ca040ea6e5293` 在自然 PAPER `/probe` 周期中复用一次原始余额读数生成记录。无流量暂存不会切换流量或产生首个样本。日常 heartbeat 现在经已有内部 probe Scheduler 触发该路径，再读取可信 GCS 对象；源码接线本身不证明已产生对象或网站已显示。
 
 ## 尚未启用
 

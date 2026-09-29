@@ -83,6 +83,7 @@ HISTORY = {
 }
 MAIN_SHA = "a" * 40
 HTTP_SNAPSHOT_CANDIDATE = admission.APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE
+PROBE_SNAPSHOT_CANDIDATE = admission.APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE
 STAGED_SOURCE_REVISION = "longbridge-quant-paper-service-r36423178119"
 STAGED_SOURCE_IMAGE = (
     "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/paper-service"
@@ -752,3 +753,84 @@ def test_http_snapshot_readback_preserves_retained_history_values():
         entry["value"] = "gs://paper-bucket/tampered" if key.endswith("GCS_PREFIX") else "false"
         with pytest.raises(admission.AdmissionError):
             confirm(changed)
+
+
+def test_probe_snapshot_candidate_uses_strict_serving_configuration():
+    service = _service()
+    calls = []
+
+    def run(command):
+        calls.append(list(command))
+        if command[:3] == ["gcloud", "run", "revisions"]:
+            return json.dumps(_revision("serving-rev", SERVING, "serving-image"))
+        sha, name = command[2].split(":", 1)
+        assert sha in {PROBE_SNAPSHOT_CANDIDATE, SERVING}
+        return _declaration(name, UES)
+
+    plan = admission.prepare_image_only_staging(
+        service="paper-service", project="synthetic-project", region="synthetic-region",
+        service_json=service,
+        env={**_main_env(), "SOURCE_COMMIT": PROBE_SNAPSHOT_CANDIDATE},
+        image_commit=PROBE_SNAPSHOT_CANDIDATE,
+        run=run,
+    )
+    assert plan["image_commit"] == PROBE_SNAPSHOT_CANDIDATE
+    assert plan["history_arg"] == plan["snapshot_arg"] == ""
+    assert plan["history_values"] == plan["retained_history_values"] == {}
+    assert plan["template_digest"] == admission._config_digest(admission._configuration(service))
+    assert not any(
+        command[:4] == ["gcloud", "run", "revisions", "describe"]
+        and command[4] == STAGED_SOURCE_REVISION
+        for command in calls
+    )
+
+
+@pytest.mark.parametrize(
+    "env_overrides",
+    [
+        {"WORKFLOW_TARGET": "HK"},
+        {"WORKFLOW_TARGET": "SG"},
+        {"SOURCE_COMMIT": "c" * 40},
+        {key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"},
+        {"ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true"},
+        {"ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false"},
+    ],
+)
+def test_probe_snapshot_source_requires_exact_candidate_paper_and_empty_settings(env_overrides):
+    env = {**_main_env(), "SOURCE_COMMIT": PROBE_SNAPSHOT_CANDIDATE}
+    env.update(env_overrides)
+    calls = []
+    with pytest.raises(admission.AdmissionError, match="not approved"):
+        admission.prepare_image_only_staging(
+            service="paper-service", project="synthetic-project", region="synthetic-region",
+            service_json={}, env=env, image_commit=env["SOURCE_COMMIT"],
+            run=lambda command: calls.append(command) or "",
+        )
+    assert calls == []
+
+
+def test_probe_snapshot_candidate_cannot_use_http_staged_template_exception():
+    service = _http_snapshot_service(
+        history={key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"}
+    )
+    calls = []
+    def run(command):
+        calls.append(list(command))
+        if command[:3] == ["gcloud", "run", "revisions"]:
+            assert command[4] == "serving-rev"
+            return json.dumps(_revision("serving-rev", SERVING, "serving-image"))
+        raise AssertionError(command)
+
+    with pytest.raises(admission.AdmissionError, match="template does not match"):
+        admission.prepare_image_only_staging(
+            service="paper-service", project="synthetic-project", region="synthetic-region",
+            service_json=service,
+            env={**_main_env(), "SOURCE_COMMIT": PROBE_SNAPSHOT_CANDIDATE},
+            image_commit=PROBE_SNAPSHOT_CANDIDATE,
+            run=run,
+        )
+    assert not any(
+        command[:4] == ["gcloud", "run", "revisions", "describe"]
+        and command[4] == STAGED_SOURCE_REVISION
+        for command in calls
+    )

@@ -122,6 +122,23 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
 
+      - name: Record and sync daily paper account snapshot
+        id: account_history
+        if: ${{ !cancelled() && matrix.target.label == 'PAPER' && vars.ACCOUNT_HISTORY_RECORDING_ENABLED == 'true' }}
+        continue-on-error: true
+        env:
+          ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ vars.ACCOUNT_HISTORY_RECORDING_ENABLED }}
+          ACCOUNT_HISTORY_SERVICE_URL: ${{ vars.ACCOUNT_HISTORY_SERVICE_URL }}
+          ACCOUNT_HISTORY_GCS_PREFIX: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX }}
+          ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
+          ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
+          ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
+          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
+          ACCOUNT_FACTS_SYNC_ENABLED: ${{ vars.ACCOUNT_FACTS_SYNC_ENABLED }}
+          ACCOUNT_FACTS_SYNC_URL: ${{ vars.ACCOUNT_FACTS_SYNC_URL }}
+          ACCOUNT_FACTS_SYNC_TOKEN: ${{ vars.ACCOUNT_FACTS_SYNC_ENABLED == 'true' && secrets.ACCOUNT_FACTS_SYNC_TOKEN || '' }}
+        run: uv run --no-sync python scripts/record_daily_account_snapshot.py
+
       - name: Check recent execution report
         run: uv run --no-sync python scripts/execution_report_heartbeat.py
 
@@ -136,20 +153,6 @@ jobs:
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
 
-      - name: Record daily paper account snapshot
-        if: ${{ success() && matrix.target.label == 'PAPER' && vars.ACCOUNT_HISTORY_RECORDING_ENABLED == 'true' }}
-        env:
-          ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ vars.ACCOUNT_HISTORY_RECORDING_ENABLED }}
-          ACCOUNT_HISTORY_SERVICE_URL: ${{ vars.ACCOUNT_HISTORY_SERVICE_URL }}
-          ACCOUNT_HISTORY_GCS_PREFIX: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX }}
-          ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
-          ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
-          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
-          ACCOUNT_FACTS_SYNC_ENABLED: ${{ vars.ACCOUNT_FACTS_SYNC_ENABLED }}
-          ACCOUNT_FACTS_SYNC_URL: ${{ vars.ACCOUNT_FACTS_SYNC_URL }}
-          ACCOUNT_FACTS_SYNC_TOKEN: ${{ vars.ACCOUNT_FACTS_SYNC_ENABLED == 'true' && secrets.ACCOUNT_FACTS_SYNC_TOKEN || '' }}
-        run: uv run --no-sync python scripts/record_daily_account_snapshot.py
-
       - name: Publish daily runtime projection
         if: ${{ !cancelled() && matrix.target.label == 'PAPER' && vars.RUNTIME_DAILY_PROJECTION_ENABLED == 'true' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
         env:
@@ -161,3 +164,7 @@ jobs:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ vars.RUNTIME_DAILY_SYNC_ENABLED == 'true' && secrets.EXECUTION_EVIDENCE_SYNC_TOKEN || '' }}
           GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
         run: uv run --no-sync python scripts/publish_daily_runtime_projection.py
+
+      - name: Fail after completing heartbeat checks if account snapshot sync failed
+        if: ${{ !cancelled() && steps.account_history.outcome == 'failure' }}
+        run: exit 1

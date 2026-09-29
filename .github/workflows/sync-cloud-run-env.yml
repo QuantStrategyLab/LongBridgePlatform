@@ -204,6 +204,7 @@ jobs:
           # Trusted control code stays on this main checkout. The application archive is chosen below.
           approved_candidate=0b939723c1db3ef59175535998b470cbcd4b8824
           approved_http_snapshot_candidate=d8314a61df697cae1dd03a78ddc5c2fc4179ec67
+          approved_probe_snapshot_candidate=a2921d157efb887e9210fad6734ca040ea6e5293
           history_count=0
           for history_value in \
             "${ACCOUNT_HISTORY_RECORDING_ENABLED:-}" \
@@ -252,6 +253,10 @@ jobs:
           elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 0 ] \
             && [ "${SOURCE_COMMIT}" = "${approved_http_snapshot_candidate}" ]; then
             image_mode=snapshot
+          elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 0 ] \
+            && [ -z "${snapshot_setting}" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_probe_snapshot_candidate}" ]; then
+            image_mode=probe
           else
             echo "Image source is not approved." >&2
             exit 1
@@ -305,6 +310,7 @@ jobs:
           set -euo pipefail
           approved_candidate=0b939723c1db3ef59175535998b470cbcd4b8824
           approved_http_snapshot_candidate=d8314a61df697cae1dd03a78ddc5c2fc4179ec67
+          approved_probe_snapshot_candidate=a2921d157efb887e9210fad6734ca040ea6e5293
           history_count=0
           for history_value in \
             "${ACCOUNT_HISTORY_RECORDING_ENABLED:-}" \
@@ -316,6 +322,7 @@ jobs:
               history_count=$((history_count + 1))
             fi
           done
+          snapshot_setting="${ACCOUNT_SNAPSHOT_ENABLED_INPUT:-}"
           if [ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] && [ "${history_count}" -eq 0 ]; then
             image_mode=same
           elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 4 ] \
@@ -324,6 +331,10 @@ jobs:
           elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 0 ] \
             && [ "${SOURCE_COMMIT}" = "${approved_http_snapshot_candidate}" ]; then
             image_mode=snapshot
+          elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 0 ] \
+            && [ -z "${snapshot_setting}" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_probe_snapshot_candidate}" ]; then
+            image_mode=probe
           else
             echo "Image source is not approved." >&2
             exit 1
@@ -334,6 +345,9 @@ jobs:
           elif [ "${image_mode}" = "snapshot" ]; then
             archive_ref="${approved_http_snapshot_candidate}"
             image_tag="${approved_http_snapshot_candidate}"
+          elif [ "${image_mode}" = "probe" ]; then
+            archive_ref="${approved_probe_snapshot_candidate}"
+            image_tag="${approved_probe_snapshot_candidate}"
           else
             archive_ref="${approved_candidate}"
             image_tag="${approved_candidate}"
