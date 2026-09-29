@@ -203,6 +203,7 @@ jobs:
           fi
           # Trusted control code stays on this main checkout. The application archive is chosen below.
           approved_candidate=0b939723c1db3ef59175535998b470cbcd4b8824
+          approved_http_snapshot_candidate=d8314a61df697cae1dd03a78ddc5c2fc4179ec67
           history_count=0
           for history_value in \
             "${ACCOUNT_HISTORY_RECORDING_ENABLED:-}" \
@@ -248,6 +249,9 @@ jobs:
           elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 4 ] \
             && [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]; then
             image_mode=history
+          elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 0 ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_http_snapshot_candidate}" ]; then
+            image_mode=snapshot
           else
             echo "Image source is not approved." >&2
             exit 1
@@ -300,6 +304,7 @@ jobs:
         run: |
           set -euo pipefail
           approved_candidate=0b939723c1db3ef59175535998b470cbcd4b8824
+          approved_http_snapshot_candidate=d8314a61df697cae1dd03a78ddc5c2fc4179ec67
           history_count=0
           for history_value in \
             "${ACCOUNT_HISTORY_RECORDING_ENABLED:-}" \
@@ -316,6 +321,9 @@ jobs:
           elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 4 ] \
             && [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]; then
             image_mode=history
+          elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 0 ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_http_snapshot_candidate}" ]; then
+            image_mode=snapshot
           else
             echo "Image source is not approved." >&2
             exit 1
@@ -323,6 +331,9 @@ jobs:
           if [ "${image_mode}" = "same" ]; then
             archive_ref=HEAD
             image_tag="${GITHUB_SHA}"
+          elif [ "${image_mode}" = "snapshot" ]; then
+            archive_ref="${approved_http_snapshot_candidate}"
+            image_tag="${approved_http_snapshot_candidate}"
           else
             archive_ref="${approved_candidate}"
             image_tag="${approved_candidate}"
@@ -337,10 +348,10 @@ jobs:
           history_arg=""
           snapshot_arg=""
           plan=""
-          if [ "${archive_ref}" = "${approved_candidate}" ]; then
-            git fetch --depth 1 origin "${approved_candidate}"
-            if [ "$(git cat-file -t "${approved_candidate}")" != "commit" ] \
-              || [ "$(git rev-parse "${approved_candidate}^{commit}")" != "${approved_candidate}" ]; then
+          if [ "${image_mode}" != "same" ]; then
+            git fetch --depth 1 origin "${archive_ref}"
+            if [ "$(git cat-file -t "${archive_ref}")" != "commit" ] \
+              || [ "$(git rev-parse "${archive_ref}^{commit}")" != "${archive_ref}" ]; then
               echo "Approved candidate commit is not available in this repository." >&2
               exit 1
             fi

@@ -446,6 +446,7 @@ assert "git checkout" not in job
 assert 'git archive "${SOURCE_COMMIT}"' not in job
 assert "git archive ${{" not in job
 assert "0b939723c1db3ef59175535998b470cbcd4b8824" in job
+assert "d8314a61df697cae1dd03a78ddc5c2fc4179ec67" in job
 assert '[ "${GITHUB_REPOSITORY:-}" != "QuantStrategyLab/LongBridgePlatform" ]' in job
 assert '[ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] || [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]' not in job
 for forbidden in ("sync_plan", "scheduler", "cleanup", "retire", "update-traffic"):
@@ -472,6 +473,18 @@ args = sys.argv[1:]
 with open(os.environ["STUB_LOG"], "a") as stream:
     stream.write(json.dumps([command, *args]) + "\\n")
 approved = "0b939723c1db3ef59175535998b470cbcd4b8824"
+http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
+staged_source_revision = "longbridge-quant-paper-service-r36423178119"
+staged_source_image = (
+    "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/synthetic-paper"
+    "@sha256:9a3260ca8255873309b1c27cd2fd7403e6006a4e9088241e6f89a4e5e65f7a10"
+)
+history = {
+    "ACCOUNT_HISTORY_RECORDING_ENABLED": "true",
+    "ACCOUNT_HISTORY_GCS_PREFIX": "gs://paper-bucket/account_snapshots",
+    "ACCOUNT_HISTORY_TARGET_ID": "paper",
+    "ACCOUNT_HISTORY_EXPECTED_SCOPE": "PAPER",
+}
 serving_sha = "1" * 40
 ues = "e" * 40
 
@@ -511,16 +524,21 @@ def base_env():
     ]
 
 def service_document(ingress):
+    env = base_env()
+    template = {"spec": {"serviceAccountName": "runtime@example.invalid", "containers": [{"env": env, "image": "serving-image"}]}}
+    status = {"traffic": [{"revisionName": "serving-rev", "percent": 100}], "latestReadyRevisionName": "ignored-latest"}
+    if os.environ.get("SOURCE_COMMIT") == http_snapshot_candidate:
+        env.extend({"name": key, "value": value} for key, value in history.items())
+        template["metadata"] = {"name": staged_source_revision}
+        template["spec"]["containers"][0]["image"] = staged_source_image
+        status["latestCreatedRevisionName"] = staged_source_revision
     return {
         "metadata": {
             "name": os.environ["CLOUD_RUN_SERVICE"],
             "annotations": {"run.googleapis.com/ingress": ingress},
         },
-        "spec": {"template": {"spec": {
-            "serviceAccountName": "runtime@example.invalid",
-            "containers": [{"env": base_env(), "image": "serving-image"}],
-        }}},
-        "status": {"traffic": [{"revisionName": "serving-rev", "percent": 100}], "latestReadyRevisionName": "ignored-latest"},
+        "spec": {"template": template},
+        "status": status,
     }
 
 def serving_revision():
@@ -530,6 +548,20 @@ def serving_revision():
             "serviceAccountName": "runtime@example.invalid",
             "containers": [{"env": base_env(), "image": "serving-image"}],
         },
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+
+def staged_source_revision_payload():
+    service = os.environ["CLOUD_RUN_SERVICE"]
+    env = base_env() + [{"name": key, "value": value} for key, value in history.items()]
+    image = (
+        "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/"
+        + service
+        + "@sha256:9a3260ca8255873309b1c27cd2fd7403e6006a4e9088241e6f89a4e5e65f7a10"
+    )
+    return {
+        "metadata": {"name": staged_source_revision, "labels": {"commit-sha": approved}},
+        "spec": {"serviceAccountName": "runtime@example.invalid", "containers": [{"env": env, "image": image}]},
         "status": {"conditions": [{"type": "Ready", "status": "True"}]},
     }
 
@@ -543,6 +575,8 @@ def staged_revision():
         "ACCOUNT_HISTORY_TARGET_ID",
         "ACCOUNT_HISTORY_EXPECTED_SCOPE",
     )
+    if os.environ.get("SOURCE_COMMIT") == http_snapshot_candidate:
+        env.extend({"name": key, "value": value} for key, value in history.items())
     if os.environ.get("CONFIG_DRIFT") == "1":
         env.append({"name": "UNRELATED_SETTING", "value": "1"})
     update_path = Path(os.environ["HOME"]) / "updated-env.json"
@@ -568,21 +602,23 @@ def staged_revision():
 
 if command == "git" and args == ["rev-parse", "HEAD"]:
     print(os.environ["CHECKOUT_SHA"])
-elif command == "git" and args == ["fetch", "--depth", "1", "origin", approved]:
+elif command == "git" and args[:4] == ["fetch", "--depth", "1", "origin"] and args[4] in (approved, http_snapshot_candidate):
     pass
-elif command == "git" and args == ["cat-file", "-t", approved]:
+elif command == "git" and args[:2] == ["cat-file", "-t"] and args[2] in (approved, http_snapshot_candidate):
     print("commit")
-elif command == "git" and args == ["rev-parse", approved + "^{commit}"]:
-    print(approved)
+elif command == "git" and args[:1] == ["rev-parse"] and len(args) == 2 and args[1] in (approved + "^{commit}", http_snapshot_candidate + "^{commit}"):
+    print(args[1].split("^", 1)[0])
 elif command == "git" and args == ["archive", "HEAD"]:
     print("synthetic tracked source archive")
 elif command == "git" and args == ["archive", approved]:
     print("synthetic candidate archive")
+elif command == "git" and args == ["archive", http_snapshot_candidate]:
+    print("synthetic HTTP snapshot candidate archive")
 elif command == "git" and args[:1] == ["show"] and len(args) == 2 and ":" in args[1]:
     sha, name = args[1].split(":", 1)
     if name not in ("uv.lock", "pyproject.toml", "qsl.toml"):
         raise SystemExit("unexpected git show")
-    if sha not in ("a" * 40, serving_sha, approved):
+    if sha not in ("a" * 40, serving_sha, approved, http_snapshot_candidate):
         raise SystemExit("admission read an unapproved source lock")
     pin = ("f" * 40) if sha == serving_sha and os.environ.get("BAD_SERVING_LOCK") == "1" else ues
     print(declaration(name, pin), end="")
@@ -616,7 +652,9 @@ elif command == "gcloud" and args[:3] == ["run", "revisions", "describe"]:
     revision_name = args[3]
     if os.environ.get("UNKNOWN_READBACK") == "1" and revision_name.endswith("-r" + os.environ["GITHUB_RUN_ID"]):
         sys.exit(1)
-    if revision_name.endswith("-r" + os.environ["GITHUB_RUN_ID"]):
+    if revision_name == staged_source_revision:
+        print(json.dumps(staged_source_revision_payload()))
+    elif revision_name.endswith("-r" + os.environ["GITHUB_RUN_ID"]):
         print(json.dumps(staged_revision()))
     else:
         print(json.dumps(serving_revision()))
@@ -659,6 +697,12 @@ else:
         "ADMISSION_PYTHON": str(Path(sys.argv[1]).resolve().parents[2] / ".venv" / "bin" / "python"),
     }
     candidate = "0b939723c1db3ef59175535998b470cbcd4b8824"
+    http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
+    staged_source_revision = "longbridge-quant-paper-service-r36423178119"
+    staged_source_image = (
+        "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/"
+        "synthetic-paper@sha256:9a3260ca8255873309b1c27cd2fd7403e6006a4e9088241e6f89a4e5e65f7a10"
+    )
     history = {
         "ACCOUNT_HISTORY_RECORDING_ENABLED": "true",
         "ACCOUNT_HISTORY_GCS_PREFIX": "gs://paper-bucket/account_snapshots",
@@ -760,6 +804,38 @@ else:
     assert not any("record_daily" in part for call in calls for part in call)
     assert sum(call[:4] == ["gcloud", "run", "services", "update"] for call in calls) == 1
     cases += 1
+    code, calls = execute(SOURCE_COMMIT=http_snapshot_candidate, CHECKOUT_SHA="a" * 40)
+    assert code == 0, (code, calls)
+    updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
+    assert len(updates) == 1
+    assert "--update-env-vars=" not in " ".join(updates[0])
+    assert updates[0][-1] == "--revision-suffix=r123"
+    assert f"--image=registry.invalid/synthetic-project/synthetic-images/longbridgeplatform/synthetic-paper@{base['IMAGE_DIGEST']}" in updates[0]
+    assert f"--update-labels=commit-sha={http_snapshot_candidate},github-run-id=123" in updates[0]
+    assert ["docker", "build", "--pull", "-t",
+            f"registry.invalid/synthetic-project/synthetic-images/longbridgeplatform/synthetic-paper:{http_snapshot_candidate}-123", "-"] in calls
+    assert ["git", "fetch", "--depth", "1", "origin", http_snapshot_candidate] in calls
+    assert ["git", "archive", http_snapshot_candidate] in calls
+    assert ["git", "archive", "HEAD"] not in calls
+    assert ["gcloud", "run", "revisions", "describe", staged_source_revision,
+            "--project=synthetic-project", "--region=synthetic-region", "--format=json"] in calls
+    assert not any(call[:4] == ["gcloud", "run", "services", "update"] and "ACCOUNT_HISTORY_" in " ".join(call) for call in calls)
+    cases += 1
+    code, calls = execute(SOURCE_COMMIT=http_snapshot_candidate, CHECKOUT_SHA="a" * 40, ACCOUNT_SNAPSHOT_ENABLED_INPUT="true")
+    assert code == 0, (code, calls)
+    updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
+    assert len(updates) == 1
+    update_args = [arg for arg in updates[0] if arg.startswith("--update-env-vars=")]
+    assert update_args == ["--update-env-vars=LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED=true"]
+    assert ["git", "archive", http_snapshot_candidate] in calls
+    cases += 1
+    for overrides in (
+        {"SOURCE_COMMIT": http_snapshot_candidate, "WORKFLOW_TARGET": "HK"},
+        {"SOURCE_COMMIT": http_snapshot_candidate, **history},
+    ):
+        code, calls = execute(**overrides)
+        assert code != 0 and calls == [], overrides
+        cases += 1
     for overrides in (
         {
             "GITHUB_REF": "refs/heads/codex/natural-cycle-history-20260928",
