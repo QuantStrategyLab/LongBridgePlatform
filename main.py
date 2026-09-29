@@ -1009,10 +1009,15 @@ def run_probe(*, response_body: str = "Probe OK"):
             quote_context, trade_context, source_binding = (
                 composer.build_account_snapshot_broker_contexts()
             )
-            read_cycle_account_balance(trade_context.account_balance)
+            read_cycle_account_balance(lambda: trade_context.account_balance(currency="USD"))
             observation = cycle_history_observation()
             if observation is None:
                 raise RuntimeError("account history observation incomplete")
+            if any(
+                row["currency"] != "USD"
+                for row in observation["projection"]["broker_reported_balances"]
+            ):
+                raise RuntimeError("account history aggregate currency mismatch")
             result = record_projected_daily_account(
                 os.environ,
                 account_scope=ACCOUNT_REGION,

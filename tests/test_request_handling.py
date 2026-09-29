@@ -244,7 +244,10 @@ def load_module(*, notify_lang="en"):
             return importlib.import_module("main")
 
 
-def _run_paper_history_probe(*, failure=None, source_status="bound", incomplete=False):
+def _run_paper_history_probe(
+    *, failure=None, source_status="bound", incomplete=False,
+    balance_currency="USD", recording=True,
+):
     from decimal import Decimal
 
     from application.account_snapshot import cycle_history_observation
@@ -266,15 +269,19 @@ def _run_paper_history_probe(*, failure=None, source_status="bound", incomplete=
         settling_cash=None if incomplete else Decimal("14.25"),
     )
     account = types.SimpleNamespace(
-        currency="USD",
+        currency=balance_currency,
         net_assets=Decimal("1234.50"),
         total_cash=Decimal("234.50"),
-        cash_infos=[cash],
+        cash_infos=[cash, types.SimpleNamespace(
+            currency="HKD", available_cash=Decimal("12.5"),
+            frozen_cash=Decimal("0"), settling_cash=Decimal("0"),
+        )],
     )
 
     class TradeContext:
-        def account_balance(self):
+        def account_balance(self, **kwargs):
             observed["balances"] += 1
+            observed["balance_args"] = kwargs
             return [account]
 
         def stock_positions(self):
@@ -307,7 +314,9 @@ def _run_paper_history_probe(*, failure=None, source_status="bound", incomplete=
 
     class FakeRuntime:
         def bootstrap(self):
-            raise AssertionError("history probe must use metadata contexts, not refresh bootstrap")
+            if recording:
+                raise AssertionError("history probe must use metadata contexts, not refresh bootstrap")
+            return quote, trade, {}
 
         portfolio_port_factory = lambda self, *_args: FakePort()
 
@@ -361,7 +370,7 @@ def _run_paper_history_probe(*, failure=None, source_status="bound", incomplete=
     module.build_composer = lambda **_kwargs: FakeComposer()
     module._open_account_history_store = lambda _project: Store()
     env = {
-        "ACCOUNT_HISTORY_RECORDING_ENABLED": "true",
+        "ACCOUNT_HISTORY_RECORDING_ENABLED": "true" if recording else "false",
         "ACCOUNT_HISTORY_GCS_PREFIX": "gs://paper-history/longbridge/account_snapshots",
         "ACCOUNT_HISTORY_TARGET_ID": "paper",
         "ACCOUNT_HISTORY_EXPECTED_SCOPE": "PAPER",
@@ -1296,17 +1305,44 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(result, ("Probe OK", 200))
         self.assertEqual(observed["metadata"], 1)
         self.assertEqual(observed["balances"], 1)
+        self.assertEqual(observed["balance_args"], {"currency": "USD"})
         self.assertEqual(observed["indicators"], 1)
         self.assertEqual(observed["portfolio"], 1)
         self.assertEqual(observed["writes"], 1)
         stored = json.loads(observed["stored"][0])
         self.assertEqual(stored["snapshot_schema_version"], "longbridge_account_snapshot.v1")
         self.assertEqual(stored["broker_reported_balances"][0]["net_assets"], "1234.5")
-        self.assertEqual(stored["cash"][0]["available_cash"], "200.25")
+        self.assertEqual(stored["broker_reported_balances"][0]["currency"], "USD")
+        self.assertEqual(stored["cash"], [
+            {"currency": "HKD", "available_cash": "12.5", "frozen_cash": "0", "settling_cash": "0"},
+            {"currency": "USD", "available_cash": "200.25", "frozen_cash": "20", "settling_cash": "14.25"},
+        ])
         self.assertNotIn("positions", stored)
         self.assertTrue(observed["uri"].endswith("Z.json"))
         self.assertIsNone(observation)
         self.assertIsNone(cycle_history_observation())
+        submit.assert_not_called()
+
+    def test_paper_probe_rejects_non_usd_aggregate_without_archiving(self):
+        for currency in ("HKD", "SGD"):
+            with self.subTest(currency=currency):
+                result, observed, submit, observation = _run_paper_history_probe(balance_currency=currency)
+                self.assertEqual(result, ("Error", 500))
+                self.assertEqual(observed["balances"], 1)
+                self.assertEqual(observed["balance_args"], {"currency": "USD"})
+                self.assertEqual(observed["writes"], 0)
+                self.assertEqual(observed["portfolio"], 0)
+                self.assertIsNone(observation)
+                submit.assert_not_called()
+
+    def test_non_recording_probe_keeps_default_account_balance_read(self):
+        result, observed, submit, observation = _run_paper_history_probe(recording=False)
+        self.assertEqual(result, ("Probe OK", 200))
+        self.assertEqual(observed["balances"], 1)
+        self.assertEqual(observed["balance_args"], {})
+        self.assertEqual(observed["metadata"], 0)
+        self.assertEqual(observed["writes"], 0)
+        self.assertIsNone(observation)
         submit.assert_not_called()
 
     def test_paper_probe_archive_conflict_is_error_and_capture_is_cleaned(self):
