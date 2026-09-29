@@ -38,9 +38,9 @@ APPROVED_PAPER_HISTORY_CANDIDATE = "0b939723c1db3ef59175535998b470cbcd4b8824"
 # Reviewed PAPER HTTP snapshot image. Distinct from the natural-cycle history archive above.
 APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
 # Reviewed PAPER internal-probe snapshot producer. It carries no history or snapshot env update.
-APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE = "a2921d157efb887e9210fad6734ca040ea6e5293"
+APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE = "318bf0419ec91002fd0f0dfd1bc80a0664a85e79"
 # Reviewed read-only SG/HK account-snapshot producer. It is not a PAPER candidate.
-APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE = "922f338fea7c46391b50bb8316ac88154596916f"
+APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE = "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f"
 # One already-staged PAPER revision that may hold history env while serving still runs an older image.
 _PAPER_HTTP_STAGED_SOURCE_REVISION = "longbridge-quant-paper-service-r36423178119"
 _PAPER_HTTP_STAGED_SOURCE_COMMIT = APPROVED_PAPER_HISTORY_CANDIDATE
