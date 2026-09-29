@@ -17,6 +17,19 @@ def test_execution_report_heartbeat_has_market_neutral_daily_schedule() -> None:
     assert "pandas-market-calendars" in (ROOT / "uv.lock").read_text()
 
 
+def test_heartbeat_dispatch_selects_one_manifest_target_and_schedule_uses_all() -> None:
+    workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+
+    assert 'cron: "20 22 * * *"' in workflow
+    dispatch = workflow[workflow.index("  workflow_dispatch:"):workflow.index("  schedule:")]
+    assert "target:" in dispatch
+    assert "type: choice" in dispatch
+    assert 'default: "all"' in dispatch
+    assert all(f'- "{target}"' in dispatch for target in ("all", "paper", "sg", "hk"))
+    assert "MATRIX_TARGET: ${{ inputs.target || 'all' }}" in workflow
+    assert 'scripts/render_runtime_target_matrix.py --profile heartbeat --target "$MATRIX_TARGET" --github-output' in workflow
+
+
 def test_runtime_monitor_workflows_retry_gcp_authentication() -> None:
     for name in ("execution-report-heartbeat.yml", "runtime-guard.yml"):
         workflow = (ROOT / ".github/workflows" / name).read_text()
@@ -90,7 +103,7 @@ def test_runtime_monitor_workflows_use_frozen_runtime_environment() -> None:
 
     heartbeat = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
     assert "resolve-matrix:" in heartbeat
-    assert "render_runtime_target_matrix.py --profile heartbeat --github-output" in heartbeat
+    assert 'render_runtime_target_matrix.py --profile heartbeat --target "$MATRIX_TARGET" --github-output' in heartbeat
     assert "matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}" in heartbeat
 
 

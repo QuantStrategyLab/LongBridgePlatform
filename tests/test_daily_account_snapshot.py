@@ -325,7 +325,7 @@ def test_scheduler_zero_retry_protobuf_defaults_are_accepted():
     assert [call[0] for call in spies.session.calls] == ["get", "post"]
 
 
-@pytest.mark.parametrize(("target_id", "state"), [("hk", "PAUSED"), ("sg", "ENABLED")])
+@pytest.mark.parametrize(("target_id", "state"), [("hk", "ENABLED"), ("sg", "ENABLED")])
 def test_sghk_targets_use_exact_manifest_identity_and_publish_matching_history(target_id, state):
     payload = _history(target_id=target_id)
     job = _job(target_id, state=state)
@@ -355,17 +355,16 @@ def test_sghk_targets_use_exact_manifest_identity_and_publish_matching_history(t
     assert json.loads(spies.posts[0][1]["data"])["account_scope"] == {"hk": "HK", "sg": "SG"}[target_id]
 
 
-def test_paused_hk_probe_is_the_only_paused_scheduler_accepted():
-    hk_job = _job("hk", state="PAUSED")
-    hk_result, hk_spies = _record(_env("hk"), _Spies(objects=[_object(_history(target_id="hk"))], job=hk_job))
-    assert hk_result.status == "recorded"
-    assert [call[0] for call in hk_spies.session.calls] == ["get", "post"]
+@pytest.mark.parametrize("target_id", ["paper", "sg", "hk"])
+def test_paused_scheduler_is_rejected_before_run_or_gcs_for_every_target(target_id):
+    result, spies = _record(
+        _env(target_id),
+        _Spies(job=_job(target_id, state="PAUSED")),
+    )
 
-    sg_job = _job("sg", state="PAUSED")
-    sg_result, sg_spies = _record(_env("sg"), _Spies(job=sg_job))
-    assert sg_result.category == "scheduler_job_mismatch"
-    assert [call[0] for call in sg_spies.session.calls] == ["get"]
-    assert sg_spies.open_calls == []
+    assert result.category == "scheduler_job_mismatch"
+    assert [call[0] for call in spies.session.calls] == ["get"]
+    assert spies.open_calls == []
 
 
 @pytest.mark.parametrize(("target_id", "wrong_scope"), [("hk", "SG"), ("sg", "HK")])
@@ -374,7 +373,7 @@ def test_cross_scope_snapshot_is_never_published(monkeypatch, target_id, wrong_s
     payload = _history(target_id=target_id, scope=wrong_scope)
     result, spies = _record(
         _env(target_id),
-        _Spies(objects=[_object(payload)], job=_job(target_id, state="PAUSED" if target_id == "hk" else "ENABLED")),
+        _Spies(objects=[_object(payload)], job=_job(target_id, state="ENABLED")),
     )
     assert result.category == "observation_timeout"
     assert spies.posts == []

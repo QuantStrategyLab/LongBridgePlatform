@@ -4,14 +4,16 @@
 
 ## 何时会写
 
-四个条件同时成立才调用 `scripts/record_daily_account_snapshot.py`：
+以下条件同时成立才调用 `scripts/record_daily_account_snapshot.py`：
 
-- 当前 matrix 目标的 `label` 是 `PAPER`
+- 当前 matrix 目标的 `id` 是 `paper`、`hk` 或 `sg`（目标 `label` 分别作为预期 scope）
 - GitHub variable `ACCOUNT_HISTORY_RECORDING_ENABLED` 精确等于 `true`
 - 同一步提供 `ACCOUNT_HISTORY_SERVICE_URL`、`ACCOUNT_HISTORY_GCS_PREFIX` 和非敏感 `ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID`
 - 目标 ID 来自 `matrix.target.id`，期望 scope 来自 `matrix.target.label`，项目来自已有 `GCP_PROJECT_ID`
 
-`PAPER` 只表示这份清单配置的范围，不能据此推断券商账户身份。脚本从已校验的 runtime target manifest 读取准确 PAPER service/region，并先读回 `{service}-probe-scheduler` 的完整 job。只有 job 完整资源名、`ENABLED`、`POST {service_url}/probe`、空 body、Scheduler OIDC service account/audience 及零重试配置全部匹配时，才调用一次 Cloud Scheduler `jobs:run`。不直连 internal Cloud Run，也不使用 `/account-snapshot`。Scheduler 请求结果未知时不重触发。缺任何配置就失败，不补默认值。
+`execution-report-heartbeat` 的每日定时运行始终选择完整 manifest matrix。手动 `workflow_dispatch` 可将 `target` 选为 `paper`、`hk` 或 `sg`，只检查该 manifest target；默认 `all` 保持完整 matrix。单目标选择只缩小这次 heartbeat 的账户范围，不启用账户记录或修改任何 target variable；对应 GitHub Environment 的 `ACCOUNT_HISTORY_RECORDING_ENABLED` 仍须单独精确为 `true`，否则采样步骤跳过。
+
+target label 只表示这份清单配置的 scope，不能据此推断券商账户身份。脚本从已校验的 runtime target manifest 读取准确 service/region，并先读回 `{service}-probe-scheduler` 的完整 job。只有 job 完整资源名、`ENABLED`、`POST {service_url}/probe`、空 body、Scheduler OIDC service account/audience 及零重试配置全部匹配时，才调用一次 Cloud Scheduler `jobs:run`。暂停的 job 会在触发前拒绝；不直连 internal Cloud Run，也不使用 `/account-snapshot`。Scheduler 请求结果未知时不重触发。缺任何配置就失败，不补默认值。
 
 `ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID` 必须由部署后的可信读回提供，并与 QRS 的预期绑定完全相同；不能从第一个 GCS 对象反推信任。GCS 前缀最后一段必须是 `account_snapshots`，不能落在 execution report 路径上。脚本只查本次触发 UTC 日期与当前 UTC 日期下准确的 target/source 前缀，限单页和 64KiB 对象。列举与固定 generation 读取都带超时、`retry=None`；若分页截断、对象变大或 generation 改变则失败，不把部分结果当完整结果。
 

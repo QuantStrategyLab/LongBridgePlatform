@@ -3,6 +3,16 @@ name: Execution Report Heartbeat
 on:
   workflow_dispatch:
     inputs:
+      target:
+        description: "Target account to check; scheduled runs always use all targets."
+        required: false
+        type: choice
+        default: "all"
+        options:
+          - "all"
+          - "paper"
+          - "sg"
+          - "hk"
       lookback_hours:
         description: "Report lookback window in hours."
         required: false
@@ -41,9 +51,11 @@ jobs:
 
       - name: Render validated matrix from public manifest
         id: render
+        env:
+          MATRIX_TARGET: ${{ inputs.target || 'all' }}
         run: |
           set -euo pipefail
-          python3 scripts/render_runtime_target_matrix.py --profile heartbeat --github-output
+          python3 scripts/render_runtime_target_matrix.py --profile heartbeat --target "$MATRIX_TARGET" --github-output
 
   heartbeat:
     needs: resolve-matrix
