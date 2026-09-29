@@ -7,7 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from google.api_core.exceptions import GoogleAPICallError, PreconditionFailed
+from google.api_core.exceptions import Forbidden, GoogleAPICallError, PreconditionFailed
 
 from scripts import execution_report_heartbeat as heartbeat
 from scripts import publish_daily_runtime_projection as publisher
@@ -401,8 +401,10 @@ def test_existing_object_is_not_overwritten_and_unknown_write_is_not_retried(mon
     assert blob.uploads[0]["kwargs"]["if_generation_match"] == 0
 
     unknown = _Blob(fail=RuntimeError("token=secret"))
-    with pytest.raises(RuntimeError, match="token=secret"):
+    with pytest.raises(publisher._KnownFailure) as failure:
         _publish(monkeypatch, _env(), [], blob=unknown)
+    assert failure.value.code == "write_unknown"
+    assert "token=secret" not in str(failure.value)
     assert len(unknown.uploads) == 1
 
 
@@ -417,7 +419,7 @@ def test_quiet_read_discards_underlying_stderr(monkeypatch, capsys) -> None:
     assert "secret payload" not in capsys.readouterr().err
 
 
-def test_main_unknown_write_prints_no_secret_and_does_not_retry(monkeypatch, capsys) -> None:
+def test_main_unknown_write_prints_safe_category_and_does_not_retry(monkeypatch, capsys) -> None:
     blob = _Blob(fail=RuntimeError("token=secret"))
     monkeypatch.setattr(publisher, "_storage_client", lambda: _Client(blob))
     monkeypatch.setattr(heartbeat, "_describe_cloud_run_service", _describe)
@@ -428,9 +430,53 @@ def test_main_unknown_write_prints_no_secret_and_does_not_retry(monkeypatch, cap
         monkeypatch.setenv(key, value)
     assert publisher.main([]) == 1
     captured = capsys.readouterr()
-    assert captured.out.strip() == "daily runtime projection failed"
+    assert captured.out.strip() == "daily runtime projection failed; category=write_unknown"
     assert "token=secret" not in captured.out + captured.err
     assert len(blob.uploads) == 1
+
+
+def test_forbidden_write_is_classified_once_without_qrs_post(monkeypatch) -> None:
+    blob = _Blob(fail=Forbidden("token=secret permission denied"))
+    posts = []
+    with pytest.raises(publisher._KnownFailure) as failure:
+        _publish(
+            monkeypatch,
+            _sync_env(),
+            [],
+            blob=blob,
+            describe=_sync_describe,
+            http_post=lambda *args, **kwargs: posts.append((args, kwargs)),
+        )
+    assert failure.value.code == "storage_write_permission_denied"
+    assert "token=secret" not in str(failure.value)
+    assert len(blob.uploads) == 1
+    assert posts == []
+
+
+def test_main_keeps_unclassified_exceptions_generic_and_redacted(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        publisher,
+        "publish",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("token=secret detail")),
+    )
+    assert publisher.main([]) == 1
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "daily runtime projection failed"
+    assert "token=secret" not in captured.out + captured.err
+
+
+def test_main_displays_only_safe_schedule_failure_category(monkeypatch, capsys) -> None:
+    for key, value in _env().items():
+        monkeypatch.setenv(key, value)
+
+    def fail_describe(*_args, **_kwargs):
+        raise RuntimeError("token=secret detail")
+
+    monkeypatch.setattr(heartbeat, "_describe_cloud_run_service", fail_describe)
+    assert publisher.main([]) == 1
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "daily runtime projection failed; category=schedule_unavailable"
+    assert "token=secret" not in captured.out + captured.err
 
 
 def test_main_hides_errors_and_keeps_heartbeat_uninvoked(monkeypatch, capsys) -> None:
