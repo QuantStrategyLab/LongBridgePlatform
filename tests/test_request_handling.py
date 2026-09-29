@@ -681,7 +681,8 @@ class RequestHandlingTests(unittest.TestCase):
         module = load_module()
         from application import broker_reconciliation as reconciliation_module
 
-        observed = {}
+        observed = {"metadata_reads": 0}
+        version_name = "projects/snapshot-project/secrets/longport_token_hk/versions/4"
 
         def collect(quote_context, trade_context, *, account_scope, now, include_broker_balances):
             observed["collector"] = (quote_context, trade_context, account_scope, now)
@@ -714,10 +715,17 @@ class RequestHandlingTests(unittest.TestCase):
         def forbidden(*_args, **_kwargs):
             self.fail("normal runtime side effect was called")
 
+        def read_metadata(project_id, secret_name):
+            observed["metadata_reads"] += 1
+            observed["metadata_request"] = (project_id, secret_name)
+            if observed["metadata_reads"] > 1:
+                return types.SimpleNamespace(value="rotated-token", version_name=version_name + "9")
+            return types.SimpleNamespace(value="snapshot-token", version_name=version_name)
+
+        module.PROJECT_ID = "snapshot-project"
         module.READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = collect
-        module.fetch_token_from_secret = lambda project_id, secret_name: (
-            observed.update(secret_read=(project_id, secret_name)) or "test-token"
-        )
+        module.fetch_token_from_secret = forbidden
+        module.fetch_account_snapshot_token_with_metadata = read_metadata
         module.build_contexts = lambda app_key, app_secret, token: (
             observed.update(
                 read_only_contexts=True,
@@ -732,19 +740,272 @@ class RequestHandlingTests(unittest.TestCase):
         module.persist_runtime_report = forbidden
 
         with patch.dict(
-            os.environ, {"LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED": "true"}, clear=False
+            os.environ,
+            {
+                "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED": "true",
+                "LONGPORT_APP_KEY": "app-key",
+                "LONGPORT_APP_SECRET": "app-secret",
+                "K_SERVICE": "lb-service",
+                "K_REVISION": "lb-service-00001",
+                "CLOUD_RUN_REGION": "asia-east1",
+            },
+            clear=False,
         ):
-            payload, status = module.run_account_snapshot()
+            with module.app.test_request_context("/account-snapshot", method="GET"):
+                body, status, headers = module.handle_account_snapshot()
 
+        payload = json.loads(body)
         self.assertEqual(status, 200)
+        self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertEqual(payload["cash"][0]["currency"], "HKD")
+        self.assertEqual(payload["cash"][0]["available_cash"], "1")
         self.assertEqual(payload["broker_reported_balances"][0]["net_assets"], "2")
         self.assertTrue(observed["include_broker_balances"])
         self.assertTrue(payload["no_order"])
         self.assertFalse(payload["live_authority_granted"])
+        self.assertIs(payload["snapshot_atomic"], False)
+        self.assertTrue(payload["observed_started_at"])
+        self.assertTrue(payload["observed_finished_at"])
         self.assertTrue(observed["read_only_contexts"])
-        self.assertEqual(observed["context_credentials"][2], "test-token")
+        self.assertEqual(observed["context_credentials"], ("app-key", "app-secret", "snapshot-token"))
+        self.assertEqual(observed["metadata_reads"], 1)
+        self.assertEqual(observed["metadata_request"], ("snapshot-project", "longport_token_hk"))
         self.assertEqual(observed["collector"][:3], ("quote-context", "trade-context", "HK"))
+        self.assertEqual(
+            payload["source_binding"],
+            reconciliation_module.build_account_snapshot_source_binding(
+                version_name=version_name,
+                project_id="snapshot-project",
+                service="lb-service",
+                revision="lb-service-00001",
+                account_scope="HK",
+                region="asia-east1",
+            ),
+        )
+        self.assertNotIn(version_name, body)
+        self.assertNotIn("snapshot-token", body)
+        self.assertNotIn("longport_token_hk", body)
+
+    def test_account_snapshot_endpoint_stays_unbound_without_deployment_revision(self):
+        module = load_module()
+        from application import broker_reconciliation as reconciliation_module
+
+        observed = {"metadata_reads": 0}
+
+        def collect(quote_context, trade_context, *, account_scope, now, include_broker_balances):
+            return reconciliation_module.LongBridgeReconciliationObservations(
+                account_scope={"configured_scope": account_scope, "account_channels": ["cash"]},
+                account_identity_match=False,
+                positions=(),
+                cash=(
+                    {
+                        "cash_infos": [
+                            {
+                                "currency": "USD",
+                                "available_cash": "3",
+                                "frozen_cash": "0",
+                                "settling_cash": "0",
+                            }
+                        ]
+                    },
+                ),
+                open_orders=(),
+                recent_executions=(),
+                positions_complete=True,
+                cash_complete=True,
+                open_orders_complete=False,
+                recent_executions_complete=False,
+                broker_reported_balances=({"currency": "USD", "net_assets": "3", "total_cash": "3"},),
+            )
+
+        def read_metadata(_project_id, _secret_name):
+            observed["metadata_reads"] += 1
+            return types.SimpleNamespace(
+                value="snapshot-token",
+                version_name="projects/snapshot-project/secrets/longport_token_hk/versions/4",
+            )
+
+        module.PROJECT_ID = "snapshot-project"
+        module.READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = collect
+        module.fetch_token_from_secret = lambda *_args, **_kwargs: self.fail("must not read latest")
+        module.fetch_account_snapshot_token_with_metadata = read_metadata
+        module.build_contexts = lambda _app_key, _app_secret, token: ("quote", token)
+        module.refresh_token_if_needed = lambda *_args, **_kwargs: self.fail("must not refresh")
+
+        env = {
+            "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED": "true",
+            "LONGPORT_APP_KEY": "app-key",
+            "LONGPORT_APP_SECRET": "app-secret",
+            "K_SERVICE": "lb-service",
+            "K_REVISION": "",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            os.environ.pop("CLOUD_RUN_REGION", None)
+            os.environ.pop("GOOGLE_CLOUD_REGION", None)
+            with module.app.test_request_context("/account-snapshot", method="GET"):
+                body, status, _headers = module.handle_account_snapshot()
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(observed["metadata_reads"], 1)
+        self.assertEqual(payload["cash"][0]["available_cash"], "3")
+        self.assertEqual(
+            payload["source_binding"],
+            {"kind": "deployment_scope_token_version", "status": "unavailable", "id": None},
+        )
+        self.assertNotIn("snapshot-token", body)
+        self.assertNotIn("longport_token_hk", body)
+
+    def test_disabled_account_snapshot_does_not_read_a_secret(self):
+        module = load_module()
+        module.fetch_account_snapshot_token_with_metadata = lambda *_args, **_kwargs: self.fail(
+            "disabled snapshot must not read a token"
+        )
+        module.fetch_token_from_secret = lambda *_args, **_kwargs: self.fail(
+            "disabled snapshot must not read latest"
+        )
+        module.build_composer = lambda **_kwargs: self.fail("disabled snapshot must not build contexts")
+
+        with patch.dict(os.environ, {"LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED": ""}, clear=False):
+            with module.app.test_request_context("/account-snapshot", method="GET"):
+                body, status, headers = module.handle_account_snapshot()
+
+        self.assertEqual(status, 503)
+        self.assertEqual(json.loads(body)["reason"], "account_snapshot_disabled")
+        self.assertEqual(headers["Cache-Control"], "no-store")
+
+    def test_account_snapshot_secret_failure_is_redacted_and_not_retried(self):
+        module = load_module()
+        observed = {"latest_reads": 0, "metadata_reads": 0}
+
+        def read_metadata(project_id, secret_name):
+            observed["metadata_reads"] += 1
+            raise RuntimeError(f"projects/{project_id}/secrets/{secret_name} token=raw-token-value")
+
+        def read_latest(*_args, **_kwargs):
+            observed["latest_reads"] += 1
+            return "other-token"
+
+        module.fetch_account_snapshot_token_with_metadata = read_metadata
+        module.fetch_token_from_secret = read_latest
+        module.refresh_token_if_needed = lambda *_args, **_kwargs: self.fail("must not refresh")
+
+        with patch.dict(os.environ, {"LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED": "true"}, clear=False):
+            with module.app.test_request_context("/account-snapshot", method="GET"):
+                body, status, _headers = module.handle_account_snapshot()
+
+        self.assertEqual(status, 503)
+        self.assertEqual(json.loads(body), {"status": "blocked", "reason": "account_snapshot_collection_failed"})
+        self.assertEqual(observed["metadata_reads"], 1)
+        self.assertEqual(observed["latest_reads"], 0)
+        self.assertNotIn("raw-token-value", body)
+        self.assertNotIn("longport_token_hk", body)
+        self.assertNotIn("secrets/", body)
+
+    def test_account_snapshot_without_metadata_reads_configured_store_once(self):
+        module = load_module()
+        from application import broker_reconciliation as reconciliation_module
+
+        observed = {"store_reads": 0, "secret_reads": 0}
+
+        class Store:
+            def get_secret(self, secret_name, *, project_id=None):
+                observed["secret_reads"] += 1
+                observed["secret_request"] = (secret_name, project_id)
+                return "snapshot-token"
+
+        def get_store():
+            observed["store_reads"] += 1
+            return Store()
+
+        def collect(quote_context, trade_context, *, account_scope, now, include_broker_balances):
+            return reconciliation_module.LongBridgeReconciliationObservations(
+                account_scope={"configured_scope": account_scope, "account_channels": ["cash"]},
+                account_identity_match=False,
+                positions=(),
+                cash=(
+                    {
+                        "cash_infos": [
+                            {
+                                "currency": "HKD",
+                                "available_cash": "1",
+                                "frozen_cash": "0",
+                                "settling_cash": "0",
+                            }
+                        ]
+                    },
+                ),
+                open_orders=(),
+                recent_executions=(),
+                positions_complete=True,
+                cash_complete=True,
+                open_orders_complete=False,
+                recent_executions_complete=False,
+                broker_reported_balances=({"currency": "HKD", "net_assets": "2", "total_cash": "1"},),
+            )
+
+        module.PROJECT_ID = "snapshot-project"
+        module.READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = collect
+        module.fetch_token_from_secret = lambda *_args, **_kwargs: self.fail("must not use latest fetch")
+        module.build_contexts = lambda app_key, app_secret, token: (
+            observed.update(context_token=token) or ("quote", "trade")
+        )
+        module.refresh_token_if_needed = lambda *_args, **_kwargs: self.fail("must not refresh")
+
+        with patch("quant_platform_kit.cloud.get_secret_store", get_store), patch.dict(
+            os.environ,
+            {
+                "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED": "true",
+                "LONGPORT_APP_KEY": "app-key",
+                "LONGPORT_APP_SECRET": "app-secret",
+                "K_SERVICE": "lb-service",
+                "K_REVISION": "lb-service-00001",
+            },
+            clear=False,
+        ):
+            with module.app.test_request_context("/account-snapshot", method="GET"):
+                body, status, _headers = module.handle_account_snapshot()
+
+        payload = json.loads(body)
+        self.assertEqual(status, 200)
+        self.assertEqual(observed["store_reads"], 1)
+        self.assertEqual(observed["secret_reads"], 1)
+        self.assertEqual(observed["secret_request"], ("longport_token_hk", "snapshot-project"))
+        self.assertEqual(observed["context_token"], "snapshot-token")
+        self.assertEqual(payload["cash"][0]["available_cash"], "1")
+        self.assertEqual(
+            payload["source_binding"],
+            {"kind": "deployment_scope_token_version", "status": "unavailable", "id": None},
+        )
+        self.assertNotIn("snapshot-token", body)
+
+    def test_account_snapshot_metadata_failure_does_not_fall_back(self):
+        module = load_module()
+        observed = {"metadata_reads": 0, "secret_reads": 0}
+
+        class Store:
+            def get_secret(self, secret_name, *, project_id=None):
+                observed["secret_reads"] += 1
+                return "fallback-token"
+
+            def get_secret_with_metadata(self, secret_name, *, project_id=None):
+                observed["metadata_reads"] += 1
+                raise RuntimeError(f"projects/{project_id}/secrets/{secret_name} token=raw-token-value")
+
+        module.fetch_token_from_secret = lambda *_args, **_kwargs: self.fail("must not use latest fetch")
+        with patch("quant_platform_kit.cloud.get_secret_store", lambda: Store()), patch.dict(
+            os.environ, {"LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED": "true"}, clear=False
+        ):
+            with module.app.test_request_context("/account-snapshot", method="GET"):
+                body, status, _headers = module.handle_account_snapshot()
+
+        self.assertEqual(status, 503)
+        self.assertEqual(json.loads(body), {"status": "blocked", "reason": "account_snapshot_collection_failed"})
+        self.assertEqual(observed["metadata_reads"], 1)
+        self.assertEqual(observed["secret_reads"], 0)
+        self.assertNotIn("fallback-token", body)
+        self.assertNotIn("raw-token-value", body)
+        self.assertNotIn("longport_token_hk", body)
 
     def test_broker_reconciliation_all_scopes_require_a_collector_before_contexts(self):
         module = load_module()
