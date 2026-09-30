@@ -346,7 +346,20 @@ def test_live_target_validation_override_suppresses_live_commands_for_probe_and_
     assert config.durable_live_execution_session_authorized is False
 
 
-def test_live_target_without_override_keeps_durable_execution_conditions():
+def test_live_target_without_override_keeps_durable_execution_conditions(monkeypatch):
+    source_metadata = {
+        "quant_platform_kit.egg-info",
+        "us_equity_strategies.egg-info",
+    }
+    monkeypatch.setattr(
+        sys,
+        "path",
+        [
+            entry
+            for entry in sys.path
+            if not any((Path(entry) / name).exists() for name in source_metadata)
+        ],
+    )
     composer, legacy_order_status, notification_calls = _build_live_command_test_composer(
         dry_run_only=False,
     )
