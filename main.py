@@ -38,6 +38,11 @@ from application.runtime_strategy_adapters import build_runtime_strategy_adapter
 from application.longbridge_execution import submit_order
 from runtime_execution_policy import fractional_buy_execution_enabled, FRACTIONAL_BUY_QUANTITY_STEP
 from application.longbridge_portfolio import fetch_strategy_account_state
+from application.account_snapshot import (
+    begin_natural_cycle_history, cycle_history_observation, end_natural_cycle_history,
+    read_cycle_account_balance,
+)
+from scripts.record_daily_account_snapshot import record_projected_daily_account
 from entrypoints.cloud_run import is_market_open_now
 from runtime_execution_policy import dca_execution_unsupported_reason
 from runtime_config_support import load_platform_runtime_settings
@@ -981,6 +986,12 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
 def run_probe(*, response_body: str = "Probe OK"):
     if _v7_application_candidate_bound():
         return response_body, 200
+    history_scope = str(ACCOUNT_REGION or "").strip()
+    record_account_history = (
+        history_scope in {"HK", "SG"}
+        and str(os.getenv("ACCOUNT_HISTORY_RECORDING_ENABLED") or "").strip() == "true"
+    )
+    history_capture = begin_natural_cycle_history() if record_account_history else None
     composer = None
     reporting_adapters = None
     log_context = None
@@ -996,7 +1007,28 @@ def run_probe(*, response_body: str = "Probe OK"):
             execution_window="probe",
         )
         runtime = composer.build_rebalance_runtime(silent_cycle_notifications=True)
-        quote_context, trade_context, _indicators = runtime.bootstrap()
+        if record_account_history:
+            quote_context, trade_context, source_binding = composer.build_account_snapshot_broker_contexts()
+            read_cycle_account_balance(lambda: trade_context.account_balance(currency="USD"))
+            observation = cycle_history_observation()
+            if observation is None:
+                raise RuntimeError("account history observation incomplete")
+            result = record_projected_daily_account(
+                os.environ,
+                account_scope=history_scope,
+                source_binding=source_binding,
+                balances=observation["projection"]["broker_reported_balances"],
+                cash=observation["projection"]["cash"],
+                started=observation["started"],
+                finished=observation["finished"],
+                open_store=_open_account_history_store,
+            )
+            print(f"account_history status={result.status} category={result.category or '-'}", flush=True)
+            if result.status != "recorded":
+                raise RuntimeError("account history write was not confirmed")
+            _indicators = composer.strategy_adapters.calculate_strategy_indicators(quote_context)
+        else:
+            quote_context, trade_context, _indicators = runtime.bootstrap()
         snapshot = runtime.portfolio_port_factory(
             quote_context,
             trade_context,
@@ -1059,6 +1091,8 @@ def run_probe(*, response_body: str = "Probe OK"):
             print(err, flush=True)
         return "Error", 500
     finally:
+        if history_capture is not None:
+            end_natural_cycle_history(history_capture)
         try:
             if reporting_adapters is not None and report is not None:
                 report_path = reporting_adapters.persist_execution_report(report)
@@ -1202,6 +1236,12 @@ def fetch_account_snapshot_token_with_metadata(project_id, secret_name):
         value=store.get_secret(secret_name, project_id=project_id),
         version_name=None,
     )
+
+
+def _open_account_history_store(project_id):
+    from quant_platform_kit.cloud import get_object_store
+
+    return get_object_store(project_id=project_id)
 
 
 def run_account_snapshot():
