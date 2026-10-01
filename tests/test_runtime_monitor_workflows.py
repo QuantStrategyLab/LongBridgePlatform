@@ -150,7 +150,10 @@ def test_account_snapshot_sync_uses_matrix_identity_and_preserves_heartbeat_fail
     assert "contains(fromJSON('[\"PAPER\",\"HK\",\"SG\"]'), matrix.target.label)" in workflow
     assert "ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}" in workflow
     assert "ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}" in workflow
-    assert "ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}" in workflow
+    assert (
+        "ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || "
+        "vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}"
+    ) in workflow
     assert "matrix.target.service" not in workflow
     assert "matrix.target.region" not in workflow
     assert "steps.account_history.outcome == 'failure'" in workflow[final_failure:]

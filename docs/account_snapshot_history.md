@@ -1,6 +1,6 @@
 # 日频账户资产记录
 
-这是关闭默认的工程记录，不是已启用的资产曲线。每日 `execution-report-heartbeat` 在现有 Google Cloud 认证后单独运行 PAPER 采样步骤，随后继续原 heartbeat 检查。采样失败会保留失败状态但不跳过原检查，最后再使整个 workflow 失败。不新增 Cloud Scheduler，也不改 `/run`、`/probe`、`/dry-run`。
+这是关闭默认的工程记录，不是已启用的资产曲线。每日 `execution-report-heartbeat` 在现有 Google Cloud 认证后单独运行账户快照步骤，随后继续原 heartbeat 检查。采样失败会保留失败状态但不跳过原检查，最后再使整个 workflow 失败。不新增 Cloud Scheduler，也不改 `/run`、`/probe`、`/dry-run`。
 
 ## 何时会写
 
@@ -8,24 +8,26 @@
 
 - 当前 matrix 目标的 `id` 是 `paper`、`hk` 或 `sg`（目标 `label` 分别作为预期 scope）
 - GitHub variable `ACCOUNT_HISTORY_RECORDING_ENABLED` 精确等于 `true`
-- 同一步提供 `ACCOUNT_HISTORY_SERVICE_URL`、`ACCOUNT_HISTORY_GCS_PREFIX` 和非敏感 `ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID`
+- 同一步提供 `ACCOUNT_HISTORY_SERVICE_URL`、`ACCOUNT_HISTORY_GCS_PREFIX` 和可信的 `ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID`（优先使用 GitHub protected Secret，旧 variable 仅作兼容回退）
 - 目标 ID 来自 `matrix.target.id`，期望 scope 来自 `matrix.target.label`，项目来自已有 `GCP_PROJECT_ID`
 
 `execution-report-heartbeat` 的每日定时运行始终选择完整 manifest matrix。手动 `workflow_dispatch` 可将 `target` 选为 `paper`、`hk` 或 `sg`，只检查该 manifest target；默认 `all` 保持完整 matrix。单目标选择只缩小这次 heartbeat 的账户范围，不启用账户记录或修改任何 target variable；对应 GitHub Environment 的 `ACCOUNT_HISTORY_RECORDING_ENABLED` 仍须单独精确为 `true`，否则采样步骤跳过。
 
-target label 只表示这份清单配置的 scope，不能据此推断券商账户身份。脚本从已校验的 runtime target manifest 读取准确 service/region，并先读回 `{service}-probe-scheduler` 的完整 job。只有 job 完整资源名、`ENABLED`、`POST {service_url}/probe`、空 body、Scheduler OIDC service account/audience 及零重试配置全部匹配时，才调用一次 Cloud Scheduler `jobs:run`。暂停的 job 会在触发前拒绝；不直连 internal Cloud Run，也不使用 `/account-snapshot`。Scheduler 请求结果未知时不重触发。缺任何配置就失败，不补默认值。
+仅需核验部署身份在项目级的 SG probe 权限时，手动选择 `target=sg` 并开启默认关闭的 `inspect_sg_probe_permissions`。其他 target 会在 matrix 解析阶段拒绝。检查只调用 Cloud Resource Manager `testIamPermissions`，输出 `context=project` 及 `cloudscheduler.jobs.get/run/enable/pause` 四项布尔值；该模式跳过采样、heartbeat 检查和发布。项目级结果不证明某个 job 上的条件角色生效，也不替代 SG probe 的实际 job 读回。
 
-`ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID` 必须由部署后的可信读回提供，并与 QRS 的预期绑定完全相同；不能从第一个 GCS 对象反推信任。GCS 前缀最后一段必须是 `account_snapshots`，不能落在 execution report 路径上。脚本只查本次触发 UTC 日期与当前 UTC 日期下准确的 target/source 前缀，限单页和 64KiB 对象。列举与固定 generation 读取都带超时、`retry=None`；若分页截断、对象变大或 generation 改变则失败，不把部分结果当完整结果。
+target label 只表示这份清单配置的 scope，不能据此推断券商账户身份。脚本从已校验的 runtime target manifest 读取准确 service/region，并先读回 `{service}-probe-scheduler` 的完整 job。默认路径仅接受 `ENABLED` job；PAPER 与 HK 的 `PAUSED` job 仍在任何 mutation 或 GCS 读取前拒绝。SG 只有在 `RUNTIME_TARGET_ENABLED` 精确为 `false`、`ACCOUNT_HISTORY_RECORDING_ENABLED` 精确为 `true`，且暂停任务完整身份、`POST {service_url}/probe`、空 body、Scheduler OIDC service account/audience、零重试、原控制字段、schedule `35 9,15 * * 1-5` 与 `America/New_York` timezone 全部匹配时，才可走一次受限恢复：避开自然触发前后 10 分钟，resume 一次并读回，run 一次后立即 pause 一次并读回原控制配置。只有恢复确认后才读取归档；resume/run/pause 结果不明或恢复读回失败时不重触发、不读取或发布归档。任何路径都不直连 internal Cloud Run，也不使用 `/account-snapshot`。
+
+`ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID` 必须由部署后的可信读回提供，并与 QRS 的预期绑定完全相同；不能从第一个 GCS 对象反推信任。Workflow 对注入值发出 GitHub mask 命令，Secret 优先，旧 variable 兼容回退。GCS 前缀最后一段必须是 `account_snapshots`，不能落在 execution report 路径上。脚本只查本次触发 UTC 日期与当前 UTC 日期下准确的 target/source 前缀，限单页和 64KiB 对象。列举与固定 generation 读取都带超时、`retry=None`；若分页截断、对象变大或 generation 改变则失败，不把部分结果当完整结果。
 
 接受 `jobs:run` 后，最多等待 180 秒，每 5 秒只读查询 GCS。候选必须是本次触发之后开始、15 分钟内的完整同源观察；取最新合法对象。若没有可信新鲜对象就失败，不追加 Scheduler 触发。QRS POST 前再次检查观察起始时间仍在 15 分钟窗口内。
 
 ## 保存什么
 
-只接受 `longbridge_account_snapshot.v1`、`status=partial`、scope 为 `PAPER`、持仓和现金读取完整、`no_order=true`、`live_authority_granted=false`、`snapshot_atomic=false`，且 `source_binding` 为 `bound` 的 64 位小写 hex。观察起止必须带时区、起点不晚于终点、都不晚于本次运行时刻，并且起点落在本次运行前 15 分钟内。观察日取起点的 UTC 日期，不是交易所收盘日。
+只接受 `longbridge_account_snapshot.v1`、`status=partial`、scope 与当前目标预期一致（PAPER/HK/SG）、持仓和现金读取完整、`no_order=true`、`live_authority_granted=false`、`snapshot_atomic=false`，且 `source_binding` 为 `bound` 的 64 位小写 hex。观察起止必须带时区、起点不晚于终点、都不晚于本次运行时刻，并且起点落在本次运行前 15 分钟内。观察日取起点的 UTC 日期，不是交易所收盘日。
 
 对象只保留分币种 `broker_reported_balances`（`currency`、`net_assets`、`total_cash`）和 `cash`（`currency`、`available_cash`、`frozen_cash`、`settling_cash`）。金额必须是有限十进制字符串；负数保持原值，不改成零，也不把币种加总。不保存持仓、订单、token、secret 或完整响应。
 
-producer 为每次观察写入 `{prefix}/paper/{source_binding_id}/{observation_date}/{HHMMSSffffffZ.json}`，其中日期来自 `observed_started_at`，文件名使用 `observed_finished_at`。consumer 固定读取 listing 返回的 generation、保留原字节，并在 POST 前重新验证合同、路径、来源、UTC日期和时间，不改写时间或拼接来源。
+producer 为每次观察写入 `{prefix}/{target_id}/{source_binding_id}/{observation_date}/{HHMMSSffffffZ.json}`，其中日期来自 `observed_started_at`，文件名使用 `observed_finished_at`。consumer 固定读取 listing 返回的 generation、保留原字节，并在 POST 前重新验证合同、路径、来源、UTC日期和时间，不改写时间或拼接来源。
 
 只有从该受限 GCS listing 选出的同一对象才会被 POST 到 QRS，发送 body 是读取到的原始字节，不重新序列化。QRS 发布状态与观察读取状态分开输出；发布拒绝或结果未知不会改变原对象，未知 POST 不自动重试。QRS `ok=true` 且回读的目标、观察日、观察结束时间匹配，只表示接收端确认保存，不证明页面已经展示或数据完成物理账户身份核验。接收端按其可信配置绑定目标与来源，调用方不传账户 key 或身份结论。
 

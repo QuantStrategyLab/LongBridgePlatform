@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Trigger one internal PAPER probe and sync its bounded GCS observation."""
+"""Trigger one internal LongBridge probe and sync its bounded GCS observation."""
 
 from __future__ import annotations
 
@@ -9,11 +9,13 @@ import re
 import sys
 import time
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as datetime_time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 HISTORY_SCHEMA = "longbridge_account_snapshot_history.v1"
@@ -44,6 +46,18 @@ _FILENAME = re.compile(r"^\d{12}Z\.json$")
 _FORBIDDEN_PREFIX_PARTS = ("execution-report", "execution_report", "runtime-report")
 _BALANCE_FIELDS = ("currency", "net_assets", "total_cash")
 _CASH_FIELDS = ("currency", "available_cash", "frozen_cash", "settling_cash")
+_SG_PROBE_SCHEDULE = "35 9,15 * * 1-5"
+_SG_PROBE_TIMEZONE = "America/New_York"
+_SG_PROBE_REQUIRED_PERMISSIONS = (
+    "cloudscheduler.jobs.get",
+    "cloudscheduler.jobs.run",
+    "cloudscheduler.jobs.enable",
+    "cloudscheduler.jobs.pause",
+)
+_SCHEDULER_OUTPUT_FIELDS = frozenset({
+    "state", "status", "lastAttemptTime", "scheduleTime", "userUpdateTime", "updateTime", "etag",
+})
+_SG_SCHEDULE_GUARD = timedelta(minutes=10)
 
 
 @dataclass(frozen=True)
@@ -99,21 +113,30 @@ def record_daily_account_snapshot(
     try:
         session = session_factory()
         job = _scheduler_get(session, config)
-        _validate_scheduler_job(job, config)
     except _Rejected as rejected:
         _close(session)
         return DailyAccountRecordResult("error", rejected.category)
     except Exception:
         _close(session)
         return DailyAccountRecordResult("error", "scheduler_read_failed")
+
+    paused_sg = config.target_id == "sg" and job.get("state") == "PAUSED"
     try:
-        started_at = _utc_now(now_reader)
-        _scheduler_run(session, config)
+        if paused_sg:
+            if env.get("RUNTIME_TARGET_ENABLED") != "false":
+                raise _Rejected("runtime_target_not_disabled")
+            _validate_scheduler_job(job, config, allow_paused=True)
+            _validate_sg_schedule(job, now_reader)
+            started_at = _run_paused_sg_probe(session, config, job, now_reader)
+        else:
+            _validate_scheduler_job(job, config)
+            started_at = _utc_now(now_reader)
+            _scheduler_run(session, config)
     except _Rejected as rejected:
         return DailyAccountRecordResult("error", rejected.category)
     except Exception:
-        # The request may have reached Scheduler. Never trigger it a second time.
-        return DailyAccountRecordResult("error", "scheduler_run_unknown")
+        category = "scheduler_run_unknown" if not paused_sg else "scheduler_transition_failed"
+        return DailyAccountRecordResult("error", category)
     finally:
         _close(session)
 
@@ -282,7 +305,60 @@ def _scheduler_get(session: Any, config: _Config) -> Mapping[str, Any]:
         _close(response)
 
 
-def _validate_scheduler_job(job: Mapping[str, Any], config: _Config) -> None:
+def inspect_sg_probe_permissions(
+    env: Mapping[str, str],
+    *,
+    session_factory: Callable[[], Any],
+) -> dict[str, bool | str]:
+    """Read fixed project-level IAM permissions for the SG probe path only."""
+    target_id = str(env.get("ACCOUNT_HISTORY_TARGET_ID") or "").strip()
+    project_id = str(env.get("GOOGLE_CLOUD_PROJECT") or "").strip()
+    if target_id != "sg" or project_id != "longbridgequant":
+        raise _Rejected("permission_inspection_target_invalid")
+    session = None
+    response = None
+    try:
+        session = session_factory()
+        response = session.post(
+            f"https://cloudresourcemanager.googleapis.com/v1/projects/{project_id}:testIamPermissions",
+            json={"permissions": list(_SG_PROBE_REQUIRED_PERMISSIONS)},
+            timeout=HTTP_TIMEOUT_SECONDS,
+            allow_redirects=False,
+        )
+        status = getattr(response, "status_code", None)
+        if status != 200 or getattr(response, "is_redirect", False):
+            raise _Rejected("permission_inspection_unknown")
+        try:
+            payload = response.json()
+        except Exception:
+            raise _Rejected("permission_inspection_response_invalid") from None
+        if not isinstance(payload, Mapping):
+            raise _Rejected("permission_inspection_response_invalid")
+        granted_value = payload.get("permissions", [])
+        if (
+            not isinstance(granted_value, list)
+            or any(not isinstance(item, str) for item in granted_value)
+            or len(set(granted_value)) != len(granted_value)
+            or not set(granted_value).issubset(_SG_PROBE_REQUIRED_PERMISSIONS)
+        ):
+            raise _Rejected("permission_inspection_response_invalid")
+        granted = set(granted_value)
+        return {
+            "context": "project",
+            **{permission: permission in granted for permission in _SG_PROBE_REQUIRED_PERMISSIONS},
+        }
+    except _Rejected:
+        raise
+    except Exception:
+        raise _Rejected("permission_inspection_unknown") from None
+    finally:
+        _close(response)
+        _close(session)
+
+
+def _validate_scheduler_job(
+    job: Mapping[str, Any], config: _Config, *, allow_paused: bool = False
+) -> None:
     target = job.get("httpTarget")
     target = target if isinstance(target, Mapping) else {}
     auth = target.get("oidcToken")
@@ -296,9 +372,10 @@ def _validate_scheduler_job(job: Mapping[str, Any], config: _Config) -> None:
         body_empty = not body
     else:
         body_empty = body is None
+    allowed_states = {"ENABLED", "PAUSED"} if allow_paused else {"ENABLED"}
     if (
         job.get("name") != config.scheduler_resource
-        or job.get("state") != "ENABLED"
+        or job.get("state") not in allowed_states
         or target.get("httpMethod") != "POST"
         or target.get("uri") != f"{config.service_url}/probe"
         or not body_empty
@@ -309,6 +386,155 @@ def _validate_scheduler_job(job: Mapping[str, Any], config: _Config) -> None:
         or not _zero_duration(retry.get("maxRetryDuration"))
     ):
         raise _Rejected("scheduler_job_mismatch")
+
+
+def _validate_sg_schedule(job: Mapping[str, Any], now_reader: Callable[[], datetime]) -> None:
+    if job.get("schedule") != _SG_PROBE_SCHEDULE or job.get("timeZone") != _SG_PROBE_TIMEZONE:
+        raise _Rejected("scheduler_schedule_mismatch")
+    try:
+        zone = ZoneInfo(_SG_PROBE_TIMEZONE)
+    except ZoneInfoNotFoundError:
+        raise _Rejected("scheduler_schedule_mismatch") from None
+    now = _utc_now(now_reader)
+    local_day = now.astimezone(zone).date()
+    occurrences = []
+    for offset in range(-7, 8):
+        day = local_day + timedelta(days=offset)
+        if day.weekday() >= 5:
+            continue
+        for hour in (9, 15):
+            occurrence = datetime.combine(day, datetime_time(hour, 35), tzinfo=zone)
+            occurrences.append(occurrence.astimezone(timezone.utc))
+    if not occurrences or min(abs(now - item) for item in occurrences) < _SG_SCHEDULE_GUARD:
+        raise _Rejected("scheduler_natural_window")
+
+
+def _scheduler_action(session: Any, config: _Config, action: str) -> None:
+    if action not in {"pause", "resume"}:
+        raise ValueError("unsupported scheduler action")
+    category_prefix = f"scheduler_{action}"
+    try:
+        response = session.post(
+            f"https://cloudscheduler.googleapis.com/v1/{config.scheduler_resource}:{action}",
+            timeout=HTTP_TIMEOUT_SECONDS,
+            allow_redirects=False,
+        )
+    except Exception:
+        raise _Rejected(f"{category_prefix}_unknown") from None
+    try:
+        status = getattr(response, "status_code", None)
+        if getattr(response, "is_redirect", False) or not isinstance(status, int):
+            raise _Rejected(f"{category_prefix}_unknown")
+        if 200 <= status < 300:
+            return
+        if status >= 500:
+            raise _Rejected(f"{category_prefix}_unknown")
+        raise _Rejected(f"{category_prefix}_rejected")
+    finally:
+        _close(response)
+
+
+def _scheduler_control_view(job: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: deepcopy(value)
+        for key, value in job.items()
+        if key not in _SCHEDULER_OUTPUT_FIELDS
+    }
+
+
+def _read_scheduler_job(session: Any, config: _Config) -> Mapping[str, Any]:
+    job = _scheduler_get(session, config)
+    if job.get("name") != config.scheduler_resource:
+        raise _Rejected("scheduler_readback_mismatch")
+    return job
+
+
+def _pause_and_verify(
+    session: Any,
+    config: _Config,
+    original: Mapping[str, Any],
+) -> None:
+    pause_error = ""
+    try:
+        _scheduler_action(session, config, "pause")
+    except _Rejected as rejected:
+        pause_error = rejected.category
+    except Exception:
+        pause_error = "scheduler_pause_unknown"
+
+    try:
+        restored = _read_scheduler_job(session, config)
+    except _Rejected:
+        raise _Rejected(pause_error or "scheduler_restore_readback_unknown") from None
+    except Exception:
+        raise _Rejected(pause_error or "scheduler_restore_readback_unknown") from None
+    if (
+        restored.get("state") != "PAUSED"
+        or _scheduler_control_view(restored) != _scheduler_control_view(original)
+    ):
+        raise _Rejected(pause_error or "scheduler_restore_mismatch")
+    if pause_error:
+        raise _Rejected(pause_error)
+
+
+def _run_paused_sg_probe(
+    session: Any,
+    config: _Config,
+    original_job: Mapping[str, Any],
+    now_reader: Callable[[], datetime],
+) -> datetime:
+    original = deepcopy(dict(original_job))
+    original_last_attempt = original.get("lastAttemptTime")
+    try:
+        _scheduler_action(session, config, "resume")
+    except _Rejected as rejected:
+        if rejected.category != "scheduler_resume_unknown":
+            raise
+        try:
+            observed = _read_scheduler_job(session, config)
+        except Exception:
+            raise _Rejected("scheduler_resume_state_unknown") from None
+        if observed.get("state") == "ENABLED":
+            _pause_and_verify(session, config, original)
+        elif observed.get("state") != "PAUSED":
+            raise _Rejected("scheduler_resume_state_unknown")
+        raise rejected
+
+    try:
+        resumed = _read_scheduler_job(session, config)
+    except Exception:
+        _pause_and_verify(session, config, original)
+        raise _Rejected("scheduler_resume_readback_unknown") from None
+    last_attempt_changed = resumed.get("lastAttemptTime") != original_last_attempt
+    resumed_is_valid = (
+        resumed.get("state") == "ENABLED"
+        and _scheduler_control_view(resumed) == _scheduler_control_view(original)
+        and not last_attempt_changed
+    )
+    if not resumed_is_valid:
+        if resumed.get("state") == "ENABLED":
+            _pause_and_verify(session, config, original)
+        if last_attempt_changed:
+            raise _Rejected("scheduler_unexpected_attempt")
+        raise _Rejected("scheduler_resume_readback_mismatch")
+
+    run_error = ""
+    try:
+        started_at = _utc_now(now_reader)
+        _scheduler_run(session, config)
+    except _Rejected as rejected:
+        run_error = rejected.category
+        started_at = None
+    except Exception:
+        run_error = "scheduler_run_unknown"
+        started_at = None
+
+    _pause_and_verify(session, config, original)
+    if run_error:
+        raise _Rejected(run_error)
+    if started_at is None:
+        raise _Rejected("scheduler_run_unknown")
+    return started_at
 
 
 def _zero_duration(value: object) -> bool:
@@ -765,6 +991,17 @@ def main(
     now_reader: Callable[[], datetime] | None = None,
 ) -> int:
     args = sys.argv[1:] if argv is None else argv
+    if args == ["--inspect-sg-probe-permissions"]:
+        try:
+            result = inspect_sg_probe_permissions(
+                os.environ if environ is None else environ,
+                session_factory=session_factory or _authorized_session,
+            )
+        except _Rejected as rejected:
+            print(f"permission_inspection=error:{rejected.category}")
+            return 1
+        print(json.dumps(result, separators=(",", ":"), sort_keys=True))
+        return 0
     if args:
         print("error: config_invalid")
         return 1

@@ -26,6 +26,11 @@ on:
         options:
           - "true"
           - "false"
+      inspect_sg_probe_permissions:
+        description: "Read-only check of the SG probe Scheduler permissions; requires target=sg."
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: "20 22 * * *"
 
@@ -53,8 +58,13 @@ jobs:
         id: render
         env:
           MATRIX_TARGET: ${{ inputs.target || 'all' }}
+          INSPECT_SG_PROBE_PERMISSIONS: ${{ inputs.inspect_sg_probe_permissions || 'false' }}
         run: |
           set -euo pipefail
+          if [[ "$INSPECT_SG_PROBE_PERMISSIONS" == 'true' && "$MATRIX_TARGET" != 'sg' ]]; then
+            echo "SG probe permission inspection requires target=sg" >&2
+            exit 1
+          fi
           python3 scripts/render_runtime_target_matrix.py --profile heartbeat --target "$MATRIX_TARGET" --github-output
 
   heartbeat:
@@ -70,6 +80,7 @@ jobs:
       id-token: write
     environment: ${{ matrix.target.environment }}
     env:
+      INSPECT_SG_PROBE_PERMISSIONS: ${{ inputs.inspect_sg_probe_permissions || 'false' }}
       RUNTIME_HEARTBEAT_NAME: LongBridgePlatform ${{ matrix.target.label }}
       RUNTIME_HEARTBEAT_REPORT_PLATFORM: longbridge
       RUNTIME_HEARTBEAT_ACCOUNT_SCOPE: ${{ vars.ACCOUNT_REGION }}
@@ -134,9 +145,16 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
 
+      - name: Inspect SG probe project permissions
+        if: ${{ env.INSPECT_SG_PROBE_PERMISSIONS == 'true' }}
+        env:
+          ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
+          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
+        run: uv run --no-sync python scripts/record_daily_account_snapshot.py --inspect-sg-probe-permissions
+
       - name: Record and sync daily account snapshot
         id: account_history
-        if: ${{ !cancelled() && contains(fromJSON('["PAPER","HK","SG"]'), matrix.target.label) && vars.ACCOUNT_HISTORY_RECORDING_ENABLED == 'true' }}
+        if: ${{ !cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && contains(fromJSON('["PAPER","HK","SG"]'), matrix.target.label) && vars.ACCOUNT_HISTORY_RECORDING_ENABLED == 'true' }}
         continue-on-error: true
         env:
           ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ vars.ACCOUNT_HISTORY_RECORDING_ENABLED }}
@@ -144,18 +162,23 @@ jobs:
           ACCOUNT_HISTORY_GCS_PREFIX: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX }}
           ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
           ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
-          ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
+          ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
           GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
           ACCOUNT_FACTS_SYNC_ENABLED: ${{ vars.ACCOUNT_FACTS_SYNC_ENABLED }}
           ACCOUNT_FACTS_SYNC_URL: ${{ vars.ACCOUNT_FACTS_SYNC_URL }}
           ACCOUNT_FACTS_SYNC_TOKEN: ${{ vars.ACCOUNT_FACTS_SYNC_ENABLED == 'true' && secrets.ACCOUNT_FACTS_SYNC_TOKEN || '' }}
-        run: uv run --no-sync python scripts/record_daily_account_snapshot.py
+        run: |
+          if [[ -n "$ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID" ]]; then
+            printf '::add-mask::%s\n' "$ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID"
+          fi
+          uv run --no-sync python scripts/record_daily_account_snapshot.py
 
       - name: Check recent execution report
+        if: ${{ env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}
         run: uv run --no-sync python scripts/execution_report_heartbeat.py
 
       - name: Publish read-only runtime execution evidence
-        if: matrix.target.label == 'PAPER'
+        if: ${{ matrix.target.label == 'PAPER' && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}
         uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@c87355fed83dc60e051244f7c7fbd5c9c3968f2b
         with:
           source-id: runtime-reports-longbridge
@@ -166,7 +189,7 @@ jobs:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
 
       - name: Publish daily runtime projection
-        if: ${{ !cancelled() && matrix.target.label == 'PAPER' && vars.RUNTIME_DAILY_PROJECTION_ENABLED == 'true' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
+        if: ${{ !cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && matrix.target.label == 'PAPER' && vars.RUNTIME_DAILY_PROJECTION_ENABLED == 'true' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
         env:
           RUNTIME_DAILY_PROJECTION_ENABLED: ${{ vars.RUNTIME_DAILY_PROJECTION_ENABLED }}
           RUNTIME_DAILY_PROJECTION_GCS_PREFIX: ${{ vars.RUNTIME_DAILY_PROJECTION_GCS_PREFIX }}
@@ -178,5 +201,5 @@ jobs:
         run: uv run --no-sync python scripts/publish_daily_runtime_projection.py
 
       - name: Fail after completing heartbeat checks if account snapshot sync failed
-        if: ${{ !cancelled() && steps.account_history.outcome == 'failure' }}
+        if: ${{ !cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && steps.account_history.outcome == 'failure' }}
         run: exit 1
