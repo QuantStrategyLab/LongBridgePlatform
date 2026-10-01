@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import os
 import re
 import sys
@@ -58,6 +59,8 @@ _SCHEDULER_OUTPUT_FIELDS = frozenset({
     "state", "status", "lastAttemptTime", "scheduleTime", "userUpdateTime", "updateTime", "etag",
 })
 _SG_SCHEDULE_GUARD = timedelta(minutes=10)
+_PRODUCER_WRITE_TIMEOUT_SECONDS = 20.0
+_PRODUCER_DECIMAL = re.compile(r"^-?(?:0|[1-9]\d*)(?:\.\d+)?$")
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,140 @@ class _Config:
     source_binding_id: str
     scheduler_job: str
     scheduler_resource: str
+
+
+@dataclass(frozen=True)
+class _ProducerConfig:
+    prefix: str
+    target_id: str
+    account_scope: str
+    project_id: str
+
+
+def record_projected_daily_account(
+    env: Mapping[str, str], *, account_scope: str, source_binding: Mapping[str, Any],
+    balances: Any, cash: Any, started: datetime, finished: datetime,
+    open_store: Callable[[str], Any],
+) -> DailyAccountRecordResult:
+    """Create one bounded history object from an already-read broker response."""
+    if str(env.get("ACCOUNT_HISTORY_RECORDING_ENABLED") or "").strip() != "true":
+        return DailyAccountRecordResult("skipped", "disabled")
+    if str(account_scope or "").strip() not in {"HK", "SG"}:
+        return DailyAccountRecordResult("skipped", "scope")
+    try:
+        config = _producer_config(env)
+        if account_scope != config.account_scope:
+            raise _Rejected("scope")
+        body, uri = _producer_history_object(config, source_binding, balances, cash, started, finished)
+    except _Rejected as rejected:
+        return DailyAccountRecordResult("skipped", rejected.category)
+    try:
+        created = _producer_create_bounded(open_store(config.project_id), uri, body)
+    except _Rejected as rejected:
+        return DailyAccountRecordResult("error", rejected.category)
+    except Exception:
+        return DailyAccountRecordResult("error", "store_unknown")
+    if created is True:
+        return DailyAccountRecordResult("recorded")
+    return DailyAccountRecordResult("error", "object_conflict" if created is False else "store_unknown")
+
+
+def _producer_config(env: Mapping[str, str]) -> _ProducerConfig:
+    prefix = _producer_gcs_prefix(str(env.get("ACCOUNT_HISTORY_GCS_PREFIX") or ""))
+    scope = str(env.get("ACCOUNT_HISTORY_EXPECTED_SCOPE") or "").strip()
+    target = str(env.get("ACCOUNT_HISTORY_TARGET_ID") or "").strip()
+    project = str(env.get("GOOGLE_CLOUD_PROJECT") or "").strip()
+    if scope not in {"HK", "SG"} or target != scope.lower() or not _TARGET_ID.fullmatch(target) or not _PROJECT_ID.fullmatch(project):
+        raise _Rejected("config_invalid")
+    return _ProducerConfig(prefix, target, scope, project)
+
+
+def _producer_gcs_prefix(value: str) -> str:
+    try:
+        parsed = urlsplit(value.strip())
+        port = parsed.port
+    except ValueError:
+        raise _Rejected("config_invalid") from None
+    segments = [part for part in parsed.path.split("/") if part]
+    if (parsed.scheme != "gs" or parsed.username or parsed.password or parsed.query or parsed.fragment or port is not None
+            or _BUCKET.fullmatch(parsed.netloc or "") is None or not segments or segments[-1] != "account_snapshots"
+            or any(part in {".", ".."} for part in segments)
+            or any(denied in part.lower() for part in segments for denied in _FORBIDDEN_PREFIX_PARTS)):
+        raise _Rejected("config_invalid")
+    return f"gs://{parsed.netloc}/{'/'.join(segments)}"
+
+
+def _producer_history_object(config, source_binding, balances, cash, started, finished):
+    if (not isinstance(source_binding, Mapping) or source_binding.get("kind") != SOURCE_KIND
+            or source_binding.get("status") != "bound" or not isinstance(source_binding.get("id"), str)
+            or not _BINDING_ID.fullmatch(source_binding["id"])):
+        raise _Rejected("source_unbound")
+    if any(not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None for value in (started, finished)):
+        raise _Rejected("observation_invalid")
+    started, finished = started.astimezone(timezone.utc), finished.astimezone(timezone.utc)
+    now = datetime.now(timezone.utc)
+    if finished < started or finished > now or started < now - OBSERVATION_WINDOW:
+        raise _Rejected("observation_invalid")
+    record = {
+        "schema_version": HISTORY_SCHEMA, "snapshot_schema_version": SNAPSHOT_SCHEMA,
+        "account_scope": config.account_scope, "target_id": config.target_id,
+        "source_binding": {"kind": SOURCE_KIND, "status": "bound", "id": source_binding["id"]},
+        "observed_started_at": started.isoformat(), "observed_finished_at": finished.isoformat(),
+        "snapshot_atomic": False, "observation_date": started.date().isoformat(),
+        "broker_reported_balances": _producer_money_rows(balances, _BALANCE_FIELDS),
+        "cash": _producer_money_rows(cash, _CASH_FIELDS),
+    }
+    body = json.dumps(record, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    uri = f"{config.prefix}/{config.target_id}/{source_binding['id']}/{record['observation_date']}/{finished.strftime('%H%M%S%fZ.json')}"
+    return body, uri
+
+
+def _producer_money_rows(value, fields):
+    if not isinstance(value, list) or not value:
+        raise _Rejected("projection_invalid")
+    rows, seen = [], set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise _Rejected("projection_invalid")
+        row = {}
+        for field in fields:
+            cell = item.get(field)
+            if field == "currency":
+                if not isinstance(cell, str) or not _CURRENCY.fullmatch(cell) or cell in seen:
+                    raise _Rejected("projection_invalid")
+                seen.add(cell)
+            elif (isinstance(cell, bool) or not isinstance(cell, str) or not _PRODUCER_DECIMAL.fullmatch(cell)
+                  or not Decimal(cell).is_finite()):
+                raise _Rejected("projection_invalid")
+            row[field] = cell
+        rows.append(row)
+    return rows
+
+
+def _producer_create_bounded(store, uri, body):
+    from google.api_core.exceptions import Conflict, PreconditionFailed
+    client, parse_uri = getattr(store, "client", None), getattr(store, "_parse_uri", None)
+    if client is None or not callable(parse_uri):
+        raise _Rejected("store_unbounded")
+    try:
+        bucket, name = parse_uri(uri)
+        blob = client.bucket(bucket).blob(name)
+        upload = blob.upload_from_string
+    except Exception:
+        raise _Rejected("store_unbounded") from None
+    try:
+        params = inspect.signature(upload).parameters
+    except (TypeError, ValueError):
+        raise _Rejected("store_unbounded") from None
+    if not all(name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+               for name in ("if_generation_match", "timeout", "retry")):
+        raise _Rejected("store_unbounded")
+    try:
+        upload(body, content_type="application/json", if_generation_match=0,
+               timeout=_PRODUCER_WRITE_TIMEOUT_SECONDS, retry=None)
+    except (Conflict, PreconditionFailed):
+        return False
+    return True
 
 
 def record_daily_account_snapshot(

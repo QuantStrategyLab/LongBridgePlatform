@@ -1162,6 +1162,186 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(observed["report"]["summary"]["total_equity"], 456.0)
         self.assertEqual(observed["report"]["summary"]["positions_count"], 1)
 
+    def test_probe_archives_real_portfolio_balance_once_with_bound_source(self):
+        from application.broker_reconciliation import build_account_snapshot_source_binding
+        from application.account_snapshot import cycle_history_observation
+        from application.runtime_bootstrap_adapters import LongBridgeRuntimeBootstrap
+        from application.runtime_composer import LongBridgeRuntimeComposer
+        from scripts import record_daily_account_snapshot as history
+
+        module = load_module()
+        events, orders, balance_calls, uploads, parsed_objects, context_tokens = [], [], [], [], [], []
+        response = [types.SimpleNamespace(
+            currency="USD", net_assets="100.25", total_cash="80",
+            cash_infos=[
+                types.SimpleNamespace(currency="USD", available_cash="50", frozen_cash="0", settling_cash="0"),
+                types.SimpleNamespace(currency="HKD", available_cash="25", frozen_cash="0", settling_cash="0"),
+            ],
+        )]
+
+        class TradeContext:
+            def account_balance(self, **kwargs):
+                balance_calls.append(kwargs)
+                return response
+
+            def stock_positions(self):
+                return types.SimpleNamespace(channels=[])
+
+        trade_context = TradeContext()
+        quote_context = types.SimpleNamespace(quote=lambda _symbols: [])
+
+        class FakeBlob:
+            def upload_from_string(self, body, *, content_type, if_generation_match, timeout, retry):
+                uploads.append((json.loads(body), content_type, if_generation_match, timeout, retry))
+
+        store = types.SimpleNamespace(
+            client=types.SimpleNamespace(bucket=lambda _name: types.SimpleNamespace(blob=lambda _name: FakeBlob())),
+            _parse_uri=lambda uri: parsed_objects.append(("generic-history-bucket", uri.removeprefix("gs://generic-history-bucket/"))) or parsed_objects[-1],
+        )
+        module.fetch_account_snapshot_token_with_metadata = lambda project, secret: types.SimpleNamespace(
+            value="opaque-token", version_name="projects/generic-project/secrets/generic-token/versions/7"
+        )
+        env_values = {"K_SERVICE": "generic-service", "K_REVISION": "revision-synthetic"}
+        bootstrap = LongBridgeRuntimeBootstrap(
+            project_id="generic-project", secret_name="generic-token", token_refresh_threshold_days=0,
+            fetch_token_from_secret_fn=lambda *_args: self.fail("snapshot must use token metadata"),
+            refresh_token_if_needed_fn=lambda *_args, **_kwargs: self.fail("snapshot must not refresh"),
+            build_contexts_fn=lambda _key, _secret, token: (context_tokens.append(token), (quote_context, trade_context))[1],
+            calculate_strategy_indicators_fn=lambda _quote: {},
+            env_reader=lambda key, default="": env_values.get(key, default),
+        )
+        composer_stub = types.SimpleNamespace(
+            project_id="generic-project", secret_name="generic-token", token_refresh_threshold_days=0,
+            fetch_token_with_metadata_fn=module.fetch_account_snapshot_token_with_metadata,
+            fetch_token_from_secret_fn=lambda *_args: self.fail("snapshot must use token metadata"),
+            refresh_token_if_needed_fn=lambda *_args, **_kwargs: self.fail("snapshot must not refresh"),
+            build_contexts_fn=lambda _key, _secret, token: (context_tokens.append(token), (quote_context, trade_context))[1],
+            bootstrap_builder=lambda **_kwargs: bootstrap,
+            account_region="HK", env_reader=lambda key, default="": env_values.get(key, default),
+        )
+        composer_stub._build_order_free_bootstrap = lambda: bootstrap
+
+        class FakeComposer:
+            project_id = "generic-project"
+            strategy_adapters = types.SimpleNamespace(calculate_strategy_indicators=lambda _quote: {})
+
+            def build_reporting_adapters(self):
+                return types.SimpleNamespace(
+                    start_run=lambda: (types.SimpleNamespace(run_id="synthetic"), {"status": "pending"}),
+                    log_event=lambda _ctx, event, **fields: events.append((event, fields)),
+                    persist_execution_report=lambda _report: "synthetic-report",
+                )
+
+            def build_rebalance_runtime(self, **_kwargs):
+                def build_portfolio(_quote, trade):
+                    class Portfolio:
+                        def get_portfolio_snapshot(self):
+                            return module.fetch_strategy_account_state(quote_context, trade, []) | {
+                                "buying_power": 50, "total_equity": 100, "positions": (),
+                            }
+                    return Portfolio()
+                return types.SimpleNamespace(portfolio_port_factory=build_portfolio)
+
+            def build_account_snapshot_broker_contexts(self):
+                return LongBridgeRuntimeComposer.build_account_snapshot_broker_contexts(composer_stub)
+
+            def build_notification_adapters(self):
+                raise AssertionError("successful probe must stay silent")
+
+        module.build_composer = lambda **_kwargs: FakeComposer()
+        expected_binding = build_account_snapshot_source_binding(
+            version_name="projects/generic-project/secrets/generic-token/versions/7",
+            project_id="generic-project", service="generic-service", revision="revision-synthetic",
+            account_scope="HK",
+        )
+        with patch.dict(os.environ, {
+            "ACCOUNT_HISTORY_RECORDING_ENABLED": "true",
+            "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK", "ACCOUNT_HISTORY_TARGET_ID": "hk",
+            "ACCOUNT_HISTORY_GCS_PREFIX": "gs://generic-history-bucket/longbridge/account_snapshots",
+            "GOOGLE_CLOUD_PROJECT": "generic-project", "K_REVISION": "revision-synthetic",
+        }, clear=False), patch.object(module, "_open_account_history_store", lambda _project: store), patch.object(module, "submit_order", side_effect=lambda *args, **kwargs: orders.append((args, kwargs))):
+            with module.app.test_request_context("/probe", method="POST"):
+                result = module.run_probe()
+
+        self.assertEqual(result, ("Probe OK", 200))
+        self.assertEqual(balance_calls, [{"currency": "USD"}])
+        self.assertEqual(context_tokens, ["opaque-token"])
+        self.assertEqual(len(uploads), 1)
+        payload, content_type, generation, timeout, retry = uploads[0]
+        self.assertEqual(payload["source_binding"], expected_binding)
+        self.assertEqual(payload["broker_reported_balances"], [{"currency": "USD", "net_assets": "100.25", "total_cash": "80"}])
+        self.assertEqual({row["currency"] for row in payload["cash"]}, {"USD", "HKD"})
+        started = datetime.fromisoformat(payload["observed_started_at"])
+        finished = datetime.fromisoformat(payload["observed_finished_at"])
+        self.assertIsNotNone(started.utcoffset())
+        self.assertIsNotNone(finished.utcoffset())
+        self.assertGreaterEqual(finished, started)
+        config = history._Config("generic-project", "region", "service", "https://service.run.app", "gs://generic-history-bucket/longbridge/account_snapshots", "generic-history-bucket", "longbridge/account_snapshots", "hk", "HK", expected_binding["id"], "job", "resource")
+        self.assertEqual(len(parsed_objects), 1)
+        bucket_name, actual_object_name = parsed_objects[0]
+        self.assertEqual(bucket_name, "generic-history-bucket")
+        candidate = {"name": actual_object_name}
+        history._validate_history_object(payload, config, candidate, started, datetime.now(timezone.utc))
+        self.assertEqual((content_type, generation, timeout, retry), ("application/json", 0, 20.0, None))
+        self.assertEqual(orders, [])
+        self.assertIsNone(cycle_history_observation())
+        self.assertIn(("health_probe_completed", unittest.mock.ANY), [(name, fields) for name, fields in events])
+
+    def test_probe_unknown_history_upload_fails_closed_without_re_read_or_archive_success(self):
+        import io
+        from contextlib import redirect_stdout
+        from application.broker_reconciliation import build_account_snapshot_source_binding
+        from application.account_snapshot import cycle_history_observation
+
+        module = load_module()
+        events, balance_calls, upload_calls, notifications = [], [], [], []
+        response = [types.SimpleNamespace(currency="USD", net_assets="100", total_cash="80", cash_infos=[
+            types.SimpleNamespace(currency="USD", available_cash="50", frozen_cash="0", settling_cash="0")
+        ])]
+
+        class TradeContext:
+            def account_balance(self, **kwargs):
+                balance_calls.append(kwargs)
+                return response
+
+            def stock_positions(self):
+                return types.SimpleNamespace(channels=[])
+
+        trade = TradeContext()
+        class Blob:
+            def upload_from_string(self, *_args, **_kwargs):
+                upload_calls.append(1)
+                raise RuntimeError("redacted storage detail")
+        store = types.SimpleNamespace(client=types.SimpleNamespace(bucket=lambda _name: types.SimpleNamespace(blob=lambda _name: Blob())), _parse_uri=lambda _uri: ("generic-history-bucket", "history/object.json"))
+        module.fetch_account_snapshot_token_with_metadata = lambda *_args: types.SimpleNamespace(value="opaque", version_name="projects/generic-project/secrets/generic-token/versions/8")
+
+        class Composer:
+            project_id = "generic-project"
+            strategy_adapters = types.SimpleNamespace(calculate_strategy_indicators=lambda _quote: {})
+            def build_reporting_adapters(self):
+                return types.SimpleNamespace(start_run=lambda: (None, {"status": "pending"}), log_event=lambda _ctx, event, **fields: events.append((event, fields)), persist_execution_report=lambda _report: "report")
+            def build_rebalance_runtime(self, **_kwargs):
+                return types.SimpleNamespace(portfolio_port_factory=lambda _quote, _trade: types.SimpleNamespace(get_portfolio_snapshot=lambda: None))
+            def build_account_snapshot_broker_contexts(self):
+                version = module.fetch_account_snapshot_token_with_metadata("generic-project", "generic-token").version_name
+                binding = build_account_snapshot_source_binding(version_name=version, project_id=self.project_id, service="generic-service", revision=os.getenv("K_REVISION"), account_scope="HK")
+                return types.SimpleNamespace(quote=lambda _symbols: []), trade, binding
+            def build_notification_adapters(self):
+                return types.SimpleNamespace(publish_cycle_notification=lambda **payload: notifications.append(payload))
+
+        module.build_composer = lambda **_kwargs: Composer()
+        output = io.StringIO()
+        with patch.dict(os.environ, {"ACCOUNT_HISTORY_RECORDING_ENABLED": "true", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK", "ACCOUNT_HISTORY_TARGET_ID": "hk", "ACCOUNT_HISTORY_GCS_PREFIX": "gs://generic-history-bucket/longbridge/account_snapshots", "GOOGLE_CLOUD_PROJECT": "generic-project", "K_REVISION": "revision-synthetic"}, clear=False), patch.object(module, "_open_account_history_store", lambda _project: store), redirect_stdout(output):
+            with module.app.test_request_context("/probe", method="POST"):
+                result = module.run_probe()
+        self.assertEqual(result, ("Error", 500))
+        self.assertEqual(balance_calls, [{"currency": "USD"}])
+        self.assertEqual(upload_calls, [1])
+        self.assertFalse(any(name == "health_probe_completed" for name, _fields in events))
+        self.assertIn("account_history status=error category=store_unknown", output.getvalue())
+        self.assertNotIn("account_history status=recorded", output.getvalue())
+        self.assertIsNone(cycle_history_observation())
+
     def test_handle_probe_rejects_get_without_running_broker_probe(self):
         module = load_module()
         observed = {"called": False}
