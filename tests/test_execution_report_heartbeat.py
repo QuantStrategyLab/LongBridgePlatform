@@ -12,7 +12,39 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+WORKFLOW = ROOT / ".github/workflows/execution-report-heartbeat.yml"
+
 from scripts import execution_report_heartbeat as heartbeat  # noqa: E402
+
+
+def test_account_history_workflow_prefers_and_masks_protected_source_binding():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}" in workflow
+    assert "printf '::add-mask::%s\\n' \"$ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID\"" in workflow
+    record_step = workflow[workflow.index("name: Record and sync daily account snapshot") :]
+    assert record_step.index("printf '::add-mask::%s\\n'") < record_step.index(
+        "uv run --no-sync python scripts/record_daily_account_snapshot.py"
+    )
+
+
+def test_sg_permission_inspection_is_opt_in_target_limited_and_skips_pipeline():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "inspect_sg_probe_permissions:" in workflow
+    assert "type: boolean" in workflow
+    assert "default: false" in workflow
+    assert "default: \"all\"" in workflow
+    assert '"$INSPECT_SG_PROBE_PERMISSIONS" == \'true\' && "$MATRIX_TARGET" != \'sg\'' in workflow
+    assert workflow.index("SG probe permission inspection requires target=sg") < workflow.index(
+        "python3 scripts/render_runtime_target_matrix.py"
+    )
+    assert "name: Inspect SG probe project permissions" in workflow
+    assert "if: ${{ env.INSPECT_SG_PROBE_PERMISSIONS == 'true' }}" in workflow
+    assert workflow.index("name: Inspect SG probe project permissions") < workflow.index(
+        "name: Record and sync daily account snapshot"
+    )
+    assert "python scripts/record_daily_account_snapshot.py --inspect-sg-probe-permissions" in workflow
+    assert "env.INSPECT_SG_PROBE_PERMISSIONS != 'true'" in workflow
+    assert "name: Check recent execution report\n        if: ${{ env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}" in workflow
 
 
 def _clear_runtime_env(monkeypatch):

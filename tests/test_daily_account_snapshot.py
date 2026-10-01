@@ -39,6 +39,7 @@ def _env(target_id="paper", **overrides):
         "ACCOUNT_HISTORY_EXPECTED_SCOPE": scope,
         "ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID": BINDING,
         "GOOGLE_CLOUD_PROJECT": "longbridgequant",
+        "RUNTIME_TARGET_ENABLED": "true",
     }
     result.update(overrides)
     return result
@@ -65,6 +66,8 @@ def _job(target_id="paper", *, state="ENABLED", service_url=None, region=None, *
         },
         "retryConfig": {"retryCount": 0, "maxRetryDuration": "0s"},
     }
+    if target_id == "sg":
+        job.update(schedule="35 9,15 * * 1-5", timeZone="America/New_York", description="synthetic control field")
     job.update(overrides)
     return job
 
@@ -190,21 +193,67 @@ class _Response:
 
 
 class _Session:
-    def __init__(self, job=None, run_response=None, run_error=None):
+    def __init__(
+        self,
+        job=None,
+        run_response=None,
+        run_error=None,
+        resume_response=None,
+        resume_error=None,
+        resume_applies=True,
+        pause_response=None,
+        pause_error=None,
+        pause_applies=True,
+        unexpected_resume_attempt=False,
+        change_control_on_resume=False,
+        read_error_number=None,
+        read_error_numbers=(),
+    ):
         self.job = job or _job()
         self.run_response = run_response or _Response()
         self.run_error = run_error
+        self.resume_response = resume_response or _Response()
+        self.resume_error = resume_error
+        self.resume_applies = resume_applies
+        self.pause_response = pause_response or _Response()
+        self.pause_error = pause_error
+        self.pause_applies = pause_applies
+        self.unexpected_resume_attempt = unexpected_resume_attempt
+        self.change_control_on_resume = change_control_on_resume
+        self.read_error_number = read_error_number
+        self.read_error_numbers = set(read_error_numbers)
         self.calls = []
+        self.read_count = 0
         self.closed = False
 
     def get(self, url, **kwargs):
         self.calls.append(("get", url, kwargs))
+        self.read_count += 1
+        if self.read_count == self.read_error_number or self.read_count in self.read_error_numbers:
+            raise TimeoutError("synthetic scheduler read timeout")
         return _Response(payload=self.job)
 
     def post(self, url, **kwargs):
         self.calls.append(("post", url, kwargs))
+        if url.endswith(":resume"):
+            if self.resume_applies:
+                self.job["state"] = "ENABLED"
+                if self.unexpected_resume_attempt:
+                    self.job["lastAttemptTime"] = (T0 + timedelta(seconds=1)).isoformat()
+                if self.change_control_on_resume:
+                    self.job["description"] = "changed synthetic control field"
+            if self.resume_error:
+                raise self.resume_error
+            return self.resume_response
+        if url.endswith(":pause"):
+            if self.pause_applies:
+                self.job["state"] = "PAUSED"
+            if self.pause_error:
+                raise self.pause_error
+            return self.pause_response
         if self.run_error:
             raise self.run_error
+        self.job["lastAttemptTime"] = (T0 + timedelta(seconds=8)).isoformat()
         return self.run_response
 
     def close(self):
@@ -221,16 +270,20 @@ class _Clock:
 
 
 class _Spies:
-    def __init__(self, *, objects=(), job=None, run_error=None, post_error=None, post_response=None):
+    def __init__(self, *, objects=(), job=None, run_error=None, post_error=None, post_response=None, **session_options):
         self.storage = _Storage(objects)
-        self.session = _Session(job=job, run_error=run_error)
+        self.session = _Session(job=job, run_error=run_error, **session_options)
         self.open_calls = []
+        self.open_state_at_open = []
+        self.scheduler_call_count_at_open = []
         self.posts = []
         self.post_error = post_error
         self.post_response = post_response
 
     def open_store(self, project):
         self.open_calls.append(project)
+        self.open_state_at_open.append(self.session.job.get("state"))
+        self.scheduler_call_count_at_open.append(len(self.session.calls))
         return self.storage
 
     def session_factory(self):
@@ -252,6 +305,24 @@ class _Spies:
                 "observed_finished_at": sent["observed_finished_at"],
             }
         )
+
+
+class _PermissionSession:
+    def __init__(self, *, status=200, payload=None, error=None):
+        self.status = status
+        self.payload = payload
+        self.error = error
+        self.calls = []
+        self.closed = False
+
+    def post(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        if self.error:
+            raise self.error
+        return _Response(self.status, self.payload)
+
+    def close(self):
+        self.closed = True
 
 
 def _record(env=None, spies=None, *, times=None, monotonic=None, sleep=None):
@@ -355,7 +426,7 @@ def test_sghk_targets_use_exact_manifest_identity_and_publish_matching_history(t
     assert json.loads(spies.posts[0][1]["data"])["account_scope"] == {"hk": "HK", "sg": "SG"}[target_id]
 
 
-@pytest.mark.parametrize("target_id", ["paper", "sg", "hk"])
+@pytest.mark.parametrize("target_id", ["paper", "hk"])
 def test_paused_scheduler_is_rejected_before_run_or_gcs_for_every_target(target_id):
     result, spies = _record(
         _env(target_id),
@@ -365,6 +436,254 @@ def test_paused_scheduler_is_rejected_before_run_or_gcs_for_every_target(target_
     assert result.category == "scheduler_job_mismatch"
     assert [call[0] for call in spies.session.calls] == ["get"]
     assert spies.open_calls == []
+
+
+def test_paused_sg_resumes_runs_once_restores_full_job_then_reads_and_publishes():
+    payload = _history(T0 + timedelta(seconds=6), T0 + timedelta(seconds=7), target_id="sg")
+    raw = json.dumps(payload, indent=2).encode()
+    job = _job("sg", state="PAUSED", lastAttemptTime=(T0 - timedelta(days=2)).isoformat())
+    original = json.loads(json.dumps(job))
+    spies = _Spies(objects=[_object(payload, raw=raw)], job=job)
+    result, spies = _record(
+        _env(
+            "sg",
+            RUNTIME_TARGET_ENABLED="false",
+            ACCOUNT_FACTS_SYNC_ENABLED="true",
+            ACCOUNT_FACTS_SYNC_URL=QRS_URL,
+            ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+        ),
+        spies,
+        times=[T0, T0 + timedelta(seconds=5), T0 + timedelta(seconds=10)],
+    )
+
+    assert result.status == "recorded"
+    assert result.publish_status == "published"
+    assert [call[0] for call in spies.session.calls] == ["get", "post", "get", "post", "post", "get"]
+    actions = [
+        "get" if method == "get" else url.rsplit(":", 1)[-1]
+        for method, url, _kwargs in spies.session.calls
+    ]
+    assert actions == ["get", "resume", "get", "run", "pause", "get"]
+    assert spies.session.job["state"] == "PAUSED"
+    for field, value in original.items():
+        if field not in snapshots._SCHEDULER_OUTPUT_FIELDS:
+            assert spies.session.job[field] == value
+    assert spies.storage.list_calls
+    assert spies.open_state_at_open == ["PAUSED"]
+    assert spies.scheduler_call_count_at_open == [6]
+    assert len(spies.posts) == 1 and spies.posts[0][1]["data"] == raw
+
+
+@pytest.mark.parametrize("runtime_flag", ["true", "False", " false", ""])
+def test_paused_sg_requires_exact_false_runtime_flag(runtime_flag):
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED=runtime_flag),
+        _Spies(job=_job("sg", state="PAUSED")),
+    )
+    assert result.category == "runtime_target_not_disabled"
+    assert [call[0] for call in spies.session.calls] == ["get"]
+    assert spies.open_calls == []
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (lambda job: job.update(schedule="35 9,16 * * 1-5"), "scheduler_schedule_mismatch"),
+        (lambda job: job.update(timeZone="UTC"), "scheduler_schedule_mismatch"),
+        (lambda job: job.update(name="projects/other/locations/asia-southeast1/jobs/other"), "scheduler_job_mismatch"),
+        (lambda job: job["httpTarget"].update(httpMethod="GET"), "scheduler_job_mismatch"),
+        (lambda job: job["httpTarget"].update(uri=job["httpTarget"]["uri"].replace("/probe", "/run")), "scheduler_job_mismatch"),
+        (lambda job: job["httpTarget"].update(body="e30="), "scheduler_job_mismatch"),
+        (lambda job: job["httpTarget"]["oidcToken"].update(serviceAccountEmail="other@example.com"), "scheduler_job_mismatch"),
+        (lambda job: job["httpTarget"]["oidcToken"].update(audience="https://other.run.app"), "scheduler_job_mismatch"),
+        (lambda job: job["retryConfig"].update(retryCount=1), "scheduler_job_mismatch"),
+        (lambda job: job["retryConfig"].update(maxRetryDuration="1s"), "scheduler_job_mismatch"),
+    ],
+)
+def test_paused_sg_mismatched_job_or_schedule_fails_before_mutation(mutate, expected):
+    job = _job("sg", state="PAUSED")
+    mutate(job)
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED="false"),
+        _Spies(job=job),
+    )
+    assert result.category == expected
+    assert [call[0] for call in spies.session.calls] == ["get"]
+    assert spies.open_calls == []
+
+
+@pytest.mark.parametrize(
+    "near_trigger",
+    [
+        datetime(2026, 9, 28, 13, 34, 59, tzinfo=timezone.utc),
+        datetime(2026, 9, 28, 13, 35, 1, tzinfo=timezone.utc),
+    ],
+)
+def test_paused_sg_natural_schedule_guard_blocks_within_ten_minutes(near_trigger):
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED="false"),
+        _Spies(job=_job("sg", state="PAUSED")),
+        times=[near_trigger],
+    )
+    assert result.category == "scheduler_natural_window"
+    assert [call[0] for call in spies.session.calls] == ["get"]
+    assert spies.open_calls == []
+
+
+def test_paused_sg_resume_rejection_does_not_run_or_publish():
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED="false"),
+        _Spies(
+            job=_job("sg", state="PAUSED"),
+            resume_response=_Response(409),
+            resume_applies=False,
+        ),
+    )
+    assert result.category == "scheduler_resume_rejected"
+    assert [call[0] for call in spies.session.calls] == ["get", "post"]
+    assert spies.open_calls == [] and spies.posts == []
+
+
+@pytest.mark.parametrize("resume_applies", [False, True])
+def test_paused_sg_unknown_resume_reads_once_and_never_runs_or_publishes(resume_applies):
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED="false"),
+        _Spies(
+            job=_job("sg", state="PAUSED"),
+            resume_error=TimeoutError(SECRET),
+            resume_applies=resume_applies,
+        ),
+    )
+    assert result.category == "scheduler_resume_unknown"
+    assert [call[0] for call in spies.session.calls] == (
+        ["get", "post", "get"] if not resume_applies else ["get", "post", "get", "post", "get"]
+    )
+    assert all(not call[1].endswith(":run") for call in spies.session.calls)
+    assert spies.open_calls == [] and spies.posts == []
+    assert spies.session.job["state"] == "PAUSED"
+
+
+def test_paused_sg_confirmed_resume_readback_failure_contains_with_one_pause_and_no_run():
+    original = _job("sg", state="PAUSED", lastAttemptTime=(T0 - timedelta(days=2)).isoformat())
+    expected = json.loads(json.dumps(original))
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED="false"),
+        _Spies(job=original, read_error_number=2),
+    )
+    assert result.category == "scheduler_resume_readback_unknown"
+    actions = [
+        "get" if method == "get" else url.rsplit(":", 1)[-1]
+        for method, url, _kwargs in spies.session.calls
+    ]
+    assert actions == ["get", "resume", "get", "pause", "get"]
+    assert spies.session.job["state"] == "PAUSED"
+    for field, value in expected.items():
+        if field not in snapshots._SCHEDULER_OUTPUT_FIELDS:
+            assert spies.session.job[field] == value
+    assert spies.open_calls == [] and spies.posts == []
+
+
+@pytest.mark.parametrize(
+    ("pause_response", "pause_applies", "expected_category", "expected_state"),
+    [
+        (_Response(500), True, "scheduler_pause_unknown", "PAUSED"),
+        (_Response(409), False, "scheduler_pause_rejected", "ENABLED"),
+    ],
+)
+def test_paused_sg_readback_containment_pause_failure_is_not_retried_or_published(
+    pause_response, pause_applies, expected_category, expected_state
+):
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED="false"),
+        _Spies(
+            job=_job("sg", state="PAUSED"),
+            read_error_number=2,
+            pause_response=pause_response,
+            pause_applies=pause_applies,
+        ),
+    )
+    assert result.category == expected_category
+    actions = [
+        "get" if method == "get" else url.rsplit(":", 1)[-1]
+        for method, url, _kwargs in spies.session.calls
+    ]
+    assert actions == ["get", "resume", "get", "pause", "get"]
+    assert spies.session.job["state"] == expected_state
+    assert "run" not in actions
+    assert spies.open_calls == [] and spies.posts == []
+
+
+def test_paused_sg_containment_readback_failure_is_explicit_and_not_retried():
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED="false"),
+        _Spies(
+            job=_job("sg", state="PAUSED"),
+            read_error_numbers={2, 3},
+        ),
+    )
+    assert result.category == "scheduler_restore_readback_unknown"
+    actions = [
+        "get" if method == "get" else url.rsplit(":", 1)[-1]
+        for method, url, _kwargs in spies.session.calls
+    ]
+    assert actions == ["get", "resume", "get", "pause", "get"]
+    assert spies.session.job["state"] == "PAUSED"
+    assert "run" not in actions
+    assert spies.open_calls == [] and spies.posts == []
+
+
+def test_paused_sg_unexpected_attempt_is_paused_and_never_run_or_publish():
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED="false"),
+        _Spies(job=_job("sg", state="PAUSED"), unexpected_resume_attempt=True),
+    )
+    assert result.category == "scheduler_unexpected_attempt"
+    assert [call[0] for call in spies.session.calls] == ["get", "post", "get", "post", "get"]
+    assert spies.session.job["state"] == "PAUSED"
+    assert spies.open_calls == [] and spies.posts == []
+
+
+def test_paused_sg_control_drift_is_not_overwritten_or_published():
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED="false"),
+        _Spies(job=_job("sg", state="PAUSED"), change_control_on_resume=True),
+    )
+    assert result.category == "scheduler_restore_mismatch"
+    assert [call[0] for call in spies.session.calls] == ["get", "post", "get", "post", "get"]
+    assert spies.session.job["state"] == "PAUSED"
+    assert spies.session.job["description"] == "changed synthetic control field"
+    assert spies.open_calls == [] and spies.posts == []
+
+
+def test_paused_sg_unknown_run_is_not_retried_and_restores_before_returning():
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED="false"),
+        _Spies(job=_job("sg", state="PAUSED"), run_error=TimeoutError(SECRET)),
+    )
+    assert result.category == "scheduler_run_unknown"
+    actions = [call[1].rsplit(":", 1)[-1] for call in spies.session.calls if call[0] == "post"]
+    assert actions == ["resume", "run", "pause"]
+    assert [call[0] for call in spies.session.calls] == ["get", "post", "get", "post", "post", "get"]
+    assert spies.session.job["state"] == "PAUSED"
+    assert spies.open_calls == [] and spies.posts == []
+
+
+@pytest.mark.parametrize(
+    ("pause_response", "pause_applies", "expected"),
+    [(_Response(500), True, "scheduler_pause_unknown"), (_Response(409), False, "scheduler_pause_rejected")],
+)
+def test_paused_sg_pause_failure_never_reads_or_publishes(pause_response, pause_applies, expected):
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED="false"),
+        _Spies(
+            job=_job("sg", state="PAUSED"),
+            pause_response=pause_response,
+            pause_applies=pause_applies,
+        ),
+    )
+    assert result.category == expected
+    assert [call[0] for call in spies.session.calls] == ["get", "post", "get", "post", "post", "get"]
+    assert spies.open_calls == [] and spies.posts == []
 
 
 @pytest.mark.parametrize(("target_id", "wrong_scope"), [("hk", "SG"), ("sg", "HK")])
@@ -600,3 +919,120 @@ def test_authorized_session_disables_transport_retries(monkeypatch):
         assert session.adapters["https://"].max_retries.total == 0
     finally:
         session.close()
+
+
+def test_sg_permission_inspection_returns_only_fixed_project_permission_booleans():
+    granted = [
+        "cloudscheduler.jobs.get",
+        "cloudscheduler.jobs.enable",
+    ]
+    session = _PermissionSession(payload={"permissions": granted})
+    result = snapshots.inspect_sg_probe_permissions(
+        _env("sg"), session_factory=lambda: session
+    )
+
+    assert result == {
+        "context": "project",
+        "cloudscheduler.jobs.get": True,
+        "cloudscheduler.jobs.run": False,
+        "cloudscheduler.jobs.enable": True,
+        "cloudscheduler.jobs.pause": False,
+    }
+    assert len(session.calls) == 1
+    url, kwargs = session.calls[0]
+    assert url == "https://cloudresourcemanager.googleapis.com/v1/projects/longbridgequant:testIamPermissions"
+    assert kwargs == {
+        "json": {"permissions": list(snapshots._SG_PROBE_REQUIRED_PERMISSIONS)},
+        "timeout": snapshots.HTTP_TIMEOUT_SECONDS,
+        "allow_redirects": False,
+    }
+    assert session.closed
+
+
+def test_sg_permission_inspection_accepts_empty_grants_as_four_denials():
+    result = snapshots.inspect_sg_probe_permissions(
+        _env("sg"), session_factory=lambda: _PermissionSession(payload={})
+    )
+    assert result == {
+        "context": "project",
+        "cloudscheduler.jobs.get": False,
+        "cloudscheduler.jobs.run": False,
+        "cloudscheduler.jobs.enable": False,
+        "cloudscheduler.jobs.pause": False,
+    }
+    assert all(type(value) is bool for key, value in result.items() if key != "context")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        {"permissions": "cloudscheduler.jobs.get"},
+        {"permissions": [1]},
+        {"permissions": ["cloudscheduler.jobs.delete"]},
+        {"permissions": ["cloudscheduler.jobs.get", "cloudscheduler.jobs.get"]},
+    ],
+)
+def test_sg_permission_inspection_rejects_invalid_permission_response(payload):
+    with pytest.raises(snapshots._Rejected) as raised:
+        snapshots.inspect_sg_probe_permissions(
+            _env("sg"), session_factory=lambda: _PermissionSession(payload=payload)
+        )
+    assert raised.value.category == "permission_inspection_response_invalid"
+
+
+@pytest.mark.parametrize("status", [302, 403, 500])
+def test_sg_permission_inspection_reports_non_success_status_without_body(status):
+    with pytest.raises(snapshots._Rejected) as raised:
+        snapshots.inspect_sg_probe_permissions(
+            _env("sg"),
+            session_factory=lambda: _PermissionSession(status=status, payload={"sensitive": SECRET}),
+        )
+    assert raised.value.category == "permission_inspection_unknown"
+
+
+def test_sg_permission_inspection_rejects_other_target_before_session_creation():
+    calls = []
+    with pytest.raises(snapshots._Rejected) as raised:
+        snapshots.inspect_sg_probe_permissions(
+            _env("paper"), session_factory=lambda: calls.append("created")
+        )
+    assert raised.value.category == "permission_inspection_target_invalid"
+    assert calls == []
+
+
+def test_permission_inspection_cli_does_not_call_record_or_publish(capsys):
+    session = _PermissionSession(payload={"permissions": ["cloudscheduler.jobs.get"]})
+    code = snapshots.main(
+        ["--inspect-sg-probe-permissions"],
+        environ=_env("sg"),
+        session_factory=lambda: session,
+        open_store=lambda *_args: pytest.fail("inspection must not read GCS"),
+        http_post=lambda *_args, **_kwargs: pytest.fail("inspection must not publish"),
+        now_reader=lambda: pytest.fail("inspection must not run the probe"),
+    )
+    output = capsys.readouterr().out
+    assert code == 0
+    assert json.loads(output) == {
+        "context": "project",
+        "cloudscheduler.jobs.get": True,
+        "cloudscheduler.jobs.run": False,
+        "cloudscheduler.jobs.enable": False,
+        "cloudscheduler.jobs.pause": False,
+    }
+    assert SECRET not in output and "longbridgequant" not in output
+    assert len(session.calls) == 1 and session.closed
+
+
+def test_permission_inspection_cli_redacts_unknown_transport_details(capsys):
+    session = _PermissionSession(error=TimeoutError(SECRET))
+    code = snapshots.main(
+        ["--inspect-sg-probe-permissions"],
+        environ=_env("sg"),
+        session_factory=lambda: session,
+    )
+    output = capsys.readouterr().out
+    assert code == 1
+    assert output.strip() == "permission_inspection=error:permission_inspection_unknown"
+    assert SECRET not in output
+    assert len(session.calls) == 1 and session.closed
