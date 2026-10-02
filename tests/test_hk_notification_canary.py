@@ -86,9 +86,7 @@ def _revision(
     }
 
 
-def _service(
-    selector: str | list[str] = "HK", profile: str = DEFAULT_PROFILE
-) -> dict:
+def _service(selector: str | list[str] = "HK", profile: str = DEFAULT_PROFILE) -> dict:
     env = _runtime_env(selector, profile)
     return {
         "name": f"projects/{PROJECT}/locations/{REGION}/services/{SERVICE}",
@@ -210,9 +208,7 @@ def test_preconditions_reject_old_revision_profile_or_config_drift(drift):
                 target["strategy_profile"] = "hk_low_vol_dividend_quality_snapshot"
                 variable["value"] = json.dumps(target, separators=(",", ":"))
     else:
-        old_revision["containers"][0]["resources"] = {
-            "limits": {"memory": "synthetic"}
-        }
+        old_revision["containers"][0]["resources"] = {"limits": {"memory": "synthetic"}}
 
     with pytest.raises(canary.CanaryError, match="serving_config_mismatch"):
         canary.validate_canary_preconditions(
@@ -714,3 +710,57 @@ def test_private_backup_rejects_nonprivate_existing_directory(tmp_path):
         canary.CanaryError, match="backup_directory_permissions_invalid"
     ):
         canary._create_backup_file(path, b"synthetic", root=tmp_path)
+
+
+def test_revision_generated_single_container_name_matches_omitted_template():
+    service = _service()
+    old = _revision(OLD, canary.BASE_APPLICATION_SHA)
+    candidate = _revision(CANDIDATE, canary.APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE)
+    old["containers"][0].update(
+        image="example.invalid/public/worker@sha256:" + "a" * 64, name="worker-1"
+    )
+    assert canary._revision_configuration_matches(service["template"], old)
+    canary.validate_canary_preconditions(
+        service=service,
+        old_revision=old,
+        candidate_revision=candidate,
+        jobs=_jobs(),
+        project=PROJECT,
+        region=REGION,
+        service_name=SERVICE,
+        now=NOW,
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "explicit",
+        "arbitrary",
+        "container_dependency",
+        "template_dependency",
+        "revision_dependency",
+    ],
+)
+def test_generated_container_name_does_not_hide_explicit_names_or_references(change):
+    service = _service()
+    revision = _revision(OLD, canary.BASE_APPLICATION_SHA)
+    revision["containers"][0].update(
+        image="example.invalid/public/worker:source", name="worker-1"
+    )
+    template = service["template"]
+    if change == "explicit":
+        template["containers"][0]["name"] = "worker-2"
+    elif change == "arbitrary":
+        revision["containers"][0]["name"] = "unrelated-1"
+    elif change == "container_dependency":
+        revision["containers"][0]["dependsOn"] = ["other"]
+    elif change == "template_dependency":
+        template["annotations"] = {
+            "run.googleapis.com/container-dependencies": '{"worker-1":[]}'
+        }
+    else:
+        revision["annotations"] = {
+            "run.googleapis.com/container-dependencies": '{"worker-1":[]}'
+        }
+    assert not canary._revision_configuration_matches(template, revision)

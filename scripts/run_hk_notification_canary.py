@@ -440,9 +440,32 @@ def _container_configuration(containers: Any) -> list[dict[str, Any]]:
 def _revision_configuration_matches(
     template: Mapping[str, Any], revision: Mapping[str, Any]
 ) -> bool:
-    return _container_configuration(
-        template.get("containers")
-    ) == _container_configuration(revision.get("containers")) and all(
+    expected = _container_configuration(template.get("containers"))
+    observed = _container_configuration(revision.get("containers"))
+    # Cloud Run can assign a default name on the revision when the single
+    # container's template did not declare one. Preserve every explicit name
+    # and any dependency reference; only this observed provider default is
+    # equivalent to an omitted template name.
+    if "name" not in expected[0] and "name" in observed[0]:
+        image = revision["containers"][0].get("image")
+        basename = (
+            image.split("@", 1)[0].rsplit("/", 1)[-1].split(":", 1)[0]
+            if isinstance(image, str)
+            else ""
+        )
+        has_references = any("dependsOn" in row for row in expected + observed) or any(
+            "run.googleapis.com/container-dependencies" in obj.get("annotations", {})
+            for obj in (template, revision)
+        )
+        if (
+            basename
+            and not has_references
+            and re.fullmatch(
+                re.escape(basename) + r"-[1-9][0-9]*", str(observed[0]["name"])
+            )
+        ):
+            observed[0].pop("name")
+    return expected == observed and all(
         template.get(field) == revision.get(field)
         for field in _REVISION_CONFIG_FIELDS
         if field in template or field in revision
