@@ -764,3 +764,48 @@ def test_generated_container_name_does_not_hide_explicit_names_or_references(cha
             "run.googleapis.com/container-dependencies": '{"worker-1":[]}'
         }
     assert not canary._revision_configuration_matches(template, revision)
+
+
+def test_service_config_ignores_only_output_modifier_and_keeps_config_changes():
+    original = _service()
+    original["lastModifier"] = "synthetic-operator-before"
+    current = dict(original, lastModifier="synthetic-operator-after")
+    assert canary._service_config_view(current) == canary._service_config_view(original)
+    current["ingress"] = "INGRESS_TRAFFIC_ALL"
+    assert canary._service_config_view(current) != canary._service_config_view(original)
+
+
+def test_canary_tag_respects_provider_combined_name_limit():
+    for length in (20, 31, 36, 37):
+        name = "s" * length
+        tag = canary._canary_tag(name)
+        assert len(name) + len(tag) <= 46
+        assert tag.startswith("hk-") and len(tag) >= 9
+    with pytest.raises(canary.CanaryError, match="service_tag_name_budget_invalid"):
+        canary._canary_tag("s" * 38)
+
+
+def test_backup_reuse_is_read_only_and_requires_exact_original_snapshot(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / canary.BACKUP_RELATIVE_PATH
+    monkeypatch.setattr(canary, "BACKUP_ROOT", tmp_path)
+    monkeypatch.setattr(canary, "BACKUP_PATH", path)
+    params = dict(
+        backup_path=str(path),
+        service={"synthetic": 1},
+        candidate={"synthetic": 2},
+        old={"synthetic": 3},
+        jobs={"probe": {"state": "PAUSED"}},
+    )
+    canary._create_backup(**params)
+    before = path.read_bytes()
+    canary._create_backup(**params, reuse_existing=True)
+    assert path.read_bytes() == before
+    params["jobs"]["probe"]["lastAttemptTime"] = "2026-10-02T12:00:00Z"
+    with pytest.raises(canary.CanaryError, match="backup_reuse_state_changed"):
+        canary._create_backup(**params, reuse_existing=True)
+    assert path.read_bytes() == before
+    path.chmod(0o644)
+    with pytest.raises(canary.CanaryError, match="backup_reuse_invalid"):
+        canary._create_backup(**params, reuse_existing=True)
