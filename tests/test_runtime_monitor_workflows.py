@@ -33,8 +33,13 @@ def test_heartbeat_dispatch_selects_one_manifest_target_and_schedule_uses_all() 
 def test_runtime_monitor_workflows_retry_gcp_authentication() -> None:
     for name in ("execution-report-heartbeat.yml", "runtime-guard.yml"):
         workflow = (ROOT / ".github/workflows" / name).read_text()
-
-        assert workflow.count("google-github-actions/auth@v3") == 2
+        if name == "execution-report-heartbeat.yml":
+            heartbeat = workflow[workflow.index("  heartbeat:") : workflow.index("  inspect-sg-account-snapshot:")]
+            inspection = workflow[workflow.index("  inspect-sg-account-snapshot:") :]
+            assert heartbeat.count("google-github-actions/auth@v3") == 2
+            assert inspection.count("google-github-actions/auth@v3") == 1
+        else:
+            assert workflow.count("google-github-actions/auth@v3") == 2
         assert "id: gcp_auth_primary" in workflow
         assert "continue-on-error: true" in workflow
         assert "steps.gcp_auth_primary.outcome == 'failure'" in workflow
@@ -83,10 +88,18 @@ def test_runtime_monitor_workflows_use_frozen_runtime_environment() -> None:
         workflow = (ROOT / ".github/workflows" / name).read_text()
 
         assert "uses: actions/setup-python@" not in workflow
-        assert workflow.count("uses: astral-sh/setup-uv@") == 1
+        if name == "execution-report-heartbeat.yml":
+            heartbeat = workflow[workflow.index("  heartbeat:") : workflow.index("  inspect-sg-account-snapshot:")]
+            inspection = workflow[workflow.index("  inspect-sg-account-snapshot:") :]
+            assert heartbeat.count("uses: astral-sh/setup-uv@") == 1
+            assert inspection.count("uses: astral-sh/setup-uv@") == 1
+            assert heartbeat.count("uv sync --frozen --no-dev") == 1
+            assert inspection.count("uv sync --frozen --no-dev") == 1
+        else:
+            assert workflow.count("uses: astral-sh/setup-uv@") == 1
+            assert workflow.count("uv sync --frozen --no-dev") == 1
         assert setup_uv in workflow
         assert "pip install" not in workflow
-        assert workflow.count("uv sync --frozen --no-dev") == 1
         assert workflow.index(setup_uv) < workflow.index("uv sync --frozen --no-dev")
         for command in commands:
             assert command in workflow

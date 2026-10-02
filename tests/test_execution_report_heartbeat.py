@@ -47,6 +47,27 @@ def test_sg_permission_inspection_is_opt_in_target_limited_and_skips_pipeline():
     assert "name: Check recent execution report\n        if: ${{ env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}" in workflow
 
 
+def test_sg_archive_inspection_is_manual_target_limited_and_skips_heartbeat_job():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "inspect_sg_account_snapshot:" in workflow
+    assert "snapshot_triggered_at:" in workflow
+    assert "snapshot_inspection_completed_at:" in workflow
+    assert workflow.count("default: false") >= 2
+    assert "INSPECT_SG_ACCOUNT_SNAPSHOT" in workflow
+    assert '"$INSPECT_SG_ACCOUNT_SNAPSHOT" == \'true\' && ( "$MATRIX_TARGET" != \'sg\' || "$INSPECT_SG_PROBE_PERMISSIONS" == \'true\' )' in workflow
+    assert "heartbeat:\n    needs: resolve-matrix\n    if: ${{ needs.resolve-matrix.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.inspect_sg_account_snapshot != true) }}" in workflow
+    job = workflow[workflow.index("  inspect-sg-account-snapshot:") :]
+    assert "github.event_name == 'workflow_dispatch' && inputs.inspect_sg_account_snapshot == true && inputs.target == 'sg'" in job
+    assert "environment: ${{ matrix.target.environment }}" in job
+    assert "ACCOUNT_HISTORY_TARGET_ID: sg" in job
+    assert "ACCOUNT_HISTORY_EXPECTED_SCOPE: SG" in job
+    assert "ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}" in job
+    assert "--inspect-archived-sg-account-snapshot --triggered-at \"$ACCOUNT_HISTORY_INSPECTION_TRIGGERED_AT\"" in job
+    assert "--completed-at \"$ACCOUNT_HISTORY_INSPECTION_COMPLETED_AT\"" in job
+    assert "cloudscheduler" not in job.lower()
+    assert "ACCOUNT_FACTS_SYNC_TOKEN" not in job
+
+
 def _clear_runtime_env(monkeypatch):
     for name in list(os.environ):
         if name.startswith("RUNTIME_HEARTBEAT_") or name in {
