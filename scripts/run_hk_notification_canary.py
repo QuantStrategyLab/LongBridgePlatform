@@ -31,6 +31,7 @@ from scripts.verify_deployed_runtime_target_admission import (
     _validate_image_only_source,
 )
 from application.runtime_target_manifest import load_runtime_target_manifest
+from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
 
 
 BASE_APPLICATION_SHA = "922f338fea7c46391b50bb8316ac88154596916f"
@@ -439,9 +440,32 @@ def _container_configuration(containers: Any) -> list[dict[str, Any]]:
 def _revision_configuration_matches(
     template: Mapping[str, Any], revision: Mapping[str, Any]
 ) -> bool:
-    return _container_configuration(
-        template.get("containers")
-    ) == _container_configuration(revision.get("containers")) and all(
+    expected = _container_configuration(template.get("containers"))
+    observed = _container_configuration(revision.get("containers"))
+    # Cloud Run can assign a default name on the revision when the single
+    # container's template did not declare one. Preserve every explicit name
+    # and any dependency reference; only this observed provider default is
+    # equivalent to an omitted template name.
+    if "name" not in expected[0] and "name" in observed[0]:
+        image = revision["containers"][0].get("image")
+        basename = (
+            image.split("@", 1)[0].rsplit("/", 1)[-1].split(":", 1)[0]
+            if isinstance(image, str)
+            else ""
+        )
+        has_references = any("dependsOn" in row for row in expected + observed) or any(
+            "run.googleapis.com/container-dependencies" in obj.get("annotations", {})
+            for obj in (template, revision)
+        )
+        if (
+            basename
+            and not has_references
+            and re.fullmatch(
+                re.escape(basename) + r"-[1-9][0-9]*", str(observed[0]["name"])
+            )
+        ):
+            observed[0].pop("name")
+    return expected == observed and all(
         template.get(field) == revision.get(field)
         for field in _REVISION_CONFIG_FIELDS
         if field in template or field in revision
@@ -457,6 +481,15 @@ def _runtime_target(env: Mapping[str, str], *, service: str) -> Mapping[str, Any
         raise _stop("runtime_target_invalid") from None
     if not isinstance(target, Mapping):
         raise _stop("runtime_target_invalid")
+    profile = target.get("strategy_profile")
+    if not isinstance(profile, str) or not profile or profile.strip() != profile:
+        raise _stop("runtime_target_mismatch")
+    try:
+        canonical_profile = resolve_strategy_definition(
+            profile, platform_id=LONGBRIDGE_PLATFORM
+        ).profile
+    except (TypeError, ValueError):
+        raise _stop("runtime_target_mismatch") from None
     selector = target.get("account_selector")
     selectors = (
         (selector,)
@@ -471,7 +504,8 @@ def _runtime_target(env: Mapping[str, str], *, service: str) -> Mapping[str, Any
         or target.get("account_scope") != "HK"
         or selectors != ("HK",)
         or target.get("deployment_selector") != "HK"
-        or target.get("strategy_profile") != "hk_global_etf_tactical_rotation"
+        or profile != canonical_profile
+        or env.get("STRATEGY_PROFILE") != profile
         or target.get("execution_mode") != "paper"
         or target.get("dry_run_only") is not True
         or env.get("RUNTIME_TARGET_ENABLED") != "false"
@@ -834,8 +868,6 @@ def validate_canary_preconditions(
         or targets[0].account_scope != "HK"
         or targets[0].service != service_name
         or targets[0].region != region
-        or targets[0].strategy_profile != target.get("strategy_profile")
-        or target_env.get("STRATEGY_PROFILE") != targets[0].strategy_profile
         or target_env.get("RUNTIME_TARGET_ENABLED") != "false"
         or target.get("dry_run_only") is not True
     ):
@@ -844,6 +876,10 @@ def validate_canary_preconditions(
         old_revision
     ):
         raise _stop("serving_source_mismatch")
+    if _container_env(old_revision.get("containers")) != target_env or not (
+        _revision_configuration_matches(template, old_revision)
+    ):
+        raise _stop("serving_config_mismatch")
     if _revision_commit(
         candidate_revision
     ) != APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE or not _revision_ready(
