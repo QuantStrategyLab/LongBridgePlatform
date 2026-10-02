@@ -17,7 +17,7 @@ on:
         required: false
         type: string
       source_commit:
-        description: "Application image SHA. No-history staging uses the main workflow SHA. PAPER history staging may use the reviewed candidate."
+        description: "Application image SHA. Staging accepts the current workflow SHA or an explicitly admitted fixed candidate."
         required: false
         type: string
       account_history_recording_enabled:
@@ -206,6 +206,7 @@ jobs:
           approved_http_snapshot_candidate=d8314a61df697cae1dd03a78ddc5c2fc4179ec67
           approved_probe_snapshot_candidate=318bf0419ec91002fd0f0dfd1bc80a0664a85e79
           approved_sghk_snapshot_candidate=df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f
+          approved_hk_probe_diagnostics_candidate=779d8e1c39d161144bc34ae8503ce34d87971b16
           history_count=0
           for history_value in \
             "${ACCOUNT_HISTORY_RECORDING_ENABLED:-}" \
@@ -277,6 +278,10 @@ jobs:
             && [ "${history_count}" -eq 4 ] && [ -z "${snapshot_setting}" ] \
             && [ "${SOURCE_COMMIT}" = "${approved_sghk_snapshot_candidate}" ]; then
             image_mode=account-history
+          elif [ "${WORKFLOW_TARGET}" = "HK" ] && [ "${history_count}" -eq 0 ] \
+            && [ -z "${snapshot_setting}" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_hk_probe_diagnostics_candidate}" ]; then
+            image_mode=hk-probe-diagnostics
           else
             echo "Image source is not approved." >&2
             exit 1
@@ -332,6 +337,7 @@ jobs:
           approved_http_snapshot_candidate=d8314a61df697cae1dd03a78ddc5c2fc4179ec67
           approved_probe_snapshot_candidate=318bf0419ec91002fd0f0dfd1bc80a0664a85e79
           approved_sghk_snapshot_candidate=df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f
+          approved_hk_probe_diagnostics_candidate=779d8e1c39d161144bc34ae8503ce34d87971b16
           case "${WORKFLOW_TARGET}" in
             HK) expected_sghk_target=hk ;;
             SG) expected_sghk_target=sg ;;
@@ -369,6 +375,10 @@ jobs:
             && [ "${ACCOUNT_HISTORY_GCS_PREFIX}" = "gs://qsl-runtime-logs-shared/longbridge/account_snapshots" ] \
             && [ "${SOURCE_COMMIT}" = "${approved_sghk_snapshot_candidate}" ]; then
             image_mode=account-history
+          elif [ "${WORKFLOW_TARGET}" = "HK" ] && [ "${history_count}" -eq 0 ] \
+            && [ -z "${snapshot_setting}" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_hk_probe_diagnostics_candidate}" ]; then
+            image_mode=hk-probe-diagnostics
           else
             echo "Image source is not approved." >&2
             exit 1
@@ -385,6 +395,9 @@ jobs:
           elif [ "${image_mode}" = "account-history" ]; then
             archive_ref="${approved_sghk_snapshot_candidate}"
             image_tag="${approved_sghk_snapshot_candidate}"
+          elif [ "${image_mode}" = "hk-probe-diagnostics" ]; then
+            archive_ref="${approved_hk_probe_diagnostics_candidate}"
+            image_tag="${approved_hk_probe_diagnostics_candidate}"
           else
             archive_ref="${approved_candidate}"
             image_tag="${approved_candidate}"
@@ -407,7 +420,8 @@ jobs:
               exit 1
             fi
           fi
-          if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ]; then
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ] \
+            || [ "${image_mode}" = "hk-probe-diagnostics" ]; then
             plan="$(mktemp)"
             uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_deployed_runtime_target_admission.py" \
               --project="${GCP_PROJECT_ID}" \
@@ -446,7 +460,8 @@ jobs:
           if [ -n "${env_update_arg}" ]; then
             update_command+=(--update-env-vars="${env_update_arg}")
           fi
-          if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ]; then
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ] \
+            || [ "${image_mode}" = "hk-probe-diagnostics" ]; then
             revision_suffix="r${GITHUB_RUN_ID}"
             revision_name="${CLOUD_RUN_SERVICE}-${revision_suffix}"
             if [[ ! "${GITHUB_RUN_ID}" =~ ^[0-9]+$ ]] \
@@ -457,7 +472,8 @@ jobs:
             update_command+=(--revision-suffix="${revision_suffix}")
           fi
           "${update_command[@]}"
-          if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ]; then
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ] \
+            || [ "${image_mode}" = "hk-probe-diagnostics" ]; then
             uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_deployed_runtime_target_admission.py" \
               --project="${GCP_PROJECT_ID}" \
               --region="${CLOUD_RUN_REGION}" \

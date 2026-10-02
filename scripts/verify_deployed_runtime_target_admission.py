@@ -41,6 +41,8 @@ APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE = "d8314a61df697cae1dd03a78ddc5c2fc4179ec
 APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE = "318bf0419ec91002fd0f0dfd1bc80a0664a85e79"
 # Reviewed read-only SG/HK account-snapshot producer. It is not a PAPER candidate.
 APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE = "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f"
+# Fixed 922-based HK candidate carrying only bounded /probe failure diagnostics.
+APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE = "779d8e1c39d161144bc34ae8503ce34d87971b16"
 # One already-staged PAPER revision that may hold history env while serving still runs an older image.
 _PAPER_HTTP_STAGED_SOURCE_REVISION = "longbridge-quant-paper-service-r36423178119"
 _PAPER_HTTP_STAGED_SOURCE_COMMIT = APPROVED_PAPER_HISTORY_CANDIDATE
@@ -718,7 +720,10 @@ def prepare_image_only_staging(
         image_commit=image_commit, env=env, project=project
     )
     admission = verify_service(service=service, service_json=service_json)
-    if image_commit == APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE:
+    if image_commit in {
+        APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE,
+        APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE,
+    }:
         _require_sghk_candidate_identity(
             target_label=str(env.get("WORKFLOW_TARGET") or ""),
             service=service,
@@ -726,6 +731,8 @@ def prepare_image_only_staging(
             region=region,
             service_json=service_json,
         )
+        if image_commit == APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE and admission["enabled"]:
+            raise AdmissionError(f"{service}: HK diagnostic staging requires the runtime target to remain disabled")
     else:
         _require_paper_target_identity(service=service, service_json=service_json)
     try:
@@ -828,6 +835,13 @@ def _validate_image_only_source(
         if (
             str(env.get("WORKFLOW_TARGET") or "") not in {"HK", "SG"}
             or history is None
+            or snapshot_value is not None
+        ):
+            raise AdmissionError("image source is not approved")
+    elif image_commit == APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE:
+        if (
+            str(env.get("WORKFLOW_TARGET") or "") != "HK"
+            or history is not None
             or snapshot_value is not None
         ):
             raise AdmissionError("image source is not approved")

@@ -449,6 +449,7 @@ assert "0b939723c1db3ef59175535998b470cbcd4b8824" in job
 assert "d8314a61df697cae1dd03a78ddc5c2fc4179ec67" in job
 assert "318bf0419ec91002fd0f0dfd1bc80a0664a85e79" in job
 assert "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f" in job
+assert "779d8e1c39d161144bc34ae8503ce34d87971b16" in job
 assert '[ "${GITHUB_REPOSITORY:-}" != "QuantStrategyLab/LongBridgePlatform" ]' in job
 assert '[ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] || [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]' not in job
 for forbidden in ("sync_plan", "scheduler", "cleanup", "retire", "update-traffic"):
@@ -478,6 +479,7 @@ approved = "0b939723c1db3ef59175535998b470cbcd4b8824"
 http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
 probe_snapshot_candidate = "318bf0419ec91002fd0f0dfd1bc80a0664a85e79"
 sghk_snapshot_candidate = "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f"
+hk_probe_diagnostics_candidate = "779d8e1c39d161144bc34ae8503ce34d87971b16"
 staged_source_revision = "longbridge-quant-paper-service-r36423178119"
 staged_source_image = (
     "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/synthetic-paper"
@@ -527,7 +529,7 @@ def base_env():
         {"name": "RUNTIME_TARGET_JSON", "value": json.dumps(target)},
         {"name": "STRATEGY_PROFILE", "value": profile},
         {"name": "LONGBRIDGE_DRY_RUN_ONLY", "value": "false"},
-        {"name": "RUNTIME_TARGET_ENABLED", "value": "true"},
+        {"name": "RUNTIME_TARGET_ENABLED", "value": os.environ.get("TARGET_RUNTIME_ENABLED", "false") if os.environ.get("SOURCE_COMMIT") == hk_probe_diagnostics_candidate else "true"},
     ]
 
 def service_document(ingress):
@@ -612,11 +614,11 @@ def staged_revision():
 
 if command == "git" and args == ["rev-parse", "HEAD"]:
     print(os.environ["CHECKOUT_SHA"])
-elif command == "git" and args[:4] == ["fetch", "--depth", "1", "origin"] and args[4] in (approved, http_snapshot_candidate, probe_snapshot_candidate, sghk_snapshot_candidate):
+elif command == "git" and args[:4] == ["fetch", "--depth", "1", "origin"] and args[4] in (approved, http_snapshot_candidate, probe_snapshot_candidate, sghk_snapshot_candidate, hk_probe_diagnostics_candidate):
     pass
-elif command == "git" and args[:2] == ["cat-file", "-t"] and args[2] in (approved, http_snapshot_candidate, probe_snapshot_candidate, sghk_snapshot_candidate):
+elif command == "git" and args[:2] == ["cat-file", "-t"] and args[2] in (approved, http_snapshot_candidate, probe_snapshot_candidate, sghk_snapshot_candidate, hk_probe_diagnostics_candidate):
     print("commit")
-elif command == "git" and args[:1] == ["rev-parse"] and len(args) == 2 and args[1] in (approved + "^{commit}", http_snapshot_candidate + "^{commit}", probe_snapshot_candidate + "^{commit}", sghk_snapshot_candidate + "^{commit}"):
+elif command == "git" and args[:1] == ["rev-parse"] and len(args) == 2 and args[1] in (approved + "^{commit}", http_snapshot_candidate + "^{commit}", probe_snapshot_candidate + "^{commit}", sghk_snapshot_candidate + "^{commit}", hk_probe_diagnostics_candidate + "^{commit}"):
     print(args[1].split("^", 1)[0])
 elif command == "git" and args == ["archive", "HEAD"]:
     print("synthetic tracked source archive")
@@ -628,11 +630,13 @@ elif command == "git" and args == ["archive", probe_snapshot_candidate]:
     print("synthetic internal probe snapshot candidate archive")
 elif command == "git" and args == ["archive", sghk_snapshot_candidate]:
     print("synthetic SG/HK account snapshot candidate archive")
+elif command == "git" and args == ["archive", hk_probe_diagnostics_candidate]:
+    print("synthetic HK probe diagnostics candidate archive")
 elif command == "git" and args[:1] == ["show"] and len(args) == 2 and ":" in args[1]:
     sha, name = args[1].split(":", 1)
     if name not in ("uv.lock", "pyproject.toml", "qsl.toml"):
         raise SystemExit("unexpected git show")
-    if sha not in ("a" * 40, serving_sha, approved, http_snapshot_candidate, probe_snapshot_candidate, sghk_snapshot_candidate):
+    if sha not in ("a" * 40, serving_sha, approved, http_snapshot_candidate, probe_snapshot_candidate, sghk_snapshot_candidate, hk_probe_diagnostics_candidate):
         raise SystemExit("admission read an unapproved source lock")
     pin = ("f" * 40) if sha == serving_sha and os.environ.get("BAD_SERVING_LOCK") == "1" else ues
     print(declaration(name, pin), end="")
@@ -714,6 +718,7 @@ else:
     http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
     probe_snapshot_candidate = "318bf0419ec91002fd0f0dfd1bc80a0664a85e79"
     sghk_snapshot_candidate = "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f"
+    hk_probe_diagnostics_candidate = "779d8e1c39d161144bc34ae8503ce34d87971b16"
     staged_source_revision = "longbridge-quant-paper-service-r36423178119"
     staged_source_image = (
         "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/"
@@ -956,6 +961,49 @@ else:
         code, calls = execute(**overrides)
         assert code != 0 and calls == [], overrides
         cases += 1
+    code, calls = execute(
+        SOURCE_COMMIT=hk_probe_diagnostics_candidate,
+        CHECKOUT_SHA="a" * 40,
+        WORKFLOW_TARGET="HK",
+        CLOUD_RUN_SERVICE="longbridge-quant-hk-service",
+        CLOUD_RUN_REGION="asia-east2",
+        GCP_PROJECT_ID="longbridgequant",
+    )
+    assert code == 0, (code, calls)
+    updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
+    assert len(updates) == 1
+    image_repo = "registry.invalid/longbridgequant/synthetic-images/longbridgeplatform/longbridge-quant-hk-service"
+    assert "--no-traffic" in updates[0]
+    assert "--update-env-vars=" not in " ".join(updates[0])
+    assert updates[0][-1] == "--revision-suffix=r123"
+    assert f"--image={image_repo}@{base['IMAGE_DIGEST']}" in updates[0]
+    assert f"--update-labels=commit-sha={hk_probe_diagnostics_candidate},github-run-id=123" in updates[0]
+    assert ["git", "fetch", "--depth", "1", "origin", hk_probe_diagnostics_candidate] in calls
+    assert ["git", "archive", hk_probe_diagnostics_candidate] in calls
+    assert any(call[:3] == ["uv", "run", "--no-sync"] for call in calls)
+    assert sum(call[:4] == ["gcloud", "run", "services", "update"] for call in calls) == 1
+    cases += 1
+    for overrides in (
+        {"SOURCE_COMMIT": hk_probe_diagnostics_candidate, "WORKFLOW_TARGET": "SG"},
+        {"SOURCE_COMMIT": hk_probe_diagnostics_candidate, "ACCOUNT_HISTORY_RECORDING_ENABLED": "true"},
+        {"SOURCE_COMMIT": hk_probe_diagnostics_candidate, "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false"},
+        {"SOURCE_COMMIT": "c" * 40, "WORKFLOW_TARGET": "HK"},
+    ):
+        code, calls = execute(**overrides)
+        assert code != 0 and calls == [], overrides
+        cases += 1
+    code, calls = execute(
+        SOURCE_COMMIT=hk_probe_diagnostics_candidate,
+        WORKFLOW_TARGET="HK",
+        CLOUD_RUN_SERVICE="longbridge-quant-hk-service",
+        CLOUD_RUN_REGION="asia-east2",
+        GCP_PROJECT_ID="longbridgequant",
+        TARGET_RUNTIME_ENABLED="true",
+    )
+    assert code != 0
+    assert not any(call[0] == "docker" and call[1] == "build" for call in calls)
+    assert not any(call[:4] == ["gcloud", "run", "services", "update"] for call in calls)
+    cases += 1
     for overrides in (
         {
             "GITHUB_REF": "refs/heads/codex/natural-cycle-history-20260928",
