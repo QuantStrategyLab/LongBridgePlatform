@@ -2,6 +2,7 @@ import importlib
 import json
 import os
 import sys
+import tempfile
 import types
 import unittest
 from contextlib import contextmanager
@@ -1411,6 +1412,196 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertIn("RuntimeError", notification["compact_text"])
         self.assertNotIn("probe failed", notification["compact_text"])
         self.assertLessEqual(len(notification["compact_text"]), 3500)
+
+    def test_run_probe_records_safe_step_and_bounded_error_code(self):
+        module = load_module()
+        from quant_platform_kit.common.runtime_logging import RuntimeLogContext
+        from quant_platform_kit.common.runtime_reports import write_runtime_report_json
+
+        class ProviderError(Exception):
+            def __init__(self, code):
+                super().__init__("sensitive provider detail token=private-value")
+                self.code = code
+
+        class BrokenCodeError(Exception):
+            def __init__(self):
+                super().__init__("sensitive getter detail token=private-value")
+
+            @property
+            def code(self):
+                raise RuntimeError("getter leaked token=private-value")
+
+        class MissingCodeError(Exception):
+            pass
+
+        cases = (
+            ("portfolio_snapshot", ProviderError(4207), 4207, "known"),
+            ("bootstrap", BrokenCodeError(), None, "unknown"),
+            ("bootstrap", MissingCodeError("sensitive missing-code token=private-value"), None, "unknown"),
+            ("bootstrap", ProviderError("4207"), None, "unknown"),
+            ("bootstrap", ProviderError(True), None, "unknown"),
+            ("bootstrap", ProviderError(4.2), None, "unknown"),
+            ("bootstrap", ProviderError(-(2**31)), -(2**31), "known"),
+            ("bootstrap", ProviderError(2**31 - 1), 2**31 - 1, "known"),
+            ("bootstrap", ProviderError(-(2**31) - 1), None, "unknown"),
+            ("bootstrap", ProviderError(2**31), None, "unknown"),
+        )
+        for expected_step, failure, expected_code, expected_code_status in cases:
+            with self.subTest(step=expected_step, code=expected_code_status):
+                observed = {"logs": []}
+                with tempfile.TemporaryDirectory() as report_dir:
+                    report_path = Path(report_dir) / "report.json"
+
+                    class FakeRuntime:
+                        def bootstrap(self):
+                            if expected_step == "bootstrap":
+                                raise failure
+                            return "quote-context", "trade-context", {}
+
+                        def portfolio_port_factory(self, *_args):
+                            return types.SimpleNamespace(get_portfolio_snapshot=lambda: (_ for _ in ()).throw(failure))
+
+                    class FakeComposer:
+                        def build_reporting_adapters(self):
+                            def persist(report):
+                                write_runtime_report_json(report, output_path=report_path)
+                                observed["report"] = json.loads(report_path.read_text())
+                                return str(report_path)
+
+                            context = RuntimeLogContext(
+                                platform="synthetic", deploy_target="synthetic", service_name="synthetic",
+                                strategy_profile="synthetic", run_id="synthetic",
+                            )
+                            return types.SimpleNamespace(
+                                start_run=lambda: (context, {"status": "pending"}),
+                                log_event=lambda ctx, event, **fields: module.emit_runtime_log(
+                                    ctx, event, printer=observed["logs"].append, **fields
+                                ),
+                                persist_execution_report=persist,
+                            )
+
+                        def build_rebalance_runtime(self, **_kwargs):
+                            return FakeRuntime()
+
+                        def build_notification_adapters(self):
+                            return types.SimpleNamespace(publish_cycle_notification=lambda **_kwargs: None)
+
+                    module.build_composer = lambda **_kwargs: FakeComposer()
+                    with module.app.test_request_context("/probe", method="POST"):
+                        self.assertEqual(module.run_probe(), ("Error", 500))
+
+                    error = observed["report"]["errors"][0]
+                    self.assertEqual(error["stage"], "health_probe")
+                    self.assertEqual(error["message"], "health_probe_failed")
+                    self.assertEqual(error["probe_step"], expected_step)
+                    self.assertEqual(error["error_code_status"], expected_code_status)
+                    if expected_code is None:
+                        self.assertNotIn("error_code", error)
+                    else:
+                        self.assertEqual(error["error_code"], expected_code)
+                    failed_log = next(json.loads(line) for line in observed["logs"] if '"event": "health_probe_failed"' in line)
+                    self.assertEqual(failed_log["probe_step"], expected_step)
+                    self.assertEqual(failed_log["error_code_status"], expected_code_status)
+                    if expected_code is None:
+                        self.assertNotIn("error_code", failed_log)
+                    else:
+                        self.assertEqual(failed_log["error_code"], expected_code)
+                    serialized = json.dumps({"report": observed["report"], "logs": observed["logs"]})
+                    self.assertNotIn("sensitive provider detail", serialized)
+                    self.assertNotIn("sensitive getter detail", serialized)
+                    self.assertNotIn("sensitive missing-code", serialized)
+                    self.assertNotIn("private-value", serialized)
+
+    def test_run_probe_records_account_history_failure_steps(self):
+        from quant_platform_kit.common.runtime_reports import write_runtime_report_json
+
+        class ProviderError(Exception):
+            def __init__(self, code):
+                super().__init__("sensitive history failure token=private-value")
+                self.code = code
+
+        for expected_step in ("balance", "archive", "indicators"):
+            with self.subTest(step=expected_step):
+                module = load_module()
+                observed = {"balance_calls": 0}
+                failure = ProviderError(9307)
+
+                class TradeContext:
+                    def account_balance(self, **_kwargs):
+                        observed["balance_calls"] += 1
+                        if expected_step == "balance":
+                            raise failure
+                        return []
+
+                trade_context = TradeContext()
+
+                class FakeComposer:
+                    strategy_adapters = types.SimpleNamespace(
+                        calculate_strategy_indicators=lambda _quote: (
+                            (_ for _ in ()).throw(failure)
+                            if expected_step == "indicators" else {"synthetic": "ok"}
+                        )
+                    )
+
+                    def build_reporting_adapters(self):
+                        def persist(report):
+                            write_runtime_report_json(report, output_path=report_path)
+                            observed["report"] = json.loads(report_path.read_text())
+                            return str(report_path)
+
+                        return types.SimpleNamespace(
+                            start_run=lambda: (types.SimpleNamespace(run_id="synthetic"), {"status": "pending"}),
+                            log_event=lambda *_args, **_kwargs: None,
+                            persist_execution_report=persist,
+                        )
+
+                    def build_rebalance_runtime(self, **_kwargs):
+                        return types.SimpleNamespace(
+                            portfolio_port_factory=lambda *_args: types.SimpleNamespace(
+                                get_portfolio_snapshot=lambda: types.SimpleNamespace(
+                                    positions=(), buying_power=0, total_equity=0,
+                                )
+                            )
+                        )
+
+                    def build_account_snapshot_broker_contexts(self):
+                        return "quote-context", trade_context, {"source": "synthetic"}
+
+                    def build_notification_adapters(self):
+                        return types.SimpleNamespace(publish_cycle_notification=lambda **_kwargs: None)
+
+                with tempfile.TemporaryDirectory() as report_dir:
+                    report_path = Path(report_dir) / "report.json"
+                    module.ACCOUNT_REGION = "HK"
+                    module.build_composer = lambda **_kwargs: FakeComposer()
+                    module.begin_natural_cycle_history = lambda: "synthetic-history"
+                    module.end_natural_cycle_history = lambda _capture: None
+                    module.read_cycle_account_balance = lambda reader: reader()
+                    module.cycle_history_observation = lambda: {
+                        "projection": {"broker_reported_balances": [], "cash": []},
+                        "started": datetime(2026, 10, 2, tzinfo=timezone.utc),
+                        "finished": datetime(2026, 10, 2, tzinfo=timezone.utc),
+                    }
+
+                    def record_history(*_args, **_kwargs):
+                        if expected_step == "archive":
+                            raise failure
+                        return types.SimpleNamespace(status="recorded", category=None)
+
+                    module.record_projected_daily_account = record_history
+                    with patch.dict(os.environ, {"ACCOUNT_HISTORY_RECORDING_ENABLED": "true"}, clear=False):
+                        with module.app.test_request_context("/probe", method="POST"):
+                            self.assertEqual(module.run_probe(), ("Error", 500))
+
+                self.assertEqual(observed["balance_calls"], 1)
+                error = observed["report"]["errors"][0]
+                self.assertEqual(error["stage"], "health_probe")
+                self.assertEqual(error["probe_step"], expected_step)
+                self.assertEqual(error["error_code_status"], "known")
+                self.assertEqual(error["error_code"], 9307)
+                serialized = json.dumps(observed["report"])
+                self.assertNotIn("sensitive history failure", serialized)
+                self.assertNotIn("private-value", serialized)
 
     @patch.dict(os.environ, {"LONGBRIDGE_EXECUTION_STATE_CLOUD_URI": "gs://unit-test-execution/claims"})
     def test_run_strategy_emits_structured_runtime_events(self):
