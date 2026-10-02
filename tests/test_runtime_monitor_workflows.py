@@ -34,8 +34,8 @@ def test_runtime_monitor_workflows_retry_gcp_authentication() -> None:
     for name in ("execution-report-heartbeat.yml", "runtime-guard.yml"):
         workflow = (ROOT / ".github/workflows" / name).read_text()
         if name == "execution-report-heartbeat.yml":
-            heartbeat = workflow[workflow.index("  heartbeat:") : workflow.index("  inspect-sg-account-snapshot:")]
-            inspection = workflow[workflow.index("  inspect-sg-account-snapshot:") :]
+            heartbeat = workflow[workflow.index("  heartbeat:") : workflow.index("  inspect-account-snapshot:")]
+            inspection = workflow[workflow.index("  inspect-account-snapshot:") :]
             assert heartbeat.count("google-github-actions/auth@v3") == 2
             assert inspection.count("google-github-actions/auth@v3") == 1
         else:
@@ -89,8 +89,8 @@ def test_runtime_monitor_workflows_use_frozen_runtime_environment() -> None:
 
         assert "uses: actions/setup-python@" not in workflow
         if name == "execution-report-heartbeat.yml":
-            heartbeat = workflow[workflow.index("  heartbeat:") : workflow.index("  inspect-sg-account-snapshot:")]
-            inspection = workflow[workflow.index("  inspect-sg-account-snapshot:") :]
+            heartbeat = workflow[workflow.index("  heartbeat:") : workflow.index("  inspect-account-snapshot:")]
+            inspection = workflow[workflow.index("  inspect-account-snapshot:") :]
             assert heartbeat.count("uses: astral-sh/setup-uv@") == 1
             assert inspection.count("uses: astral-sh/setup-uv@") == 1
             assert heartbeat.count("uv sync --frozen --no-dev") == 1

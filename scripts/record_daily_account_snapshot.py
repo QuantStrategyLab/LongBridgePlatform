@@ -911,20 +911,25 @@ def _list_archive_inspection_candidates(
     return candidates
 
 
-def inspect_archived_sg_account_snapshot(
+def inspect_archived_account_snapshot(
     env: Mapping[str, str],
     *,
+    target: str,
     triggered_at: str,
     completed_at: str,
     open_store: Callable[[str], Any],
     now_reader: Callable[[], datetime],
     monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
-    """Inspect existing SG objects through the normal candidate validator; never writes."""
+    """Inspect one existing paper or SG object set; never writes or samples."""
     if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
         raise _Rejected("inspection_not_manual")
     config = _config(env)
-    if config.target_id != "sg" or config.expected_scope != "SG":
+    if (
+        target not in {"paper", "sg"}
+        or config.target_id != target
+        or config.expected_scope != _EXPECTED_TARGETS[target][0]
+    ):
         raise _Rejected("inspection_target_invalid")
     try:
         requested_after = _aware(triggered_at)
@@ -1052,7 +1057,7 @@ def inspect_archived_sg_account_snapshot(
 
     return {
         "inspection": "complete",
-        "target": "sg",
+        "target": target,
         "requested_after": requested_after.isoformat().replace("+00:00", "Z"),
         "historical_inspection_completed_at": inspection_completed.isoformat().replace("+00:00", "Z"),
         "inspected_at": now.isoformat().replace("+00:00", "Z"),
@@ -1402,13 +1407,15 @@ def main(
             return 1
         print(json.dumps(result, separators=(",", ":"), sort_keys=True))
         return 0
-    if (len(args) == 5 and args[0] == "--inspect-archived-sg-account-snapshot"
-            and args[1] == "--triggered-at" and args[3] == "--completed-at"):
+    if (len(args) == 7 and args[0] == "--inspect-archived-account-snapshot"
+            and args[1] == "--target" and args[3] == "--triggered-at"
+            and args[5] == "--completed-at" and args[2] in {"paper", "sg"}):
         try:
-            result = inspect_archived_sg_account_snapshot(
+            result = inspect_archived_account_snapshot(
                 os.environ if environ is None else environ,
-                triggered_at=args[2],
-                completed_at=args[4],
+                target=args[2],
+                triggered_at=args[4],
+                completed_at=args[6],
                 open_store=open_store or _open_store,
                 now_reader=now_reader or (lambda: datetime.now(timezone.utc)),
             )

@@ -1055,8 +1055,9 @@ def test_permission_inspection_cli_redacts_unknown_transport_details(capsys):
 def test_archive_inspection_uses_expected_source_and_same_candidate_validator():
     payload = _history(started=T0 + timedelta(seconds=1), finished=T0 + timedelta(seconds=2), target_id="sg")
     storage = _Storage([_object(payload)])
-    result = snapshots.inspect_archived_sg_account_snapshot(
+    result = snapshots.inspect_archived_account_snapshot(
         _env("sg", GITHUB_EVENT_NAME="workflow_dispatch"),
+        target="sg",
         triggered_at=T0.isoformat(),
         completed_at=(T0 + timedelta(seconds=4)).isoformat(),
         open_store=lambda project: storage if project == "longbridgequant" else pytest.fail("wrong project"),
@@ -1095,8 +1096,9 @@ def test_archive_inspection_reports_source_binding_mismatch_without_disclosing_i
         target_id="sg",
         binding=OTHER_BINDING,
     )
-    result = snapshots.inspect_archived_sg_account_snapshot(
+    result = snapshots.inspect_archived_account_snapshot(
         _env("sg", GITHUB_EVENT_NAME="workflow_dispatch"),
+        target="sg",
         triggered_at=T0.isoformat(),
         completed_at=(T0 + timedelta(seconds=4)).isoformat(),
         open_store=lambda _project: _Storage([_object(payload)]),
@@ -1117,8 +1119,9 @@ def test_archive_inspection_reuses_trigger_and_freshness_validation():
         finished=T0 + timedelta(seconds=1),
         target_id="sg",
     )
-    result = snapshots.inspect_archived_sg_account_snapshot(
+    result = snapshots.inspect_archived_account_snapshot(
         _env("sg", GITHUB_EVENT_NAME="workflow_dispatch"),
+        target="sg",
         triggered_at=T0.isoformat(),
         completed_at=(T0 + timedelta(seconds=4)).isoformat(),
         open_store=lambda _project: _Storage([_object(old)]),
@@ -1137,8 +1140,9 @@ def test_archive_inspection_distinguishes_historical_window_match_from_current_s
         finished=T0 + timedelta(seconds=47),
         target_id="sg",
     )
-    result = snapshots.inspect_archived_sg_account_snapshot(
+    result = snapshots.inspect_archived_account_snapshot(
         _env("sg", GITHUB_EVENT_NAME="workflow_dispatch"),
+        target="sg",
         triggered_at=T0.isoformat(),
         completed_at=(T0 + timedelta(minutes=4)).isoformat(),
         open_store=lambda _project: _Storage([_object(payload)]),
@@ -1157,15 +1161,65 @@ def test_archive_inspection_distinguishes_historical_window_match_from_current_s
     ))
 
 
+def test_archive_inspection_accepts_paper_scope_and_target():
+    payload = _history(
+        started=T0 + timedelta(seconds=1),
+        finished=T0 + timedelta(seconds=2),
+        target_id="paper",
+    )
+    result = snapshots.inspect_archived_account_snapshot(
+        _env("paper", GITHUB_EVENT_NAME="workflow_dispatch"),
+        target="paper",
+        triggered_at=T0.isoformat(),
+        completed_at=(T0 + timedelta(seconds=4)).isoformat(),
+        open_store=lambda _project: _Storage([_object(payload)]),
+        now_reader=lambda: T0 + timedelta(seconds=5),
+        monotonic=lambda: 0.0,
+    )
+    observation = result["observations"][0]
+    assert result["target"] == "paper"
+    assert observation["historical_window_match"] is True
+    assert observation["scope_matches"] is True
+    assert observation["target_matches"] is True
+
+
+def test_archive_inspection_rejects_cli_target_environment_scope_mismatch():
+    with pytest.raises(snapshots._Rejected) as raised:
+        snapshots.inspect_archived_account_snapshot(
+            _env("sg", GITHUB_EVENT_NAME="workflow_dispatch"),
+            target="paper",
+            triggered_at=T0.isoformat(),
+            completed_at=(T0 + timedelta(seconds=4)).isoformat(),
+            open_store=lambda *_args: pytest.fail("target mismatch must stop before storage"),
+            now_reader=lambda: T0 + timedelta(seconds=5),
+        )
+    assert raised.value.category == "inspection_target_invalid"
+
+
+def test_archive_inspection_cli_rejects_non_whitelisted_target(capsys):
+    code = snapshots.main(
+        [
+            "--inspect-archived-account-snapshot", "--target", "hk",
+            "--triggered-at", T0.isoformat(), "--completed-at", (T0 + timedelta(seconds=4)).isoformat(),
+        ],
+        environ=_env("hk", GITHUB_EVENT_NAME="workflow_dispatch"),
+        open_store=lambda *_args: pytest.fail("non-whitelisted target must not read storage"),
+        now_reader=lambda: T0 + timedelta(seconds=5),
+    )
+    assert code == 1
+    assert capsys.readouterr().out.strip() == "error: config_invalid"
+
+
 @pytest.mark.parametrize(
     ("target_id", "event"),
-    [("paper", "workflow_dispatch"), ("sg", "schedule")],
+    [("paper", "schedule"), ("sg", "schedule")],
 )
 def test_archive_inspection_rejects_other_target_or_non_manual_before_storage(target_id, event):
     opened = []
     with pytest.raises(snapshots._Rejected) as raised:
-        snapshots.inspect_archived_sg_account_snapshot(
+        snapshots.inspect_archived_account_snapshot(
             _env(target_id, GITHUB_EVENT_NAME=event),
+            target=target_id,
             triggered_at=T0.isoformat(),
             completed_at=(T0 + timedelta(seconds=4)).isoformat(),
             open_store=lambda *_args: opened.append("opened"),
