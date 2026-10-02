@@ -134,20 +134,27 @@ class _Blob:
 
 
 class _PageIterator:
-    def __init__(self, objects, page_size, before_page=None):
+    def __init__(self, objects, page_size, before_page=None, prefixes=()):
         self.objects = objects
         self.page_size = page_size
         self.before_page = before_page
-        self.next_page_token = "next" if len(objects) > page_size else None
+        self.prefixes = set(prefixes)
+        self.next_page_token = "next" if max(len(objects), len(self.prefixes)) > page_size else None
 
     @property
     def pages(self):
         def iterate():
             if self.before_page:
                 self.before_page()
-            yield self.objects[: self.page_size]
+            yield _Page(self.objects[: self.page_size], self.prefixes)
 
         return iterate()
+
+
+class _Page(list):
+    def __init__(self, objects, prefixes):
+        super().__init__(objects)
+        self.prefixes = prefixes
 
 
 class _Storage:
@@ -160,6 +167,13 @@ class _Storage:
     def list_blobs(self, bucket, **kwargs):
         self.list_calls.append((bucket, kwargs))
         prefix = kwargs["prefix"]
+        if kwargs.get("delimiter") == "/":
+            prefixes = {
+                f"{prefix}{obj.name[len(prefix):].split('/', 1)[0]}/"
+                for obj in self.objects
+                if obj.name.startswith(prefix) and "/" in obj.name[len(prefix):]
+            }
+            return _PageIterator([], kwargs["page_size"], prefixes=prefixes)
         return _PageIterator(
             [obj for obj in self.objects if obj.name.startswith(prefix)],
             kwargs["page_size"],
@@ -1036,3 +1050,126 @@ def test_permission_inspection_cli_redacts_unknown_transport_details(capsys):
     assert output.strip() == "permission_inspection=error:permission_inspection_unknown"
     assert SECRET not in output
     assert len(session.calls) == 1 and session.closed
+
+
+def test_archive_inspection_uses_expected_source_and_same_candidate_validator():
+    payload = _history(started=T0 + timedelta(seconds=1), finished=T0 + timedelta(seconds=2), target_id="sg")
+    storage = _Storage([_object(payload)])
+    result = snapshots.inspect_archived_sg_account_snapshot(
+        _env("sg", GITHUB_EVENT_NAME="workflow_dispatch"),
+        triggered_at=T0.isoformat(),
+        completed_at=(T0 + timedelta(seconds=4)).isoformat(),
+        open_store=lambda project: storage if project == "longbridgequant" else pytest.fail("wrong project"),
+        now_reader=lambda: T0 + timedelta(seconds=5),
+        monotonic=lambda: 0.0,
+    )
+    assert result["inspection"] == "complete"
+    assert result["candidate_count"] == result["historical_window_match_count"] == 1
+    assert result["source_binding_matches"] is True
+    assert result["observations"] == [
+        {
+            "historical_window_match": True,
+            "current_stale": False,
+            "reason": "historical_match_currently_fresh",
+            "source_binding_matches": True,
+            "scope_matches": True,
+            "target_matches": True,
+            "schema_matches": True,
+            "trigger_time_matches": True,
+            "object_path_matches": True,
+            "observed_started_at": (T0 + timedelta(seconds=1)).isoformat().replace("+00:00", "Z"),
+            "observed_finished_at": (T0 + timedelta(seconds=2)).isoformat().replace("+00:00", "Z"),
+            "balance_currency_rows": 1,
+            "cash_currency_rows": 1,
+        }
+    ]
+    assert all(call[1].get("retry") is None for call in storage.list_calls if "retry" in call[1])
+    assert storage.blob_calls
+    assert not any(call[1].get("upload") for call in storage.list_calls)
+
+
+def test_archive_inspection_reports_source_binding_mismatch_without_disclosing_it():
+    payload = _history(
+        started=T0 + timedelta(seconds=1),
+        finished=T0 + timedelta(seconds=2),
+        target_id="sg",
+        binding=OTHER_BINDING,
+    )
+    result = snapshots.inspect_archived_sg_account_snapshot(
+        _env("sg", GITHUB_EVENT_NAME="workflow_dispatch"),
+        triggered_at=T0.isoformat(),
+        completed_at=(T0 + timedelta(seconds=4)).isoformat(),
+        open_store=lambda _project: _Storage([_object(payload)]),
+        now_reader=lambda: T0 + timedelta(seconds=5),
+        monotonic=lambda: 0.0,
+    )
+    observation = result["observations"][0]
+    assert result["candidate_count"] == 1 and result["historical_window_match_count"] == 0
+    assert result["source_binding_matches"] is False
+    assert observation["reason"] == "source_binding_mismatch"
+    assert observation["source_binding_matches"] is False
+    assert OTHER_BINDING not in json.dumps(result)
+
+
+def test_archive_inspection_reuses_trigger_and_freshness_validation():
+    old = _history(
+        started=T0 - timedelta(seconds=1),
+        finished=T0 + timedelta(seconds=1),
+        target_id="sg",
+    )
+    result = snapshots.inspect_archived_sg_account_snapshot(
+        _env("sg", GITHUB_EVENT_NAME="workflow_dispatch"),
+        triggered_at=T0.isoformat(),
+        completed_at=(T0 + timedelta(seconds=4)).isoformat(),
+        open_store=lambda _project: _Storage([_object(old)]),
+        now_reader=lambda: T0 + timedelta(seconds=5),
+        monotonic=lambda: 0.0,
+    )
+    assert result["historical_window_match_count"] == 0
+    assert result["observations"][0]["reason"] == "gcs_object_invalid"
+    assert result["observations"][0]["source_binding_matches"] is True
+    assert result["observations"][0]["trigger_time_matches"] is False
+
+
+def test_archive_inspection_distinguishes_historical_window_match_from_current_staleness():
+    payload = _history(
+        started=T0 + timedelta(seconds=46),
+        finished=T0 + timedelta(seconds=47),
+        target_id="sg",
+    )
+    result = snapshots.inspect_archived_sg_account_snapshot(
+        _env("sg", GITHUB_EVENT_NAME="workflow_dispatch"),
+        triggered_at=T0.isoformat(),
+        completed_at=(T0 + timedelta(minutes=4)).isoformat(),
+        open_store=lambda _project: _Storage([_object(payload)]),
+        now_reader=lambda: T0 + timedelta(minutes=20),
+        monotonic=lambda: 0.0,
+    )
+    observation = result["observations"][0]
+    assert result["historical_window_match_count"] == 1
+    assert result["currently_stale_count"] == 1
+    assert observation["historical_window_match"] is True
+    assert observation["current_stale"] is True
+    assert observation["reason"] == "historical_match_currently_stale"
+    assert all(observation[key] is True for key in (
+        "source_binding_matches", "scope_matches", "target_matches", "schema_matches",
+        "trigger_time_matches", "object_path_matches",
+    ))
+
+
+@pytest.mark.parametrize(
+    ("target_id", "event"),
+    [("paper", "workflow_dispatch"), ("sg", "schedule")],
+)
+def test_archive_inspection_rejects_other_target_or_non_manual_before_storage(target_id, event):
+    opened = []
+    with pytest.raises(snapshots._Rejected) as raised:
+        snapshots.inspect_archived_sg_account_snapshot(
+            _env(target_id, GITHUB_EVENT_NAME=event),
+            triggered_at=T0.isoformat(),
+            completed_at=(T0 + timedelta(seconds=4)).isoformat(),
+            open_store=lambda *_args: opened.append("opened"),
+            now_reader=lambda: T0 + timedelta(seconds=5),
+        )
+    assert raised.value.category in {"inspection_not_manual", "inspection_target_invalid"}
+    assert opened == []

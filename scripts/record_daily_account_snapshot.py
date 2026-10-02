@@ -33,6 +33,7 @@ HTTP_TIMEOUT_SECONDS = 20.0
 GCS_TIMEOUT_SECONDS = 15.0
 MAX_OBJECTS_PER_DAY = 64
 MAX_OBJECT_BYTES = 64 * 1024
+ARCHIVE_INSPECTION_MAX_DURATION = timedelta(minutes=5)
 MAX_QRS_BODY_BYTES = 64 * 1024
 MAX_QRS_RESPONSE_BYTES = 64 * 1024
 _RUN_APP_HOST = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.run\.app$")
@@ -815,6 +816,268 @@ def _list_candidates(
     return candidates
 
 
+def _list_archive_inspection_candidates(
+    client: Any,
+    config: _Config,
+    dates: set[Any],
+    *,
+    deadline: float,
+    monotonic: Callable[[], float],
+) -> list[dict[str, Any]]:
+    """List only bounded SG/date objects, including prior binding folders."""
+    target_prefix = f"{config.prefix_path}/{config.target_id}/"
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise _Rejected("inspection_timeout")
+    try:
+        iterator = client.list_blobs(
+            config.bucket,
+            prefix=target_prefix,
+            delimiter="/",
+            max_results=MAX_OBJECTS_PER_DAY + 1,
+            page_size=MAX_OBJECTS_PER_DAY + 1,
+            timeout=min(GCS_TIMEOUT_SECONDS, remaining),
+            retry=None,
+            fields="items(name,generation,size),prefixes,nextPageToken",
+        )
+        page = next(iter(iterator.pages), ())
+        binding_prefixes = set(getattr(page, "prefixes", ()) or ())
+        binding_prefixes.update(getattr(iterator, "prefixes", ()) or ())
+        has_next_page = bool(getattr(iterator, "next_page_token", None))
+    except Exception:
+        raise _Rejected("gcs_list_failed") from None
+    if monotonic() >= deadline:
+        raise _Rejected("inspection_timeout")
+    if has_next_page or len(binding_prefixes) > MAX_OBJECTS_PER_DAY:
+        raise _Rejected("gcs_listing_truncated")
+
+    bindings = []
+    for binding_prefix in binding_prefixes:
+        if not isinstance(binding_prefix, str) or not binding_prefix.startswith(target_prefix):
+            continue
+        binding_id = binding_prefix[len(target_prefix) :].rstrip("/")
+        if _BINDING_ID.fullmatch(binding_id) and binding_prefix == f"{target_prefix}{binding_id}/":
+            bindings.append(binding_id)
+
+    candidates: list[dict[str, Any]] = []
+    for day in sorted(dates):
+        day_candidates: list[dict[str, Any]] = []
+        for binding_id in bindings:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise _Rejected("inspection_timeout")
+            prefix = f"{target_prefix}{binding_id}/{day.isoformat()}/"
+            try:
+                iterator = client.list_blobs(
+                    config.bucket,
+                    prefix=prefix,
+                    max_results=MAX_OBJECTS_PER_DAY + 1,
+                    page_size=MAX_OBJECTS_PER_DAY + 1,
+                    timeout=min(GCS_TIMEOUT_SECONDS, remaining),
+                    retry=None,
+                    fields="items(name,generation,size),nextPageToken",
+                )
+                page = list(next(iter(iterator.pages), ()))
+                has_next_page = bool(getattr(iterator, "next_page_token", None))
+            except Exception:
+                raise _Rejected("gcs_list_failed") from None
+            if monotonic() >= deadline:
+                raise _Rejected("inspection_timeout")
+            if has_next_page or len(page) > MAX_OBJECTS_PER_DAY:
+                raise _Rejected("gcs_listing_truncated")
+            for blob in page:
+                name = getattr(blob, "name", None)
+                generation = getattr(blob, "generation", None)
+                size = getattr(blob, "size", None)
+                if (
+                    not isinstance(name, str)
+                    or not name.startswith(prefix)
+                    or not _FILENAME.fullmatch(name[len(prefix) :])
+                    or isinstance(generation, bool)
+                    or not str(generation or "").isdigit()
+                    or isinstance(size, bool)
+                    or not isinstance(size, int)
+                    or size < 0
+                ):
+                    continue
+                if size > MAX_OBJECT_BYTES:
+                    raise _Rejected("gcs_object_too_large")
+                day_candidates.append(
+                    {"name": name, "generation": int(generation), "size": size}
+                )
+                if len(day_candidates) > MAX_OBJECTS_PER_DAY:
+                    raise _Rejected("gcs_listing_truncated")
+        candidates.extend(day_candidates)
+    return candidates
+
+
+def inspect_archived_sg_account_snapshot(
+    env: Mapping[str, str],
+    *,
+    triggered_at: str,
+    completed_at: str,
+    open_store: Callable[[str], Any],
+    now_reader: Callable[[], datetime],
+    monotonic: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    """Inspect existing SG objects through the normal candidate validator; never writes."""
+    if env.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+        raise _Rejected("inspection_not_manual")
+    config = _config(env)
+    if config.target_id != "sg" or config.expected_scope != "SG":
+        raise _Rejected("inspection_target_invalid")
+    try:
+        requested_after = _aware(triggered_at)
+        inspection_completed = _aware(completed_at)
+    except _Rejected:
+        raise _Rejected("inspection_time_invalid") from None
+    now = _utc_now(now_reader)
+    if (
+        requested_after > inspection_completed
+        or inspection_completed > now
+        or inspection_completed - requested_after > ARCHIVE_INSPECTION_MAX_DURATION
+        or now - requested_after > timedelta(hours=24)
+    ):
+        raise _Rejected("inspection_time_invalid")
+
+    store = open_store(config.project_id)
+    client = _storage_client(store)
+    deadline = monotonic() + WAIT_SECONDS
+    candidates = _list_archive_inspection_candidates(
+        client,
+        config,
+        {requested_after.date(), now.date()},
+        deadline=deadline,
+        monotonic=monotonic,
+    )
+    observations = []
+    for candidate in candidates:
+        try:
+            payload, _raw = _read_candidate(
+                client,
+                config,
+                candidate,
+                deadline=deadline,
+                monotonic=monotonic,
+            )
+        except _Rejected as rejected:
+            observations.append(
+                {
+                    "historical_window_match": False,
+                    "current_stale": False,
+                    "reason": rejected.category,
+                    "source_binding_matches": False,
+                    "scope_matches": False,
+                    "target_matches": False,
+                    "schema_matches": False,
+                    "trigger_time_matches": False,
+                    "object_path_matches": False,
+                    "observed_started_at": None,
+                    "observed_finished_at": None,
+                    "balance_currency_rows": 0,
+                    "cash_currency_rows": 0,
+                }
+            )
+            continue
+
+        binding = payload.get("source_binding")
+        started = _try_aware(payload.get("observed_started_at"))
+        finished = _try_aware(payload.get("observed_finished_at"))
+        name_parts = candidate["name"][len(config.prefix_path) + 1 :].split("/")
+        source_matches = (
+            len(name_parts) == 4
+            and name_parts[0] == config.target_id
+            and name_parts[1] == config.source_binding_id
+            and isinstance(binding, Mapping)
+            and binding.get("kind") == SOURCE_KIND
+            and binding.get("status") == "bound"
+            and binding.get("id") == config.source_binding_id
+        )
+        target_matches = payload.get("target_id") == config.target_id and len(name_parts) == 4 and name_parts[0] == config.target_id
+        scope_matches = payload.get("account_scope") == config.expected_scope
+        schema_matches = (
+            set(payload) == {
+                "schema_version", "snapshot_schema_version", "account_scope", "target_id",
+                "source_binding", "observed_started_at", "observed_finished_at", "snapshot_atomic",
+                "observation_date", "broker_reported_balances", "cash",
+            }
+            and payload.get("schema_version") == HISTORY_SCHEMA
+            and payload.get("snapshot_schema_version") == SNAPSHOT_SCHEMA
+            and payload.get("snapshot_atomic") is False
+        )
+        trigger_time_matches = (
+            started is not None and finished is not None
+            and requested_after <= started <= finished <= inspection_completed
+        )
+        object_path_matches = False
+        if started is not None and finished is not None:
+            expected_name = (
+                f"{config.prefix_path}/{config.target_id}/{config.source_binding_id}/"
+                f"{started.date().isoformat()}/{_filename_for(finished)}"
+            )
+            object_path_matches = candidate.get("name") == expected_name
+        started_at = _inspection_time(payload.get("observed_started_at"))
+        finished_at = _inspection_time(payload.get("observed_finished_at"))
+        balances = payload.get("broker_reported_balances")
+        cash = payload.get("cash")
+        historical_window_match = False
+        historical_reason = "gcs_object_invalid"
+        try:
+            _validate_history_object(payload, config, candidate, requested_after, inspection_completed)
+        except _Rejected as rejected:
+            historical_reason = rejected.category
+        else:
+            historical_window_match = True
+        current_stale = started is not None and started < now - OBSERVATION_WINDOW
+        result = {
+            "historical_window_match": historical_window_match,
+            "current_stale": current_stale,
+            "reason": "source_binding_mismatch" if not source_matches else historical_reason,
+            "source_binding_matches": source_matches,
+            "scope_matches": scope_matches,
+            "target_matches": target_matches,
+            "schema_matches": schema_matches,
+            "trigger_time_matches": trigger_time_matches,
+            "object_path_matches": object_path_matches,
+            "observed_started_at": started_at,
+            "observed_finished_at": finished_at,
+            "balance_currency_rows": len(balances) if isinstance(balances, list) else 0,
+            "cash_currency_rows": len(cash) if isinstance(cash, list) else 0,
+        }
+        if historical_window_match and current_stale:
+            result["reason"] = "historical_match_currently_stale"
+        elif historical_window_match:
+            result["reason"] = "historical_match_currently_fresh"
+        observations.append(result)
+
+    return {
+        "inspection": "complete",
+        "target": "sg",
+        "requested_after": requested_after.isoformat().replace("+00:00", "Z"),
+        "historical_inspection_completed_at": inspection_completed.isoformat().replace("+00:00", "Z"),
+        "inspected_at": now.isoformat().replace("+00:00", "Z"),
+        "candidate_count": len(observations),
+        "historical_window_match_count": sum(item["historical_window_match"] for item in observations),
+        "currently_stale_count": sum(item["current_stale"] for item in observations),
+        "source_binding_matches": any(item["source_binding_matches"] for item in observations),
+        "observations": observations,
+    }
+
+
+def _inspection_time(value: object) -> str | None:
+    try:
+        return _aware(value).isoformat().replace("+00:00", "Z")
+    except _Rejected:
+        return None
+
+
+def _try_aware(value: object) -> datetime | None:
+    try:
+        return _aware(value)
+    except _Rejected:
+        return None
+
+
 def _read_candidate(
     client: Any,
     config: _Config,
@@ -1136,6 +1399,24 @@ def main(
             )
         except _Rejected as rejected:
             print(f"permission_inspection=error:{rejected.category}")
+            return 1
+        print(json.dumps(result, separators=(",", ":"), sort_keys=True))
+        return 0
+    if (len(args) == 5 and args[0] == "--inspect-archived-sg-account-snapshot"
+            and args[1] == "--triggered-at" and args[3] == "--completed-at"):
+        try:
+            result = inspect_archived_sg_account_snapshot(
+                os.environ if environ is None else environ,
+                triggered_at=args[2],
+                completed_at=args[4],
+                open_store=open_store or _open_store,
+                now_reader=now_reader or (lambda: datetime.now(timezone.utc)),
+            )
+        except _Rejected as rejected:
+            print(f"archive_inspection=error:{rejected.category}")
+            return 1
+        except Exception:
+            print("archive_inspection=error:gcs_read_failed")
             return 1
         print(json.dumps(result, separators=(",", ":"), sort_keys=True))
         return 0
