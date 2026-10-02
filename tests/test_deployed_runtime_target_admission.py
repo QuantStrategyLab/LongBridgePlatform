@@ -85,6 +85,7 @@ MAIN_SHA = "a" * 40
 HTTP_SNAPSHOT_CANDIDATE = admission.APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE
 PROBE_SNAPSHOT_CANDIDATE = admission.APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE
 SGHK_SNAPSHOT_CANDIDATE = admission.APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE
+HK_PROBE_DIAGNOSTICS_CANDIDATE = admission.APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE
 SGHK_PREFIX = "gs://qsl-runtime-logs-shared/longbridge/account_snapshots"
 STAGED_SOURCE_REVISION = "longbridge-quant-paper-service-r36423178119"
 STAGED_SOURCE_IMAGE = (
@@ -472,6 +473,83 @@ def test_sghk_candidate_rejects_arbitrary_sha_and_template_drift():
         admission.prepare_image_only_staging(
             service=target["service_name"], project="longbridgequant", region="asia-east2",
             service_json=service_json, env=env, image_commit=SGHK_SNAPSHOT_CANDIDATE, run=run,
+        )
+
+
+def _prepare_hk_probe_diagnostics(*, target_label="HK", enabled="false", extra_env=None, input_overrides=None):
+    target = _sghk_target(target_label)
+    env_rows = [
+        {"name": "RUNTIME_TARGET_JSON", "value": json.dumps(target)},
+        {"name": "STRATEGY_PROFILE", "value": target["strategy_profile"]},
+        {"name": "LONGBRIDGE_DRY_RUN_ONLY", "value": "false"},
+        {"name": "RUNTIME_TARGET_ENABLED", "value": enabled},
+    ] + (extra_env or [])
+    service = {
+        "metadata": {"annotations": {"run.googleapis.com/ingress": "internal"}},
+        "spec": {"template": {"spec": {"serviceAccountName": "runtime@example.invalid", "containers": [{"env": env_rows}]}}},
+        "status": {"traffic": [{"revisionName": "serving-rev", "percent": 100}]},
+    }
+
+    def run(command):
+        if command[:3] == ["gcloud", "run", "revisions"]:
+            return json.dumps({
+                "metadata": {"name": "serving-rev", "labels": {"commit-sha": SERVING}},
+                "spec": {"serviceAccountName": "runtime@example.invalid", "containers": [{"env": env_rows, "image": "serving-image"}]},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            })
+        sha, name = command[2].split(":", 1)
+        assert sha in {HK_PROBE_DIAGNOSTICS_CANDIDATE, SERVING}
+        return _declaration(name, UES)
+
+    return admission.prepare_image_only_staging(
+        service=target["service_name"],
+        project="longbridgequant",
+        region="asia-east2",
+        service_json=service,
+        env={"WORKFLOW_TARGET": "HK", "SOURCE_COMMIT": HK_PROBE_DIAGNOSTICS_CANDIDATE, **(input_overrides or {})},
+        image_commit=HK_PROBE_DIAGNOSTICS_CANDIDATE,
+        run=run,
+    )
+
+
+def test_hk_probe_diagnostics_candidate_stages_only_with_exact_target_disabled():
+    plan = _prepare_hk_probe_diagnostics()
+    assert plan["image_commit"] == HK_PROBE_DIAGNOSTICS_CANDIDATE
+    assert plan["history_arg"] == plan["snapshot_arg"] == ""
+    assert plan["history_values"] == plan["retained_history_values"] == {}
+    assert plan["serving_traffic"] == [{"revisionName": "serving-rev", "percent": 100}]
+
+
+@pytest.mark.parametrize(
+    ("target_label", "enabled", "extra_env"),
+    [
+        ("SG", "false", None),
+        ("HK", "true", None),
+    ],
+)
+def test_hk_probe_diagnostics_candidate_rejects_wrong_target_or_mutable_settings(target_label, enabled, extra_env):
+    with pytest.raises(admission.AdmissionError):
+        _prepare_hk_probe_diagnostics(target_label=target_label, enabled=enabled, extra_env=extra_env)
+
+
+@pytest.mark.parametrize(
+    "input_overrides",
+    [
+        {"ACCOUNT_HISTORY_RECORDING_ENABLED": "true"},
+        {"ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false"},
+    ],
+)
+def test_hk_probe_diagnostics_candidate_rejects_history_or_snapshot_inputs(input_overrides):
+    with pytest.raises(admission.AdmissionError):
+        _prepare_hk_probe_diagnostics(input_overrides=input_overrides)
+
+
+def test_hk_probe_diagnostics_candidate_does_not_admit_arbitrary_sha():
+    with pytest.raises(admission.AdmissionError, match="not approved"):
+        admission._validate_image_only_source(
+            image_commit="c" * 40,
+            env={"WORKFLOW_TARGET": "HK"},
+            project="longbridgequant",
         )
 
 
