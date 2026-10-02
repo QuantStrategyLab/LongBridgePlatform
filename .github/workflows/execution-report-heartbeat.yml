@@ -36,6 +36,11 @@ on:
         required: false
         type: boolean
         default: false
+      inspect_paper_account_snapshot:
+        description: "Read an existing paper account snapshot after the supplied UTC trigger time; requires target=paper."
+        required: false
+        type: boolean
+        default: false
       snapshot_triggered_at:
         description: "UTC time at which the existing account snapshot probe was triggered (ISO-8601)."
         required: false
@@ -75,6 +80,7 @@ jobs:
           MATRIX_TARGET: ${{ inputs.target || 'all' }}
           INSPECT_SG_PROBE_PERMISSIONS: ${{ inputs.inspect_sg_probe_permissions || 'false' }}
           INSPECT_SG_ACCOUNT_SNAPSHOT: ${{ inputs.inspect_sg_account_snapshot || 'false' }}
+          INSPECT_PAPER_ACCOUNT_SNAPSHOT: ${{ inputs.inspect_paper_account_snapshot || 'false' }}
         run: |
           set -euo pipefail
           if [[ "$INSPECT_SG_PROBE_PERMISSIONS" == 'true' && "$MATRIX_TARGET" != 'sg' ]]; then
@@ -85,11 +91,19 @@ jobs:
             echo "SG account snapshot inspection requires target=sg and cannot be combined with permission inspection" >&2
             exit 1
           fi
+          if [[ "$INSPECT_PAPER_ACCOUNT_SNAPSHOT" == 'true' && ( "$MATRIX_TARGET" != 'paper' || "$INSPECT_SG_PROBE_PERMISSIONS" == 'true' ) ]]; then
+            echo "Paper account snapshot inspection requires target=paper and cannot be combined with permission inspection" >&2
+            exit 1
+          fi
+          if [[ "$INSPECT_SG_ACCOUNT_SNAPSHOT" == 'true' && "$INSPECT_PAPER_ACCOUNT_SNAPSHOT" == 'true' ]]; then
+            echo "Account snapshot inspection accepts exactly one target" >&2
+            exit 1
+          fi
           python3 scripts/render_runtime_target_matrix.py --profile heartbeat --target "$MATRIX_TARGET" --github-output
 
   heartbeat:
     needs: resolve-matrix
-    if: ${{ needs.resolve-matrix.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.inspect_sg_account_snapshot != true) }}
+    if: ${{ needs.resolve-matrix.result == 'success' && (github.event_name != 'workflow_dispatch' || (inputs.inspect_sg_account_snapshot != true && inputs.inspect_paper_account_snapshot != true)) }}
     name: Check ${{ matrix.target.label }} execution report heartbeat
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -103,6 +117,7 @@ jobs:
     env:
       INSPECT_SG_PROBE_PERMISSIONS: ${{ inputs.inspect_sg_probe_permissions || 'false' }}
       INSPECT_SG_ACCOUNT_SNAPSHOT: ${{ inputs.inspect_sg_account_snapshot || 'false' }}
+      INSPECT_PAPER_ACCOUNT_SNAPSHOT: ${{ inputs.inspect_paper_account_snapshot || 'false' }}
       RUNTIME_HEARTBEAT_NAME: LongBridgePlatform ${{ matrix.target.label }}
       RUNTIME_HEARTBEAT_REPORT_PLATFORM: longbridge
       RUNTIME_HEARTBEAT_ACCOUNT_SCOPE: ${{ vars.ACCOUNT_REGION }}
@@ -226,10 +241,10 @@ jobs:
         if: ${{ !cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && steps.account_history.outcome == 'failure' }}
         run: exit 1
 
-  inspect-sg-account-snapshot:
+  inspect-account-snapshot:
     needs: resolve-matrix
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.inspect_sg_account_snapshot == true && inputs.target == 'sg' }}
-    name: Inspect existing SG account snapshot
+    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.inspect_sg_account_snapshot == true && inputs.target == 'sg') || (inputs.inspect_paper_account_snapshot == true && inputs.target == 'paper')) }}
+    name: Inspect existing ${{ matrix.target.label }} account snapshot
     runs-on: ubuntu-latest
     timeout-minutes: 5
     strategy:
@@ -243,8 +258,8 @@ jobs:
       GCP_PROJECT_ID: longbridgequant
       GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
       GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
-      ACCOUNT_HISTORY_TARGET_ID: sg
-      ACCOUNT_HISTORY_EXPECTED_SCOPE: SG
+      ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
+      ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
       ACCOUNT_HISTORY_SERVICE_URL: ${{ vars.ACCOUNT_HISTORY_SERVICE_URL }}
       ACCOUNT_HISTORY_GCS_PREFIX: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX }}
       ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
@@ -269,4 +284,4 @@ jobs:
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
 
       - name: Inspect the existing snapshot object
-        run: uv run --no-sync python scripts/record_daily_account_snapshot.py --inspect-archived-sg-account-snapshot --triggered-at "$ACCOUNT_HISTORY_INSPECTION_TRIGGERED_AT" --completed-at "$ACCOUNT_HISTORY_INSPECTION_COMPLETED_AT"
+        run: uv run --no-sync python scripts/record_daily_account_snapshot.py --inspect-archived-account-snapshot --target "$ACCOUNT_HISTORY_TARGET_ID" --triggered-at "$ACCOUNT_HISTORY_INSPECTION_TRIGGERED_AT" --completed-at "$ACCOUNT_HISTORY_INSPECTION_COMPLETED_AT"
