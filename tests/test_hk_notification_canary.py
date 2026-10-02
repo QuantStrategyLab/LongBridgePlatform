@@ -25,14 +25,19 @@ CANDIDATE = "longbridge-quant-hk-service-candidate779"
 BASE_URI = "https://longbridge-quant-hk-service-abc.run.app"
 
 
-def _runtime_env(selector: str | list[str]) -> dict[str, str]:
+DEFAULT_PROFILE = "hk_global_etf_tactical_rotation"
+
+
+def _runtime_env(
+    selector: str | list[str], profile: str = DEFAULT_PROFILE
+) -> dict[str, str]:
     target = {
         "platform_id": "longbridge",
         "service_name": SERVICE,
         "account_scope": "HK",
         "account_selector": selector,
         "deployment_selector": "HK",
-        "strategy_profile": "hk_global_etf_tactical_rotation",
+        "strategy_profile": profile,
         "execution_mode": "paper",
         "dry_run_only": True,
     }
@@ -42,11 +47,16 @@ def _runtime_env(selector: str | list[str]) -> dict[str, str]:
         "RUNTIME_TARGET_JSON": json.dumps(target, separators=(",", ":")),
         "RUNTIME_TARGET_ENABLED": "false",
         "LONGBRIDGE_DRY_RUN_ONLY": "true",
-        "STRATEGY_PROFILE": "hk_global_etf_tactical_rotation",
+        "STRATEGY_PROFILE": profile,
     }
 
 
-def _revision(name: str, commit: str, selector: str | list[str] = "HK") -> dict:
+def _revision(
+    name: str,
+    commit: str,
+    selector: str | list[str] = "HK",
+    profile: str = DEFAULT_PROFILE,
+) -> dict:
     is_candidate = name == CANDIDATE
     return {
         "name": f"projects/{PROJECT}/locations/{REGION}/services/{SERVICE}/revisions/{name}",
@@ -69,15 +79,17 @@ def _revision(name: str, commit: str, selector: str | list[str] = "HK") -> dict:
             {
                 "env": [
                     {"name": key, "value": value}
-                    for key, value in _runtime_env(selector).items()
+                    for key, value in _runtime_env(selector, profile).items()
                 ]
             }
         ],
     }
 
 
-def _service(selector: str | list[str] = "HK") -> dict:
-    env = _runtime_env(selector)
+def _service(
+    selector: str | list[str] = "HK", profile: str = DEFAULT_PROFILE
+) -> dict:
+    env = _runtime_env(selector, profile)
     return {
         "name": f"projects/{PROJECT}/locations/{REGION}/services/{SERVICE}",
         "etag": "synthetic-etag",
@@ -157,6 +169,81 @@ def test_preconditions_accept_both_existing_hk_selector_shapes(selector):
             "percent": 100,
         }
     ]
+
+
+def test_preconditions_accept_legal_native_profile_when_old_and_service_match():
+    profile = "hk_low_vol_dividend_quality_snapshot"
+    selected, contract, _ = canary.validate_canary_preconditions(
+        service=_service(profile=profile),
+        candidate_revision=_revision(
+            CANDIDATE,
+            canary.APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE,
+            profile=profile,
+        ),
+        old_revision=_revision(OLD, canary.BASE_APPLICATION_SHA, profile=profile),
+        jobs=_jobs(),
+        project=PROJECT,
+        region=REGION,
+        service_name=SERVICE,
+        now=NOW,
+    )
+
+    assert len(selected) == 3
+    assert contract["target"]["strategy_profile"] == profile
+    manifest_hk_profile = next(
+        item.strategy_profile
+        for item in canary.load_runtime_target_manifest().targets
+        if item.id == "hk"
+    )
+    assert manifest_hk_profile == DEFAULT_PROFILE
+
+
+@pytest.mark.parametrize("drift", ["env", "container_config"])
+def test_preconditions_reject_old_revision_profile_or_config_drift(drift):
+    old_revision = _revision(OLD, canary.BASE_APPLICATION_SHA)
+    if drift == "env":
+        for variable in old_revision["containers"][0]["env"]:
+            if variable["name"] == "STRATEGY_PROFILE":
+                variable["value"] = "hk_low_vol_dividend_quality_snapshot"
+            elif variable["name"] == "RUNTIME_TARGET_JSON":
+                target = json.loads(variable["value"])
+                target["strategy_profile"] = "hk_low_vol_dividend_quality_snapshot"
+                variable["value"] = json.dumps(target, separators=(",", ":"))
+    else:
+        old_revision["containers"][0]["resources"] = {
+            "limits": {"memory": "synthetic"}
+        }
+
+    with pytest.raises(canary.CanaryError, match="serving_config_mismatch"):
+        canary.validate_canary_preconditions(
+            service=_service(),
+            candidate_revision=_revision(
+                CANDIDATE, canary.APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE
+            ),
+            old_revision=old_revision,
+            jobs=_jobs(),
+            project=PROJECT,
+            region=REGION,
+            service_name=SERVICE,
+            now=NOW,
+        )
+
+
+@pytest.mark.parametrize(
+    ("native_profile", "environment_profile"),
+    [
+        ("", ""),
+        ("unsupported_profile", "unsupported_profile"),
+        ("hk_low_vol_dividend_quality_snapshot", DEFAULT_PROFILE),
+    ],
+)
+def test_runtime_profile_must_be_legal_and_match_environment(
+    native_profile, environment_profile
+):
+    env = _runtime_env("HK", native_profile)
+    env["STRATEGY_PROFILE"] = environment_profile
+    with pytest.raises(canary.CanaryError, match="runtime_target_mismatch"):
+        canary._runtime_target(env, service=SERVICE)
 
 
 def test_preconditions_reject_partial_identity_or_nonpaused_job():
