@@ -70,6 +70,7 @@ _SERVICE_OUTPUT_FIELDS = frozenset(
         "trafficStatuses",
         "uri",
         "urls",
+        "lastModifier",
     }
 )
 _PROBE_STEPS = frozenset(
@@ -944,6 +945,7 @@ def _create_backup(
     candidate: Mapping[str, Any],
     old: Mapping[str, Any],
     jobs: Mapping[str, Mapping[str, Any]],
+    reuse_existing: bool = False,
 ) -> None:
     payload = {
         "schema_version": "hk_notification_canary_backup.v1",
@@ -955,7 +957,51 @@ def _create_backup(
     }
     if backup_path != str(BACKUP_PATH):
         raise _stop("backup_config_invalid")
+    if reuse_existing:
+        # A confirmed rejected tag write may resume only from the unchanged
+        # original snapshot. This never rewrites or resets that private file.
+        parent = _open_directory_nofollow(BACKUP_PATH.parent)
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                BACKUP_PATH.name,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent,
+            )
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600:
+                raise _stop("backup_reuse_invalid")
+            with os.fdopen(os.dup(descriptor), "rb") as source:
+                raw = source.read(MAX_CLOUD_BODY_BYTES + 1)
+            if len(raw) > MAX_CLOUD_BODY_BYTES:
+                raise _stop("backup_reuse_invalid")
+            existing = json.loads(raw)
+            if not isinstance(existing, dict):
+                raise _stop("backup_reuse_invalid")
+            captured_at = existing.get("captured_at")
+            if _aware(captured_at) > datetime.now(timezone.utc):
+                raise _stop("backup_reuse_invalid")
+            payload["captured_at"] = captured_at
+            if _canonical(existing) != _canonical(payload):
+                raise _stop("backup_reuse_state_changed")
+        except CanaryError:
+            raise
+        except Exception:
+            raise _stop("backup_reuse_invalid") from None
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            os.close(parent)
+        return
     _create_backup_file(BACKUP_PATH, _canonical(payload), root=BACKUP_ROOT)
+
+
+def _canary_tag(service: str) -> str:
+    # Cloud Run limits the combined service and traffic-tag length to 46.
+    suffix_length = min(12, 46 - len(service) - len("hk-"))
+    if suffix_length < 6:
+        raise _stop("service_tag_name_budget_invalid")
+    return "hk-" + uuid.uuid4().hex[:suffix_length]
 
 
 def _job_run_status(job: Mapping[str, Any], *, started_at: datetime) -> int | None:
@@ -1327,7 +1373,7 @@ def run_hk_notification_canary(
     candidate_revision: Mapping[str, Any] | None = None
     selected_jobs: dict[str, Mapping[str, Any]] = {}
     traffic_before: list[dict[str, Any]] = []
-    tag = f"hk-canary-{uuid.uuid4().hex[:12]}"
+    tag = _canary_tag(service_name)
     probe_resumed = False
     pause_attempted = False
     try:
@@ -1433,6 +1479,8 @@ def run_hk_notification_canary(
             candidate=candidate_revision,
             old=old_revision,
             jobs=selected_jobs,
+            reuse_existing=env.get("HK_NOTIFICATION_CANARY_RESUME_REJECTED_TAG")
+            == "true",
         )
 
         candidate_revision_name = _revision_name(candidate_revision)
