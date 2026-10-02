@@ -985,6 +985,16 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 print(f"failed to persist execution report: {type(persist_exc).__name__}", flush=True)
 
 
+def _bounded_probe_error_code(exc: Exception) -> int | None:
+    try:
+        code = getattr(exc, "code", None)
+    except Exception:
+        return None
+    if type(code) is not int or not -(2**31) <= code <= 2**31 - 1:
+        return None
+    return code
+
+
 def run_probe(*, response_body: str = "Probe OK"):
     if _v7_application_candidate_bound():
         return response_body, 200
@@ -998,6 +1008,7 @@ def run_probe(*, response_body: str = "Probe OK"):
     reporting_adapters = None
     log_context = None
     report = None
+    probe_step = "settings"
     try:
         composer = build_composer(dry_run_only_override=True)
         reporting_adapters = composer.build_reporting_adapters()
@@ -1008,15 +1019,19 @@ def run_probe(*, response_body: str = "Probe OK"):
             message="Received health probe request",
             execution_window="probe",
         )
+        probe_step = "context"
         runtime = composer.build_rebalance_runtime(silent_cycle_notifications=True)
         if record_account_history:
+            probe_step = "context"
             quote_context, trade_context, source_binding = (
                 composer.build_account_snapshot_broker_contexts()
             )
+            probe_step = "balance"
             read_cycle_account_balance(trade_context.account_balance)
             observation = cycle_history_observation()
             if observation is None:
                 raise RuntimeError("account history observation incomplete")
+            probe_step = "archive"
             result = record_projected_daily_account(
                 os.environ,
                 account_scope=history_scope,
@@ -1033,11 +1048,14 @@ def run_probe(*, response_body: str = "Probe OK"):
             )
             if result.status != "recorded":
                 raise RuntimeError("account history write was not confirmed")
+            probe_step = "indicators"
             _indicators = composer.strategy_adapters.calculate_strategy_indicators(quote_context)
             if _indicators is None:
                 raise RuntimeError("probe indicators unavailable")
         else:
+            probe_step = "bootstrap"
             quote_context, trade_context, _indicators = runtime.bootstrap()
+        probe_step = "portfolio_snapshot"
         snapshot = runtime.portfolio_port_factory(
             quote_context,
             trade_context,
@@ -1065,12 +1083,20 @@ def run_probe(*, response_body: str = "Probe OK"):
         )
         return response_body, 200
     except Exception as exc:
+        error_code = _bounded_probe_error_code(exc)
+        error_diagnostics = {
+            "probe_step": probe_step,
+            "error_code_status": "known" if error_code is not None else "unknown",
+        }
+        if error_code is not None:
+            error_diagnostics["error_code"] = error_code
         if report is not None:
             append_runtime_report_error(
                 report,
                 stage="health_probe",
                 message="health_probe_failed",
                 error_type=type(exc).__name__,
+                **error_diagnostics,
             )
             finalize_runtime_report(report, status="error")
         if reporting_adapters is not None and log_context is not None:
@@ -1082,6 +1108,7 @@ def run_probe(*, response_body: str = "Probe OK"):
                 execution_window="probe",
                 error_type=type(exc).__name__,
                 error_message="health_probe_failed",
+                **error_diagnostics,
             )
         err = _compact_error_notification(
             exc, title=t("health_probe_title"), prefix=t("health_probe_error_prefix"), phase="health_probe",
