@@ -265,7 +265,22 @@ def record_daily_account_snapshot(
                 raise _Rejected("runtime_target_not_disabled")
             _validate_scheduler_job(job, config, allow_paused=True)
             _validate_sg_schedule(job, now_reader)
-            started_at = _run_paused_sg_probe(session, config, job, now_reader)
+            selected = _run_paused_sg_probe(
+                session,
+                config,
+                job,
+                now_reader,
+                monotonic=monotonic,
+                observe=lambda started_at, deadline: _observe_archived_snapshot(
+                    open_store,
+                    config,
+                    started_at=started_at,
+                    deadline=deadline,
+                    now_reader=now_reader,
+                    monotonic=monotonic,
+                    sleep=sleep,
+                ),
+            )
         else:
             _validate_scheduler_job(job, config)
             started_at = _utc_now(now_reader)
@@ -278,25 +293,21 @@ def record_daily_account_snapshot(
     finally:
         _close(session)
 
-    try:
-        store = open_store(config.project_id)
-        client = _storage_client(store)
-        deadline = monotonic() + WAIT_SECONDS
-        selected = _wait_for_observation(
-            client,
-            config,
-            started_at=started_at,
-            deadline=deadline,
-            now_reader=now_reader,
-            monotonic=monotonic,
-            sleep=sleep,
-        )
-        if monotonic() >= deadline:
-            return DailyAccountRecordResult("error", "observation_timeout")
-    except _Rejected as rejected:
-        return DailyAccountRecordResult("error", rejected.category)
-    except Exception:
-        return DailyAccountRecordResult("error", "gcs_read_failed")
+    if not paused_sg:
+        try:
+            selected = _observe_archived_snapshot(
+                open_store,
+                config,
+                started_at=started_at,
+                deadline=None,
+                now_reader=now_reader,
+                monotonic=monotonic,
+                sleep=sleep,
+            )
+        except _Rejected as rejected:
+            return DailyAccountRecordResult("error", rejected.category)
+        except Exception:
+            return DailyAccountRecordResult("error", "gcs_read_failed")
 
     if selected is None:
         return DailyAccountRecordResult("error", "observation_timeout")
@@ -620,9 +631,13 @@ def _run_paused_sg_probe(
     config: _Config,
     original_job: Mapping[str, Any],
     now_reader: Callable[[], datetime],
-) -> datetime:
+    *,
+    monotonic: Callable[[], float],
+    observe: Callable[[datetime, float], tuple[bytes, dict[str, Any]] | None],
+) -> tuple[bytes, dict[str, Any]] | None:
     original = deepcopy(dict(original_job))
     original_last_attempt = original.get("lastAttemptTime")
+    deadline = monotonic() + WAIT_SECONDS
     try:
         _scheduler_action(session, config, "resume")
     except _Rejected as rejected:
@@ -656,23 +671,21 @@ def _run_paused_sg_probe(
             raise _Rejected("scheduler_unexpected_attempt")
         raise _Rejected("scheduler_resume_readback_mismatch")
 
-    run_error = ""
     try:
+        if monotonic() >= deadline:
+            raise _Rejected("observation_timeout")
         started_at = _utc_now(now_reader)
-        _scheduler_run(session, config)
-    except _Rejected as rejected:
-        run_error = rejected.category
-        started_at = None
-    except Exception:
-        run_error = "scheduler_run_unknown"
-        started_at = None
-
-    _pause_and_verify(session, config, original)
-    if run_error:
-        raise _Rejected(run_error)
-    if started_at is None:
-        raise _Rejected("scheduler_run_unknown")
-    return started_at
+        try:
+            _scheduler_run(session, config)
+        except _Rejected:
+            raise
+        except Exception:
+            raise _Rejected("scheduler_run_unknown") from None
+        if monotonic() >= deadline:
+            raise _Rejected("observation_timeout")
+        return observe(started_at, deadline)
+    finally:
+        _pause_and_verify(session, config, original)
 
 
 def _zero_duration(value: object) -> bool:
@@ -702,6 +715,43 @@ def _scheduler_run(session: Any, config: _Config) -> None:
         raise _Rejected("scheduler_run_unknown")
     finally:
         _close(response)
+
+
+def _observe_archived_snapshot(
+    open_store: Callable[[str], Any],
+    config: _Config,
+    *,
+    started_at: datetime,
+    deadline: float | None,
+    now_reader: Callable[[], datetime],
+    monotonic: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> tuple[bytes, dict[str, Any]] | None:
+    if deadline is not None and monotonic() >= deadline:
+        return None
+    try:
+        store = open_store(config.project_id)
+        if deadline is None:
+            deadline = monotonic() + WAIT_SECONDS
+        if monotonic() >= deadline:
+            return None
+        client = _storage_client(store)
+        selected = _wait_for_observation(
+            client,
+            config,
+            started_at=started_at,
+            deadline=deadline,
+            now_reader=now_reader,
+            monotonic=monotonic,
+            sleep=sleep,
+        )
+        if monotonic() >= deadline:
+            return None
+        return selected
+    except _Rejected:
+        raise
+    except Exception:
+        raise _Rejected("gcs_read_failed") from None
 
 
 def _storage_client(store: Any) -> Any:
