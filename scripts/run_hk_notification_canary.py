@@ -1005,7 +1005,7 @@ def _canary_tag(service: str) -> str:
 
 
 def _job_run_status(job: Mapping[str, Any], *, started_at: datetime) -> int | None:
-    if job.get("state") != "PAUSED":
+    if job.get("state") not in {"ENABLED", "PAUSED"}:
         return None
     try:
         last = _aware(job.get("lastAttemptTime"))
@@ -1595,23 +1595,37 @@ def run_hk_notification_canary(
         except Exception:
             pass
 
-        # This is the first operation after the one run request: pause immediately.
-        pause_once()
-        paused_job = snapshot._scheduler_get(session, job_config)
-        if paused_job.get("state") != "PAUSED":
-            raise _stop("probe_pause_readback_failed")
-
-        outcome, request_status, _event = _wait_terminal(
-            session=session,
-            project=project,
-            service=service_name,
-            candidate_revision=candidate_revision_name,
-            candidate_host=urlsplit(tagged_url).hostname or "",
-            job_config=job_config,
-            started_at=started_at,
-            monotonic=monotonic,
-            sleep=sleep,
-        )
+        wait_error: Exception | None = None
+        try:
+            outcome, request_status, _event = _wait_terminal(
+                session=session,
+                project=project,
+                service=service_name,
+                candidate_revision=candidate_revision_name,
+                candidate_host=urlsplit(tagged_url).hostname or "",
+                job_config=job_config,
+                started_at=started_at,
+                monotonic=monotonic,
+                sleep=sleep,
+            )
+        except Exception as exc:
+            wait_error = exc
+        finally:
+            try:
+                # Scheduler Run acknowledges dispatch; let the bounded terminal
+                # observation finish before pausing so a queued dispatch can start.
+                pause_once()
+                paused_job = snapshot._scheduler_get(session, job_config)
+                if paused_job.get("state") != "PAUSED":
+                    raise _stop("probe_pause_readback_failed")
+            except Exception as pause_error:
+                if wait_error is None:
+                    raise
+                # Keep the original terminal-unknown reason primary while retaining
+                # the pause failure as its cause. Never continue to URI/tag restore.
+                raise wait_error from pause_error
+        if wait_error is not None:
+            raise wait_error
         del request_status
 
         # Restore only our modified URI, then remove only our unique tag.

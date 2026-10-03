@@ -6,6 +6,7 @@ import stat
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -609,6 +610,20 @@ def test_complete_logging_pagination_and_scheduler_default_status(monkeypatch):
         )
         == 0
     )
+    assert (
+        canary._job_run_status(
+            {"state": "ENABLED", "lastAttemptTime": NOW.isoformat(), "status": {}},
+            started_at=NOW,
+        )
+        == 0
+    )
+    assert (
+        canary._job_run_status(
+            {"state": "UNKNOWN", "lastAttemptTime": NOW.isoformat(), "status": {}},
+            started_at=NOW,
+        )
+        is None
+    )
 
     class RepeatingTokenSession:
         def post(self, _url, **_kwargs):
@@ -618,6 +633,76 @@ def test_complete_logging_pagination_and_scheduler_default_status(monkeypatch):
         canary._read_terminal_logs(
             RepeatingTokenSession(), project=PROJECT, filter_text="fixed"
         )
+
+
+def test_wait_terminal_accepts_matching_attempt_while_scheduler_remains_enabled(
+    monkeypatch,
+):
+    entries = [
+        {
+            "resource": {
+                "type": "cloud_run_revision",
+                "labels": {"revision_name": CANDIDATE, "service_name": SERVICE},
+            },
+            "httpRequest": {
+                "requestMethod": "POST",
+                "requestUrl": "https://candidate-tag.run.app/probe",
+                "status": 200,
+            },
+            "trace": "trace-1",
+        },
+        {
+            "resource": {
+                "type": "cloud_run_revision",
+                "labels": {"revision_name": CANDIDATE, "service_name": SERVICE},
+            },
+            "jsonPayload": {
+                "event": "health_probe_completed",
+                "execution_window": "probe",
+            },
+            "trace": "trace-1",
+        },
+    ]
+
+    class Response:
+        status_code = 200
+        is_redirect = False
+
+        def __init__(self, payload):
+            self.content = json.dumps(payload).encode()
+
+    class Session:
+        def get(self, _url, **_kwargs):
+            return Response(
+                {
+                    "state": "ENABLED",
+                    "lastAttemptTime": NOW.isoformat(),
+                    "status": {},
+                }
+            )
+
+        def post(self, _url, *, json, **_kwargs):
+            assert "httpRequest.requestMethod:*" in json["filter"]
+            return Response({"entries": entries})
+
+    monkeypatch.setattr(canary.snapshot, "_close", lambda _value: None)
+    status = canary._wait_terminal(
+        session=Session(),
+        project=PROJECT,
+        service=SERVICE,
+        candidate_revision=CANDIDATE,
+        candidate_host="candidate-tag.run.app",
+        job_config=SimpleNamespace(
+            scheduler_resource=(
+                f"projects/{PROJECT}/locations/{REGION}/jobs/{SERVICE}-probe-scheduler"
+            )
+        ),
+        started_at=NOW,
+        monotonic=lambda: 100.0,
+        sleep=lambda _seconds: None,
+    )
+
+    assert status == ("completed", 200, entries[1]["jsonPayload"])
 
 
 def test_prior_full_revision_request_window_requires_exact_original_terminal():
@@ -809,3 +894,228 @@ def test_backup_reuse_is_read_only_and_requires_exact_original_snapshot(
     path.chmod(0o644)
     with pytest.raises(canary.CanaryError, match="backup_reuse_invalid"):
         canary._create_backup(**params, reuse_existing=True)
+
+
+def _run_synthetic_canary_with_delayed_dispatch(
+    monkeypatch, tmp_path, *, wait_fails=False, pause_fails=False
+):
+    state = {
+        "service": _service(),
+        "jobs": _jobs(),
+        "events": [],
+        "run_count": 0,
+        "pause_count": 0,
+        "uri_restores": 0,
+        "traffic_restores": 0,
+    }
+    original_uri = f"{BASE_URI}/probe"
+    previous_request = {
+        "resource": {
+            "type": "cloud_run_revision",
+            "labels": {"revision_name": OLD, "service_name": SERVICE},
+        },
+        "timestamp": canary.PREVIOUS_REQUEST_TIMESTAMP,
+        "httpRequest": {
+            "requestMethod": "POST",
+            "requestUrl": original_uri,
+            "status": 500,
+            "latency": canary.PREVIOUS_REQUEST_LATENCY,
+        },
+    }
+    backup_path = tmp_path / canary.BACKUP_RELATIVE_PATH
+    monkeypatch.setattr(canary, "BACKUP_ROOT", tmp_path)
+    monkeypatch.setattr(canary, "BACKUP_PATH", backup_path)
+
+    monkeypatch.setattr(
+        canary,
+        "_service_get",
+        lambda _session, _resource: json.loads(json.dumps(state["service"])),
+    )
+
+    def revision_get(_session, _project, _region, _service, revision):
+        if revision == CANDIDATE:
+            return _revision(
+                CANDIDATE, canary.APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE
+            )
+        return _revision(OLD, canary.BASE_APPLICATION_SHA)
+
+    monkeypatch.setattr(canary, "_revision_get", revision_get)
+    monkeypatch.setattr(
+        canary,
+        "_scheduler_list",
+        lambda *_args: json.loads(json.dumps(state["jobs"])),
+    )
+    monkeypatch.setattr(
+        canary,
+        "_read_terminal_logs",
+        lambda *_args, **_kwargs: [previous_request],
+    )
+    monkeypatch.setattr(canary, "_validate_image_only_source", lambda **_kwargs: None)
+
+    def patch_traffic(_session, _resource, *, etag, traffic):
+        del etag
+        state["events"].append("traffic_patch")
+        if not any(row.get("tag") for row in traffic):
+            state["traffic_restores"] += 1
+        state["service"]["traffic"] = json.loads(json.dumps(list(traffic)))
+        statuses = []
+        for row in traffic:
+            tag = row.get("tag") or ""
+            statuses.append(
+                {
+                    "revision": row["revision"],
+                    "percent": row.get("percent", 0),
+                    "tag": tag,
+                    "uri": "https://candidate-tag.run.app" if tag else BASE_URI,
+                }
+            )
+        state["service"]["trafficStatuses"] = statuses
+
+    monkeypatch.setattr(canary, "_service_patch_traffic", patch_traffic)
+
+    def patch_uri(_session, _resource, uri):
+        state["events"].append("uri_patch")
+        if uri == original_uri:
+            state["uri_restores"] += 1
+        state["jobs"][1]["httpTarget"]["uri"] = uri
+
+    monkeypatch.setattr(canary, "_scheduler_patch_uri", patch_uri)
+    monkeypatch.setattr(canary, "_candidate_tag_url", lambda *_args, **_kwargs: "https://candidate-tag.run.app")
+
+    monkeypatch.setattr(
+        canary.snapshot,
+        "_scheduler_get",
+        lambda _session, _config: json.loads(json.dumps(state["jobs"][1])),
+    )
+
+    def scheduler_action(_session, _config, action):
+        state["events"].append(action)
+        if action == "resume":
+            state["jobs"][1]["state"] = "ENABLED"
+        else:
+            state["pause_count"] += 1
+            if pause_fails:
+                raise RuntimeError("synthetic pause failure")
+            state["jobs"][1]["state"] = "PAUSED"
+
+    monkeypatch.setattr(canary.snapshot, "_scheduler_action", scheduler_action)
+
+    def scheduler_run(_session, _config):
+        state["events"].append("run")
+        state["run_count"] += 1
+
+    monkeypatch.setattr(canary.snapshot, "_scheduler_run", scheduler_run)
+
+    def wait_terminal(**_kwargs):
+        state["events"].append("wait")
+        # Model a delayed Cloud Scheduler dispatch: the job must remain enabled
+        # through terminal observation, after exactly one accepted Run request.
+        assert state["jobs"][1]["state"] == "ENABLED"
+        assert state["run_count"] == 1
+        if wait_fails:
+            raise canary._stop("probe_terminal_unknown")
+        return "completed", 200, {
+            "event": "health_probe_completed",
+            "execution_window": "probe",
+        }
+
+    monkeypatch.setattr(canary, "_wait_terminal", wait_terminal)
+    monkeypatch.setattr(canary.snapshot, "_close", lambda _session: None)
+    monkeypatch.setattr(
+        canary,
+        "_require_quiet_window",
+        lambda _jobs, _now: None,
+    )
+
+    env = {
+        "WORKFLOW_TARGET": "HK",
+        "GITHUB_REF": "refs/heads/main",
+        "GITHUB_REPOSITORY": "QuantStrategyLab/LongBridgePlatform",
+        "GOOGLE_CLOUD_PROJECT": PROJECT,
+        "HK_NOTIFICATION_CANARY_BACKUP_PATH": str(backup_path),
+        "CLOUD_RUN_SERVICE": SERVICE,
+        "CLOUD_RUN_REGION": REGION,
+        "HK_CANDIDATE_REVISION": CANDIDATE,
+    }
+
+    def run():
+        return canary.run_hk_notification_canary(
+            env=env,
+            session_factory=lambda: object(),
+            now_reader=lambda: NOW,
+            monotonic=lambda: 100.0,
+            sleep=lambda _seconds: None,
+        )
+
+    return run, state
+
+
+def test_run_waits_for_delayed_dispatch_before_pause_and_restores_after_terminal(
+    monkeypatch, tmp_path
+):
+    run, state = _run_synthetic_canary_with_delayed_dispatch(
+        monkeypatch, tmp_path
+    )
+
+    assert run() == "completed"
+    assert state["events"].index("run") < state["events"].index("wait")
+    assert state["events"].index("wait") < state["events"].index("pause")
+    assert state["uri_restores"] == 1
+    assert state["traffic_restores"] == 1
+    assert state["run_count"] == 1
+    assert state["pause_count"] == 1
+    assert state["jobs"][1]["state"] == "PAUSED"
+    assert state["jobs"][1]["httpTarget"]["uri"] == f"{BASE_URI}/probe"
+    assert canary._traffic_rows(state["service"]) == [
+        {"revision": OLD, "percent": 100, "tag": "", "uri": BASE_URI}
+    ]
+
+
+def test_wait_failure_pauses_once_and_preserves_unknown_without_config_restore(
+    monkeypatch, tmp_path
+):
+    run, state = _run_synthetic_canary_with_delayed_dispatch(
+        monkeypatch, tmp_path, wait_fails=True
+    )
+
+    with pytest.raises(canary.CanaryError, match="probe_terminal_unknown"):
+        run()
+    assert state["events"].index("wait") < state["events"].index("pause")
+    assert state["jobs"][1]["state"] == "PAUSED"
+    assert state["pause_count"] == 1
+    assert state["run_count"] == 1
+    assert state["uri_restores"] == 0
+    assert state["traffic_restores"] == 0
+
+
+def test_pause_failure_after_wait_blocks_uri_and_traffic_restore_without_rerun(
+    monkeypatch, tmp_path
+):
+    run, state = _run_synthetic_canary_with_delayed_dispatch(
+        monkeypatch, tmp_path, pause_fails=True
+    )
+
+    with pytest.raises(canary.CanaryError, match="probe_pause_unknown"):
+        run()
+    assert state["events"].index("wait") < state["events"].index("pause")
+    assert state["jobs"][1]["state"] == "ENABLED"
+    assert state["pause_count"] == 1
+    assert state["run_count"] == 1
+    assert state["uri_restores"] == 0
+    assert state["traffic_restores"] == 0
+
+
+def test_pause_failure_does_not_mask_terminal_observation_failure(
+    monkeypatch, tmp_path
+):
+    run, state = _run_synthetic_canary_with_delayed_dispatch(
+        monkeypatch, tmp_path, wait_fails=True, pause_fails=True
+    )
+
+    with pytest.raises(canary.CanaryError, match="probe_terminal_unknown") as raised:
+        run()
+    assert str(raised.value.__cause__) == "hk_notification_canary_probe_pause_unknown"
+    assert state["pause_count"] == 1
+    assert state["run_count"] == 1
+    assert state["uri_restores"] == 0
+    assert state["traffic_restores"] == 0
