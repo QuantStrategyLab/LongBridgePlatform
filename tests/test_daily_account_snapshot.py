@@ -158,14 +158,23 @@ class _Page(list):
 
 
 class _Storage:
-    def __init__(self, objects=()):
+    def __init__(self, objects=(), *, before_list=None, list_error=None):
         self.client = self
         self.objects = list(objects)
         self.list_calls = []
         self.blob_calls = []
+        self.before_list = before_list
+        self.list_error = list_error
+        self.events = None
 
     def list_blobs(self, bucket, **kwargs):
+        if self.events is not None:
+            self.events.append("gcs_list")
         self.list_calls.append((bucket, kwargs))
+        if self.before_list is not None:
+            self.before_list(self, kwargs)
+        if self.list_error:
+            raise self.list_error
         prefix = kwargs["prefix"]
         if kwargs.get("delimiter") == "/":
             prefixes = {
@@ -222,6 +231,7 @@ class _Session:
         change_control_on_resume=False,
         read_error_number=None,
         read_error_numbers=(),
+        events=None,
     ):
         self.job = job or _job()
         self.run_response = run_response or _Response()
@@ -236,11 +246,14 @@ class _Session:
         self.change_control_on_resume = change_control_on_resume
         self.read_error_number = read_error_number
         self.read_error_numbers = set(read_error_numbers)
+        self.events = events
         self.calls = []
         self.read_count = 0
         self.closed = False
 
     def get(self, url, **kwargs):
+        if self.events is not None:
+            self.events.append("scheduler_get")
         self.calls.append(("get", url, kwargs))
         self.read_count += 1
         if self.read_count == self.read_error_number or self.read_count in self.read_error_numbers:
@@ -250,6 +263,8 @@ class _Session:
     def post(self, url, **kwargs):
         self.calls.append(("post", url, kwargs))
         if url.endswith(":resume"):
+            if self.events is not None:
+                self.events.append("scheduler_resume")
             if self.resume_applies:
                 self.job["state"] = "ENABLED"
                 if self.unexpected_resume_attempt:
@@ -260,11 +275,15 @@ class _Session:
                 raise self.resume_error
             return self.resume_response
         if url.endswith(":pause"):
+            if self.events is not None:
+                self.events.append("scheduler_pause")
             if self.pause_applies:
                 self.job["state"] = "PAUSED"
             if self.pause_error:
                 raise self.pause_error
             return self.pause_response
+        if self.events is not None:
+            self.events.append("scheduler_run")
         if self.run_error:
             raise self.run_error
         self.job["lastAttemptTime"] = (T0 + timedelta(seconds=8)).isoformat()
@@ -284,20 +303,29 @@ class _Clock:
 
 
 class _Spies:
-    def __init__(self, *, objects=(), job=None, run_error=None, post_error=None, post_response=None, **session_options):
-        self.storage = _Storage(objects)
-        self.session = _Session(job=job, run_error=run_error, **session_options)
+    def __init__(
+        self, *, objects=(), job=None, run_error=None, post_error=None, post_response=None,
+        store_error=None, storage_before_list=None, storage_list_error=None, **session_options,
+    ):
+        self.events = []
+        self.storage = _Storage(objects, before_list=storage_before_list, list_error=storage_list_error)
+        self.storage.events = self.events
+        self.session = _Session(job=job, run_error=run_error, events=self.events, **session_options)
         self.open_calls = []
         self.open_state_at_open = []
         self.scheduler_call_count_at_open = []
         self.posts = []
         self.post_error = post_error
         self.post_response = post_response
+        self.store_error = store_error
 
     def open_store(self, project):
+        self.events.append("storage_open")
         self.open_calls.append(project)
         self.open_state_at_open.append(self.session.job.get("state"))
         self.scheduler_call_count_at_open.append(len(self.session.calls))
+        if self.store_error:
+            raise self.store_error
         return self.storage
 
     def session_factory(self):
@@ -452,12 +480,20 @@ def test_paused_scheduler_is_rejected_before_run_or_gcs_for_every_target(target_
     assert spies.open_calls == []
 
 
-def test_paused_sg_resumes_runs_once_restores_full_job_then_reads_and_publishes():
+def test_paused_sg_observes_delayed_archive_before_restoring_then_publishes():
     payload = _history(T0 + timedelta(seconds=6), T0 + timedelta(seconds=7), target_id="sg")
     raw = json.dumps(payload, indent=2).encode()
+    delayed_object = _object(payload, raw=raw)
+    list_count = {"value": 0}
+
+    def reveal_after_first_empty_list(storage, _kwargs):
+        list_count["value"] += 1
+        if list_count["value"] == 2:
+            storage.objects.append(delayed_object)
+
     job = _job("sg", state="PAUSED", lastAttemptTime=(T0 - timedelta(days=2)).isoformat())
     original = json.loads(json.dumps(job))
-    spies = _Spies(objects=[_object(payload, raw=raw)], job=job)
+    spies = _Spies(objects=[], job=job, storage_before_list=reveal_after_first_empty_list)
     result, spies = _record(
         _env(
             "sg",
@@ -483,9 +519,119 @@ def test_paused_sg_resumes_runs_once_restores_full_job_then_reads_and_publishes(
         if field not in snapshots._SCHEDULER_OUTPUT_FIELDS:
             assert spies.session.job[field] == value
     assert spies.storage.list_calls
-    assert spies.open_state_at_open == ["PAUSED"]
-    assert spies.scheduler_call_count_at_open == [6]
+    assert spies.open_state_at_open == ["ENABLED"]
+    assert spies.scheduler_call_count_at_open == [4]
     assert len(spies.posts) == 1 and spies.posts[0][1]["data"] == raw
+    assert list_count["value"] == 2, "RunJob ACK precedes asynchronous archive visibility"
+    assert spies.events.index("scheduler_run") < spies.events.index("storage_open")
+    assert spies.events.index("gcs_list") < spies.events.index("scheduler_pause")
+    assert spies.events.index("scheduler_pause") < len(spies.events) - 1
+    assert spies.events[-1] == "scheduler_get"
+
+
+@pytest.mark.parametrize(
+    ("spies_kwargs", "expected"),
+    [
+        ({"store_error": RuntimeError(SECRET)}, "gcs_read_failed"),
+        ({"storage_list_error": RuntimeError(SECRET)}, "gcs_list_failed"),
+    ],
+)
+def test_paused_sg_storage_failures_restore_before_returning(spies_kwargs, expected):
+    spies = _Spies(job=_job("sg", state="PAUSED"), **spies_kwargs)
+    result, spies = _record(_env("sg", RUNTIME_TARGET_ENABLED="false"), spies)
+
+    assert result.category == expected
+    actions = [call[1].rsplit(":", 1)[-1] for call in spies.session.calls if call[0] == "post"]
+    assert actions == ["resume", "run", "pause"]
+    assert spies.session.job["state"] == "PAUSED"
+    assert spies.events.index("scheduler_run") < spies.events.index("scheduler_pause")
+    assert spies.events[-1] == "scheduler_get"
+    assert spies.posts == []
+
+
+def test_paused_sg_observation_timeout_restores_before_returning(monkeypatch):
+    monkeypatch.setattr(snapshots, "WAIT_SECONDS", 1)
+    spies = _Spies(job=_job("sg", state="PAUSED"))
+    result, spies = _record(_env("sg", RUNTIME_TARGET_ENABLED="false"), spies)
+
+    assert result.category == "observation_timeout"
+    actions = [call[1].rsplit(":", 1)[-1] for call in spies.session.calls if call[0] == "post"]
+    assert actions == ["resume", "run", "pause"]
+    assert spies.session.job["state"] == "PAUSED"
+    assert spies.events.index("gcs_list") < spies.events.index("scheduler_pause")
+    assert spies.posts == []
+
+
+def test_paused_sg_deadline_includes_storage_initialization(monkeypatch):
+    monkeypatch.setattr(snapshots, "WAIT_SECONDS", 1)
+    ticks = {"now": 0.0}
+    spies = _Spies(job=_job("sg", state="PAUSED"))
+    original_open = spies.open_store
+
+    def slow_open(project):
+        storage = original_open(project)
+        ticks["now"] = snapshots.WAIT_SECONDS + 1
+        return storage
+
+    spies.open_store = slow_open
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED="false"),
+        spies,
+        monotonic=lambda: ticks["now"],
+    )
+
+    assert result.category == "observation_timeout"
+    actions = [call[1].rsplit(":", 1)[-1] for call in spies.session.calls if call[0] == "post"]
+    assert actions == ["resume", "run", "pause"]
+    assert spies.session.job["state"] == "PAUSED"
+    assert spies.open_calls == ["longbridgequant"]
+    assert spies.storage.list_calls == []
+    assert spies.posts == []
+
+
+def test_non_sg_observation_budget_starts_after_storage_initialization(monkeypatch):
+    monkeypatch.setattr(snapshots, "WAIT_SECONDS", 1)
+    ticks = {"now": 0.0}
+    spies = _Spies(objects=[_object(_history())])
+    original_open = spies.open_store
+
+    def slow_open(project):
+        storage = original_open(project)
+        ticks["now"] = snapshots.WAIT_SECONDS + 1
+        return storage
+
+    spies.open_store = slow_open
+    result, spies = _record(_env("paper"), spies, monotonic=lambda: ticks["now"])
+
+    assert result.status == "recorded"
+    assert spies.storage.list_calls
+    assert spies.session.job["state"] == "ENABLED"
+    assert spies.posts == []
+
+
+def test_paused_sg_restore_failure_blocks_publish_after_archive_is_observed():
+    payload = _history(target_id="sg")
+    spies = _Spies(
+        objects=[_object(payload)],
+        job=_job("sg", state="PAUSED"),
+        pause_response=_Response(500),
+    )
+    result, spies = _record(
+        _env(
+            "sg",
+            RUNTIME_TARGET_ENABLED="false",
+            ACCOUNT_FACTS_SYNC_ENABLED="true",
+            ACCOUNT_FACTS_SYNC_URL=QRS_URL,
+            ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+        ),
+        spies,
+    )
+
+    assert result.category == "scheduler_pause_unknown"
+    assert spies.storage.list_calls
+    assert spies.events.index("gcs_list") < spies.events.index("scheduler_pause")
+    assert spies.session.job["state"] == "PAUSED"
+    assert spies.posts == []
 
 
 @pytest.mark.parametrize("runtime_flag", ["true", "False", " false", ""])
@@ -686,7 +832,7 @@ def test_paused_sg_unknown_run_is_not_retried_and_restores_before_returning():
     ("pause_response", "pause_applies", "expected"),
     [(_Response(500), True, "scheduler_pause_unknown"), (_Response(409), False, "scheduler_pause_rejected")],
 )
-def test_paused_sg_pause_failure_never_reads_or_publishes(pause_response, pause_applies, expected):
+def test_paused_sg_pause_failure_never_publishes(pause_response, pause_applies, expected):
     result, spies = _record(
         _env("sg", RUNTIME_TARGET_ENABLED="false"),
         _Spies(
@@ -697,7 +843,9 @@ def test_paused_sg_pause_failure_never_reads_or_publishes(pause_response, pause_
     )
     assert result.category == expected
     assert [call[0] for call in spies.session.calls] == ["get", "post", "get", "post", "post", "get"]
-    assert spies.open_calls == [] and spies.posts == []
+    assert spies.open_calls == ["longbridgequant"]
+    assert spies.events.index("gcs_list") < spies.events.index("scheduler_pause")
+    assert spies.posts == []
 
 
 @pytest.mark.parametrize(("target_id", "wrong_scope"), [("hk", "SG"), ("sg", "HK")])
