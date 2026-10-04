@@ -1158,8 +1158,8 @@ def test_short_parent_cannot_bypass_same_fixed_request_boundary():
         ({"status": {"message": "PRIVATE_VALUE"}}, "scheduler_status_shape"),
         ({"status": {"code": True}}, "scheduler_status_code"),
         ({"status": {"code": "13"}}, "scheduler_status_code"),
-        ({"status": {"code": -1}}, "scheduler_status_code"),
-        ({"status": {"code": 17}}, "scheduler_status_code"),
+        ({"status": {"code": -(2**31) - 1}}, "scheduler_status_code"),
+        ({"status": {"code": 2**31}}, "scheduler_status_code"),
         ({"lastAttemptTime": None}, "scheduler_last_attempt_time"),
         ({"lastAttemptTime": "PRIVATE_TIMESTAMP"}, "scheduler_last_attempt_time"),
         ({"lastAttemptTime": "2026-10-02T00:00:00"}, "scheduler_last_attempt_time"),
@@ -1195,7 +1195,7 @@ def test_required_scheduler_omission_is_profiled_without_default_relaxation(miss
 
 def test_scheduler_profile_reports_simultaneous_faults_without_raw_values():
     body = scheduler()
-    body.update(state=None, status={"code": 17}, lastAttemptTime="PRIVATE_TIME")
+    body.update(state=None, status={"code": 2**31}, lastAttemptTime="PRIVATE_TIME")
     with pytest.raises(metadata.MetadataRejected) as caught:
         inspect(Session(scheduler_value=body))
     error = caught.value
@@ -1308,3 +1308,63 @@ def test_scheduler_profile_reuses_timestamp_parser(monkeypatch, stamp):
     assert calls == [stamp, stamp]
     assert caught.value.scheduler_schema["last_attempt_parse_valid"] is True
     assert caught.value.scheduler_schema["user_update_parse_valid"] is True
+
+
+@pytest.mark.parametrize("code", [0, 13, 16, 17, 200, 403, -1, -(2**31), 2**31 - 1])
+def test_signed_int32_status_is_metadata_with_explicit_domain_only(code):
+    body = scheduler()
+    body["status"] = {"code": code}
+    session = Session(scheduler_value=body)
+    result = inspect(session)
+    assert result["scheduler"]["status_code"] == code
+    assert result["scheduler"]["status_code_classification"] == (
+        "canonical_rpc" if 0 <= code <= 16 else "noncanonical_int32"
+    )
+    assert "http_status" not in result["scheduler"]
+    assert result["current_health_confirmed"] is False
+    assert result["receiver_ack_confirmed"] is False
+    assert result["request_terminal_confirmed"] is False
+    assert len(session.calls) == 4
+
+
+@pytest.mark.parametrize("code", [-(2**31) - 1, 2**31, True, "13", 13.0, float("nan")])
+def test_invalid_status_wire_type_or_int32_overflow_still_rejects(code):
+    body = scheduler()
+    body["status"] = {"code": code}
+    session = Session(scheduler_value=body)
+    with pytest.raises(metadata.MetadataRejected) as caught:
+        inspect(session)
+    assert caught.value.category == "metadata_schema_invalid"
+    assert len(session.calls) == 3
+
+
+@pytest.mark.parametrize(
+    "kind,expected,classifier",
+    [
+        ("absent", None, "unknown"),
+        ("null_code", None, "unknown"),
+        ("empty", 0, "canonical_rpc"),
+    ],
+)
+def test_status_unknown_and_empty_default_classification_preserves_omissions(
+    kind, expected, classifier
+):
+    body = scheduler()
+    if kind == "absent":
+        del body["status"]
+    else:
+        body["status"] = {"code": None} if kind == "null_code" else {}
+    result = inspect(Session(scheduler_value=body))["scheduler"]
+    assert result["status_code"] == expected
+    assert result["status_code_classification"] == classifier
+
+
+def test_noncanonical_profile_separates_enum_range_from_wire_validity():
+    body = scheduler()
+    body.update(state="PRIVATE_UNKNOWN", status={"code": 200})
+    with pytest.raises(metadata.MetadataRejected) as caught:
+        inspect(Session(scheduler_value=body))
+    profile = caught.value.scheduler_schema
+    assert profile["status_code_canonical_range"] is False
+    assert profile["status_code_current_contract_valid"] is True
+    assert "200" not in json.dumps(profile)

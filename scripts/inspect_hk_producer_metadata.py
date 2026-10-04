@@ -491,7 +491,8 @@ def _scheduler_state_valid(value: Any) -> bool:
 
 
 def _scheduler_code_valid(value: Any) -> bool:
-    return value is None or (type(value) is int and 0 <= value <= 16)
+    # Status.code is int32 on the wire; canonical enum membership is separate.
+    return value is None or (type(value) is int and -(2**31) <= value <= 2**31 - 1)
 
 
 def _validation_ok(validate: Callable[[], Any]) -> bool:
@@ -591,6 +592,13 @@ def _scheduler_validated(value: dict) -> dict:
         if "userUpdateTime" in value
         else None,
         "status_code": code,
+        "status_code_classification": (
+            "unknown"
+            if code is None
+            else "canonical_rpc"
+            if 0 <= code <= 16
+            else "noncanonical_int32"
+        ),
         "historical_oct2_invocation_confirmed": False,
     }
 
