@@ -879,7 +879,7 @@ def test_scheduler_state_is_metadata_only_without_an_invocation_claim(status):
         ("service", "service_initial", "service_name", 1, True, True, False),
         ("traffic", "service_initial", "traffic_revision", 1, True, True, False),
         ("revision", "revision_1", "revision_name", 2, True, True, False),
-        ("parent", "revision_1", "revision_parent", 2, False, False, True),
+        ("parent", "revision_1", "revision_parent", 2, False, False, False),
         ("scheduler", "scheduler", "scheduler_name", 3, True, True, False),
         ("recheck", "service_recheck", "service_name", 4, True, True, False),
     ],
@@ -899,7 +899,7 @@ def test_resource_aliases_remain_rejected_with_fixed_stage_and_shape(
     elif case == "revision":
         rev["name"] = alias(rev["name"])
     elif case == "parent":
-        rev["service"] = "longbridge-quant-hk-service"
+        rev["service"] = "longbridge-quant-hk-service-foreign"
     elif case == "scheduler":
         job["name"] = alias(job["name"])
     else:
@@ -1051,3 +1051,93 @@ def test_second_revision_mismatch_retains_exact_stage_and_no_followup():
     assert caught.value.resource_slot == "revision_name"
     assert caught.value.resource_shape["project_segment_is_numeric"] is True
     assert len(session.calls) == 3
+
+
+@pytest.mark.parametrize(
+    "parent", [metadata.SERVICE_RESOURCE, "longbridge-quant-hk-service"]
+)
+def test_exact_full_or_observed_short_parent_succeeds_with_full_revision_anchor(parent):
+    one, two = revision(REV1), revision(REV2)
+    one["service"] = two["service"] = parent
+    session = Session(
+        first=service(((REV1, 75), (REV2, 25))),
+        revision_overrides={REV1: one, REV2: two},
+    )
+    result = inspect(session)
+    assert len(result["serving_revisions"]) == 2 and len(session.calls) == 5
+    assert result["current_health_confirmed"] is False
+    assert result["native_identity_confirmed"] is False
+    assert all(
+        metadata.SERVICE_RESOURCE in path
+        for _, path, _ in session.calls
+        if "/revisions/" in path
+    )
+
+
+@pytest.mark.parametrize(
+    "parent",
+    [
+        "longbridge-quant-hk-service-foreign",
+        "LONGBridge-quant-hk-service",
+        " longbridge-quant-hk-service",
+        "longbridge-quant-hk-service ",
+        "longbridge-quant-hk-service/",
+        "longbridge%2Dquant%2Dhk%2Dservice",
+        metadata.SERVICE_RESOURCE.replace("longbridgequant", "other-project"),
+        metadata.SERVICE_RESOURCE.replace("longbridgequant", "123456789"),
+        metadata.SERVICE_RESOURCE.replace("asia-east2", "asia-east1"),
+        None,
+        [],
+    ],
+)
+def test_other_parent_spellings_remain_rejected_without_followup(parent):
+    body = revision()
+    body["service"] = parent
+    session = Session(revision_overrides={REV1: body})
+    with pytest.raises(metadata.MetadataRejected) as caught:
+        inspect(session)
+    assert caught.value.category == "metadata_resource_invalid"
+    assert caught.value.resource_slot == "revision_parent"
+    assert len(session.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "wrong_name",
+    [
+        metadata.SERVICE_RESOURCE + "/revisions/" + REV2,
+        metadata.SERVICE_RESOURCE.replace("longbridgequant", "123456789")
+        + "/revisions/"
+        + REV1,
+        metadata.SERVICE_RESOURCE.replace("longbridgequant", "other-project")
+        + "/revisions/"
+        + REV1,
+        REV1,
+    ],
+)
+def test_exact_short_parent_cannot_bypass_full_revision_name_anchor(wrong_name):
+    body = revision()
+    body["service"] = "longbridge-quant-hk-service"
+    body["name"] = wrong_name
+    session = Session(revision_overrides={REV1: body})
+    with pytest.raises(metadata.MetadataRejected) as caught:
+        inspect(session)
+    assert caught.value.resource_slot == "revision_name"
+    assert len(session.calls) == 2
+
+
+def test_short_parent_cannot_bypass_same_fixed_request_boundary():
+    body = revision()
+    body["service"] = "longbridge-quant-hk-service"
+    session = Session(revision_overrides={REV1: body})
+    original = session.request
+
+    def request(*args, **kwargs):
+        response = original(*args, **kwargs)
+        if "/revisions/" in response.url:
+            response.url = response.url.replace("longbridgequant", "other-project")
+        return response
+
+    session.request = request
+    with pytest.raises(metadata.MetadataRejected, match="metadata_redirect_rejected"):
+        inspect(session)
+    assert len(session.calls) == 2 and session.responses[-1].body_reads == 0
