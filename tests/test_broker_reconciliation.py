@@ -185,6 +185,7 @@ def test_account_snapshot_returns_only_safe_partial_account_facts():
                 "settling_cash": "0",
             }
         ],
+        "financing": [{"currency": "USD", "buy_power": "10"}],
         "positions": [{"symbol": "SOXL.US", "currency": "USD", "quantity": "1"}],
         "known_non_terminal_orders_7d": [
             {
@@ -319,6 +320,7 @@ def test_snapshot_valuation_does_not_change_reconciliation_observations_or_diges
     assert after.broker_reported_balances == (
         {"currency": "USD", "net_assets": "999", "total_cash": "888"},
     )
+    assert before.financing == after.financing == ({"currency": "USD", "buy_power": "10"},)
 
 
 @pytest.mark.parametrize("bad_cash", [[], None, "NaN", "Infinity"])

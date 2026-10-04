@@ -1375,3 +1375,49 @@ def test_archive_inspection_rejects_other_target_or_non_manual_before_storage(ta
         )
     assert raised.value.category in {"inspection_not_manual", "inspection_target_invalid"}
     assert opened == []
+
+
+def test_history_validator_accepts_optional_financing_and_rejects_malformed():
+    started = T0 + timedelta(seconds=1)
+    finished = T0 + timedelta(seconds=2)
+    config = snapshots._Config(
+        "longbridgequant",
+        "asia-east1",
+        "service",
+        SERVICE_URL,
+        PREFIX,
+        "qsl-runtime-logs-shared",
+        "longbridge/account_snapshots",
+        "sg",
+        "SG",
+        BINDING,
+        "job",
+        "resource",
+    )
+    good = _history(started=started, finished=finished, target_id="sg")
+    good["financing"] = [{"currency": "USD", "buy_power": "10.00", "risk_level": "1"}]
+    candidate = {
+        "name": (
+            f"longbridge/account_snapshots/sg/{BINDING}/{started.date().isoformat()}/"
+            f"{finished.astimezone(timezone.utc).strftime('%H%M%S%fZ.json')}"
+        )
+    }
+    snapshots._validate_history_object(good, config, candidate, T0, T0 + timedelta(seconds=5))
+
+    bad = dict(good)
+    bad["financing"] = [{"currency": "USD", "buy_power": "10", "extra": "nope"}]
+    with pytest.raises(snapshots._Rejected) as raised:
+        snapshots._validate_history_object(bad, config, candidate, T0, T0 + timedelta(seconds=5))
+    assert raised.value.category == "gcs_object_invalid"
+
+    result = snapshots.inspect_archived_account_snapshot(
+        _env("sg", GITHUB_EVENT_NAME="workflow_dispatch"),
+        target="sg",
+        triggered_at=T0.isoformat(),
+        completed_at=(T0 + timedelta(seconds=4)).isoformat(),
+        open_store=lambda _project: _Storage([_object(good)]),
+        now_reader=lambda: T0 + timedelta(seconds=5),
+        monotonic=lambda: 0.0,
+    )
+    assert result["observations"][0]["schema_matches"] is True
+    assert result["observations"][0]["historical_window_match"] is True

@@ -45,10 +45,6 @@ def test_capture_reuses_the_same_native_balance_and_preserves_currencies():
 def test_produced_history_is_accepted_by_existing_consumer_validator():
     now = datetime.now(timezone.utc)
     binding_id = "a" * 64
-    env = {
-        "ACCOUNT_HISTORY_RECORDING_ENABLED": "true", "ACCOUNT_HISTORY_GCS_PREFIX": "gs://qsl-runtime-logs-shared/longbridge/account_snapshots",
-        "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK", "ACCOUNT_HISTORY_TARGET_ID": "hk", "GOOGLE_CLOUD_PROJECT": "longbridge-prod",
-    }
     config = history._ProducerConfig("gs://qsl-runtime-logs-shared/longbridge/account_snapshots", "hk", "HK", "longbridge-prod")
     body, uri = history._producer_history_object(
         config,
@@ -61,6 +57,26 @@ def test_produced_history_is_accepted_by_existing_consumer_validator():
     payload = json.loads(body)
     candidate = {"name": uri.removeprefix("gs://qsl-runtime-logs-shared/")}
     history._validate_history_object(payload, consumer_config, candidate, now, now)
+    body_with_financing, uri_with_financing = history._producer_history_object(
+        config,
+        {"kind": history.SOURCE_KIND, "status": "bound", "id": binding_id},
+        [{"currency": "USD", "net_assets": "100.10", "total_cash": "90"}, {"currency": "HKD", "net_assets": "800", "total_cash": "700"}],
+        [{"currency": "USD", "available_cash": "20", "frozen_cash": "0", "settling_cash": "0"}, {"currency": "HKD", "available_cash": "30", "frozen_cash": "0", "settling_cash": "0"}, {"currency": "SGD", "available_cash": "4", "frozen_cash": "0", "settling_cash": "0"}],
+        now, now,
+        financing=[
+            {"currency": "HKD", "max_finance_amount": "0.00"},
+            {"currency": "USD", "buy_power": "12.00", "risk_level": "1"},
+        ],
+    )
+    financed = json.loads(body_with_financing)
+    history._validate_history_object(
+        financed,
+        consumer_config,
+        {"name": uri_with_financing.removeprefix("gs://qsl-runtime-logs-shared/")},
+        now,
+        now,
+    )
+    assert financed["financing"][0]["max_finance_amount"] == "0.00"
 
 
 def test_producer_does_not_write_unbound_or_invalid_data():

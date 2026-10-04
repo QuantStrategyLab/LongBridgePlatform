@@ -105,6 +105,7 @@ def record_projected_daily_account(
     env: Mapping[str, str], *, account_scope: str, source_binding: Mapping[str, Any],
     balances: Any, cash: Any, started: datetime, finished: datetime,
     open_store: Callable[[str], Any],
+    financing: Any = None,
 ) -> DailyAccountRecordResult:
     """Create one bounded history object from an already-read broker response."""
     if str(env.get("ACCOUNT_HISTORY_RECORDING_ENABLED") or "").strip() != "true":
@@ -115,7 +116,9 @@ def record_projected_daily_account(
         config = _producer_config(env)
         if account_scope != config.account_scope:
             raise _Rejected("scope")
-        body, uri = _producer_history_object(config, source_binding, balances, cash, started, finished)
+        body, uri = _producer_history_object(
+            config, source_binding, balances, cash, started, finished, financing=financing,
+        )
     except _Rejected as rejected:
         return DailyAccountRecordResult("skipped", rejected.category)
     try:
@@ -154,7 +157,7 @@ def _producer_gcs_prefix(value: str) -> str:
     return f"gs://{parsed.netloc}/{'/'.join(segments)}"
 
 
-def _producer_history_object(config, source_binding, balances, cash, started, finished):
+def _producer_history_object(config, source_binding, balances, cash, started, finished, financing=None):
     if (not isinstance(source_binding, Mapping) or source_binding.get("kind") != SOURCE_KIND
             or source_binding.get("status") != "bound" or not isinstance(source_binding.get("id"), str)
             or not _BINDING_ID.fullmatch(source_binding["id"])):
@@ -165,18 +168,32 @@ def _producer_history_object(config, source_binding, balances, cash, started, fi
     now = datetime.now(timezone.utc)
     if finished < started or finished > now or started < now - OBSERVATION_WINDOW:
         raise _Rejected("observation_invalid")
+    balance_rows = _producer_money_rows(balances, _BALANCE_FIELDS)
     record = {
         "schema_version": HISTORY_SCHEMA, "snapshot_schema_version": SNAPSHOT_SCHEMA,
         "account_scope": config.account_scope, "target_id": config.target_id,
         "source_binding": {"kind": SOURCE_KIND, "status": "bound", "id": source_binding["id"]},
         "observed_started_at": started.isoformat(), "observed_finished_at": finished.isoformat(),
         "snapshot_atomic": False, "observation_date": started.date().isoformat(),
-        "broker_reported_balances": _producer_money_rows(balances, _BALANCE_FIELDS),
+        "broker_reported_balances": balance_rows,
         "cash": _producer_money_rows(cash, _CASH_FIELDS),
     }
+    if financing is not None:
+        record["financing"] = _producer_financing_rows(
+            financing, {row["currency"] for row in balance_rows},
+        )
     body = json.dumps(record, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     uri = f"{config.prefix}/{config.target_id}/{source_binding['id']}/{record['observation_date']}/{finished.strftime('%H%M%S%fZ.json')}"
     return body, uri
+
+
+def _producer_financing_rows(value, balance_currencies):
+    from application.account_financing import FinancingPayloadError, validate_financing_payload
+
+    try:
+        return validate_financing_payload(value, balance_currencies=balance_currencies)
+    except FinancingPayloadError as exc:
+        raise _Rejected("projection_invalid") from exc
 
 
 def _producer_money_rows(value, fields):
@@ -1005,7 +1022,14 @@ def inspect_archived_account_snapshot(
         deadline=deadline,
         monotonic=monotonic,
     )
+    from application.account_financing import financing_shape_ok
+
     observations = []
+    required_fields = {
+        "schema_version", "snapshot_schema_version", "account_scope", "target_id",
+        "source_binding", "observed_started_at", "observed_finished_at", "snapshot_atomic",
+        "observation_date", "broker_reported_balances", "cash",
+    }
     for candidate in candidates:
         try:
             payload, _raw = _read_candidate(
@@ -1050,15 +1074,13 @@ def inspect_archived_account_snapshot(
         )
         target_matches = payload.get("target_id") == config.target_id and len(name_parts) == 4 and name_parts[0] == config.target_id
         scope_matches = payload.get("account_scope") == config.expected_scope
+        payload_fields = set(payload)
         schema_matches = (
-            set(payload) == {
-                "schema_version", "snapshot_schema_version", "account_scope", "target_id",
-                "source_binding", "observed_started_at", "observed_finished_at", "snapshot_atomic",
-                "observation_date", "broker_reported_balances", "cash",
-            }
+            required_fields <= payload_fields <= required_fields | {"financing"}
             and payload.get("schema_version") == HISTORY_SCHEMA
             and payload.get("snapshot_schema_version") == SNAPSHOT_SCHEMA
             and payload.get("snapshot_atomic") is False
+            and ("financing" not in payload or financing_shape_ok(payload.get("financing")))
         )
         trigger_time_matches = (
             started is not None and finished is not None
@@ -1184,8 +1206,9 @@ def _validate_history_object(
         "observation_date", "broker_reported_balances", "cash",
     }
     binding = payload.get("source_binding")
+    payload_fields = set(payload)
     if (
-        set(payload) != expected_fields
+        not expected_fields <= payload_fields <= expected_fields | {"financing"}
         or payload.get("schema_version") != HISTORY_SCHEMA
         or payload.get("snapshot_schema_version") != SNAPSHOT_SCHEMA
         or payload.get("account_scope") != config.expected_scope
@@ -1214,6 +1237,16 @@ def _validate_history_object(
         raise _Rejected("gcs_object_invalid")
     balances = _money_rows(payload.get("broker_reported_balances"), _BALANCE_FIELDS)
     cash = _money_rows(payload.get("cash"), _CASH_FIELDS)
+    if "financing" in payload:
+        from application.account_financing import FinancingPayloadError, validate_financing_payload
+
+        try:
+            validate_financing_payload(
+                payload.get("financing"),
+                balance_currencies={row["currency"] for row in balances},
+            )
+        except FinancingPayloadError as exc:
+            raise _Rejected("gcs_object_invalid") from exc
     return dict(payload)
 
 
