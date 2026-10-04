@@ -394,7 +394,9 @@ def _revision(value: dict, resource: str, percent: int) -> dict:
     _keys(value, allowed, allowed - {"reconciling"})
     if value["name"] != resource:
         _resource_invalid(value["name"], resource, "revision_name")
-    if value["service"] != SERVICE_RESOURCE:
+    # The exact full revision name above anchors project/location/service;
+    # accept only the observed short spelling of that same configured parent.
+    if value["service"] not in (SERVICE_RESOURCE, "longbridge-quant-hk-service"):
         _resource_invalid(value["service"], SERVICE_RESOURCE, "revision_parent")
     _text(value["uid"])
     _text(value["etag"])
