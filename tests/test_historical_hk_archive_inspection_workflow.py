@@ -51,6 +51,9 @@ def no_network(monkeypatch, tmp_path):
         raise AssertionError("network forbidden in contract tests")
 
     monkeypatch.setattr(socket.socket, "connect", fail)
+    monkeypatch.setattr(socket.socket, "connect_ex", fail)
+    monkeypatch.setattr(socket.socket, "sendto", fail)
+    monkeypatch.setattr(socket, "getaddrinfo", fail)
     monkeypatch.setattr(socket, "create_connection", fail)
 
 
@@ -1049,3 +1052,167 @@ def test_native_regional_security_endpoint_and_headers_remain_intact(tmp_path):
     assert "_rab_manager =" not in block("INVENTORY")
     assert "_set_blocking_regional_access_boundary_lookup" not in block("INVENTORY")
     assert "def refresh" not in block("INVENTORY")
+
+
+def test_inventory_outer_timeout_includes_native_sdk_and_five_second_grace():
+    text = WORKFLOW.read_text()
+    assert (
+        "PYTHONPATH=. timeout --signal=TERM --kill-after=5s 175s "
+        "uv run --no-sync python -" in text
+    )
+    assert "timeout-minutes: 8" in text
+    assert 175 + 5 == 180
+
+
+def test_outer_timeout_kills_only_synthetic_nonterminating_process_group():
+    import shutil
+    import subprocess
+    import time
+
+    timeout = shutil.which("timeout")
+    if timeout is None:
+        pytest.skip("GNU timeout is unavailable on this local test host")
+    started = time.monotonic()
+    result = subprocess.run(
+        [
+            timeout,
+            "--signal=TERM",
+            "--kill-after=0.1s",
+            "0.1s",
+            "bash",
+            "-c",
+            'trap "" TERM; while :; do :; done',
+        ],
+        capture_output=True,
+        timeout=3,
+    )
+    assert result.returncode in {124, 137, -9}
+    assert time.monotonic() - started < 3
+
+
+@pytest.mark.parametrize(
+    "cause,expected_family,expected_status",
+    [
+        (TypeError("PRIVATE token URL"), "local_argument", None),
+        (ValueError("PRIVATE account value"), "local_value", None),
+        (RuntimeError("PRIVATE body"), "unknown", None),
+        (None, "unknown", None),
+    ],
+)
+def test_fixed_immediate_cause_projection_never_reads_exception_message(
+    cause, expected_family, expected_status
+):
+    p = scope("INVENTORY")
+    result = p["project_reader_cause"](cause)
+    assert result == {
+        "cause_family": expected_family,
+        "http_status": expected_status,
+        "cause_depth": 0 if cause is None else 1,
+    }
+    assert "PRIVATE" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    "kind,expected_family,expected_status",
+    [
+        ("refresh", "auth_refresh", None),
+        ("transport", "transport", None),
+        ("gcs_response", "gcs_response", 403),
+    ],
+)
+def test_native_exception_family_projection_is_fixed_without_body_or_url(
+    kind, expected_family, expected_status
+):
+    auth_errors = pytest.importorskip("google.auth.exceptions")
+    api_errors = pytest.importorskip("google.api_core.exceptions")
+    causes = {
+        "refresh": auth_errors.RefreshError("PRIVATE credential body"),
+        "transport": auth_errors.TransportError("PRIVATE endpoint URL"),
+        "gcs_response": api_errors.Forbidden("PRIVATE account body"),
+    }
+    p = scope("INVENTORY")
+    result = p["project_reader_cause"](causes[kind])
+    assert result == {
+        "cause_family": expected_family,
+        "http_status": expected_status,
+        "cause_depth": 1,
+    }
+    assert "PRIVATE" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("status", [True, 99, 600, "403", float("nan"), [403]])
+def test_unknown_http_metadata_cannot_be_printed_as_status(status):
+    p = scope("INVENTORY")
+    error = RuntimeError("PRIVATE")
+    error.code = status
+    assert p["project_reader_cause"](error)["http_status"] is None
+
+
+def test_reader_error_retains_safe_immediate_auth_refresh_family():
+    auth_errors = pytest.importorskip("google.auth.exceptions")
+    from scripts import record_daily_account_snapshot as snapshots
+
+    p = scope("INVENTORY")
+
+    def inspect(**kwargs):
+        try:
+            raise auth_errors.RefreshError("PRIVATE auth response")
+        except auth_errors.RefreshError:
+            raise snapshots._Rejected("historical_listing_failed") from None
+
+    with pytest.raises(p["InventoryError"]) as caught:
+        p["launch_inventory"](env(), NOW, object, inspect)
+    assert str(caught.value) == "reader_historical_listing_failed"
+    assert caught.value.reader_cause == {
+        "cause_family": "auth_refresh",
+        "http_status": None,
+        "cause_depth": 1,
+    }
+
+
+def test_main_only_prints_fixed_reader_cause_fields(capsys):
+    pytest.importorskip("google.cloud.storage")
+    p = scope("INVENTORY")
+
+    def failed(*args, **kwargs):
+        raise p["InventoryError"](
+            "reader_historical_listing_failed",
+            reader_cause={
+                "cause_family": "local_value",
+                "http_status": None,
+                "cause_depth": 1,
+            },
+        )
+
+    p["launch_inventory"] = failed
+    assert p["main"]() == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "hk_archive_inventory_error:reader_historical_listing_failed"
+    assert json.loads(lines[1].split(":", 1)[1]) == {
+        "cause_family": "local_value",
+        "http_status": None,
+        "cause_depth": 1,
+    }
+
+
+def test_main_never_prints_unvalidated_reader_cause_fields(capsys):
+    pytest.importorskip("google.cloud.storage")
+    p = scope("INVENTORY")
+
+    def failed(*args, **kwargs):
+        raise p["InventoryError"](
+            "reader_historical_listing_failed",
+            reader_cause={
+                "cause_family": "PRIVATE",
+                "http_status": "PRIVATE",
+                "cause_depth": 1,
+                "body": "PRIVATE",
+            },
+        )
+
+    p["launch_inventory"] = failed
+    assert p["main"]() == 1
+    assert (
+        capsys.readouterr().out
+        == "hk_archive_inventory_error:reader_historical_listing_failed\n"
+    )

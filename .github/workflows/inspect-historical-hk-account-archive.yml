@@ -320,7 +320,7 @@ jobs:
         if: success() && steps.preflight.outputs.validated == 'true' && steps.checked-source.outputs.validated == 'true'
         run: |
           set -euo pipefail
-          PYTHONPATH=. uv run --no-sync python - <<'PY_INVENTORY'
+          PYTHONPATH=. timeout --signal=TERM --kill-after=5s 175s uv run --no-sync python - <<'PY_INVENTORY'
           # BEGIN_INVENTORY
           import hashlib
           import hmac
@@ -375,8 +375,81 @@ jobs:
           )
 
 
+          CAUSE_FAMILIES = frozenset(
+              {
+                  "local_argument",
+                  "local_value",
+                  "transport",
+                  "auth_refresh",
+                  "gcs_response",
+                  "unknown",
+              }
+          )
+
+
           class InventoryError(ValueError):
-              pass
+              def __init__(self, category, *, reader_cause=None):
+                  super().__init__(category)
+                  self.reader_cause = reader_cause
+
+
+          def project_reader_cause(cause):
+              family = "unknown"
+              if type(cause) is TypeError:
+                  family = "local_argument"
+              elif type(cause) is ValueError:
+                  family = "local_value"
+              elif cause is not None:
+                  try:
+                      from google.api_core import exceptions as api_errors
+                      from google.auth import exceptions as auth_errors
+                      from requests.exceptions import RequestException
+
+                      if isinstance(cause, auth_errors.RefreshError):
+                          family = "auth_refresh"
+                      elif isinstance(cause, (auth_errors.TransportError, RequestException)):
+                          family = "transport"
+                      elif isinstance(cause, api_errors.GoogleAPICallError):
+                          family = "gcs_response"
+                  except ImportError:
+                      pass
+              code = None
+              try:
+                  value = getattr(cause, "code", None)
+                  if (
+                      isinstance(value, int)
+                      and not isinstance(value, bool)
+                      and 100 <= value <= 599
+                  ):
+                      code = int(value)
+              except Exception:
+                  pass
+              return {
+                  "cause_family": family,
+                  "http_status": code,
+                  "cause_depth": 0 if cause is None else 1,
+              }
+
+
+          def valid_reader_cause(details):
+              try:
+                  return (
+                      isinstance(details, dict)
+                      and set(details) == {"cause_family", "http_status", "cause_depth"}
+                      and isinstance(details["cause_family"], str)
+                      and details["cause_family"] in CAUSE_FAMILIES
+                      and type(details["cause_depth"]) is int
+                      and details["cause_depth"] in {0, 1}
+                      and (
+                          details["http_status"] is None
+                          or (
+                              type(details["http_status"]) is int
+                              and 100 <= details["http_status"] <= 599
+                          )
+                      )
+                  )
+              except Exception:
+                  return False
 
 
           def project_inventory(result, selected_date):
@@ -545,18 +618,14 @@ jobs:
                   try:
                       category = getattr(error, "category", None)
                       if isinstance(category, str) and category in READER_CATEGORIES:
-                          cause = getattr(error, "__context__", None)
-                          code = getattr(cause, "code", None)
-                          if (
-                              isinstance(code, int)
-                              and not isinstance(code, bool)
-                              and code in {401, 403}
-                          ):
+                          details = project_reader_cause(getattr(error, "__context__", None))
+                          output_category = "reader_" + category
+                          if details["http_status"] in {401, 403}:
                               if category == "historical_listing_failed":
-                                  raise InventoryError("reader_listing_http_denied") from None
+                                  output_category = "reader_listing_http_denied"
                               if category == "gcs_read_failed":
-                                  raise InventoryError("reader_get_http_denied") from None
-                          raise InventoryError("reader_" + category) from None
+                                  output_category = "reader_get_http_denied"
+                          raise InventoryError(output_category, reader_cause=details) from None
                   except InventoryError:
                       raise
                   except Exception:
@@ -697,6 +766,13 @@ jobs:
                       else "inventory_unavailable"
                   )
                   print("hk_archive_inventory_error:" + category)
+                  if category in READER_OUTPUT_CATEGORIES and valid_reader_cause(
+                      error.reader_cause
+                  ):
+                      print(
+                          "hk_archive_inventory_failure:"
+                          + json.dumps(error.reader_cause, sort_keys=True, separators=(",", ":"))
+                      )
                   return 1
               except Exception:
                   print("hk_archive_inventory_error:inventory_unavailable")

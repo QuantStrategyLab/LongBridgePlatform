@@ -4,6 +4,7 @@ import ast
 import hashlib
 import json
 import socket
+import urllib.request  # preload SSL before the socket connection guard
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,10 +25,15 @@ BUCKET = "qsl-runtime-logs-shared"
 
 @pytest.fixture(autouse=True)
 def no_external_or_default_operations(monkeypatch):
+    assert urllib.request.HTTPRedirectHandler
+
     def forbidden(*_args, **_kwargs):
         raise AssertionError("external/default operation forbidden")
 
-    monkeypatch.setattr(socket, "socket", forbidden)
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
+    monkeypatch.setattr(socket.socket, "sendto", forbidden)
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
     monkeypatch.setattr(socket, "create_connection", forbidden)
     for name in (
         "main",
@@ -591,3 +597,121 @@ def test_bounded_listing_does_not_materialize_unbounded_iterator():
     )
     rejected("historical_listing_truncated", client)
     assert len(count) == snapshots.MAX_OBJECTS_PER_DAY + 1
+
+
+class NativeStorageStubTransport:
+    """Real locked SDK HTTP boundary; no auth, provider factory or network."""
+
+    is_mtls = False
+
+    def __init__(
+        self, items=(), *, next_page_token=None, list_status=200, get_status=206
+    ):
+        self.items = dict((row.name, (row, raw)) for row, raw in items)
+        self.next_page_token = next_page_token
+        self.list_status = list_status
+        self.get_status = get_status
+        self.calls = []
+
+    def request(self, method, url, **kwargs):
+        from urllib.parse import parse_qs, unquote, urlsplit
+
+        requests = pytest.importorskip("requests")
+        parts = urlsplit(url)
+        query = parse_qs(parts.query)
+        assert parts.scheme == "https" and parts.hostname == "storage.googleapis.com"
+        assert method == "GET"
+        assert 0 < kwargs["timeout"] <= snapshots.GCS_TIMEOUT_SECONDS
+        response = requests.Response()
+        response.headers["content-type"] = "application/json"
+        response.request = requests.Request(method, url).prepare()
+        response.url = url
+        response._content_consumed = True
+        response.raw = SimpleNamespace(headers=response.headers)
+        if parts.path == "/storage/v1/b/" + BUCKET + "/o":
+            self.calls.append(("list", query))
+            assert query["maxResults"] == [str(snapshots.MAX_OBJECTS_PER_DAY + 1)]
+            assert query["fields"] == ["items(name,generation,size),nextPageToken"]
+            prefix = query["prefix"][0]
+            assert prefix == PREFIX + START.date().isoformat() + "/"
+            value = {
+                "items": [
+                    {
+                        "name": row.name,
+                        "generation": str(row.generation),
+                        "size": str(row.size),
+                    }
+                    for row, _ in self.items.values()
+                ]
+            }
+            if self.next_page_token:
+                value["nextPageToken"] = self.next_page_token
+            response.status_code = self.list_status
+        elif parts.path.startswith("/download/storage/v1/b/" + BUCKET + "/o/"):
+            name = unquote(parts.path.split("/o/", 1)[1])
+            self.calls.append(("download", query))
+            row, raw = self.items[name]
+            assert query["generation"] == [str(row.generation)]
+            assert query["ifGenerationMatch"] == [str(row.generation)]
+            assert kwargs["headers"]["range"] == "bytes=0-65535"
+            response.status_code = self.get_status
+            response.headers["content-range"] = f"bytes 0-{len(raw) - 1}/{len(raw)}"
+            response.headers["content-length"] = str(len(raw))
+            response.headers["x-goog-generation"] = str(row.generation)
+            response._content = raw
+            return response
+        else:
+            raise AssertionError("unexpected SDK request path")
+        if self.list_status != 200:
+            value = {
+                "error": {"code": self.list_status, "message": "PRIVATE native body"}
+            }
+        response._content = json.dumps(value).encode()
+        return response
+
+
+def native_client(transport):
+    auth = pytest.importorskip("google.auth")
+    core = pytest.importorskip("google.api_core")
+    storage = pytest.importorskip("google.cloud.storage")
+    from google.auth.credentials import AnonymousCredentials
+
+    assert auth.__version__ == "2.55.1"
+    assert core.__version__ == "2.31.0"
+    assert storage.__version__ == "3.12.0"
+    return storage.Client(
+        project="longbridgequant", credentials=AnonymousCredentials(), _http=transport
+    )
+
+
+def test_native_sdk_single_use_page_property_empty_listing_reaches_transport_once():
+    transport = NativeStorageStubTransport()
+    result = inspect(native_client(transport))
+    assert result["scanned_object_count"] == 0
+    assert [call[0] for call in transport.calls] == ["list"]
+
+
+def test_native_sdk_valid_list_and_fixed_generation_range_download():
+    transport = NativeStorageStubTransport([metadata(history())])
+    result = inspect(native_client(transport))
+    assert result["scanned_object_count"] == 1
+    assert result["observations"][0]["object_generation"] == 7
+    assert [call[0] for call in transport.calls] == ["list", "download"]
+    assert "1234.56" not in json.dumps(result) and BINDING not in json.dumps(result)
+
+
+def test_native_sdk_truncated_listing_rejects_without_second_page_or_get():
+    transport = NativeStorageStubTransport(next_page_token="PRIVATE")
+    rejected("historical_listing_truncated", native_client(transport))
+    assert [call[0] for call in transport.calls] == ["list"]
+
+
+@pytest.mark.parametrize("status", [401, 403, 429, 500])
+def test_native_sdk_http_failure_is_explicit_and_never_retried(status):
+    transport = NativeStorageStubTransport(list_status=status)
+    with pytest.raises(snapshots._Rejected) as caught:
+        inspect(native_client(transport))
+    assert caught.value.category == "historical_listing_failed"
+    assert caught.value.__context__.code == status
+    assert str(caught.value) == "historical_listing_failed"
+    assert [call[0] for call in transport.calls] == ["list"]
