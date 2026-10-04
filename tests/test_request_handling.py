@@ -246,7 +246,7 @@ def load_module(*, notify_lang="en"):
 
 def _run_paper_history_probe(
     *, failure=None, source_status="bound", incomplete=False,
-    balance_currency="USD", recording=True,
+    balance_currency="USD", recording=True, financing=None,
 ):
     from decimal import Decimal
 
@@ -256,7 +256,14 @@ def _run_paper_history_probe(
     module = load_module()
     module.ACCOUNT_REGION = "PAPER"
     module._v7_application_candidate_bound = lambda: False
-    observed = {"balances": 0, "metadata": 0, "indicators": 0, "portfolio": 0, "writes": 0}
+    observed = {
+        "balances": 0,
+        "metadata": 0,
+        "indicators": 0,
+        "portfolio": 0,
+        "writes": 0,
+        "store_opens": 0,
+    }
     source = {
         "kind": "deployment_scope_token_version",
         "status": source_status,
@@ -276,6 +283,7 @@ def _run_paper_history_probe(
             currency="HKD", available_cash=Decimal("12.5"),
             frozen_cash=Decimal("0"), settling_cash=Decimal("0"),
         )],
+        **(financing or {}),
     )
 
     class TradeContext:
@@ -368,7 +376,12 @@ def _run_paper_history_probe(
             return Blob()
 
     module.build_composer = lambda **_kwargs: FakeComposer()
-    module._open_account_history_store = lambda _project: Store()
+
+    def _open_account_history_store(_project):
+        observed["store_opens"] += 1
+        return Store()
+
+    module._open_account_history_store = _open_account_history_store
     env = {
         "ACCOUNT_HISTORY_RECORDING_ENABLED": "true" if recording else "false",
         "ACCOUNT_HISTORY_GCS_PREFIX": "gs://paper-history/longbridge/account_snapshots",
@@ -1332,6 +1345,71 @@ class RequestHandlingTests(unittest.TestCase):
                 self.assertEqual(observed["balance_args"], {"currency": "USD"})
                 self.assertEqual(observed["writes"], 0)
                 self.assertEqual(observed["portfolio"], 0)
+                self.assertIsNone(observation)
+                submit.assert_not_called()
+
+    def test_paper_probe_records_usd_financing_from_same_cached_balance_read(self):
+        from decimal import Decimal
+
+        from application.account_snapshot import cycle_history_observation
+
+        result, observed, submit, observation = _run_paper_history_probe(
+            financing={
+                "max_finance_amount": Decimal("0.00"),
+                "remaining_finance_amount": Decimal("-1.2500"),
+                "buy_power": Decimal("12.00"),
+                "risk_level": 1,
+            }
+        )
+        self.assertEqual(result, ("Probe OK", 200))
+        self.assertEqual(observed["balances"], 1)
+        self.assertEqual(observed["balance_args"], {"currency": "USD"})
+        self.assertEqual(observed["store_opens"], 1)
+        self.assertEqual(observed["writes"], 1)
+        stored = json.loads(observed["stored"][0])
+        self.assertEqual(
+            stored["broker_reported_balances"],
+            [{"currency": "USD", "net_assets": "1234.5", "total_cash": "234.5"}],
+        )
+        self.assertEqual(stored["cash"], [
+            {"currency": "HKD", "available_cash": "12.5", "frozen_cash": "0", "settling_cash": "0"},
+            {"currency": "USD", "available_cash": "200.25", "frozen_cash": "20", "settling_cash": "14.25"},
+        ])
+        self.assertEqual(
+            stored["financing"],
+            [{
+                "currency": "USD",
+                "max_finance_amount": "0.00",
+                "remaining_finance_amount": "-1.2500",
+                "buy_power": "12.00",
+                "risk_level": "1",
+            }],
+        )
+        self.assertNotIn("positions", stored)
+        self.assertIsNone(observation)
+        self.assertIsNone(cycle_history_observation())
+        submit.assert_not_called()
+
+    def test_paper_probe_rejects_non_usd_aggregate_with_financing_before_store(self):
+        from decimal import Decimal
+
+        for currency in ("HKD", "SGD"):
+            with self.subTest(currency=currency):
+                result, observed, submit, observation = _run_paper_history_probe(
+                    balance_currency=currency,
+                    financing={
+                        "max_finance_amount": Decimal("0.00"),
+                        "buy_power": Decimal("12.00"),
+                        "risk_level": 1,
+                    },
+                )
+                self.assertEqual(result, ("Error", 500))
+                self.assertEqual(observed["balances"], 1)
+                self.assertEqual(observed["balance_args"], {"currency": "USD"})
+                self.assertEqual(observed["store_opens"], 0)
+                self.assertEqual(observed["writes"], 0)
+                self.assertEqual(observed["portfolio"], 0)
+                self.assertNotIn("stored", observed)
                 self.assertIsNone(observation)
                 submit.assert_not_called()
 

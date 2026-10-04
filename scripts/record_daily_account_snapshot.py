@@ -57,6 +57,7 @@ def record_projected_daily_account(
     started: datetime,
     finished: datetime,
     open_store: Callable[[str], Any],
+    financing: Any = None,
 ) -> DailyAccountRecordResult:
     """Validate one PAPER observation and confirm its create-only write."""
 
@@ -73,6 +74,7 @@ def record_projected_daily_account(
             cash=cash,
             started=started,
             finished=finished,
+            financing=financing,
         )
     except _Rejected as rejected:
         return DailyAccountRecordResult("skipped", rejected.category)
@@ -139,6 +141,7 @@ def _history_object(
     cash: Any,
     started: datetime,
     finished: datetime,
+    financing: Any = None,
 ) -> tuple[str, str]:
     binding_id = _binding_id(source_binding)
     if not isinstance(started, datetime) or started.tzinfo is None or started.utcoffset() is None:
@@ -154,6 +157,7 @@ def _history_object(
         or started_utc < now - OBSERVATION_WINDOW
     ):
         raise _Rejected("observation_invalid")
+    balance_rows = _money_rows(balances, _BALANCE_FIELDS)
     record = {
         "schema_version": HISTORY_SCHEMA,
         "snapshot_schema_version": SNAPSHOT_SCHEMA,
@@ -168,9 +172,14 @@ def _history_object(
         "observed_finished_at": finished_utc.isoformat(),
         "snapshot_atomic": False,
         "observation_date": started_utc.date().isoformat(),
-        "broker_reported_balances": _money_rows(balances, _BALANCE_FIELDS),
+        "broker_reported_balances": balance_rows,
         "cash": _money_rows(cash, _CASH_FIELDS),
     }
+    if financing is not None:
+        record["financing"] = _financing_rows(
+            financing,
+            {row["currency"] for row in balance_rows},
+        )
     body = json.dumps(record, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     filename = finished_utc.strftime("%H%M%S%fZ.json")
     uri = (
@@ -178,6 +187,15 @@ def _history_object(
         f"{record['observation_date']}/{filename}"
     )
     return body, uri
+
+
+def _financing_rows(value: object, balance_currencies: set[str]) -> list[dict[str, str]]:
+    from application.account_financing import FinancingPayloadError, validate_financing_payload
+
+    try:
+        return validate_financing_payload(value, balance_currencies=balance_currencies)
+    except FinancingPayloadError as exc:
+        raise _Rejected("projection_invalid") from exc
 
 
 def _binding_id(value: object) -> str:

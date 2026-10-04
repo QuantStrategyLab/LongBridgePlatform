@@ -7,6 +7,7 @@ from contextvars import ContextVar, Token
 from datetime import datetime, timezone
 from typing import Any
 
+from application.account_financing import project_native_financing
 from application.broker_reconciliation import _normalize_broker_balance, _normalize_cash
 
 
@@ -108,4 +109,11 @@ def project_cycle_history_balances(account_balance: Any) -> dict[str, list[dict[
         return None
     balances.sort(key=lambda row: row["currency"])
     cash.sort(key=lambda row: row["currency"])
-    return {"broker_reported_balances": balances, "cash": cash}
+    projection: dict[str, list[dict[str, str]]] = {
+        "broker_reported_balances": balances,
+        "cash": cash,
+    }
+    financing = project_native_financing(account_balance, balance_currencies=balance_currencies)
+    if financing:
+        projection["financing"] = financing
+    return projection

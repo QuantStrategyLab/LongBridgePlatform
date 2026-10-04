@@ -106,10 +106,42 @@ def test_writer_creates_complete_redacted_history_with_bounded_create_only_uploa
             "settling_cash": "14.25",
         }],
     }
+    assert "financing" not in record
     assert store.name.startswith(f"longbridge/account_snapshots/paper/{'a' * 64}/")
     assert store.name.endswith("Z.json")
     assert "positions" not in record
     assert "token" not in record
+
+
+def test_writer_includes_optional_native_financing_without_changing_base_money():
+    store = _Store()
+    values = _inputs(
+        financing=[
+            {
+                "currency": "USD",
+                "max_finance_amount": "0.00",
+                "buy_power": "12.00",
+                "risk_level": "1",
+            }
+        ]
+    )
+    result = record_projected_daily_account(
+        **values, open_store=lambda project_id: store
+    )
+
+    assert result.status == "recorded"
+    record = json.loads(store.uploads[0][0])
+    assert record["broker_reported_balances"] == values["balances"]
+    assert record["cash"] == values["cash"]
+    assert record["financing"] == [
+        {
+            "currency": "USD",
+            "max_finance_amount": "0.00",
+            "buy_power": "12.00",
+            "risk_level": "1",
+        }
+    ]
+    assert store.uploads[0][2:] == (0, 20.0, None)
 
 
 @pytest.mark.parametrize(

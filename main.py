@@ -1027,6 +1027,7 @@ def run_probe(*, response_body: str = "Probe OK"):
                 started=observation["started"],
                 finished=observation["finished"],
                 open_store=_open_account_history_store,
+                financing=observation["projection"].get("financing"),
             )
             print(
                 f"account_history status={result.status} category={result.category or '-'}",
