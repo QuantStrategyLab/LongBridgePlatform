@@ -408,6 +408,8 @@ jobs:
 
 
           def project_reader_context(error):
+              from scripts.inspect_hk_producer_metadata import SCHEDULER_SCHEMA_CHECKS
+
               stages = {
                   "service_initial",
                   "revision_1",
@@ -443,7 +445,41 @@ jobs:
                   and all(type(value) is bool for value in shape.values())
                   else None
               )
-              return {"stage": stage, "resource_slot": slot, "resource_shape": shape}
+              reasons = {
+                  "scheduler_fields",
+                  "scheduler_state",
+                  "scheduler_status_shape",
+                  "scheduler_status_code",
+                  "scheduler_last_attempt_time",
+                  "scheduler_user_update_time",
+                  "scheduler_json_schema",
+                  "scheduler_schema_unknown",
+              }
+              reason = getattr(error, "schema_reason", None)
+              reason = (
+                  reason
+                  if error.category == "metadata_schema_invalid"
+                  and stage == "scheduler"
+                  and isinstance(reason, str)
+                  and reason in reasons
+                  else None
+              )
+              profile = getattr(error, "scheduler_schema", None)
+              profile = (
+                  {key: profile[key] for key in SCHEDULER_SCHEMA_CHECKS}
+                  if reason is not None
+                  and isinstance(profile, dict)
+                  and set(profile) == set(SCHEDULER_SCHEMA_CHECKS)
+                  and all(type(value) is bool for value in profile.values())
+                  else None
+              )
+              return {
+                  "stage": stage,
+                  "resource_slot": slot,
+                  "resource_shape": shape,
+                  "schema_reason": reason,
+                  "scheduler_schema": profile,
+              }
 
 
           def main():

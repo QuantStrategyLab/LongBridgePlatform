@@ -993,6 +993,8 @@ def test_launcher_emits_only_allowlisted_reader_context(monkeypatch, capsys, mal
         "stage",
         "resource_slot",
         "resource_shape",
+        "schema_reason",
+        "scheduler_schema",
     }
     assert (
         value["category"] == "metadata_resource_invalid"
@@ -1006,6 +1008,7 @@ def test_launcher_emits_only_allowlisted_reader_context(monkeypatch, capsys, mal
         else error.resource_shape
     )
     assert "PRIVATE" not in raw
+    assert value["schema_reason"] is None and value["scheduler_schema"] is None
 
 
 @pytest.mark.parametrize(
@@ -1141,3 +1144,167 @@ def test_short_parent_cannot_bypass_same_fixed_request_boundary():
     with pytest.raises(metadata.MetadataRejected, match="metadata_redirect_rejected"):
         inspect(session)
     assert len(session.calls) == 2 and session.responses[-1].body_reads == 0
+
+
+@pytest.mark.parametrize(
+    "change,reason",
+    [
+        ({"PRIVATE_KEY": "PRIVATE_VALUE"}, "scheduler_fields"),
+        ({"state": None}, "scheduler_state"),
+        ({"state": "PRIVATE_UNKNOWN"}, "scheduler_state"),
+        ({"state": 2}, "scheduler_state"),
+        ({"status": None}, "scheduler_status_shape"),
+        ({"status": []}, "scheduler_status_shape"),
+        ({"status": {"message": "PRIVATE_VALUE"}}, "scheduler_status_shape"),
+        ({"status": {"code": True}}, "scheduler_status_code"),
+        ({"status": {"code": "13"}}, "scheduler_status_code"),
+        ({"status": {"code": -1}}, "scheduler_status_code"),
+        ({"status": {"code": 17}}, "scheduler_status_code"),
+        ({"lastAttemptTime": None}, "scheduler_last_attempt_time"),
+        ({"lastAttemptTime": "PRIVATE_TIMESTAMP"}, "scheduler_last_attempt_time"),
+        ({"lastAttemptTime": "2026-10-02T00:00:00"}, "scheduler_last_attempt_time"),
+        ({"userUpdateTime": None}, "scheduler_user_update_time"),
+        ({"userUpdateTime": 123}, "scheduler_user_update_time"),
+    ],
+)
+def test_scheduler_schema_profile_covers_every_validation_branch(change, reason):
+    body = scheduler()
+    body.update(change)
+    session = Session(scheduler_value=body)
+    with pytest.raises(metadata.MetadataRejected) as caught:
+        inspect(session)
+    error = caught.value
+    assert error.category == "metadata_schema_invalid" and error.stage == "scheduler"
+    assert error.schema_reason == reason
+    assert set(error.scheduler_schema) == set(metadata.SCHEDULER_SCHEMA_CHECKS)
+    assert all(type(value) is bool for value in error.scheduler_schema.values())
+    assert error.scheduler_schema["profile_available"] is True
+    assert len(session.calls) == 3
+    assert "PRIVATE" not in json.dumps(error.scheduler_schema)
+
+
+@pytest.mark.parametrize("missing", ["name", "state"])
+def test_required_scheduler_omission_is_profiled_without_default_relaxation(missing):
+    body = scheduler()
+    del body[missing]
+    with pytest.raises(metadata.MetadataRejected) as caught:
+        inspect(Session(scheduler_value=body))
+    assert caught.value.schema_reason == "scheduler_fields"
+    assert caught.value.scheduler_schema["required_keys_present"] is False
+
+
+def test_scheduler_profile_reports_simultaneous_faults_without_raw_values():
+    body = scheduler()
+    body.update(state=None, status={"code": 17}, lastAttemptTime="PRIVATE_TIME")
+    with pytest.raises(metadata.MetadataRejected) as caught:
+        inspect(Session(scheduler_value=body))
+    error = caught.value
+    assert error.schema_reason == "scheduler_state"
+    assert error.scheduler_schema["state_is_null"] is True
+    assert error.scheduler_schema["status_code_current_contract_valid"] is False
+    assert error.scheduler_schema["last_attempt_parse_valid"] is False
+    assert "17" not in json.dumps(error.scheduler_schema)
+
+
+@pytest.mark.parametrize(
+    "status,expected", [(None, None), ({}, 0), ({"code": None}, None)]
+)
+def test_optional_status_absence_empty_and_null_code_behavior_is_unchanged(
+    status, expected
+):
+    body = scheduler()
+    if status is None:
+        del body["status"]
+    else:
+        body["status"] = status
+    assert (
+        inspect(Session(scheduler_value=body))["scheduler"]["status_code"] == expected
+    )
+    body["state"] = "PRIVATE_UNKNOWN"
+    with pytest.raises(metadata.MetadataRejected) as caught:
+        inspect(Session(scheduler_value=body))
+    profile = caught.value.scheduler_schema
+    assert profile["status_code_current_contract_valid"] is True
+    assert profile["status_present"] == (status is not None)
+    assert profile["status_code_is_null"] == (status == {"code": None})
+
+
+@pytest.mark.parametrize("field", ["lastAttemptTime", "userUpdateTime"])
+def test_optional_timestamp_absence_remains_allowed(field):
+    body = scheduler()
+    del body[field]
+    assert inspect(Session(scheduler_value=body))["serving_configuration_consistent"]
+
+
+@pytest.mark.parametrize("raw", [b"[]", b'{"a":NaN}', b'{"a":1,"a":2}'])
+def test_scheduler_decode_schema_fallback_has_no_field_claims(raw):
+    with pytest.raises(metadata.MetadataRejected) as caught:
+        inspect(Session(scheduler_value=raw))
+    error = caught.value
+    assert error.stage == "scheduler" and error.schema_reason == "scheduler_json_schema"
+    assert set(error.scheduler_schema) == set(metadata.SCHEDULER_SCHEMA_CHECKS)
+    assert all(value is False for value in error.scheduler_schema.values())
+
+
+@pytest.mark.parametrize(
+    "malformed", [False, "reason", "extra_key", "value_type", "wrong_stage"]
+)
+def test_scheduler_profile_error_projection_is_allowlisted(
+    monkeypatch, capsys, malformed
+):
+    pytest.importorskip("google.auth.transport.requests")
+    scope = embedded_scope("METADATA_LAUNCH")
+    error = metadata.MetadataRejected("metadata_schema_invalid")
+    error.stage = "scheduler"
+    error.schema_reason = "scheduler_fields"
+    error.scheduler_schema = {key: False for key in metadata.SCHEDULER_SCHEMA_CHECKS}
+    if malformed == "reason":
+        error.schema_reason = "PRIVATE_VALUE"
+    elif malformed == "extra_key":
+        error.scheduler_schema["PRIVATE_KEY"] = True
+    elif malformed == "value_type":
+        error.scheduler_schema["profile_available"] = "PRIVATE_VALUE"
+    elif malformed == "wrong_stage":
+        error.stage = "revision_1"
+
+    def fail(**kwargs):
+        raise error
+
+    monkeypatch.setattr(metadata, "inspect_hk_producer_metadata", fail)
+    scope["make_metadata_session"] = lambda *args: SimpleNamespace(close=lambda: None)
+    assert scope["main"]() == 1
+    raw = capsys.readouterr().out
+    result = json.loads(raw.split("hk_producer_metadata_error:", 1)[1])
+    assert "PRIVATE" not in raw and len(raw.encode()) < 8192
+    assert result["schema_reason"] == (
+        None if malformed in {"reason", "wrong_stage"} else "scheduler_fields"
+    )
+    assert result["scheduler_schema"] == (
+        error.scheduler_schema if malformed is False else None
+    )
+
+
+@pytest.mark.parametrize(
+    "stamp",
+    [
+        "2026-10-02T00:00:00Z",
+        "2026-10-02T00:00:00.123456789Z",
+        "2026-10-02T00:00:00+05:30",
+    ],
+)
+def test_scheduler_profile_reuses_timestamp_parser(monkeypatch, stamp):
+    body = scheduler()
+    body.update(state="PRIVATE_UNKNOWN", lastAttemptTime=stamp, userUpdateTime=stamp)
+    original = metadata._timestamp
+    calls = []
+
+    def timestamp(value):
+        calls.append(value)
+        return original(value)
+
+    monkeypatch.setattr(metadata, "_timestamp", timestamp)
+    with pytest.raises(metadata.MetadataRejected) as caught:
+        inspect(Session(scheduler_value=body))
+    assert calls == [stamp, stamp]
+    assert caught.value.scheduler_schema["last_attempt_parse_valid"] is True
+    assert caught.value.scheduler_schema["user_update_parse_valid"] is True
