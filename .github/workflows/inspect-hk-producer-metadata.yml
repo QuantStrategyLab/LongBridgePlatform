@@ -407,6 +407,45 @@ jobs:
               return session_factory(credentials, max_refresh_attempts=0, refresh_timeout=15)
 
 
+          def project_reader_context(error):
+              stages = {
+                  "service_initial",
+                  "revision_1",
+                  "revision_2",
+                  "scheduler",
+                  "service_recheck",
+              }
+              slots = {
+                  "request_resource",
+                  "service_name",
+                  "traffic_revision",
+                  "revision_name",
+                  "revision_parent",
+                  "scheduler_name",
+              }
+              shape_keys = {
+                  "configured_project_id_matches",
+                  "project_segment_is_numeric",
+                  "fixed_location_and_resource_suffix_matches",
+                  "short_expected_service_parent_matches",
+              }
+              stage = getattr(error, "stage", None)
+              stage = stage if isinstance(stage, str) and stage in stages else None
+              slot = getattr(error, "resource_slot", None)
+              slot = slot if isinstance(slot, str) and slot in slots else None
+              shape = getattr(error, "resource_shape", None)
+              shape = (
+                  {key: shape[key] for key in shape_keys}
+                  if error.category == "metadata_resource_invalid"
+                  and slot is not None
+                  and isinstance(shape, dict)
+                  and set(shape) == shape_keys
+                  and all(type(value) is bool for value in shape.values())
+                  else None
+              )
+              return {"stage": stage, "resource_slot": slot, "resource_shape": shape}
+
+
           def main():
               logging.disable(logging.CRITICAL)
               try:
@@ -464,7 +503,11 @@ jobs:
                   print(
                       "hk_producer_metadata_error:"
                       + json.dumps(
-                          {"category": category, "http_status": code},
+                          {
+                              "category": category,
+                              "http_status": code,
+                              **project_reader_context(error),
+                          },
                           sort_keys=True,
                           separators=(",", ":"),
                       )
