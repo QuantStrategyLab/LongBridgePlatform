@@ -1,0 +1,501 @@
+name: Inspect HK Producer Metadata
+
+# Current names-only control-plane metadata; never invoke a producer or broker.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "Exact reviewed current main/workflow SHA"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hk-producer-metadata-inspection
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.repository == 'QuantStrategyLab/LongBridgePlatform'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: longbridge-hk
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+    steps:
+      - name: Validate fixed source before checkout
+        id: preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/hk-producer-preflight.py" <<'PY_PREFLIGHT'
+          # BEGIN_METADATA_PREFLIGHT
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from urllib.error import HTTPError
+          from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+          REPO = "QuantStrategyLab/LongBridgePlatform"
+          WORKFLOW = ".github/workflows/inspect-hk-producer-metadata.yml"
+          PROVIDER = (
+              "projects/252919773759/locations/global/workloadIdentityPools/"
+              "github-actions/providers/github-main"
+          )
+          SERVICE_ACCOUNT = "longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com"
+          MAIN_PATH = "/repos/QuantStrategyLab/LongBridgePlatform/git/ref/heads/main"
+          MAX_REST_BYTES = 65536
+          PREFLIGHT_CATEGORIES = frozenset(
+              {
+                  "preauth_metadata_unavailable",
+                  "preauth_metadata_denied",
+                  "preauth_source_invalid",
+                  "preauth_event_invalid",
+                  "preauth_date_invalid",
+                  "preauth_checkout_invalid",
+                  "preauth_main_changed",
+                  "preauth_config_invalid",
+                  "preauth_unavailable",
+              }
+          )
+
+
+          class PreflightError(ValueError):
+              pass
+
+
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+
+
+          def read_json(path, token):
+              if path != MAIN_PATH or not token:
+                  raise PreflightError("preauth_metadata_unavailable")
+              request = Request(
+                  "https://api.github.com" + path,
+                  headers={
+                      "Authorization": "Bearer " + token,
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+                  method="GET",
+              )
+              try:
+                  with build_opener(NoRedirect()).open(request, timeout=10) as response:
+                      if response.status != 200 or response.geturl() != request.full_url:
+                          raise ValueError
+                      raw = response.read(MAX_REST_BYTES + 1)
+                      if len(raw) > MAX_REST_BYTES:
+                          raise ValueError
+                      value = json.loads(raw)
+                      if not isinstance(value, dict):
+                          raise ValueError
+              except HTTPError as error:
+                  category = (
+                      "preauth_metadata_denied"
+                      if error.code in {401, 403}
+                      else "preauth_metadata_unavailable"
+                  )
+                  raise PreflightError(category) from None
+              except Exception:
+                  raise PreflightError("preauth_metadata_unavailable") from None
+              return value
+
+
+          def reject_duplicate_keys(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError
+                  result[key] = value
+              return result
+
+
+          def load_dispatch_inputs(env):
+              try:
+                  path = env.get("GITHUB_EVENT_PATH", "")
+                  if not isinstance(path, str) or not path or len(path) > 4096:
+                      raise ValueError
+                  with Path(path).open("rb") as source:
+                      raw = source.read(65537)
+                  if len(raw) > 65536:
+                      raise ValueError
+                  event = json.loads(raw, object_pairs_hook=reject_duplicate_keys)
+                  inputs = event.get("inputs")
+                  if (
+                      not isinstance(inputs, dict)
+                      or set(inputs) != {"expected_sha"}
+                      or not isinstance(inputs["expected_sha"], str)
+                  ):
+                      raise ValueError
+                  return inputs
+              except Exception:
+                  raise PreflightError("preauth_event_invalid") from None
+
+
+          def validate_local(env, now):
+              if (
+                  env.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+                  or env.get("GITHUB_REPOSITORY") != REPO
+                  or env.get("GITHUB_REF") != "refs/heads/main"
+                  or env.get("GITHUB_WORKFLOW_REF") != REPO + "/" + WORKFLOW + "@refs/heads/main"
+                  or env.get("GCP_WORKLOAD_IDENTITY_PROVIDER") != PROVIDER
+                  or env.get("GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT") != SERVICE_ACCOUNT
+              ):
+                  raise PreflightError("preauth_source_invalid")
+              inputs = load_dispatch_inputs(env)
+              expected = inputs["expected_sha"]
+              if (
+                  re.fullmatch("[0-9a-f]{40}", expected) is None
+                  or env.get("GITHUB_SHA") != expected
+                  or env.get("GITHUB_WORKFLOW_SHA") != expected
+              ):
+                  raise PreflightError("preauth_source_invalid")
+              return expected
+
+
+          def validate_pre_auth(env, now, fetch, *, checkout_sha=None):
+              expected = validate_local(env, now)
+              if checkout_sha is not None and checkout_sha != expected:
+                  raise PreflightError("preauth_checkout_invalid")
+              try:
+                  main = fetch(MAIN_PATH)
+                  if (
+                      main.get("ref") != "refs/heads/main"
+                      or main.get("object", {}).get("type") != "commit"
+                      or main["object"]["sha"] != expected
+                  ):
+                      raise PreflightError("preauth_main_changed")
+              except PreflightError:
+                  raise
+              except Exception:
+                  raise PreflightError("preauth_metadata_unavailable") from None
+              return expected
+
+
+          def main(mode, env=None, now=None):
+              env = os.environ if env is None else env
+              now = datetime.now(timezone.utc) if now is None else now
+              try:
+                  validate_local(env, now)
+                  if mode not in {"before_checkout", "after_checkout"}:
+                      raise PreflightError("preauth_source_invalid")
+                  checkout_sha = None
+                  if mode == "after_checkout":
+                      result = subprocess.run(
+                          ["git", "rev-parse", "HEAD"],
+                          capture_output=True,
+                          text=True,
+                          timeout=10,
+                          check=False,
+                      )
+                      if result.returncode:
+                          raise PreflightError("preauth_checkout_invalid")
+                      checkout_sha = result.stdout.strip()
+                  expected = validate_pre_auth(
+                      env,
+                      now,
+                      lambda path: read_json(path, env.get("GH_TOKEN", "")),
+                      checkout_sha=checkout_sha,
+                  )
+                  with Path(env["GITHUB_ENV"]).open("a", encoding="utf-8") as output:
+                      if checkout_sha is not None:
+                          output.write("HK_CHECKED_OUT_SHA=" + expected + "\n")
+                  with Path(env["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+                      output.write("validated=true\n")
+              except PreflightError as error:
+                  category = (
+                      str(error) if str(error) in PREFLIGHT_CATEGORIES else "preauth_unavailable"
+                  )
+                  print("hk_producer_metadata_error:" + category)
+                  return 1
+              except Exception:
+                  print("hk_producer_metadata_error:preauth_unavailable")
+                  return 1
+              return 0
+
+
+          if __name__ == "__main__":
+              raise SystemExit(main(sys.argv[1] if len(sys.argv) == 2 else ""))
+          # END_METADATA_PREFLIGHT
+          PY_PREFLIGHT
+          python3 "$RUNNER_TEMP/hk-producer-preflight.py" before_checkout
+
+      - name: Checkout validated source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ inputs.expected_sha }}
+          persist-credentials: false
+
+      - name: Verify actual checkout before dependency installation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 "$RUNNER_TEMP/hk-producer-preflight.py" after_checkout
+
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+
+      - name: Install unchanged locked dependencies
+        run: uv sync --frozen --no-dev
+
+      - name: Recheck actual main and checkout immediately before WIF
+        id: checked-source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 "$RUNNER_TEMP/hk-producer-preflight.py" after_checkout
+
+      - name: Authenticate fixed HK observer
+        id: fixed-auth
+        if: success() && steps.preflight.outputs.validated == 'true' && steps.checked-source.outputs.validated == 'true'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+
+      - name: Read fixed names-only HK metadata once
+        if: success() && steps.preflight.outputs.validated == 'true' && steps.checked-source.outputs.validated == 'true'
+        env:
+          HK_APPROVED_CREDENTIALS_FILE: ${{ steps.fixed-auth.outputs.credentials_file_path }}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. timeout --signal=TERM --kill-after=5s 175s uv run --no-sync python - <<'PY_METADATA'
+          # BEGIN_METADATA_LAUNCH
+          import hmac
+          import json
+          import logging
+          import os
+          import stat
+          from pathlib import Path
+          from urllib.parse import parse_qsl, urlsplit
+
+          PROVIDER = (
+              "projects/252919773759/locations/global/workloadIdentityPools/"
+              "github-actions/providers/github-main"
+          )
+          SERVICE_ACCOUNT = "longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com"
+
+
+          class MetadataLaunchError(ValueError):
+              pass
+
+
+          def reject_duplicate_keys(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError
+                  result[key] = value
+              return result
+
+
+          def validate_wif_info(info, env):
+              try:
+                  if not isinstance(info, dict) or set(info) != {
+                      "type",
+                      "audience",
+                      "subject_token_type",
+                      "token_url",
+                      "credential_source",
+                      "service_account_impersonation_url",
+                  }:
+                      raise ValueError
+                  expected = {
+                      "type": "external_account",
+                      "audience": "//iam.googleapis.com/" + PROVIDER,
+                      "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                      "token_url": "https://sts.googleapis.com/v1/token",
+                      "service_account_impersonation_url": (
+                          "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/"
+                          + SERVICE_ACCOUNT
+                          + ":generateAccessToken"
+                      ),
+                  }
+                  if any(info.get(key) != value for key, value in expected.items()):
+                      raise ValueError
+                  source = info["credential_source"]
+                  if not isinstance(source, dict) or set(source) != {"url", "headers", "format"}:
+                      raise ValueError
+                  if source["format"] != {"type": "json", "subject_token_field_name": "value"}:
+                      raise ValueError
+                  base_url = env.get("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+                  token = env.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+                  if not isinstance(base_url, str) or not isinstance(token, str) or not token:
+                      raise ValueError
+                  base = urlsplit(base_url)
+                  actual = urlsplit(source["url"])
+                  for url in (base, actual):
+                      if (
+                          url.scheme != "https"
+                          or not url.hostname
+                          or not url.hostname.endswith(".actions.githubusercontent.com")
+                          or url.username is not None
+                          or url.password is not None
+                          or url.port is not None
+                          or url.fragment
+                      ):
+                          raise ValueError
+                  if (actual.scheme, actual.netloc, actual.path) != (
+                      base.scheme,
+                      base.netloc,
+                      base.path,
+                  ):
+                      raise ValueError
+                  base_pairs = parse_qsl(base.query, keep_blank_values=True, strict_parsing=True)
+                  actual_pairs = parse_qsl(
+                      actual.query, keep_blank_values=True, strict_parsing=True
+                  )
+                  if len(dict(base_pairs)) != len(base_pairs) or len(dict(actual_pairs)) != len(
+                      actual_pairs
+                  ):
+                      raise ValueError
+                  expected_query = dict(base_pairs)
+                  expected_query["audience"] = "https://iam.googleapis.com/" + PROVIDER
+                  if dict(actual_pairs) != expected_query:
+                      raise ValueError
+                  headers = source["headers"]
+                  if (
+                      not isinstance(headers, dict)
+                      or set(headers) != {"Authorization"}
+                      or not isinstance(headers["Authorization"], str)
+                      or not hmac.compare_digest(headers["Authorization"], "Bearer " + token)
+                  ):
+                      raise ValueError
+              except Exception:
+                  raise MetadataLaunchError("metadata_credentials_binding_invalid") from None
+              return info
+
+
+          def make_metadata_session(env, session_factory, credential_constructor):
+              try:
+                  path = env.get("HK_APPROVED_CREDENTIALS_FILE", "")
+                  if (
+                      not isinstance(path, str)
+                      or not path
+                      or len(path) > 4096
+                      or path != env.get("GOOGLE_APPLICATION_CREDENTIALS")
+                  ):
+                      raise ValueError
+                  with Path(path).open("rb") as source:
+                      if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                          raise ValueError
+                      raw = source.read(65537)
+                  if len(raw) > 65536:
+                      raise ValueError
+                  info = json.loads(raw, object_pairs_hook=reject_duplicate_keys)
+                  validate_wif_info(info, env)
+              except Exception:
+                  raise MetadataLaunchError("metadata_credentials_binding_invalid") from None
+              # Native 2.55.1 constructor performs no project discovery or token request.
+              # Keep its regional allowedLocations checks/header behavior unchanged at use time.
+              credentials = credential_constructor(
+                  info,
+                  scopes=["https://www.googleapis.com/auth/cloud-platform"],
+              )
+              return session_factory(credentials, max_refresh_attempts=0, refresh_timeout=15)
+
+
+          def main():
+              logging.disable(logging.CRITICAL)
+              try:
+                  from scripts.inspect_hk_producer_metadata import (
+                      MetadataRejected,
+                      inspect_hk_producer_metadata,
+                  )
+              except Exception:
+                  print(
+                      'hk_producer_metadata_error:{"category":"metadata_unavailable","http_status":null}'
+                  )
+                  return 1
+              try:
+                  from google.auth import identity_pool
+                  from google.auth.transport.requests import AuthorizedSession
+
+                  session = make_metadata_session(
+                      os.environ, AuthorizedSession, identity_pool.Credentials.from_info
+                  )
+                  try:
+                      result = inspect_hk_producer_metadata(session=session)
+                  finally:
+                      session.close()
+                  raw = json.dumps(result, sort_keys=True, separators=(",", ":"))
+                  if len(raw.encode()) > 8192:
+                      raise MetadataLaunchError("metadata_output_limit")
+              except MetadataRejected as error:
+                  categories = {
+                      "metadata_schema_invalid",
+                      "metadata_resource_invalid",
+                      "metadata_deadline",
+                      "metadata_request_limit",
+                      "metadata_http_invalid",
+                      "metadata_redirect_rejected",
+                      "metadata_http_denied",
+                      "metadata_http_failed",
+                      "metadata_body_invalid",
+                      "metadata_byte_limit",
+                      "metadata_pagination_rejected",
+                      "metadata_transport_failed",
+                      "metadata_traffic_invalid",
+                      "metadata_service_unstable",
+                      "metadata_revision_unstable",
+                      "metadata_service_changed",
+                      "metadata_output_limit",
+                  }
+                  category = (
+                      error.category if error.category in categories else "metadata_unavailable"
+                  )
+                  code = (
+                      error.http_status
+                      if type(error.http_status) is int and 100 <= error.http_status <= 599
+                      else None
+                  )
+                  print(
+                      "hk_producer_metadata_error:"
+                      + json.dumps(
+                          {"category": category, "http_status": code},
+                          sort_keys=True,
+                          separators=(",", ":"),
+                      )
+                  )
+                  return 1
+              except MetadataLaunchError as error:
+                  category = (
+                      str(error)
+                      if str(error)
+                      in {"metadata_credentials_binding_invalid", "metadata_output_limit"}
+                      else "metadata_unavailable"
+                  )
+                  print(
+                      "hk_producer_metadata_error:"
+                      + json.dumps(
+                          {"category": category, "http_status": None},
+                          sort_keys=True,
+                          separators=(",", ":"),
+                      )
+                  )
+                  return 1
+              except Exception:
+                  print(
+                      'hk_producer_metadata_error:{"category":"metadata_unavailable","http_status":null}'
+                  )
+                  return 1
+              print(raw)
+              return 0
+
+
+          if __name__ == "__main__":
+              raise SystemExit(main())
+          # END_METADATA_LAUNCH
+          PY_METADATA
