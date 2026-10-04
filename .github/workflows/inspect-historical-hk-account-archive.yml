@@ -1,0 +1,711 @@
+name: Inspect Historical HK Account Archive
+
+# Manual-only archive inventory, never a probe, current-health check or old-request receipt.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "Exact reviewed current main/workflow SHA (40 lowercase hex)"
+        required: true
+        type: string
+      inspection_date:
+        description: "Operator-selected past UTC inventory date (YYYY-MM-DD), not original request time"
+        required: true
+        type: string
+      expected_source_binding_id:
+        description: "Existing nonsecret configured binding, exact approved 64 lowercase hex"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: historical-hk-archive-inventory
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.repository == 'QuantStrategyLab/LongBridgePlatform'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    environment: longbridge-hk
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+    steps:
+      - name: Validate inputs, fixed source and nonsecret configuration before checkout
+        id: preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Context comparisons are case-insensitive; Python fixes exact source hash.
+          HK_CONFIG_BINDING_MATCH: ${{ vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID == inputs.expected_source_binding_id }}
+          HK_CONFIG_PREFIX_MATCH: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX == 'gs://qsl-runtime-logs-shared/longbridge/account_snapshots' }}
+        run: |
+          set -euo pipefail
+          # Binding stays in the GitHub event and process memory, never workflow env/run text.
+          # GitHub retains dispatch metadata; this is not a platform secrecy guarantee.
+          cat > "$RUNNER_TEMP/hk-archive-preflight.py" <<'PY_PREFLIGHT'
+          # BEGIN_PREFLIGHT
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+          import sys
+          from datetime import date, datetime, timezone
+          from pathlib import Path
+          from urllib.error import HTTPError
+          from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+          REPO = "QuantStrategyLab/LongBridgePlatform"
+          WORKFLOW = ".github/workflows/inspect-historical-hk-account-archive.yml"
+          BINDING_SHA256 = "97d4d634841d5fa0c3b97ceb2085ee9c25edc740457cab309e19aa2d828a81ab"
+          PROVIDER = (
+              "projects/252919773759/locations/global/workloadIdentityPools/"
+              "github-actions/providers/github-main"
+          )
+          SERVICE_ACCOUNT = "longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com"
+          MAIN_PATH = "/repos/QuantStrategyLab/LongBridgePlatform/git/ref/heads/main"
+          MAX_REST_BYTES = 65536
+          PREFLIGHT_CATEGORIES = frozenset(
+              {
+                  "preauth_metadata_unavailable",
+                  "preauth_metadata_denied",
+                  "preauth_source_invalid",
+                  "preauth_event_invalid",
+                  "preauth_date_invalid",
+                  "preauth_checkout_invalid",
+                  "preauth_main_changed",
+                  "preauth_config_invalid",
+                  "preauth_unavailable",
+              }
+          )
+
+
+          class PreflightError(ValueError):
+              pass
+
+
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, *args, **kwargs):
+                  return None
+
+
+          def read_json(path, token):
+              if path != MAIN_PATH or not token:
+                  raise PreflightError("preauth_metadata_unavailable")
+              request = Request(
+                  "https://api.github.com" + path,
+                  headers={
+                      "Authorization": "Bearer " + token,
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+                  method="GET",
+              )
+              try:
+                  with build_opener(NoRedirect()).open(request, timeout=10) as response:
+                      if response.status != 200 or response.geturl() != request.full_url:
+                          raise ValueError
+                      raw = response.read(MAX_REST_BYTES + 1)
+                      if len(raw) > MAX_REST_BYTES:
+                          raise ValueError
+                      value = json.loads(raw)
+                      if not isinstance(value, dict):
+                          raise ValueError
+              except HTTPError as error:
+                  category = (
+                      "preauth_metadata_denied"
+                      if error.code in {401, 403}
+                      else "preauth_metadata_unavailable"
+                  )
+                  raise PreflightError(category) from None
+              except Exception:
+                  raise PreflightError("preauth_metadata_unavailable") from None
+              return value
+
+
+          def reject_duplicate_keys(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError
+                  result[key] = value
+              return result
+
+
+          def load_dispatch_inputs(env):
+              try:
+                  path = env.get("GITHUB_EVENT_PATH", "")
+                  if not isinstance(path, str) or not path or len(path) > 4096:
+                      raise ValueError
+                  with Path(path).open("rb") as source:
+                      raw = source.read(65537)
+                  if len(raw) > 65536:
+                      raise ValueError
+                  event = json.loads(raw, object_pairs_hook=reject_duplicate_keys)
+                  inputs = event.get("inputs")
+                  if (
+                      not isinstance(inputs, dict)
+                      or set(inputs)
+                      != {"expected_sha", "inspection_date", "expected_source_binding_id"}
+                      or any(not isinstance(value, str) for value in inputs.values())
+                  ):
+                      raise ValueError
+                  return inputs
+              except Exception:
+                  raise PreflightError("preauth_event_invalid") from None
+
+
+          def validate_local(env, now):
+              if (
+                  env.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+                  or env.get("GITHUB_REPOSITORY") != REPO
+                  or env.get("GITHUB_REF") != "refs/heads/main"
+                  or env.get("GITHUB_WORKFLOW_REF") != REPO + "/" + WORKFLOW + "@refs/heads/main"
+                  or env.get("GCP_WORKLOAD_IDENTITY_PROVIDER") != PROVIDER
+                  or env.get("GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT") != SERVICE_ACCOUNT
+              ):
+                  raise PreflightError("preauth_source_invalid")
+              inputs = load_dispatch_inputs(env)
+              expected = inputs["expected_sha"]
+              selected = inputs["inspection_date"]
+              binding = inputs["expected_source_binding_id"]
+              if (
+                  re.fullmatch("[0-9a-f]{40}", expected) is None
+                  or env.get("GITHUB_SHA") != expected
+                  or env.get("GITHUB_WORKFLOW_SHA") != expected
+              ):
+                  raise PreflightError("preauth_source_invalid")
+              if (
+                  env.get("HK_CONFIG_BINDING_MATCH") != "true"
+                  or env.get("HK_CONFIG_PREFIX_MATCH") != "true"
+                  or re.fullmatch("[0-9a-f]{64}", binding) is None
+                  or hashlib.sha256(binding.encode()).hexdigest() != BINDING_SHA256
+              ):
+                  raise PreflightError("preauth_config_invalid")
+              try:
+                  if re.fullmatch("[0-9]{4}-[0-9]{2}-[0-9]{2}", selected) is None:
+                      raise ValueError
+                  day = date.fromisoformat(selected)
+                  if (
+                      not isinstance(now, datetime)
+                      or now.tzinfo is None
+                      or now.utcoffset() is None
+                  ):
+                      raise ValueError
+                  if day >= now.astimezone(timezone.utc).date():
+                      raise ValueError
+              except Exception:
+                  raise PreflightError("preauth_date_invalid") from None
+              return expected, selected, binding
+
+
+          def validate_pre_auth(env, now, fetch, *, checkout_sha=None):
+              expected, selected, binding = validate_local(env, now)
+              if checkout_sha is not None and checkout_sha != expected:
+                  raise PreflightError("preauth_checkout_invalid")
+              try:
+                  main = fetch(MAIN_PATH)
+                  if (
+                      main.get("ref") != "refs/heads/main"
+                      or main.get("object", {}).get("type") != "commit"
+                      or main["object"]["sha"] != expected
+                  ):
+                      raise PreflightError("preauth_main_changed")
+              except PreflightError:
+                  raise
+              except Exception:
+                  raise PreflightError("preauth_metadata_unavailable") from None
+              return expected, selected, binding
+
+
+          def main(mode, env=None, now=None):
+              env = os.environ if env is None else env
+              now = datetime.now(timezone.utc) if now is None else now
+              try:
+                  _expected, _selected, binding = validate_local(env, now)
+                  print("::add-mask::" + binding)
+                  if mode not in {"before_checkout", "after_checkout"}:
+                      raise PreflightError("preauth_source_invalid")
+                  checkout_sha = None
+                  if mode == "after_checkout":
+                      result = subprocess.run(
+                          ["git", "rev-parse", "HEAD"],
+                          capture_output=True,
+                          text=True,
+                          timeout=10,
+                          check=False,
+                      )
+                      if result.returncode:
+                          raise PreflightError("preauth_checkout_invalid")
+                      checkout_sha = result.stdout.strip()
+                  expected, selected, binding = validate_pre_auth(
+                      env,
+                      now,
+                      lambda path: read_json(path, env.get("GH_TOKEN", "")),
+                      checkout_sha=checkout_sha,
+                  )
+                  with Path(env["GITHUB_ENV"]).open("a", encoding="utf-8") as output:
+                      if checkout_sha is not None:
+                          output.write("HK_CHECKED_OUT_SHA=" + expected + "\n")
+                  with Path(env["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+                      output.write("validated=true\n")
+              except PreflightError as error:
+                  category = (
+                      str(error) if str(error) in PREFLIGHT_CATEGORIES else "preauth_unavailable"
+                  )
+                  print("hk_archive_inventory_error:" + category)
+                  return 1
+              except Exception:
+                  print("hk_archive_inventory_error:preauth_unavailable")
+                  return 1
+              return 0
+
+
+          if __name__ == "__main__":
+              raise SystemExit(main(sys.argv[1] if len(sys.argv) == 2 else ""))
+          # END_PREFLIGHT
+          PY_PREFLIGHT
+          python3 "$RUNNER_TEMP/hk-archive-preflight.py" before_checkout
+
+      - name: Checkout the validated source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # existing v6 CI-resolved SHA
+        with:
+          ref: ${{ inputs.expected_sha }}
+          persist-credentials: false
+
+      - name: Verify actual checkout before installing pinned code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Context comparisons are case-insensitive; Python fixes exact source hash.
+          HK_CONFIG_BINDING_MATCH: ${{ vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID == inputs.expected_source_binding_id }}
+          HK_CONFIG_PREFIX_MATCH: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX == 'gs://qsl-runtime-logs-shared/longbridge/account_snapshots' }}
+        run: python3 "$RUNNER_TEMP/hk-archive-preflight.py" after_checkout
+
+      - name: Set up the existing pinned uv action
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+
+      - name: Install the unchanged locked dependencies
+        run: uv sync --frozen --no-dev
+
+      - name: Recheck source, actual main and binding immediately before WIF
+        id: checked-source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Context comparisons are case-insensitive; Python fixes exact source hash.
+          HK_CONFIG_BINDING_MATCH: ${{ vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID == inputs.expected_source_binding_id }}
+          HK_CONFIG_PREFIX_MATCH: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX == 'gs://qsl-runtime-logs-shared/longbridge/account_snapshots' }}
+        run: python3 "$RUNNER_TEMP/hk-archive-preflight.py" after_checkout
+
+      - name: Authenticate using the existing fixed HK WIF identity
+        id: fixed-auth
+        if: success() && steps.preflight.outputs.validated == 'true' && steps.checked-source.outputs.validated == 'true'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # existing v3 resolved, no new grant/key
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+
+      - name: Inspect the fixed configured HK archive date once
+        env:
+          HK_APPROVED_CREDENTIALS_FILE: ${{ steps.fixed-auth.outputs.credentials_file_path }}
+          # Context comparisons are case-insensitive; Python fixes exact source hash.
+          HK_CONFIG_BINDING_MATCH: ${{ vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID == inputs.expected_source_binding_id }}
+          HK_CONFIG_PREFIX_MATCH: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX == 'gs://qsl-runtime-logs-shared/longbridge/account_snapshots' }}
+        if: success() && steps.preflight.outputs.validated == 'true' && steps.checked-source.outputs.validated == 'true'
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. uv run --no-sync python - <<'PY_INVENTORY'
+          # BEGIN_INVENTORY
+          import hashlib
+          import hmac
+          import json
+          import logging
+          import os
+          import re
+          import stat
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from urllib.parse import parse_qsl, urlsplit
+
+          BINDING_SHA256 = "97d4d634841d5fa0c3b97ceb2085ee9c25edc740457cab309e19aa2d828a81ab"
+          PROVIDER = (
+              "projects/252919773759/locations/global/workloadIdentityPools/"
+              "github-actions/providers/github-main"
+          )
+          SERVICE_ACCOUNT = "longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com"
+          MAX_OUTPUT_BYTES = 32768
+          MAX_OBJECTS = 64
+          READER_CATEGORIES = frozenset(
+              {
+                  "historical_inspection_timeout",
+                  "historical_config_invalid",
+                  "historical_time_invalid",
+                  "historical_listing_invalid",
+                  "historical_listing_failed",
+                  "historical_listing_truncated",
+                  "historical_object_invalid",
+                  "historical_read_failed",
+                  "gcs_object_invalid",
+                  "gcs_object_truncated",
+                  "gcs_read_failed",
+                  "generation_changed",
+              }
+          )
+          READER_OUTPUT_CATEGORIES = frozenset(
+              "reader_" + category for category in READER_CATEGORIES
+          ) | {
+              "reader_listing_http_denied",
+              "reader_get_http_denied",
+          }
+          INVENTORY_CATEGORIES = READER_OUTPUT_CATEGORIES | frozenset(
+              {
+                  "inventory_projection_invalid",
+                  "inventory_output_limit",
+                  "inventory_inputs_invalid",
+                  "inventory_read_failed",
+                  "inventory_unavailable",
+                  "inventory_credentials_binding_invalid",
+              }
+          )
+
+
+          class InventoryError(ValueError):
+              pass
+
+
+          def project_inventory(result, selected_date):
+              if (
+                  not isinstance(result, dict)
+                  or result.get("evidence_kind") != "historical_hk_archive_inspection"
+                  or result.get("target") != "hk"
+              ):
+                  raise InventoryError("inventory_projection_invalid")
+              for key in (
+                  "current_health_confirmed",
+                  "request_terminal_confirmed",
+                  "receiver_ack_confirmed",
+                  "native_identity_confirmed",
+              ):
+                  if result.get(key) is not False:
+                      raise InventoryError("inventory_projection_invalid")
+              objects = result.get("observations")
+              if (
+                  not isinstance(objects, list)
+                  or len(objects) > MAX_OBJECTS
+                  or type(result.get("scanned_object_count")) is not int
+                  or result["scanned_object_count"] != len(objects)
+              ):
+                  raise InventoryError("inventory_projection_invalid")
+              observations = []
+              for row in objects:
+                  if not isinstance(row, dict):
+                      raise InventoryError("inventory_projection_invalid")
+                  projected = {}
+                  for key in ("observed_started_at", "observed_finished_at"):
+                      cell = row.get(key)
+                      try:
+                          if not isinstance(cell, str) or len(cell) > 64:
+                              raise ValueError
+                          stamp = datetime.fromisoformat(cell.replace("Z", "+00:00"))
+                          if stamp.tzinfo is None or stamp.utcoffset() is None:
+                              raise ValueError
+                          projected[key] = stamp.astimezone(timezone.utc).isoformat()
+                      except Exception:
+                          raise InventoryError("inventory_projection_invalid") from None
+                  if (
+                      projected["observed_started_at"][:10] != selected_date
+                      or projected["observed_finished_at"] < projected["observed_started_at"]
+                  ):
+                      raise InventoryError("inventory_projection_invalid")
+                  for key in ("object_generation", "balance_currency_rows", "cash_currency_rows"):
+                      cell = row.get(key)
+                      maximum = 2**64 - 1 if key == "object_generation" else 65536
+                      if type(cell) is not int or not 1 <= cell <= maximum:
+                          raise InventoryError("inventory_projection_invalid")
+                      projected[key] = cell
+                  digest = row.get("archive_sha256")
+                  if (
+                      not isinstance(digest, str)
+                      or re.fullmatch("[0-9a-f]{64}", digest) is None
+                      or type(row.get("currently_stale")) is not bool
+                  ):
+                      raise InventoryError("inventory_projection_invalid")
+                  projected["archive_sha256"] = digest
+                  projected["currently_stale"] = row["currently_stale"]
+                  observations.append(projected)
+              payload = {
+                  "evidence_kind": "historical_hk_archive_inventory",
+                  "query_date_basis": "operator_selected",
+                  "query_date": selected_date,
+                  "configured_source_date_listing_complete": True,
+                  "listed_prefix_objects_validated": True,
+                  "archive_snapshot_atomic": False,
+                  "historical_account_coverage_confirmed": False,
+                  "scanned_object_count": len(observations),
+                  "currently_stale_count": sum(row["currently_stale"] for row in observations),
+                  "current_health_confirmed": False,
+                  "request_terminal_confirmed": False,
+                  "receiver_ack_confirmed": False,
+                  "native_identity_confirmed": False,
+                  "observations": observations,
+              }
+              raw = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+              if len(raw.encode()) > MAX_OUTPUT_BYTES:
+                  raise InventoryError("inventory_output_limit")
+              return raw
+
+
+          def reject_duplicate_keys(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError
+                  result[key] = value
+              return result
+
+
+          def load_dispatch_inputs(env):
+              try:
+                  path = env.get("GITHUB_EVENT_PATH", "")
+                  if not isinstance(path, str) or not path or len(path) > 4096:
+                      raise ValueError
+                  with Path(path).open("rb") as source:
+                      raw = source.read(65537)
+                  if len(raw) > 65536:
+                      raise ValueError
+                  event = json.loads(raw, object_pairs_hook=reject_duplicate_keys)
+                  inputs = event.get("inputs")
+                  if (
+                      not isinstance(inputs, dict)
+                      or set(inputs)
+                      != {"expected_sha", "inspection_date", "expected_source_binding_id"}
+                      or any(not isinstance(value, str) for value in inputs.values())
+                  ):
+                      raise ValueError
+                  return inputs
+              except Exception:
+                  raise InventoryError("inventory_inputs_invalid") from None
+
+
+          def launch_inventory(env, now, make_client, inspect):
+              try:
+                  inputs = load_dispatch_inputs(env)
+                  expected = inputs["expected_sha"]
+                  selected = inputs["inspection_date"]
+                  binding = inputs["expected_source_binding_id"]
+                  stamp = datetime.fromisoformat(selected + "T00:00:00+00:00")
+                  if (
+                      re.fullmatch("[0-9]{4}-[0-9]{2}-[0-9]{2}", selected) is None
+                      or now.tzinfo is None
+                      or now.utcoffset() is None
+                      or stamp.date() >= now.astimezone(timezone.utc).date()
+                      or re.fullmatch("[0-9a-f]{40}", expected) is None
+                      or env.get("GITHUB_REPOSITORY") != "QuantStrategyLab/LongBridgePlatform"
+                      or env.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+                      or env.get("GITHUB_REF") != "refs/heads/main"
+                      or env.get("GITHUB_WORKFLOW_REF")
+                      != (
+                          "QuantStrategyLab/LongBridgePlatform/.github/workflows/"
+                          "inspect-historical-hk-account-archive.yml@refs/heads/main"
+                      )
+                      or any(
+                          env.get(key) != expected
+                          for key in ("GITHUB_SHA", "GITHUB_WORKFLOW_SHA", "HK_CHECKED_OUT_SHA")
+                      )
+                      or env.get("HK_CONFIG_BINDING_MATCH") != "true"
+                      or env.get("HK_CONFIG_PREFIX_MATCH") != "true"
+                      or env.get("GCP_WORKLOAD_IDENTITY_PROVIDER") != PROVIDER
+                      or env.get("GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT") != SERVICE_ACCOUNT
+                      or not isinstance(binding, str)
+                      or re.fullmatch("[0-9a-f]{64}", binding) is None
+                      or hashlib.sha256(binding.encode()).hexdigest() != BINDING_SHA256
+                  ):
+                      raise ValueError
+              except Exception:
+                  raise InventoryError("inventory_inputs_invalid") from None
+              try:
+                  client = make_client()
+                  result = inspect(
+                      archive_client=client,
+                      expected_source_binding_id=binding,
+                      window_start=selected + "T00:00:00Z",
+                      window_end=selected + "T00:05:00Z",
+                      inspected_at=now,
+                  )
+                  return project_inventory(result, selected)
+              except InventoryError:
+                  raise
+              except Exception as error:
+                  try:
+                      category = getattr(error, "category", None)
+                      if isinstance(category, str) and category in READER_CATEGORIES:
+                          cause = getattr(error, "__context__", None)
+                          code = getattr(cause, "code", None)
+                          if (
+                              isinstance(code, int)
+                              and not isinstance(code, bool)
+                              and code in {401, 403}
+                          ):
+                              if category == "historical_listing_failed":
+                                  raise InventoryError("reader_listing_http_denied") from None
+                              if category == "gcs_read_failed":
+                                  raise InventoryError("reader_get_http_denied") from None
+                          raise InventoryError("reader_" + category) from None
+                  except InventoryError:
+                      raise
+                  except Exception:
+                      pass
+                  raise InventoryError("inventory_read_failed") from None
+
+
+          def validate_wif_info(info, env):
+              try:
+                  if not isinstance(info, dict) or set(info) != {
+                      "type",
+                      "audience",
+                      "subject_token_type",
+                      "token_url",
+                      "credential_source",
+                      "service_account_impersonation_url",
+                  }:
+                      raise ValueError
+                  expected = {
+                      "type": "external_account",
+                      "audience": "//iam.googleapis.com/" + PROVIDER,
+                      "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+                      "token_url": "https://sts.googleapis.com/v1/token",
+                      "service_account_impersonation_url": (
+                          "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/"
+                          + SERVICE_ACCOUNT
+                          + ":generateAccessToken"
+                      ),
+                  }
+                  if any(info.get(key) != value for key, value in expected.items()):
+                      raise ValueError
+                  source = info["credential_source"]
+                  if not isinstance(source, dict) or set(source) != {"url", "headers", "format"}:
+                      raise ValueError
+                  if source["format"] != {"type": "json", "subject_token_field_name": "value"}:
+                      raise ValueError
+                  base_url = env.get("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+                  token = env.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+                  if not isinstance(base_url, str) or not isinstance(token, str) or not token:
+                      raise ValueError
+                  base = urlsplit(base_url)
+                  actual = urlsplit(source["url"])
+                  for url in (base, actual):
+                      if (
+                          url.scheme != "https"
+                          or not url.hostname
+                          or not url.hostname.endswith(".actions.githubusercontent.com")
+                          or url.username is not None
+                          or url.password is not None
+                          or url.port is not None
+                          or url.fragment
+                      ):
+                          raise ValueError
+                  if (actual.scheme, actual.netloc, actual.path) != (
+                      base.scheme,
+                      base.netloc,
+                      base.path,
+                  ):
+                      raise ValueError
+                  base_pairs = parse_qsl(base.query, keep_blank_values=True, strict_parsing=True)
+                  actual_pairs = parse_qsl(
+                      actual.query, keep_blank_values=True, strict_parsing=True
+                  )
+                  if len(dict(base_pairs)) != len(base_pairs) or len(dict(actual_pairs)) != len(
+                      actual_pairs
+                  ):
+                      raise ValueError
+                  expected_query = dict(base_pairs)
+                  expected_query["audience"] = "https://iam.googleapis.com/" + PROVIDER
+                  if dict(actual_pairs) != expected_query:
+                      raise ValueError
+                  headers = source["headers"]
+                  if (
+                      not isinstance(headers, dict)
+                      or set(headers) != {"Authorization"}
+                      or not isinstance(headers["Authorization"], str)
+                      or not hmac.compare_digest(headers["Authorization"], "Bearer " + token)
+                  ):
+                      raise ValueError
+              except Exception:
+                  raise InventoryError("inventory_credentials_binding_invalid") from None
+              return info
+
+
+          def make_storage_client(env, storage_factory, credential_constructor):
+              try:
+                  path = env.get("HK_APPROVED_CREDENTIALS_FILE", "")
+                  if (
+                      not isinstance(path, str)
+                      or not path
+                      or len(path) > 4096
+                      or path != env.get("GOOGLE_APPLICATION_CREDENTIALS")
+                  ):
+                      raise ValueError
+                  with Path(path).open("rb") as source:
+                      if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                          raise ValueError
+                      raw = source.read(65537)
+                  if len(raw) > 65536:
+                      raise ValueError
+                  info = json.loads(raw, object_pairs_hook=reject_duplicate_keys)
+                  validate_wif_info(info, env)
+              except Exception:
+                  raise InventoryError("inventory_credentials_binding_invalid") from None
+              # Native 2.55.1 constructor performs no project discovery or token request.
+              # Keep its regional allowedLocations checks/header behavior unchanged at use time.
+              credentials = credential_constructor(
+                  info,
+                  scopes=["https://www.googleapis.com/auth/devstorage.read_only"],
+              )
+              return storage_factory(project="longbridgequant", credentials=credentials)
+
+
+          def main():
+              logging.disable(logging.CRITICAL)
+              try:
+                  from google.auth import identity_pool
+                  from google.cloud import storage
+
+                  from scripts.inspect_historical_hk_account_archive import (
+                      inspect_historical_hk_account_archive,
+                  )
+
+                  raw = launch_inventory(
+                      os.environ,
+                      datetime.now(timezone.utc),
+                      lambda: make_storage_client(
+                          os.environ,
+                          storage.Client,
+                          identity_pool.Credentials.from_info,
+                      ),
+                      inspect_historical_hk_account_archive,
+                  )
+              except InventoryError as error:
+                  category = (
+                      str(error)
+                      if str(error) in INVENTORY_CATEGORIES
+                      else "inventory_unavailable"
+                  )
+                  print("hk_archive_inventory_error:" + category)
+                  return 1
+              except Exception:
+                  print("hk_archive_inventory_error:inventory_unavailable")
+                  return 1
+              print(raw)
+              return 0
+
+
+          if __name__ == "__main__":
+              raise SystemExit(main())
+          # END_INVENTORY
+          PY_INVENTORY
