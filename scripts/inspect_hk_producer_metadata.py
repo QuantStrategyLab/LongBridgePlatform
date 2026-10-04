@@ -59,6 +59,36 @@ _TRAFFIC_TYPES = {
     "TRAFFIC_TARGET_ALLOCATION_TYPE_UNSPECIFIED",
 }
 _STATES = {"STATE_UNSPECIFIED", "ENABLED", "PAUSED", "DISABLED", "UPDATE_FAILED"}
+_SCHEDULER_KEYS = {"name", "state", "lastAttemptTime", "status", "userUpdateTime"}
+SCHEDULER_SCHEMA_CHECKS = (
+    "profile_available",
+    "object_type_valid",
+    "required_keys_present",
+    "allowed_keys_only",
+    "name_present",
+    "name_type_valid",
+    "state_present",
+    "state_is_null",
+    "state_type_valid",
+    "state_enum_valid",
+    "status_present",
+    "status_is_null",
+    "status_object_valid",
+    "status_keys_valid",
+    "status_code_present",
+    "status_code_is_null",
+    "status_code_exact_int",
+    "status_code_canonical_range",
+    "status_code_current_contract_valid",
+    "last_attempt_present",
+    "last_attempt_is_null",
+    "last_attempt_type_valid",
+    "last_attempt_parse_valid",
+    "user_update_present",
+    "user_update_is_null",
+    "user_update_type_valid",
+    "user_update_parse_valid",
+)
 
 
 class MetadataRejected(ValueError):
@@ -69,6 +99,8 @@ class MetadataRejected(ValueError):
         self.stage: str | None = None
         self.resource_slot: str | None = None
         self.resource_shape: dict[str, bool] | None = None
+        self.schema_reason: str | None = None
+        self.scheduler_schema: dict[str, bool] | None = None
 
 
 def _reject(category: str) -> None:
@@ -454,20 +486,101 @@ def _timestamp(value: Any) -> str:
         raise MetadataRejected("metadata_schema_invalid") from None
 
 
-def _scheduler(value: dict) -> dict:
+def _scheduler_state_valid(value: Any) -> bool:
+    return isinstance(value, str) and value in _STATES
+
+
+def _scheduler_code_valid(value: Any) -> bool:
+    return value is None or (type(value) is int and 0 <= value <= 16)
+
+
+def _validation_ok(validate: Callable[[], Any]) -> bool:
+    try:
+        validate()
+        return True
+    except Exception:
+        return False
+
+
+def _scheduler_schema_profile(value: Any) -> tuple[str, dict[str, bool]]:
+    profile = {key: False for key in SCHEDULER_SCHEMA_CHECKS}
+    profile["profile_available"] = True
+    profile["object_type_valid"] = isinstance(value, dict)
+    if not isinstance(value, dict):
+        return "scheduler_fields", profile
+    profile["required_keys_present"] = {"name", "state"} <= set(value)
+    profile["allowed_keys_only"] = _validation_ok(
+        lambda: _keys(value, _SCHEDULER_KEYS, set())
+    )
+    for field, prefix in (("name", "name"), ("state", "state")):
+        profile[prefix + "_present"] = field in value
+        profile[prefix + "_type_valid"] = isinstance(value.get(field), str)
+    profile["state_is_null"] = "state" in value and value["state"] is None
+    profile["state_enum_valid"] = _scheduler_state_valid(value.get("state"))
+    status = value.get("status", {})
+    profile["status_present"] = "status" in value
+    profile["status_is_null"] = "status" in value and status is None
+    profile["status_object_valid"] = isinstance(status, dict)
+    profile["status_keys_valid"] = _validation_ok(
+        lambda: _keys(status, {"code"}, set())
+    )
+    if isinstance(status, dict):
+        profile["status_code_present"] = "code" in status
+        raw_code = status.get("code")
+        profile["status_code_is_null"] = "code" in status and raw_code is None
+        profile["status_code_exact_int"] = type(raw_code) is int
+        profile["status_code_canonical_range"] = (
+            type(raw_code) is int and 0 <= raw_code <= 16
+        )
+        code = status.get("code", 0) if "status" in value else None
+        profile["status_code_current_contract_valid"] = _scheduler_code_valid(code)
+    for field, prefix in (
+        ("lastAttemptTime", "last_attempt"),
+        ("userUpdateTime", "user_update"),
+    ):
+        present = field in value
+        profile[prefix + "_present"] = present
+        profile[prefix + "_is_null"] = present and value[field] is None
+        profile[prefix + "_type_valid"] = present and isinstance(value[field], str)
+        profile[prefix + "_parse_valid"] = present and _validation_ok(
+            lambda: _timestamp(value[field])
+        )
+    checks = (
+        (
+            profile["required_keys_present"] and profile["allowed_keys_only"],
+            "scheduler_fields",
+        ),
+        (profile["state_enum_valid"], "scheduler_state"),
+        (profile["status_keys_valid"], "scheduler_status_shape"),
+        (profile["status_code_current_contract_valid"], "scheduler_status_code"),
+        (
+            not profile["last_attempt_present"] or profile["last_attempt_parse_valid"],
+            "scheduler_last_attempt_time",
+        ),
+        (
+            not profile["user_update_present"] or profile["user_update_parse_valid"],
+            "scheduler_user_update_time",
+        ),
+    )
+    return next(
+        (reason for valid, reason in checks if not valid), "scheduler_schema_unknown"
+    ), profile
+
+
+def _scheduler_validated(value: dict) -> dict:
     _keys(
         value,
-        {"name", "state", "lastAttemptTime", "status", "userUpdateTime"},
+        _SCHEDULER_KEYS,
         {"name", "state"},
     )
     if value["name"] != SCHEDULER_RESOURCE:
         _resource_invalid(value["name"], SCHEDULER_RESOURCE, "scheduler_name")
-    if not isinstance(value["state"], str) or value["state"] not in _STATES:
+    if not _scheduler_state_valid(value["state"]):
         _reject("metadata_schema_invalid")
     status = value.get("status", {})
     _keys(status, {"code"}, set())
     code = status.get("code", 0) if "status" in value else None
-    if code is not None and (type(code) is not int or not 0 <= code <= 16):
+    if not _scheduler_code_valid(code):
         _reject("metadata_schema_invalid")
     return {
         "state": value["state"],
@@ -480,6 +593,17 @@ def _scheduler(value: dict) -> dict:
         "status_code": code,
         "historical_oct2_invocation_confirmed": False,
     }
+
+
+def _scheduler(value: dict) -> dict:
+    try:
+        return _scheduler_validated(value)
+    except MetadataRejected as error:
+        if error.category == "metadata_schema_invalid":
+            error.schema_reason, error.scheduler_schema = _scheduler_schema_profile(
+                value
+            )
+        raise
 
 
 def inspect_hk_producer_metadata(
@@ -511,6 +635,13 @@ def inspect_hk_producer_metadata(
             _reject("metadata_service_changed")
     except MetadataRejected as error:
         error.stage = stage
+        if (
+            stage == "scheduler"
+            and error.category == "metadata_schema_invalid"
+            and error.scheduler_schema is None
+        ):
+            error.schema_reason = "scheduler_json_schema"
+            error.scheduler_schema = {key: False for key in SCHEDULER_SCHEMA_CHECKS}
         raise
     result = {
         "evidence_kind": "current_hk_producer_metadata",
