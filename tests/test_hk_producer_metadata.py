@@ -871,3 +871,183 @@ def test_scheduler_state_is_metadata_only_without_an_invocation_claim(status):
     result = inspect(Session(scheduler_value=body))
     assert result["scheduler"]["state"] == status
     assert result["scheduler"]["historical_oct2_invocation_confirmed"] is False
+
+
+@pytest.mark.parametrize(
+    "case,stage,slot,requests,numeric,suffix,short_parent",
+    [
+        ("service", "service_initial", "service_name", 1, True, True, False),
+        ("traffic", "service_initial", "traffic_revision", 1, True, True, False),
+        ("revision", "revision_1", "revision_name", 2, True, True, False),
+        ("parent", "revision_1", "revision_parent", 2, False, False, True),
+        ("scheduler", "scheduler", "scheduler_name", 3, True, True, False),
+        ("recheck", "service_recheck", "service_name", 4, True, True, False),
+    ],
+)
+def test_resource_aliases_remain_rejected_with_fixed_stage_and_shape(
+    case, stage, slot, requests, numeric, suffix, short_parent
+):
+    first, last, rev, job = service(), service(), revision(), scheduler()
+
+    def alias(value):
+        return value.replace("projects/longbridgequant/", "projects/123456789/")
+
+    if case == "service":
+        first["name"] = alias(first["name"])
+    elif case == "traffic":
+        first["trafficStatuses"][0]["revision"] = alias(rev["name"])
+    elif case == "revision":
+        rev["name"] = alias(rev["name"])
+    elif case == "parent":
+        rev["service"] = "longbridge-quant-hk-service"
+    elif case == "scheduler":
+        job["name"] = alias(job["name"])
+    else:
+        last["name"] = alias(last["name"])
+    session = Session(
+        first=first,
+        recheck=last,
+        revision_overrides={REV1: rev},
+        scheduler_value=job,
+    )
+    with pytest.raises(
+        metadata.MetadataRejected, match="metadata_resource_invalid"
+    ) as caught:
+        inspect(session)
+    error = caught.value
+    assert error.stage == stage and error.resource_slot == slot
+    assert error.resource_shape == {
+        "configured_project_id_matches": False,
+        "project_segment_is_numeric": numeric,
+        "fixed_location_and_resource_suffix_matches": suffix,
+        "short_expected_service_parent_matches": short_parent,
+    }
+    assert len(session.calls) == requests
+    assert "123456789" not in str(error)
+
+
+@pytest.mark.parametrize("name", ["PRIVATE TOKEN", None, [], "x" * 513])
+def test_malformed_resource_context_is_only_fixed_booleans(name):
+    first = service()
+    first["name"] = name
+    session = Session(first=first)
+    with pytest.raises(metadata.MetadataRejected) as caught:
+        inspect(session)
+    error = caught.value
+    assert error.stage == "service_initial"
+    assert error.resource_slot == "service_name"
+    assert all(
+        type(value) is bool and value is False
+        for value in error.resource_shape.values()
+    )
+    assert len(session.calls) == 1 and "PRIVATE" not in str(error)
+
+
+def test_http_denial_has_planned_stage_but_no_resource_claim():
+    session = Session(status=403)
+    with pytest.raises(metadata.MetadataRejected) as caught:
+        inspect(session)
+    error = caught.value
+    assert error.stage == "service_initial" and error.http_status == 403
+    assert error.resource_slot is None and error.resource_shape is None
+    assert len(session.calls) == 1 and session.responses[0].body_reads == 0
+
+
+@pytest.mark.parametrize(
+    "malformed", [False, "stage", "slot", "shape", "shape_int", "shape_list"]
+)
+def test_launcher_emits_only_allowlisted_reader_context(monkeypatch, capsys, malformed):
+    pytest.importorskip("google.auth.transport.requests")
+    p = embedded_scope("METADATA_LAUNCH")
+    error = metadata.MetadataRejected("metadata_resource_invalid")
+    error.stage = "service_initial"
+    error.resource_slot = "service_name"
+    error.resource_shape = {
+        "configured_project_id_matches": False,
+        "project_segment_is_numeric": True,
+        "fixed_location_and_resource_suffix_matches": True,
+        "short_expected_service_parent_matches": False,
+    }
+    if malformed == "stage":
+        error.stage = ["PRIVATE STAGE"]
+    elif malformed == "slot":
+        error.resource_slot = "PRIVATE SLOT"
+    elif malformed == "shape":
+        error.resource_shape["raw_resource"] = "PRIVATE RESOURCE"
+    elif malformed == "shape_int":
+        error.resource_shape["project_segment_is_numeric"] = 1
+    elif malformed == "shape_list":
+        error.resource_shape = ["PRIVATE RESOURCE"]
+
+    def fail(**kwargs):
+        raise error
+
+    monkeypatch.setattr(metadata, "inspect_hk_producer_metadata", fail)
+    p["make_metadata_session"] = lambda *args: SimpleNamespace(close=lambda: None)
+    assert p["main"]() == 1
+    raw = capsys.readouterr().out
+    value = json.loads(raw.split("hk_producer_metadata_error:", 1)[1])
+    assert set(value) == {
+        "category",
+        "http_status",
+        "stage",
+        "resource_slot",
+        "resource_shape",
+    }
+    assert (
+        value["category"] == "metadata_resource_invalid"
+        and value["http_status"] is None
+    )
+    assert value["stage"] == (None if malformed == "stage" else "service_initial")
+    assert value["resource_slot"] == (None if malformed == "slot" else "service_name")
+    assert value["resource_shape"] == (
+        None
+        if malformed in {"shape", "shape_int", "shape_list", "slot"}
+        else error.resource_shape
+    )
+    assert "PRIVATE" not in raw
+
+
+@pytest.mark.parametrize(
+    "at,stage",
+    [
+        (1, "service_initial"),
+        (2, "revision_1"),
+        (3, "revision_2"),
+        (4, "scheduler"),
+        (5, "service_recheck"),
+    ],
+)
+def test_all_planned_stages_stop_on_denial_without_followup(at, stage):
+    session = Session(first=service(((REV1, 75), (REV2, 25))))
+    original = session.request
+
+    def request(*args, **kwargs):
+        response = original(*args, **kwargs)
+        if len(session.calls) == at:
+            response.status_code = 403
+        return response
+
+    session.request = request
+    with pytest.raises(metadata.MetadataRejected) as caught:
+        inspect(session)
+    assert caught.value.category == "metadata_http_denied"
+    assert caught.value.stage == stage and caught.value.http_status == 403
+    assert caught.value.resource_slot is None and caught.value.resource_shape is None
+    assert len(session.calls) == at and session.responses[-1].body_reads == 0
+
+
+def test_second_revision_mismatch_retains_exact_stage_and_no_followup():
+    wrong = revision(REV2)
+    wrong["name"] = wrong["name"].replace(
+        "projects/longbridgequant/", "projects/123456789/"
+    )
+    session = Session(
+        first=service(((REV1, 75), (REV2, 25))), revision_overrides={REV2: wrong}
+    )
+    with pytest.raises(metadata.MetadataRejected) as caught:
+        inspect(session)
+    assert caught.value.stage == "revision_2"
+    assert caught.value.resource_slot == "revision_name"
+    assert caught.value.resource_shape["project_segment_is_numeric"] is True
+    assert len(session.calls) == 3

@@ -66,10 +66,41 @@ class MetadataRejected(ValueError):
         super().__init__(category)
         self.category = category
         self.http_status = http_status
+        self.stage: str | None = None
+        self.resource_slot: str | None = None
+        self.resource_shape: dict[str, bool] | None = None
 
 
 def _reject(category: str) -> None:
     raise MetadataRejected(category)
+
+
+def _resource_invalid(value: Any, expected: str, slot: str) -> None:
+    """Project shape only; never accept or disclose an unknown resource alias."""
+    shape = {
+        "configured_project_id_matches": False,
+        "project_segment_is_numeric": False,
+        "fixed_location_and_resource_suffix_matches": False,
+        "short_expected_service_parent_matches": False,
+    }
+    if isinstance(value, str) and len(value) <= 512:
+        match = re.fullmatch(r"projects/([a-z][a-z0-9-]{0,62}|[0-9]{1,20})/(.+)", value)
+        if match:
+            project, suffix = match.groups()
+            shape["configured_project_id_matches"] = project == "longbridgequant"
+            shape["project_segment_is_numeric"] = (
+                re.fullmatch(r"[0-9]+", project) is not None
+            )
+            shape["fixed_location_and_resource_suffix_matches"] = (
+                suffix == expected.split("/", 2)[2]
+            )
+        shape["short_expected_service_parent_matches"] = (
+            slot == "revision_parent" and value == "longbridge-quant-hk-service"
+        )
+    error = MetadataRejected("metadata_resource_invalid")
+    error.resource_slot = slot
+    error.resource_shape = shape
+    raise error
 
 
 def _text(value: Any, maximum: int = 256) -> str:
@@ -106,7 +137,7 @@ def _duplicates(pairs):
     return result
 
 
-def _revision_resource(value: Any) -> str:
+def _revision_resource(value: Any, *, slot: str = "traffic_revision") -> str:
     value = _text(value, 512)
     prefix = SERVICE_RESOURCE + "/revisions/"
     if value.startswith(prefix):
@@ -114,12 +145,19 @@ def _revision_resource(value: Any) -> str:
     elif "/" not in value:
         name = value
     else:
-        _reject("metadata_resource_invalid")
+        terminal = value.rsplit("/", 1)[-1]
+        expected = prefix
+        if (
+            terminal.startswith("longbridge-quant-hk-service-")
+            and re.fullmatch(r"[a-z][a-z0-9-]{0,99}", terminal) is not None
+        ):
+            expected += terminal
+        _resource_invalid(value, expected, slot)
     if (
         not name.startswith("longbridge-quant-hk-service-")
         or re.fullmatch(r"[a-z][a-z0-9-]{0,99}", name) is None
     ):
-        _reject("metadata_resource_invalid")
+        _resource_invalid(value, prefix, slot)
     return prefix + name
 
 
@@ -163,7 +201,7 @@ class _Budget:
         elif resource == SCHEDULER_RESOURCE:
             base = "https://cloudscheduler.googleapis.com/v1/" + resource
             expected = SCHEDULER_FIELDS
-        elif resource == _revision_resource(resource):
+        elif resource == _revision_resource(resource, slot="request_resource"):
             base = "https://run.googleapis.com/v2/" + resource
             expected = REVISION_FIELDS
         else:
@@ -300,7 +338,7 @@ def _service(value: dict) -> tuple[tuple, dict[str, int]]:
     }
     _keys(value, allowed, allowed - {"traffic", "reconciling"})
     if value["name"] != SERVICE_RESOURCE:
-        _reject("metadata_resource_invalid")
+        _resource_invalid(value["name"], SERVICE_RESOURCE, "service_name")
     generation = _generation(value["generation"])
     if (
         _generation(value["observedGeneration"]) != generation
@@ -354,8 +392,10 @@ def _revision(value: dict, resource: str, percent: int) -> dict:
         "containers",
     }
     _keys(value, allowed, allowed - {"reconciling"})
-    if value["name"] != resource or value["service"] != SERVICE_RESOURCE:
-        _reject("metadata_resource_invalid")
+    if value["name"] != resource:
+        _resource_invalid(value["name"], resource, "revision_name")
+    if value["service"] != SERVICE_RESOURCE:
+        _resource_invalid(value["service"], SERVICE_RESOURCE, "revision_parent")
     _text(value["uid"])
     _text(value["etag"])
     if value.get("reconciling", False) is not False or _generation(
@@ -419,7 +459,7 @@ def _scheduler(value: dict) -> dict:
         {"name", "state"},
     )
     if value["name"] != SCHEDULER_RESOURCE:
-        _reject("metadata_resource_invalid")
+        _resource_invalid(value["name"], SCHEDULER_RESOURCE, "scheduler_name")
     if not isinstance(value["state"], str) or value["state"] not in _STATES:
         _reject("metadata_schema_invalid")
     status = value.get("status", {})
@@ -445,15 +485,31 @@ def inspect_hk_producer_metadata(
 ) -> dict:
     """Read current fixed-resource configuration, never invoke a producer."""
     budget = _Budget(monotonic)
-    first, revisions = _service(budget.get(session, SERVICE_RESOURCE, SERVICE_FIELDS))
-    projected = [
-        _revision(budget.get(session, resource, REVISION_FIELDS), resource, percent)
-        for resource, percent in sorted(revisions.items())
-    ]
-    scheduler = _scheduler(budget.get(session, SCHEDULER_RESOURCE, SCHEDULER_FIELDS))
-    last, _ = _service(budget.get(session, SERVICE_RESOURCE, SERVICE_FIELDS))
-    if last != first:
-        _reject("metadata_service_changed")
+    # This labels the planned operation; native auth can fail before its GET.
+    stage = "service_initial"
+    try:
+        first, revisions = _service(
+            budget.get(session, SERVICE_RESOURCE, SERVICE_FIELDS)
+        )
+        projected = []
+        for index, (resource, percent) in enumerate(sorted(revisions.items()), 1):
+            stage = "revision_" + str(index)
+            projected.append(
+                _revision(
+                    budget.get(session, resource, REVISION_FIELDS), resource, percent
+                )
+            )
+        stage = "scheduler"
+        scheduler = _scheduler(
+            budget.get(session, SCHEDULER_RESOURCE, SCHEDULER_FIELDS)
+        )
+        stage = "service_recheck"
+        last, _ = _service(budget.get(session, SERVICE_RESOURCE, SERVICE_FIELDS))
+        if last != first:
+            _reject("metadata_service_changed")
+    except MetadataRejected as error:
+        error.stage = stage
+        raise
     result = {
         "evidence_kind": "current_hk_producer_metadata",
         "target": "hk",
