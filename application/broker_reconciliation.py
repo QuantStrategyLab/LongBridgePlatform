@@ -423,7 +423,9 @@ def collect_read_only_reconciliation_observations(
         cash_complete=True,
         # A bounded history query cannot prove every long-lived active order is present.
         open_orders_complete=False,
-        recent_executions_complete=len(executions) < 1000,
+        # longport 3.0.23 returns rows without the HTTP has_more field or page
+        # coverage evidence. A short or empty result cannot prove completeness.
+        recent_executions_complete=False,
         broker_reported_balances=broker_balances,
         financing=financing,
     )

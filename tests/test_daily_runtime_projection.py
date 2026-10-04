@@ -144,6 +144,25 @@ def test_execution_status_no_action_with_submission_is_submitted() -> None:
     assert record["fills"]["count"] is None
 
 
+def test_pending_order_report_does_not_populate_execution_fills() -> None:
+    projected = _project(
+        [
+            _report(
+                broker_submission_done=True,
+                action_done=True,
+                execution_status="pending_reconciliation",
+                orders_pending_count=1,
+                receipt={"outcome": "submitted", "broker_confirmation": "accepted"},
+            )
+        ],
+        observed_at=dt.datetime(2026, 9, 28, 16, 40, tzinfo=HK),
+    )
+
+    record = _record(projected)
+    assert record["status"] == "reconciliation_required"
+    assert record["fills"] == {"source": "not_connected", "records": [], "count": None}
+
+
 def test_partial_receipt_is_not_filled() -> None:
     projected = _project(
         [

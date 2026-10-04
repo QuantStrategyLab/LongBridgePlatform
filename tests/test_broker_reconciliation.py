@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -703,9 +704,24 @@ def test_recent_executions_include_today_and_deduplicate_window_overlap():
 
     assert {row["trade_id"] for row in observations.recent_executions} == {"old", "current"}
     assert len(observations.recent_executions) == 2
-    assert observations.recent_executions_complete is True
+    assert observations.recent_executions_complete is False
     assert observations.account_identity_match is False
     assert observations.open_orders_complete is False
+
+
+def test_duplicate_identical_execution_rows_collapse_by_stable_trade_id():
+    context, _calls = _read_only_trade_context()
+    now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+    context.history_executions = lambda **_kwargs: [
+        _execution("replayed-trade", now - timedelta(minutes=1)),
+        _execution("replayed-trade", now - timedelta(minutes=1)),
+    ]
+
+    observations = reconciliation.collect_read_only_reconciliation_observations(
+        object(), context, account_scope="SG", now=now,
+    )
+
+    assert [row["trade_id"] for row in observations.recent_executions] == ["replayed-trade"]
 
 
 def test_today_only_execution_is_not_silently_omitted():
@@ -720,16 +736,95 @@ def test_today_only_execution_is_not_silently_omitted():
     assert [row["trade_id"] for row in observations.recent_executions] == ["today-only"]
 
 
-def test_result_at_sdk_limit_cannot_claim_complete_executions():
+@pytest.mark.parametrize("execution_count", [0, 1, 999, 1000])
+def test_execution_counts_without_page_coverage_cannot_claim_complete(execution_count):
     context, _calls = _read_only_trade_context()
     now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
-    context.history_executions = lambda **_kwargs: [_execution(str(i), now) for i in range(1000)]
+    context.history_executions = lambda **_kwargs: [
+        _execution(str(i), now) for i in range(execution_count)
+    ]
 
     observations = reconciliation.collect_read_only_reconciliation_observations(
         object(), context, account_scope="SG", now=now,
     )
 
+    assert len(observations.recent_executions) == execution_count
     assert observations.recent_executions_complete is False
+
+
+@pytest.mark.parametrize("execution_count", [1, 1000])
+def test_account_snapshot_preserves_balance_facts_with_incomplete_executions(execution_count):
+    context, _calls = _read_only_trade_context()
+    now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+    context.history_executions = lambda **_kwargs: [
+        _execution(str(i), now - timedelta(minutes=1)) for i in range(execution_count)
+    ]
+
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True,
+        account_scope="PAPER",
+        build_read_only_contexts=_snapshot_contexts(context),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+        now_reader=lambda: now,
+    )
+
+    assert status == 200
+    assert payload["status"] == "partial"
+    assert payload["broker_reported_balances"] == [
+        {"currency": "USD", "net_assets": "10", "total_cash": "10"}
+    ]
+    assert payload["cash_complete"] is True
+    assert payload["positions_complete"] is True
+    assert payload["known_recent_executions_7d_count"] == execution_count
+    assert payload["recent_executions_complete"] is False
+    assert payload["execution_fees"] is None
+    assert payload["equity"] is None
+    assert payload["no_order"] is True
+    assert payload["live_authority_granted"] is False
+
+
+def test_incomplete_executions_cannot_match_a_trusted_digest(monkeypatch):
+    context, _calls = _read_only_trade_context()
+    now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+    context.history_executions = lambda **_kwargs: [_execution("synthetic-trade", now)]
+    observations = reconciliation.collect_read_only_reconciliation_observations(
+        object(), context, account_scope="PAPER", now=now,
+    )
+    # Isolate execution coverage from the other synthetic reconciliation gates.
+    observations = replace(observations, account_identity_match=True, open_orders_complete=True)
+    ledger_digest = "2" * 64
+    expected = {
+        f"{name}_sha256": reconciliation.calculate_broker_observation_sha256(
+            getattr(observations, name)
+        )
+        for name in ("account_scope", "positions", "cash", "open_orders", "recent_executions")
+    }
+    expected["local_execution_ledger_sha256"] = ledger_digest
+
+    class MarkerStore:
+        def calculate_recent_ledger_digest(self, **_kwargs):
+            return ledger_digest, 1
+
+    monkeypatch.setattr(
+        reconciliation, "build_execution_marker_store_from_env", lambda **_kwargs: MarkerStore(),
+    )
+    candidate = reconciliation.build_reconciliation_candidate(
+        observations=observations,
+        runtime_target=_runtime_target(),
+        project_id=None,
+        env_reader=lambda key, default=None: (
+            json.dumps(expected) if key == reconciliation.EXPECTED_DIGESTS_ENV_NAME else default
+        ),
+        observed_at=now,
+    )
+
+    assert candidate.expected_digests_configured is True
+    assert candidate.evidence.recent_executions_sha256 == expected["recent_executions_sha256"]
+    assert candidate.evidence.recent_executions_match is False
+    assert set(candidate.recovery_blockers) == {
+        reconciliation.BrokerReconciliationFinding.RECENT_EXECUTIONS_MISMATCH
+    }
+    assert candidate.permits_active_lkg is False
 
 
 @pytest.mark.parametrize("bad_time", [None, "private-invalid-time"])
