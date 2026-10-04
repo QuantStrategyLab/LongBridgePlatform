@@ -84,6 +84,8 @@ HISTORY = {
 MAIN_SHA = "a" * 40
 HTTP_SNAPSHOT_CANDIDATE = admission.APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE
 PROBE_SNAPSHOT_CANDIDATE = admission.APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE
+PROBE_FINANCING_CANDIDATE = admission.APPROVED_PAPER_PROBE_FINANCING_CANDIDATE
+PROBE_CANDIDATES = (PROBE_SNAPSHOT_CANDIDATE, PROBE_FINANCING_CANDIDATE)
 SGHK_SNAPSHOT_CANDIDATE = admission.APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE
 HK_PROBE_DIAGNOSTICS_CANDIDATE = admission.APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE
 SGHK_PREFIX = "gs://qsl-runtime-logs-shared/longbridge/account_snapshots"
@@ -980,7 +982,8 @@ def test_http_snapshot_readback_preserves_retained_history_values():
             confirm(changed)
 
 
-def test_probe_snapshot_candidate_uses_strict_serving_configuration():
+@pytest.mark.parametrize("probe_candidate", PROBE_CANDIDATES)
+def test_probe_snapshot_candidate_uses_strict_serving_configuration(probe_candidate):
     service = _service()
     calls = []
 
@@ -989,17 +992,17 @@ def test_probe_snapshot_candidate_uses_strict_serving_configuration():
         if command[:3] == ["gcloud", "run", "revisions"]:
             return json.dumps(_revision("serving-rev", SERVING, "serving-image"))
         sha, name = command[2].split(":", 1)
-        assert sha in {PROBE_SNAPSHOT_CANDIDATE, SERVING}
+        assert sha in {probe_candidate, SERVING}
         return _declaration(name, UES)
 
     plan = admission.prepare_image_only_staging(
         service="paper-service", project="synthetic-project", region="synthetic-region",
         service_json=service,
-        env={**_main_env(), "SOURCE_COMMIT": PROBE_SNAPSHOT_CANDIDATE},
-        image_commit=PROBE_SNAPSHOT_CANDIDATE,
+        env={**_main_env(), "SOURCE_COMMIT": probe_candidate},
+        image_commit=probe_candidate,
         run=run,
     )
-    assert plan["image_commit"] == PROBE_SNAPSHOT_CANDIDATE
+    assert plan["image_commit"] == probe_candidate
     assert plan["history_arg"] == plan["snapshot_arg"] == ""
     assert plan["history_values"] == plan["retained_history_values"] == {}
     assert plan["template_digest"] == admission._config_digest(admission._configuration(service))
@@ -1010,6 +1013,7 @@ def test_probe_snapshot_candidate_uses_strict_serving_configuration():
     )
 
 
+@pytest.mark.parametrize("probe_candidate", PROBE_CANDIDATES)
 @pytest.mark.parametrize(
     "env_overrides",
     [
@@ -1021,8 +1025,10 @@ def test_probe_snapshot_candidate_uses_strict_serving_configuration():
         {"ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false"},
     ],
 )
-def test_probe_snapshot_source_requires_exact_candidate_paper_and_empty_settings(env_overrides):
-    env = {**_main_env(), "SOURCE_COMMIT": PROBE_SNAPSHOT_CANDIDATE}
+def test_probe_snapshot_source_requires_exact_candidate_paper_and_empty_settings(
+    probe_candidate, env_overrides
+):
+    env = {**_main_env(), "SOURCE_COMMIT": probe_candidate}
     env.update(env_overrides)
     calls = []
     with pytest.raises(admission.AdmissionError, match="not approved"):
@@ -1034,7 +1040,8 @@ def test_probe_snapshot_source_requires_exact_candidate_paper_and_empty_settings
     assert calls == []
 
 
-def test_probe_snapshot_candidate_cannot_use_http_staged_template_exception():
+@pytest.mark.parametrize("probe_candidate", PROBE_CANDIDATES)
+def test_probe_snapshot_candidate_cannot_use_http_staged_template_exception(probe_candidate):
     service = _http_snapshot_service(
         history={key: value for key, value in HISTORY.items() if key != "WORKFLOW_TARGET"}
     )
@@ -1050,8 +1057,8 @@ def test_probe_snapshot_candidate_cannot_use_http_staged_template_exception():
         admission.prepare_image_only_staging(
             service="paper-service", project="synthetic-project", region="synthetic-region",
             service_json=service,
-            env={**_main_env(), "SOURCE_COMMIT": PROBE_SNAPSHOT_CANDIDATE},
-            image_commit=PROBE_SNAPSHOT_CANDIDATE,
+            env={**_main_env(), "SOURCE_COMMIT": probe_candidate},
+            image_commit=probe_candidate,
             run=run,
         )
     assert not any(
@@ -1059,3 +1066,91 @@ def test_probe_snapshot_candidate_cannot_use_http_staged_template_exception():
         and command[4] == STAGED_SOURCE_REVISION
         for command in calls
     )
+
+
+@pytest.mark.parametrize("probe_candidate", PROBE_CANDIDATES)
+def test_probe_candidate_readback_rejects_traffic_config_image_and_serving_revision(probe_candidate):
+    image = "repo@sha256:" + "b" * 64
+    service = _service()
+    plan = {
+        "history_values": {},
+        "retained_history_values": {},
+        "snapshot_value": None,
+        "service_ingress": "internal",
+        "serving_traffic": [{"revisionName": "serving-rev", "percent": 100}],
+        "template_digest": admission._config_digest(admission._configuration(service)),
+    }
+    revision = _revision("paper-service-r123", probe_candidate, image)
+
+    def confirm(service_payload, revision_payload, *, plan_payload=plan):
+        def run(command):
+            if command[:3] == ["gcloud", "run", "services"]:
+                return json.dumps(service_payload)
+            return json.dumps(revision_payload)
+
+        admission.confirm_image_only_readback(
+            service="paper-service",
+            project="synthetic-project",
+            region="synthetic-region",
+            plan=plan_payload,
+            expected_image=image,
+            expected_commit=probe_candidate,
+            expected_revision="paper-service-r123",
+            run=run,
+        )
+
+    confirm(service, revision)
+    changed_traffic = json.loads(json.dumps(service))
+    changed_traffic["status"]["traffic"] = [{"revisionName": "other-rev", "percent": 100}]
+    with pytest.raises(admission.AdmissionError, match="traffic"):
+        confirm(changed_traffic, revision)
+    serving_staged = json.loads(json.dumps(service))
+    serving_staged["status"]["traffic"] = [{"revisionName": "paper-service-r123", "percent": 100}]
+    with pytest.raises(admission.AdmissionError, match="staged revision is serving"):
+        confirm(
+            serving_staged,
+            revision,
+            plan_payload={
+                **plan,
+                "serving_traffic": [{"revisionName": "paper-service-r123", "percent": 100}],
+            },
+        )
+    changed_env = _revision(
+        "paper-service-r123",
+        probe_candidate,
+        image,
+        extra_env=[{"name": "UNEXPECTED", "value": "1"}],
+    )
+    with pytest.raises(admission.AdmissionError, match="configuration"):
+        confirm(service, changed_env)
+    wrong_image = _revision("paper-service-r123", probe_candidate, "repo@sha256:" + "c" * 64)
+    with pytest.raises(admission.AdmissionError, match="approved image"):
+        confirm(service, wrong_image)
+    wrong_source = _revision("paper-service-r123", "d" * 40, image)
+    with pytest.raises(admission.AdmissionError, match="approved image"):
+        confirm(service, wrong_source)
+
+
+@pytest.mark.parametrize("probe_candidate", PROBE_CANDIDATES)
+def test_probe_candidate_rejects_serving_ues_mismatch(probe_candidate):
+    calls = []
+
+    def run(command):
+        calls.append(list(command))
+        if command[:3] == ["gcloud", "run", "revisions"]:
+            return json.dumps(_revision("serving-rev", SERVING, "serving-image"))
+        sha, name = command[2].split(":", 1)
+        pin = OTHER_UES if sha == SERVING else UES
+        return _declaration(name, pin)
+
+    with pytest.raises(admission.AdmissionError, match="differs from serving"):
+        admission.prepare_image_only_staging(
+            service="paper-service",
+            project="synthetic-project",
+            region="synthetic-region",
+            service_json=_service(),
+            env={**_main_env(), "SOURCE_COMMIT": probe_candidate},
+            image_commit=probe_candidate,
+            run=run,
+        )
+    assert not any(command[:3] == ["gcloud", "run", "services"] and "update" in command for command in calls)

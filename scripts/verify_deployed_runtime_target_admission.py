@@ -39,6 +39,8 @@ APPROVED_PAPER_HISTORY_CANDIDATE = "0b939723c1db3ef59175535998b470cbcd4b8824"
 APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
 # Reviewed PAPER internal-probe snapshot producer. It carries no history or snapshot env update.
 APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE = "318bf0419ec91002fd0f0dfd1bc80a0664a85e79"
+# Reviewed PAPER internal-probe financing producer. Same empty-settings gate as the probe snapshot.
+APPROVED_PAPER_PROBE_FINANCING_CANDIDATE = "82788aa7c73690d2b87f63540a9102943e9372eb"
 # Reviewed read-only SG/HK account-snapshot producer. It is not a PAPER candidate.
 APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE = "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f"
 # Fixed 922-based HK candidate carrying only bounded /probe failure diagnostics.
@@ -824,7 +826,10 @@ def _validate_image_only_source(
     elif image_commit == APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE:
         if str(env.get("WORKFLOW_TARGET") or "") != "PAPER" or history is not None:
             raise AdmissionError("image source is not approved")
-    elif image_commit == APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE:
+    elif image_commit in {
+        APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE,
+        APPROVED_PAPER_PROBE_FINANCING_CANDIDATE,
+    }:
         if (
             str(env.get("WORKFLOW_TARGET") or "") != "PAPER"
             or history is not None
