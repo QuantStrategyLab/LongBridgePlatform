@@ -99,14 +99,12 @@ def _historical_candidates(
                 retry=None,
                 fields="items(name,generation,size),nextPageToken",
             )
-            if not hasattr(iterator, "pages") or not hasattr(
-                iterator, "next_page_token"
-            ):
+            # Native SDK pages is a single-use property; access it exactly once.
+            pages = getattr(iterator, "pages", None)
+            if pages is None or not hasattr(iterator, "next_page_token"):
                 raise snapshots._Rejected("historical_listing_invalid")
             page = list(
-                islice(
-                    next(iter(iterator.pages), ()), snapshots.MAX_OBJECTS_PER_DAY + 1
-                )
+                islice(next(iter(pages), ()), snapshots.MAX_OBJECTS_PER_DAY + 1)
             )
             token = iterator.next_page_token
         except snapshots._Rejected:
