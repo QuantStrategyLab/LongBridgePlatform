@@ -216,7 +216,7 @@ jobs:
 
       - name: Publish read-only runtime execution evidence
         if: ${{ matrix.target.label == 'PAPER' && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}
-        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@c87355fed83dc60e051244f7c7fbd5c9c3968f2b
+        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@3b1a4929decbca2858589a7c14189382505a1c5a
         with:
           source-id: runtime-reports-longbridge
           report-platform: longbridge
