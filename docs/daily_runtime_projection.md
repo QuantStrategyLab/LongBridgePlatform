@@ -84,6 +84,8 @@ projected = project_listed_reports(
 
 可选的 QRS 日报同步另由 `RUNTIME_DAILY_SYNC_ENABLED` 精确等于 `true` 才开启，并要求 HTTPS 精确路径 `/api/runtime-daily/sync`。它复用既有 `EXECUTION_EVIDENCE_SYNC_TOKEN`，不增加 token 类型；workflow 仅在该开关开启时把 secret 送入当前 step。只允许固定 QRS PAPER 目标 `longbridge-quant-paper-service|russell_top50_leader_rotation|paper`，不由调用者指定或推导账户 key。只有本次 GCS 明确新建后才 POST 与该对象完全相同的 JSON；同一观测版本冲突及 GCS 写入结果未知均不 POST。POST 不跟随重定向、不重试，限制超时和响应大小。同步状态独立输出为 `qrs_sync=disabled|recorded|rejected|unknown`；网络结果未知或 QRS 拒绝不会撤销已保存的 GCS 记录，也不表示网页已经展示。成功响应必须回显同一 `business_date` 和 `target_key`，且包含服务端解析出的非空 `account_key` 才报告 `recorded`，但不会记录或输出该账户 key。
 
+这里的“可选”表示可以不开启同步。整个投影关闭时，CLI 保持正常退出 0；同步未精确开启时，GCS 存档新建或同观测版本已存在也退出 0。显式开启同步后，CLI 只有取得 `qrs_sync=recorded` 的有效 ACK 才退出 0；`rejected` 或异常 `disabled` 退出 2，`unknown`、未识别的同步状态或 `skipped_existing` 退出 1。同观测版本已存在会输出 `qrs_sync=skipped_existing`，因为本次没有 POST，也没有确认 QRS 已收录，不能用 GCS 对象存在替代 ACK。非零退出不撤销已保存的 GCS 对象，不自动重试、重发、改写观测时间或覆盖旧对象；`publish` 仍分别返回 GCS 存档状态、业务日和同步状态。
+
 heartbeat 的告警、返回码和交易链不变。这个步骤不调用 heartbeat 的 `main`。workflow 只在 PAPER、变量显式为 `true`、任务未取消且 Google 认证成功时运行；heartbeat 业务失败后仍可以写出异常投影。
 
-该同步仍默认关闭；本地只读核验发现 LongBridge PAPER 环境尚无 `RUNTIME_DAILY_SYNC_ENABLED` 或 `RUNTIME_DAILY_SYNC_URL` variable。它复用已有 execution-evidence secret 名称，不新增 secret。真实报告前缀、桶权限及第一份对象仍需在获准身份上验收。bot 送达不在这一步。
+该同步仍默认关闭；此前的只读核验记录（非本次线上配置确认）显示 LongBridge PAPER 环境当时尚无 `RUNTIME_DAILY_SYNC_ENABLED` 或 `RUNTIME_DAILY_SYNC_URL` variable。它复用已有 execution-evidence secret 名称，不新增 secret。真实报告前缀、桶权限及第一份对象仍需在获准身份上验收。bot 送达不在这一步。

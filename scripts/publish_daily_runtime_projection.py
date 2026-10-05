@@ -698,6 +698,15 @@ def _storage_client() -> Any:
     return storage.Client()
 
 
+def _sync_exit_code(env: Mapping[str, str], sync_status: str) -> int:
+    """An explicitly requested sync needs an ACK; the GCS fact stays separate."""
+    if env.get("RUNTIME_DAILY_SYNC_ENABLED") != "true" or sync_status == "recorded":
+        return 0
+    if sync_status in {"rejected", "disabled"}:
+        return 2
+    return 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     del argv
     try:
@@ -716,10 +725,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if status == "recorded":
         print(f"daily runtime projection recorded {business_date}; qrs_sync={sync_status}")
-        return 0
+        return _sync_exit_code(os.environ, sync_status)
     if status == "already_recorded":
         print(f"daily runtime projection already recorded {business_date}; qrs_sync={sync_status}")
-        return 0
+        return _sync_exit_code(os.environ, sync_status)
     print("daily runtime projection failed")
     return 1
 
