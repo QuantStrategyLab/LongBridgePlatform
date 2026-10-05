@@ -505,6 +505,134 @@ def test_main_hides_errors_and_keeps_heartbeat_uninvoked(monkeypatch, capsys) ->
     assert capsys.readouterr().out.strip() == "daily runtime projection rejected"
 
 
+@pytest.mark.parametrize("status", ["recorded", "already_recorded"])
+@pytest.mark.parametrize("sync_enabled", ["false", "true"])
+@pytest.mark.parametrize(
+    ("sync_status", "enabled_exit"),
+    [("recorded", 0), ("rejected", 2), ("unknown", 1),
+     ("skipped_existing", 1), ("disabled", 2), ("unexpected", 1)],
+)
+def test_main_requires_sync_ack_only_when_explicitly_enabled(
+    monkeypatch, capsys, status, sync_enabled, sync_status, enabled_exit,
+) -> None:
+    monkeypatch.setenv("RUNTIME_DAILY_SYNC_ENABLED", sync_enabled)
+    monkeypatch.setattr(publisher, "publish", lambda *_args, **_kwargs: (status, "2026-09-28", sync_status))
+    assert publisher.main([]) == (enabled_exit if sync_enabled == "true" else 0)
+    assert capsys.readouterr().out.strip().endswith(f"qrs_sync={sync_status}")
+
+
+@pytest.mark.parametrize("sync_enabled", [None, "", "false", "True", "TRUE", "1", " true"])
+def test_main_sync_opt_in_is_exact_and_disabled_projection_stays_normal(
+    monkeypatch, capsys, sync_enabled,
+) -> None:
+    if sync_enabled is None:
+        monkeypatch.delenv("RUNTIME_DAILY_SYNC_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("RUNTIME_DAILY_SYNC_ENABLED", sync_enabled)
+    monkeypatch.setattr(publisher, "publish", lambda *_args, **_kwargs: ("recorded", "2026-09-28", "disabled"))
+    assert publisher.main([]) == 0
+    assert capsys.readouterr().out.strip().endswith("qrs_sync=disabled")
+    monkeypatch.setenv("RUNTIME_DAILY_SYNC_ENABLED", "true")
+    monkeypatch.setattr(publisher, "publish", lambda *_args, **_kwargs: ("disabled", "", "disabled"))
+    assert publisher.main([]) == 0
+    assert capsys.readouterr().out.strip() == "daily runtime projection disabled"
+
+
+@pytest.mark.parametrize("sync_enabled", ["false", "true"])
+def test_main_unrecognized_local_status_stays_failed(monkeypatch, capsys, sync_enabled) -> None:
+    monkeypatch.setenv("RUNTIME_DAILY_SYNC_ENABLED", sync_enabled)
+    monkeypatch.setattr(publisher, "publish", lambda *_args, **_kwargs: ("unexpected", "", "recorded"))
+    assert publisher.main([]) == 1
+    assert capsys.readouterr().out.strip() == "daily runtime projection failed"
+
+
+@pytest.mark.parametrize(
+    ("outcome", "sync_enabled", "expected_exit", "expected_sync", "expected_posts"),
+    [
+        ("ack", "true", 0, "recorded", 1),
+        ("ack", "false", 0, "disabled", 0),
+        ("ack", "True", 0, "disabled", 0),
+        ("unauthorized", "true", 2, "rejected", 1),
+        ("redirect", "true", 2, "rejected", 1),
+        ("negative_ack", "true", 2, "rejected", 1),
+        ("missing_token", "true", 2, "rejected", 0),
+        ("timeout", "true", 1, "unknown", 1),
+        ("server_error", "true", 1, "unknown", 1),
+        ("mismatched_ack", "true", 1, "unknown", 1),
+        ("invalid_json", "true", 1, "unknown", 1),
+        ("oversized_response", "true", 1, "unknown", 1),
+        ("existing", "true", 1, "skipped_existing", 0),
+        ("existing", "false", 0, "skipped_existing", 0),
+    ],
+)
+def test_main_real_publish_keeps_archive_and_does_not_retry_sync(
+    monkeypatch, capsys, outcome, sync_enabled, expected_exit, expected_sync, expected_posts,
+) -> None:
+    env = _sync_env(RUNTIME_DAILY_SYNC_ENABLED=sync_enabled)
+    if outcome == "missing_token":
+        env["EXECUTION_EVIDENCE_SYNC_TOKEN"] = ""
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    blob = _Blob(fail=PreconditionFailed("already exists") if outcome == "existing" else None)
+    requests = []
+    results = []
+    real_publish = publisher.publish
+
+    def post(url, **kwargs):
+        requests.append((url, kwargs))
+        if outcome == "timeout":
+            raise TimeoutError("token=secret transport detail")
+        if outcome == "unauthorized":
+            return _SyncResponse(status_code=401)
+        if outcome == "redirect":
+            return _SyncResponse(status_code=302, redirect=True)
+        if outcome == "server_error":
+            return _SyncResponse(status_code=503)
+        payload = json.loads(kwargs["data"])
+        response = _SyncResponse(payload={
+            "ok": outcome != "negative_ack",
+            "stored": True,
+            "business_date": "wrong" if outcome == "mismatched_ack" else payload["records"][0]["business_date"],
+            "target_key": publisher._RUNTIME_DAILY_SYNC_TARGET_KEY,
+            "account_key": "secret-account-key",
+        })
+        if outcome == "invalid_json":
+            response.content = b"secret-invalid-json"
+        if outcome == "oversized_response":
+            response.content = b"x" * (publisher._RUNTIME_DAILY_SYNC_MAX_RESPONSE_BYTES + 1)
+        return response
+
+    def publish_offline(supplied_env, *, now):
+        del now
+        result = real_publish(
+            supplied_env, now=OBSERVED, session_dates_loader=_open_calendar,
+            client=_Client(blob), list_objects=lambda *_args, **_kwargs: [],
+            read_payload=lambda _uri: None,
+            report_globs=lambda _since, _now: ["gs://reports/longbridge/**/2026-09/*.json"],
+            http_post=post,
+        )
+        results.append(result)
+        return result
+
+    monkeypatch.setattr(heartbeat, "_describe_cloud_run_service", _sync_describe)
+    monkeypatch.setattr(heartbeat, "_list_scheduler_jobs", lambda *, project: _jobs_for_env(env))
+    monkeypatch.setattr(publisher, "publish", publish_offline)
+    assert publisher.main([]) == expected_exit
+    captured = capsys.readouterr()
+    expected_status = "already_recorded" if outcome == "existing" else "recorded"
+    assert results == [(expected_status, "2026-09-28", expected_sync)]
+    assert captured.out.strip().endswith(f"qrs_sync={expected_sync}")
+    assert "secret" not in captured.out + captured.err
+    assert len(blob.uploads) == 1
+    assert blob.uploads[0]["kwargs"] == {
+        "content_type": "application/json", "if_generation_match": 0, "timeout": 20, "retry": None,
+    }
+    assert len(requests) == expected_posts
+    if requests:
+        assert requests[0][1]["data"] == blob.uploads[0]["data"].encode("utf-8")
+        assert requests[0][1]["allow_redirects"] is False
+
+
 def test_missing_schedule_does_not_publish_a_normal_day(monkeypatch) -> None:
     target = _target()
     target["scheduler"] = {}
