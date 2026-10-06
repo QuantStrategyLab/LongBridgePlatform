@@ -461,6 +461,7 @@ def test_bound_v7_decision_mapper_preserves_research_block_markers(monkeypatch) 
 
 def test_bound_v7_loaded_runtime_to_rebalance_isolated_validation_has_zero_writes(monkeypatch) -> None:
     from application import rebalance_service
+    from application.runtime_composer import LongBridgeRuntimeComposer
     from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
     from application.runtime_strategy_adapters import build_runtime_strategy_adapters
     from quant_platform_kit.common.models import QuoteSnapshot
@@ -566,6 +567,50 @@ def test_bound_v7_loaded_runtime_to_rebalance_isolated_validation_has_zero_write
             lambda: inputs["portfolio_snapshot"]
         ),
     )
+    # Use the same explicit silent-sink contract as main's validation_only
+    # caller. A no-trade success flag alone must not silence RiskEngine REJECT.
+    runtime_ports = runtime
+    composer = LongBridgeRuntimeComposer(
+        project_id=None, secret_name="synthetic-validation", token_refresh_threshold_days=30,
+        account_prefix="PAPER", account_region="PAPER", strategy_profile=V7_PAPER_PROFILE,
+        strategy_display_name="V7", strategy_display_name_localized="V7",
+        strategy_domain="us_equity", notify_lang="en", tg_token=None, tg_chat_id=None,
+        managed_symbols=("SOXL", "SOXX", "BOXX"), benchmark_symbol="SOXX",
+        signal_effective_after_trading_days=1, separator="-",
+        limit_sell_discount=1.0, limit_buy_premium=1.0,
+        order_poll_interval_sec=0, order_poll_max_attempts=1,
+        safe_haven_cash_substitute_threshold_usd=1000.0, min_order_notional_usd=100.0,
+        dry_run_only=True, configured_dry_run_only=False, suppress_live_execution_commands=True,
+        runtime_target=target,
+        broker_adapters=SimpleNamespace(
+            build_market_data_port=runtime_ports.market_data_port_factory,
+            build_portfolio_port=runtime_ports.portfolio_port_factory,
+            build_execution_port=runtime_ports.execution_port_factory,
+        ),
+        strategy_adapters=SimpleNamespace(
+            calculate_strategy_indicators=lambda *_args, **_kwargs: inputs["derived_indicators"],
+            resolve_rebalance_plan=runtime_ports.resolve_rebalance_plan,
+        ),
+        estimate_max_purchase_quantity_fn=runtime_ports.estimate_max_purchase_quantity,
+        fetch_order_status_fn=lambda *_args, **_kwargs: None,
+        fetch_token_from_secret_fn=lambda *_args, **_kwargs: "",
+        refresh_token_if_needed_fn=lambda *_args, **_kwargs: "",
+        build_contexts_fn=lambda *_args, **_kwargs: ("quote", "trade"),
+        run_id_builder=lambda: "synthetic-validation",
+        event_logger=lambda *_args, **_kwargs: {},
+        report_builder=lambda *_args, **_kwargs: {},
+        report_persister=lambda *_args, **_kwargs: None,
+        translator=build_translator("en"), env_reader=lambda _name, default="": default,
+        sleeper=lambda _seconds: None,
+        bootstrap_builder=lambda **_kwargs: runtime_ports.bootstrap,
+        notification_adapter_builder=lambda **_kwargs: SimpleNamespace(
+            notification_port=runtime_ports.notifications,
+            notify_issue=runtime_ports.notify_issue,
+            post_submit_order=None,
+        ),
+    )
+    runtime = composer.build_rebalance_runtime(silent_cycle_notifications=True)
+
     config = LongBridgeRebalanceConfig(
         strategy_profile=V7_PAPER_PROFILE,
         dry_run_only=True,
@@ -588,6 +633,16 @@ def test_bound_v7_loaded_runtime_to_rebalance_isolated_validation_has_zero_write
     assert plan["execution"]["no_order"] is True
     assert result.dry_run_orders == ()
     assert observed == {"submit": 0, "notify": 0}
+
+    # The same real V7 REJECT is still visible on the ordinary runtime sink,
+    # even in dry-run. Do not create a profile/no_order exception in the policy.
+    ordinary_runtime = composer.build_rebalance_runtime(silent_cycle_notifications=False)
+    ordinary_result = rebalance_service.run_strategy(runtime=ordinary_runtime, config=config)
+    assert ordinary_result.execution["risk_gate"] == "REJECT"
+    assert ordinary_result.dry_run_orders == ()
+    assert ordinary_result.pending_orders == ()
+    assert observed == {"submit": 0, "notify": 1}
+
 
 
 def test_v7_evidence_runtime_to_rebalance_uses_real_risk_and_fake_broker(monkeypatch, tmp_path) -> None:

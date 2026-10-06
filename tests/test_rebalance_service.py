@@ -3175,7 +3175,10 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             dry_run_only=True,
         )
 
-        self.assertEqual(sent_messages, [])
+        # Missing BOXX quote is an independent issue, not healthy cycle success.
+        self.assertEqual(sent_messages, ["Quote failed\nSymbol: BOXX.US\n'BOXX.US'"])
+        self.assertEqual(self._last_cycle_result.dry_run_orders, ())
+        self.assertEqual(self._last_cycle_result.pending_orders, ())
 
     def test_refreshes_account_state_after_sell_and_can_place_followup_buy(self):
         initial_plan = _build_plan(
