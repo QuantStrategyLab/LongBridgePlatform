@@ -396,10 +396,9 @@ class LongBridgeRuntimeComposer:
             sleeper=self.sleeper,
             extra_notification_lines=(market_scope_line, *plugin_lines, *plugin_error_lines),
             notification_title_key=notification_title_key,
-            notify_no_trade_cycles=bool(
-                live_execution_session_authorized
-                and not self.dry_run_only
-                and not self.suppress_live_execution_commands
+            notify_no_trade_cycles=False,
+            notification_attention_reason_codes=(
+                ("strategy_plugin_error",) if strategy_plugin_error else ()
             ),
             strategy_plugin_signals=tuple(strategy_plugin_signals or ()),
             execution_dedup_enabled=(

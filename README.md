@@ -47,6 +47,40 @@ live-trading, order, token-refresh, notification, or reporting authority.
 Access retains the service's existing Cloud Run IAM and internal ingress
 protection; deploying and enabling this endpoint is a separate operational step.
 
+## Runtime notification policy (NOTIFY-02, 2026-10-06)
+
+Runtime-composed cycles keep healthy no-order success and successful dry-run
+previews quiet, including previews whose existing `action_done` is true. Real
+pending/submitted/filled order facts keep their current delivery. Explicit
+blocked/rejected/unknown states, reconciliation or data errors, and plugin-load
+errors remain attention-worthy in both live and dry-run cycles. A bare unknown
+`no_execute` is not a healthy result; the explicit research
+`no_order=true` + `execution_authorized=false` contract remains non-executing.
+Only a known queued command plus `waiting_window` explains the normal durable
+command wait. The existing explicit `notify_no_trade_cycles` opt-in on manually
+constructed configs is retained for compatibility; the runtime composer sets it
+false. It does not opt successful previews back into delivery.
+
+The classifier reads structured facts and an appended, default-empty notification
+reason tuple. Existing small-account, negative-cash, and pending-sell-release
+blocks supply that tuple without changing execution. Account-new-risk attention
+keeps its existing transition-key dedup path instead of gaining another cycle
+message. Order hooks, issue notifications, execution markers/claims, strategy
+and risk decisions, quantity/state, and scanner alerts-only policy are unchanged.
+
+本地阶段：原生 orchestration 合成回归覆盖健康静默、preview 与异常/订单可达，
+并核对 composer 和既有阻断变量的输出投影。定向提取测试不是完整依赖 CI；合并、
+部署、生效版本和自然周期 Telegram 投递须分别验收。没有读取 secret、连接券商、
+发测试消息、调用模型或修改运行配置。真实路由同一性与跨服务去重不由本补丁证明。
+
+Known pre-existing limit: final execution-report persistence failures in `main.py`
+are logged rather than sent through a dedicated issue notification. This bounded
+classification change does not add that separate alert path. Existing marker and
+durable-command persistence issue notifications remain in place. Explicit
+`validation_only` callers already request a silent cycle sink, and V7 validation
+also mutes issue notifications. These isolated validation paths remain unchanged;
+attention classification here is not proof that those sinks deliver errors.
+
 ## Direct vs snapshot-backed profiles
 
 Direct runtime profiles can usually run from market history or portfolio state. Snapshot-backed profiles need a current artifact bundle from the matching snapshot pipeline before this platform should execute them. The platform should not invent strategy eligibility; it should consume the status and artifacts published by the strategy and snapshot repositories.

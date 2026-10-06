@@ -50,6 +50,7 @@ class LongBridgeRebalanceConfig:
     paper_risk_admission_receipt: Mapping[str, object] | None = None
     account_identity_policy: Any = None
     account_identity_expected_platform_id: str = "longbridge"
+    notification_attention_reason_codes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

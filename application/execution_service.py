@@ -275,6 +275,7 @@ class ExecutionCycleResult:
     dry_run_orders: tuple[dict, ...] = ()
     pending_orders: tuple[dict, ...] = ()
     quote_snapshots: tuple[dict, ...] = ()
+    notification_attention_reason_codes: tuple[str, ...] = ()
 
 
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
@@ -2006,4 +2007,13 @@ def execute_rebalance_cycle(
         dry_run_orders=tuple(dry_run_orders),
         pending_orders=tuple(pending_orders),
         quote_snapshots=tuple(quote_snapshots_by_symbol.values()),
+        # Account-new-risk attention already owns transition dedup. Do not emit
+        # a second per-cycle notification for that same gate.
+        notification_attention_reason_codes=(
+            (buys_blocked_reason,)
+            if buys_blocked_reason in {
+                "small_account_below_recommended_equity", "negative_cash", "pending_sell_release"
+            }
+            else ()
+        ),
     )
