@@ -417,6 +417,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertFalse(result.action_done)
         self.assertEqual(submitted_orders, [])
         self.assertTrue(any("禁止新增买入或加仓" in note for note in result.note_logs))
+        self.assertEqual(result.notification_attention_reason_codes, ("small_account_below_recommended_equity",))
 
     def test_safe_haven_target_below_cash_substitute_threshold_stays_cash(self):
         submitted_orders = []
@@ -2064,10 +2065,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
         self.assertEqual(len(checked_keys), 1)
         self.assertIn("paper", checked_keys[0])
-        self.assertEqual(len(sent_messages), 1)
-        self.assertNotIn("已跳过重复执行", sent_messages[0])
-        self.assertNotIn("2026-06-01", sent_messages[0])
-        self.assertNotIn("限价买入", sent_messages[0])
+        self.assertEqual(sent_messages, [])
 
     def test_run_strategy_dry_run_bypasses_execution_marker_when_env_enabled(self):
         os.environ[rebalance_service.DRY_RUN_BYPASS_EXECUTION_MARKER_ENV] = "true"
@@ -2148,8 +2146,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         # report an existing marker.
         self.assertEqual(checked_keys, [])
         self.assertEqual(recorded_markers, [])
-        self.assertEqual(len(sent_messages), 1)
-        self.assertNotIn("已跳过重复执行", sent_messages[0])
+        self.assertEqual(sent_messages, [])
 
     def test_run_strategy_skips_when_prior_report_matches_execution_signal(self):
         sent_messages = []
@@ -2225,9 +2222,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(report_checks), 1)
         self.assertEqual(report_checks[0]["signal_date"], "2026-06-01")
         self.assertEqual(report_checks[0]["effective_date"], "2026-06-02")
-        self.assertEqual(len(sent_messages), 1)
-        self.assertNotIn("已跳过重复执行", sent_messages[0])
-        self.assertNotIn("限价买入", sent_messages[0])
+        self.assertEqual(sent_messages, [])
 
     def test_run_strategy_records_execution_marker_after_dry_run_order_preview(self):
         sent_messages = []
@@ -2309,13 +2304,13 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(len(sent_messages), 1)
-        self.assertIn("🧪 模拟限价买入 BOXX.US", sent_messages[0])
+        self.assertEqual(sent_messages, [])
         self.assertEqual(len(recorded_markers), 1)
         self.assertIn("2026-06-01", recorded_markers[0][0])
         self.assertTrue(recorded_markers[0][1]["dry_run_only"])
         self.assertEqual(len(queued_commands), 1)
         self.assertEqual(queued_commands[0].effective_date, "2026-06-02")
+        self.assertTrue(result.dry_run_orders)
         self.assertEqual(result.execution["durable_execution_command"]["status"], "QUEUED")
         self.assertFalse(result.execution["durable_execution_command"]["consumer_authorized"])
 
@@ -2441,7 +2436,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                 raise AssertionError("unexpected extra resolve_rebalance_plan call")
             return plan_side_effect.pop(0)
 
-        rebalance_service.run_strategy(
+        self._last_cycle_result = rebalance_service.run_strategy(
             runtime=LongBridgeRebalanceRuntime(
                 bootstrap=lambda: ("quote-context", "trade-context", {"soxl": {"price": 1, "ma_trend": 2}}),
                 resolve_rebalance_plan=fake_resolve_rebalance_plan,
@@ -2866,10 +2861,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             dry_run_only=True,
         )
 
-        self.assertEqual(len(sent_messages), 1)
-        self.assertIn("💓 【策略运行心跳】", sent_messages[0])
-        self.assertNotIn("BOXX.US 目标差额 $1005.08 未超过 1 股价格 $1167.40", sent_messages[0])
-        self.assertNotIn("可投资现金 $164.98 不足买入 1 股", sent_messages[0])
+        self.assertEqual(sent_messages, [])
 
     def test_strategy_target_buy_floors_to_cash_backed_whole_shares(self):
         plan = _build_plan(
@@ -3183,11 +3175,10 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             dry_run_only=True,
         )
 
-        self.assertGreaterEqual(len(sent_messages), 1)
-        self.assertFalse(any("各币种现金: SGD 350.00" in message for message in sent_messages))
-        self.assertFalse(any("检测到非 USD 现金" in message for message in sent_messages))
-        self.assertTrue(any("本轮没有可执行订单" in message for message in sent_messages))
-        self.assertFalse(any("✅ 无交易，无需调仓" in message for message in sent_messages))
+        # Missing BOXX quote is an independent issue, not healthy cycle success.
+        self.assertEqual(sent_messages, ["Quote failed\nSymbol: BOXX.US\n'BOXX.US'"])
+        self.assertEqual(self._last_cycle_result.dry_run_orders, ())
+        self.assertEqual(self._last_cycle_result.pending_orders, ())
 
     def test_refreshes_account_state_after_sell_and_can_place_followup_buy(self):
         initial_plan = _build_plan(
@@ -3509,11 +3500,22 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             dry_run_only=True,
         )
 
-        self.assertEqual(len(sent_messages), 1)
-        self.assertIn("🧪 模拟运行模式", sent_messages[0])
-        self.assertIn("🧪 模拟市价卖出 BOXX.US", sent_messages[0])
-        self.assertIn("🧪 模拟限价买入 SOXL.US: 4股 @ $100.50", sent_messages[0])
-        self.assertNotIn("买入说明", sent_messages[0])
+        self.assertEqual(sent_messages, [])
+        self.assertEqual(
+            [(order["symbol"], order["side"]) for order in self._last_cycle_result.dry_run_orders
+             if (order["symbol"], order["side"]) in [('BOXX.US', 'sell'), ('SOXL.US', 'buy')]],
+            [('BOXX.US', 'sell'), ('SOXL.US', 'buy')],
+        )
+        self.assertEqual(self._last_cycle_result.pending_orders, ())
+        # Preserve the exact 4 shares @ $100.50 business regression from the
+        # former message assertion, independently of notification delivery.
+        self.assertEqual(
+            [order for order in self._last_cycle_result.dry_run_orders
+             if order["symbol"] == "SOXL.US" and order["side"] == "buy"],
+            [{"symbol": "SOXL.US", "side": "buy", "quantity": 4,
+              "order_type": "limit", "status": "dry_run",
+              "price": 100.50, "limit_price": 100.50}],
+        )
 
     def test_dry_run_cash_sweep_reports_note_when_estimator_is_zero(self):
         initial_plan = _build_plan(
@@ -3544,14 +3546,17 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             dry_run_only=True,
         )
 
-        self.assertEqual(len(sent_messages), 1)
-        self.assertIn("🧪 模拟运行模式", sent_messages[0])
-        self.assertIn("🧪 模拟市价卖出 BOXX.US", sent_messages[0])
-        self.assertNotIn(
-            "ℹ️ [买入说明] SOXL.US 目标差额 $500.00，预算可买 4 股，但券商估算可买数量为 0；可能有未完成挂单、结算或购买力占用",
-            sent_messages[0],
+        self.assertEqual(sent_messages, [])
+        self.assertEqual(
+            [(order["symbol"], order["side"]) for order in self._last_cycle_result.dry_run_orders
+             if (order["symbol"], order["side"]) in [('BOXX.US', 'sell')]],
+            [('BOXX.US', 'sell')],
         )
-        self.assertNotIn("🧪 模拟限价买入 SOXL.US", sent_messages[0])
+        self.assertEqual(self._last_cycle_result.pending_orders, ())
+        self.assertFalse(any(
+            order["symbol"] == "SOXL.US" and order["side"] == "buy"
+            for order in self._last_cycle_result.dry_run_orders
+        ))
 
     def test_dry_run_rebuys_cash_sweep_symbol_with_remaining_investable_cash(self):
         initial_plan = _build_plan(
@@ -3582,9 +3587,13 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             dry_run_only=True,
         )
 
-        self.assertEqual(len(sent_messages), 1)
-        self.assertIn("🧪 模拟运行模式", sent_messages[0])
-        self.assertIn("🧪 模拟限价买入 BOXX.US", sent_messages[0])
+        self.assertEqual(sent_messages, [])
+        self.assertEqual(
+            [(order["symbol"], order["side"]) for order in self._last_cycle_result.dry_run_orders
+             if (order["symbol"], order["side"]) in [('BOXX.US', 'buy')]],
+            [('BOXX.US', 'buy')],
+        )
+        self.assertEqual(self._last_cycle_result.pending_orders, ())
 
     def test_cash_sweep_rebuy_skips_when_broker_estimate_is_zero(self):
         initial_plan = _build_plan(
@@ -3764,10 +3773,13 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             dry_run_only=True,
         )
 
-        self.assertEqual(len(sent_messages), 1)
-        self.assertIn("🧪 模拟运行模式", sent_messages[0])
-        self.assertIn("🧪 模拟限价卖出 SOXL.US", sent_messages[0])
-        self.assertIn("🧪 模拟限价买入 SOXX.US", sent_messages[0])
+        self.assertEqual(sent_messages, [])
+        self.assertEqual(
+            [(order["symbol"], order["side"]) for order in self._last_cycle_result.dry_run_orders
+             if (order["symbol"], order["side"]) in [('SOXL.US', 'sell'), ('SOXX.US', 'buy')]],
+            [('SOXL.US', 'sell'), ('SOXX.US', 'buy')],
+        )
+        self.assertEqual(self._last_cycle_result.pending_orders, ())
 
     def test_heartbeat_accepts_normalized_portfolio_and_execution_sections(self):
         plan = _build_plan(
@@ -3804,7 +3816,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertNotIn("可用现金: $101.95 | 可投资现金: $101.95", sent_messages[0])
         self.assertNotIn("SOXX: $0.00 / 0股", sent_messages[0])
 
-    def test_hybrid_heartbeat_hides_empty_semiconductor_fields_and_shows_benchmark_line(self):
+    def test_dry_run_hybrid_noop_does_not_send_heartbeat(self):
         plan = _build_plan(
             strategy_profile="tqqq_growth_income",
             strategy_symbols=("TQQQ", "BOXX", "QQQI", "SPYI"),
@@ -3839,27 +3851,9 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             strategy_display_name="TQQQ 增长收益",
         )
 
-        self.assertEqual(len(sent_messages), 1)
-        self.assertIn("💓 【策略运行心跳】", sent_messages[0])
-        self.assertIn("🧭 策略: TQQQ 增长收益", sent_messages[0])
-        self.assertIn("🧪 模拟运行模式", sent_messages[0])
-        self.assertNotIn("📌 策略账户概览", sent_messages[0])
-        self.assertNotIn("TQQQ: $0.00 / 0股", sent_messages[0])
-        self.assertNotIn("BOXX: $0.00 / 0股", sent_messages[0])
-        self.assertNotIn("QQQI: $0.00 / 0股", sent_messages[0])
-        self.assertNotIn("SPYI: $0.00 / 0股", sent_messages[0])
-        self.assertNotIn("📈 QQQ 基准\n  - QQQ: 588.50\n  - MA200: 595.25\n  - 退出线: 573.00", sent_messages[0])
-        self.assertNotIn("🎯 信号:", sent_messages[0])
-        # Dry-run cycles now surface the account new-risk gate diagnostic note so
-        # verification reports can prove cycle-health axes; no-op heartbeats with
-        # this note fall into the "no executable orders" branch instead of the
-        # plain "no rebalance needed" branch.
-        self.assertNotIn("[Account new-risk gate]", sent_messages[0])
-        self.assertNotIn("账户现金: $0.00 | 可投资现金", sent_messages[0])
-        self.assertNotIn("TQQQ: $0.00  BOXX", sent_messages[0])
-        self.assertNotIn("📊 市场状态: ", sent_messages[0])
-        self.assertNotIn("💼 交易层风险仓位: ", sent_messages[0])
-        self.assertNotIn("🏦 收入层锁定占比: ", sent_messages[0])
+        self.assertEqual(sent_messages, [])
+        # Cycle facts remain available to the report without a success message.
+        self.assertEqual(self._last_cycle_result.pending_orders, ())
 
 
 class RequiredExecutionClaimTests(unittest.TestCase):
@@ -4191,6 +4185,133 @@ class RequiredExecutionClaimTests(unittest.TestCase):
         store.has_marker.assert_not_called()
         store.claim_marker.assert_not_called()
         self.assertEqual([title for title, _detail in self.issues], ["Next-session execution blocked"])
+
+
+class RuntimeNotificationPolicyTests(unittest.TestCase):
+    """Only synthetic cycle results; execution ports must never be used."""
+
+    def _run_notification_case(self, *, execution=None, dry_run=False, action=False,
+                               pending=(), preview=(), reasons=(), result_reasons=()):
+        execution = dict(execution or {})
+        plan = {"execution": {}, "portfolio": {}, "allocation": {"target_mode": "value"}}
+        result = rebalance_service.ExecutionCycleResult(
+            plan=plan, portfolio={}, execution=execution, allocation=plan["allocation"],
+            logs=(), skip_logs=(), note_logs=(), action_done=action,
+            pending_orders=pending, dry_run_orders=preview,
+            notification_attention_reason_codes=result_reasons,
+        )
+        sent = []
+        no_execution = Mock(side_effect=AssertionError("notification test must not submit"))
+        runtime = LongBridgeRebalanceRuntime(
+            bootstrap=lambda: ("synthetic-quote", "synthetic-trade", {}),
+            resolve_rebalance_plan=lambda **_kwargs: plan,
+            market_data_port_factory=lambda *_args: object(),
+            estimate_max_purchase_quantity=no_execution,
+            notifications=types.SimpleNamespace(send_text=sent.append),
+            notify_issue=Mock(),
+            portfolio_port_factory=lambda *_args: types.SimpleNamespace(
+                get_portfolio_snapshot=lambda: types.SimpleNamespace(as_of="2026-10-06", metadata={})
+            ),
+            execution_port_factory=lambda *_args: types.SimpleNamespace(submit_order=no_execution),
+        )
+        config = LongBridgeRebalanceConfig(
+            limit_sell_discount=1.0, limit_buy_premium=1.0, separator="-",
+            translator=lambda key, **_kwargs: key, with_prefix=lambda text: text,
+            dry_run_only=dry_run, notify_no_trade_cycles=False,
+            notification_attention_reason_codes=reasons,
+        )
+        with (
+            patch.object(rebalance_service, "execute_rebalance_cycle", return_value=result),
+            patch.object(rebalance_service, "build_signal_snapshot", return_value={}),
+            patch.object(rebalance_service.notification_renderers, "render_rebalance_notification", return_value="order"),
+            patch.object(rebalance_service.notification_renderers, "render_heartbeat_notification", return_value="attention"),
+            patch.object(rebalance_service, "NotificationPublisher") as publisher,
+        ):
+            publisher.return_value.publish.side_effect = sent.append
+            returned = rebalance_service.run_strategy(runtime=runtime, config=config)
+        self.assertIs(returned, result)
+        self.assertEqual(returned.pending_orders, pending)
+        self.assertEqual(returned.dry_run_orders, preview)
+        self.assertEqual(returned.action_done, action)
+        no_execution.assert_not_called()
+        return sent
+
+    def test_healthy_no_order_and_successful_preview_are_quiet(self):
+        for kwargs in (
+            {}, {"dry_run": True},
+            {"dry_run": True, "action": True, "preview": ({"status": "dry_run"},)},
+            {"execution": {"heartbeat_execution_state": "waiting_window",
+                           "direct_live_routing_blocked": True,
+                           "durable_live_execution_command": {"status": "QUEUED"}}},
+            {"dry_run": True, "execution": {"no_execute": True, "no_order": True,
+                                            "execution_authorized": False}},
+        ):
+            with self.subTest(kwargs=kwargs):
+                self.assertEqual(self._run_notification_case(**kwargs), [])
+
+    def test_anomalies_survive_quiet_policy_including_dry_run(self):
+        for dry in (False, True):
+            for execution in (
+                {"execution_status": "blocked"}, {"execution_status": "rejected"},
+                {"execution_status": "unknown"}, {"execution_status": "unrecognized"},
+                {"heartbeat_execution_state": "blocked"}, {"reconciliation_required": True},
+                {"data_error": "stale"}, {"persistence_error": "write_failed"},
+                {"no_execute": True}, {"risk_gate": "REJECT"},
+                {"risk_flags": ("rejected:stale_data",)},
+                {"heartbeat_execution_state": "waiting_window", "execution_status": "unknown"},
+                {"durable_live_execution_command": {"status": "UNKNOWN"}},
+                {"no_execute": True, "no_order": True, "execution_authorized": False, "error": "bad_input"},
+            ):
+                with self.subTest(dry=dry, execution=execution):
+                    self.assertEqual(self._run_notification_case(execution=execution, dry_run=dry), ["attention"])
+            self.assertEqual(self._run_notification_case(dry_run=dry, reasons=("strategy_plugin_error",)), ["attention"])
+            for reason in ("small_account_below_recommended_equity", "negative_cash", "pending_sell_release"):
+                self.assertEqual(self._run_notification_case(dry_run=dry, result_reasons=(reason,)), ["attention"])
+
+    def test_real_order_facts_keep_delivery(self):
+        for status in ("submitted", "accepted", "filled", "partially_filled", "unknown", "pending_reconciliation"):
+            with self.subTest(status=status):
+                self.assertEqual(self._run_notification_case(action=True, pending=({"submission_status": status},)), ["order"])
+        self.assertEqual(self._run_notification_case(action=True), ["order"])
+
+    def test_successful_preview_with_plugin_error_still_notifies(self):
+        self.assertEqual(self._run_notification_case(
+            dry_run=True, action=True, preview=({"status": "dry_run"},),
+            reasons=("strategy_plugin_error",),
+        ), ["attention"])
+
+    def test_existing_marker_persistence_issue_is_not_suppressed(self):
+        result = rebalance_service.ExecutionCycleResult(
+            plan={}, portfolio={}, execution={}, allocation={}, logs=(), skip_logs=(),
+            note_logs=(), action_done=True, pending_orders=({"submission_status": "submitted"},),
+        )
+        store = Mock()
+        store.record_outcome.side_effect = RuntimeError("synthetic write failure")
+        config = types.SimpleNamespace(execution_state_store=store, notify_no_trade_cycles=False)
+        issue = Mock()
+        rebalance_service._record_execution_marker(
+            config=config, marker_key="synthetic-marker", result=result, notify_issue=issue,
+        )
+        issue.assert_called_once_with("Execution marker write failed", "execution_outcome_persistence_failed")
+        self.assertEqual(result.pending_orders, ({"submission_status": "submitted"},))
+
+    def test_waiting_requires_explicit_queued_command_evidence(self):
+        for dry in (False, True):
+            for execution in (
+                {"heartbeat_execution_state": "waiting_window"},
+                {"execution_status": "waiting_window"},
+                {"heartbeat_execution_state": "waiting_window", "durable_live_execution_command": {}},
+                {"heartbeat_execution_state": "waiting_window", "durable_live_execution_command": {"status": "UNKNOWN"}},
+                {"heartbeat_execution_state": "waiting_window", "durable_live_execution_command": {"status": "PENDING_RECONCILIATION"}},
+            ):
+                with self.subTest(dry=dry, execution=execution):
+                    self.assertEqual(self._run_notification_case(execution=execution, dry_run=dry), ["attention"])
+            for status in ("QUEUED", "ALREADY_QUEUED"):
+                self.assertEqual(self._run_notification_case(
+                    dry_run=dry, execution={"heartbeat_execution_state": "waiting_window",
+                        "direct_live_routing_blocked": True,
+                        "durable_live_execution_command": {"status": status}},
+                ), [])
 
 
 if __name__ == "__main__":

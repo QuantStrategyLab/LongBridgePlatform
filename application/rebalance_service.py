@@ -529,6 +529,64 @@ def _evaluate_execution_account_identity(
     )
 
 
+def _has_notification_attention(*, config, result: ExecutionCycleResult) -> bool:
+    """Read structured cycle facts without changing execution or gate dedup."""
+    if getattr(config, "notification_attention_reason_codes", ()) or getattr(
+        result, "notification_attention_reason_codes", ()
+    ):
+        return True
+    for scope in (result.execution, result.allocation):
+        if any(scope.get(key) for key in (
+            "error", "errors", "fail_reason", "blocked_reason", "execution_blocked_reason",
+            "plugin_error", "data_error", "persistence_error", "report_persistence_error",
+            "reconciliation_required", "pending_reconciliation",
+            "account_identity_blocked",
+        )):
+            return True
+        command = scope.get("durable_live_execution_command") or {}
+        command_status = str(command.get("status") or "").strip().upper()
+        if command_status and command_status not in {"QUEUED", "ALREADY_QUEUED"}:
+            return True
+        if scope.get("direct_live_routing_blocked") and not (
+            scope.get("heartbeat_execution_state") == "waiting_window"
+            and command_status in {"QUEUED", "ALREADY_QUEUED"}
+        ):
+            return True
+        for key in ("execution_status", "heartbeat_execution_state"):
+            status = str(scope.get(key) or "").strip().lower()
+            if status == "waiting_window":
+                if command_status not in {"QUEUED", "ALREADY_QUEUED"}:
+                    return True
+            elif status not in {
+                "", "no_op", "no_action", "completed", "executed", "dry_run",
+                "dry_run_completed", "already_recorded",
+            }:
+                return True
+        if str(scope.get("risk_gate") or "").strip().upper() in {
+            "REJECT", "REJECTED", "BLOCK", "BLOCKED", "DENY", "DENIED"
+        }:
+            return True
+        flags = scope.get("risk_flags") or ()
+        if isinstance(flags, str):
+            flags = (flags,)
+        if any(str(flag).startswith("rejected:") for flag in flags):
+            return True
+        if scope.get("no_execute") or "no_execute" in flags:
+            # This explicit research contract is a normal non-execution lane.
+            # A bare/unknown no_execute is not evidence of a healthy cycle.
+            if not (scope.get("no_order") is True and scope.get("execution_authorized") is False):
+                return True
+    return False
+
+
+def _should_publish_no_order_notification(*, config, result: ExecutionCycleResult) -> bool:
+    if _has_notification_attention(config=config, result=result):
+        return True
+    return not bool(getattr(config, "dry_run_only", False)) and bool(
+        getattr(config, "notify_no_trade_cycles", False)
+    )
+
+
 def _should_record_execution_marker(*, result: ExecutionCycleResult, config: LongBridgeRebalanceConfig) -> bool:
     if not getattr(config, "execution_dedup_enabled", False):
         return False
@@ -1159,7 +1217,7 @@ def run_strategy(
             )
         except Exception:
             print("pending_order_notification_failed", flush=True)
-    elif action_done:
+    elif action_done and not config.dry_run_only:
         notification_publisher.publish(
             notification_renderers.render_rebalance_notification(
                 execution=execution,
@@ -1174,7 +1232,7 @@ def run_strategy(
                 title_key=config.notification_title_key or "rebalance_title",
             )
         )
-    elif getattr(config, "notify_no_trade_cycles", True):
+    elif _should_publish_no_order_notification(config=config, result=execution_result):
         notification_publisher.publish(
             notification_renderers.render_heartbeat_notification(
                 execution=execution,
@@ -1189,6 +1247,6 @@ def run_strategy(
             )
         )
     else:
-        print(config.with_prefix("notification_suppressed reason=no_trade_or_error"), flush=True)
+        print(config.with_prefix("notification_suppressed reason=healthy_no_order_cycle"), flush=True)
     _record_platform_execution_telemetry(config, execution_result)
     return execution_result

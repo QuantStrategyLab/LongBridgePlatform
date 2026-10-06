@@ -595,3 +595,22 @@ def test_account_snapshot_cloud_read_failure_does_not_read_another_token():
     else:
         raise AssertionError("cloud read failure must not be replaced")
     assert observed["latest"] is False
+
+
+
+def test_runtime_cycle_success_is_quiet_even_in_authorized_live_session():
+    composer, _, _ = _build_live_command_test_composer(dry_run_only=False)
+    config = composer.build_rebalance_config(live_execution_session_authorized=True)
+    assert config.notify_no_trade_cycles is False
+    assert config.durable_live_execution_session_authorized is True
+    assert config.notification_attention_reason_codes == ()
+
+
+def test_plugin_error_is_structured_attention_even_without_display_lines():
+    composer, _, _ = _build_live_command_test_composer(dry_run_only=False)
+    config = composer.build_rebalance_config(
+        strategy_plugin_error="synthetic plugin unavailable",
+        live_execution_session_authorized=True,
+    )
+    assert config.notify_no_trade_cycles is False
+    assert config.notification_attention_reason_codes == ("strategy_plugin_error",)
