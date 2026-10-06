@@ -1,5 +1,16 @@
 # LongBridgePlatform
 
+LongBridgePlatform is QuantStrategyLab's LongBridge execution runtime for US
+and HK equities. It takes strategy profiles produced by `UsEquityStrategies`
+and `HkEquityStrategies`, runs them through LongBridge-compatible broker
+connectivity, and applies regional dry-run/live controls before anything
+reaches a real order. It is an execution layer only: strategy research lives
+in the strategy repositories, and snapshot/validation artifacts come from the
+matching snapshot pipeline when a profile needs one.
+
+[Chinese README](README.zh-CN.md)
+
+> Investing involves risk. This project does not provide investment advice and is for education, research, and engineering review only.
 
 ## QSL architecture role
 
@@ -8,16 +19,6 @@
 - **Owns**: LongBridge connectivity, regional runtime settings, dry-run/live controls.
 - **Consumes**: UsEquityStrategies, HkEquityStrategies, snapshot artifacts, QuantPlatformKit, QuantRuntimeSettings.
 - **Must not**: own strategy research logic or store credentials in Git.
-
-[Chinese README](README.zh-CN.md)
-
-> Investing involves risk. This project does not provide investment advice and is for education, research, and engineering review only.
-
-## What this repository is
-
-LongBridgePlatform is a QuantStrategyLab LongBridge US/HK equity execution platform. It runs US and HK equity profiles through LongBridge-compatible runtime services and regional deployment settings.
-
-It is an execution layer, not a strategy research repository. Strategy logic comes from `UsEquityStrategies / HkEquityStrategies`; snapshot and validation artifacts come from `UsEquitySnapshotPipelines / HkEquitySnapshotPipelines` when a profile requires them.
 
 ## Runtime boundary
 
