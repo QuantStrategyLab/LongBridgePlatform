@@ -3,10 +3,13 @@ from __future__ import annotations
 import datetime as dt
 import json
 import sys
+import socket
+from copy import deepcopy
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+import requests
 from google.api_core.exceptions import Forbidden, GoogleAPICallError, PreconditionFailed
 
 from scripts import execution_report_heartbeat as heartbeat
@@ -1263,3 +1266,516 @@ def test_workflow_adds_a_paper_projection_after_auth_with_existing_sync_token() 
     assert "RUNTIME_DAILY_SYNC_ENABLED: ${{ vars.RUNTIME_DAILY_SYNC_ENABLED }}" in step
     assert "RUNTIME_DAILY_SYNC_URL: ${{ vars.RUNTIME_DAILY_SYNC_URL }}" in step
     assert "EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ vars.RUNTIME_DAILY_SYNC_ENABLED == 'true' && secrets.EXECUTION_EVIDENCE_SYNC_TOKEN || '' }}" in step
+
+
+
+# Explicitly opted-in verified-path fixtures and regressions.
+
+
+@pytest.fixture(autouse=True)
+def _deny_external_io(monkeypatch):
+    """Every daily-caller test is offline, including accidental fallback paths."""
+    def denied(*args, **kwargs):
+        raise AssertionError("external I/O forbidden in synthetic daily-caller tests")
+
+    monkeypatch.setattr(heartbeat, "_run_gcloud", denied)
+    monkeypatch.setattr(publisher, "_storage_client", denied)
+    monkeypatch.setattr(requests.sessions.Session, "request", denied)
+    monkeypatch.setattr(socket, "create_connection", denied)
+    monkeypatch.setattr(socket.socket, "connect", denied)
+
+
+def _verified_cloud_run(runtime_target: dict, *, enabled_env: str | None = None, service: str | None = None) -> dict:
+    env = [{"name": "RUNTIME_TARGET_JSON", "value": json.dumps(runtime_target)}]
+    if enabled_env is not None:
+        env.append({"name": "RUNTIME_TARGET_ENABLED", "value": enabled_env})
+    service = service or runtime_target["service_name"]
+    return {
+        "metadata": {"name": service},
+        "status": {
+            "url": f"https://{service}-abcd.a.run.app",
+            "traffic": [{"revisionName": f"{service}-r1", "percent": 100}],
+        },
+        "spec": {"template": {"spec": {"containers": [{"env": env}]}}},
+    }
+
+
+def _verified_describe(service: str, *, project: str | None) -> dict:
+    del project
+    return _verified_cloud_run(
+        {
+            "strategy_profile": "paper-profile",
+            "account_scope": "PAPER",
+            "service_name": service,
+            "runtime_target_enabled": True,
+        }
+    )
+
+
+def _verified_sync_describe(service: str, *, project: str | None) -> dict:
+    del project
+    return _verified_cloud_run(
+        {
+            "strategy_profile": "russell_top50_leader_rotation",
+            "account_scope": "PAPER",
+            "service_name": service,
+            "runtime_target_enabled": True,
+        }
+    )
+
+
+def _serving_context(service="lb-paper", *, service_payload=None, runtime_target=None, path="/run"):
+    runtime_target = runtime_target or {
+        "strategy_profile": "paper-profile", "account_scope": "PAPER",
+        "service_name": service, "runtime_target_enabled": True,
+    }
+    payload = deepcopy(service_payload) if service_payload is not None else _verified_cloud_run(runtime_target)
+    payload["metadata"] = {"name": service}
+    payload["status"] = {
+        "url": f"https://{service}-abcd.a.run.app",
+        "traffic": [{"revisionName": f"{service}-r1", "percent": 100}],
+    }
+    return {
+        "service": payload,
+        "revision": {
+            "metadata": {"name": f"{service}-r1", "labels": {"commit-sha": "a" * 40}},
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            "spec": deepcopy(payload["spec"]["template"]["spec"]),
+        },
+        "route_contract": {
+            "service": service, "source_commit": "a" * 40,
+            "path": path, "http_method": "POST",
+        },
+    }
+
+
+def _context_for_env(env, *, describe=_verified_describe):
+    service = json.loads(env["RUNTIME_TARGET_JSON"])["service"]
+    return _serving_context(service, service_payload=describe(service, project="synthetic"))
+
+
+def _verified_scheduler_job(
+    service: str,
+    *,
+    schedule: str = "5 16 * * 1-5",
+    timezone: str = "Asia/Hong_Kong",
+    state: str = "ENABLED",
+    path: str = "/run",
+) -> dict:
+    return {
+        "name": f"projects/synthetic/locations/test/jobs/{service}-scheduler",
+        "state": state,
+        "schedule": schedule,
+        "timeZone": timezone,
+        "httpTarget": {"uri": f"https://{service}-abcd.a.run.app{path}", "httpMethod": "POST"},
+    }
+
+
+def _verified_jobs_for_env(env: dict[str, str]) -> list[dict]:
+    target = json.loads(env["RUNTIME_TARGET_JSON"])
+    scheduler = target.get("scheduler") or {}
+    return [
+        _verified_scheduler_job(
+            str(target.get("service") or "lb-paper"),
+            schedule=str(scheduler.get("main_time") or "5 16 * * 1-5"),
+            timezone=str(scheduler.get("timezone") or "Asia/Hong_Kong"),
+        )
+    ]
+
+
+def _publish_verified(
+    monkeypatch,
+    env,
+    reports,
+    *,
+    calendar=_open_calendar,
+    blob=None,
+    list_error=False,
+    limit=None,
+    jobs="default",
+    http_post=None,
+    describe=_verified_describe,
+    serving_context="fixture",
+):
+    blob = blob or _Blob()
+    client = _Client(blob)
+    calls = {"listed": 0, "read": 0}
+
+    def list_objects(pattern, *, project):
+        del pattern, project
+        calls["listed"] += 1
+        if list_error:
+            raise RuntimeError("secret listing detail")
+        return reports
+
+    def read_payload(uri: str):
+        calls["read"] += 1
+        for entry in reports:
+            if entry.get("url") == uri:
+                return entry.get("payload")
+        return None
+
+    if limit is not None:
+        env = {**env, "RUNTIME_HEARTBEAT_MAX_REPORTS_TO_READ": str(limit)}
+    selected = _verified_jobs_for_env(env) if jobs == "default" else jobs
+    if serving_context == "fixture":
+        serving_context = _context_for_env(env, describe=describe)
+
+    def list_jobs(*, project: str | None) -> list:
+        del project
+        return selected
+
+    monkeypatch.setattr(heartbeat, "_describe_cloud_run_service", describe)
+    monkeypatch.setattr(heartbeat, "_list_scheduler_jobs", list_jobs)
+    status, business_date, sync_status = publisher.publish_verified(
+        env,
+        now=OBSERVED,
+        session_dates_loader=calendar,
+        client=client,
+        list_objects=list_objects,
+        read_payload=read_payload,
+        report_globs=lambda since, now: ["gs://reports/longbridge/**/2026-09/*.json"],
+        http_post=http_post,
+        serving_context=serving_context,
+    )
+    calls["sync_status"] = sync_status
+    return status, business_date, blob, client, calls
+
+
+def test_projections_cover_quiet_closed_missing_and_prior_unknown_verified(monkeypatch) -> None:
+    quiet_report = _entry("gs://reports/quiet.json", "2026-09-28T08:07:00Z")
+    quiet_report["payload"] = _report()
+    status, business_date, blob, client, _calls = _publish_verified(monkeypatch, _env(), [quiet_report])
+    stored = _stored(blob)
+    assert status == "recorded"
+    assert business_date == "2026-09-28"
+    assert client.buckets == ["paper-bucket"]
+    assert client._bucket.names == ["runtime_daily/longbridge/paper/2026-09-28/20260928T084000000000Z.json"]
+    assert stored["records"][0]["status"] == "no_submission"
+    assert stored["records"][0]["runs"][0]["run_id"] == "run-1"
+    assert "secret" not in json.dumps(stored)
+
+    closed_status, _, closed_blob, _, _ = _publish_verified(monkeypatch, _env(), [], calendar=_closed_calendar)
+    assert closed_status == "recorded"
+    assert _stored(closed_blob)["records"][0]["status"] == "market_closed"
+
+    missing_status, _, missing_blob, _, _ = _publish_verified(monkeypatch, _env(), [])
+    assert missing_status == "recorded"
+    assert _stored(missing_blob)["records"][0]["status"] == "missing_report"
+
+    prior = _entry("gs://reports/prior.json", "2026-09-27T08:07:00Z")
+    prior["payload"] = _report(
+        run_id="prior-unknown",
+        started_at="2026-09-27T16:06:00+08:00",
+        finished_at="2026-09-27T16:07:00+08:00",
+        summary={
+            "execution_status": "unknown",
+            "broker_submission_done": False,
+            "action_done": False,
+            "orders_pending_count": 0,
+        },
+    )
+    unknown_status, _, unknown_blob, _, _ = _publish_verified(
+        monkeypatch, _env(), [prior], calendar=_closed_calendar
+    )
+    assert unknown_status == "recorded"
+    unknown = _stored(unknown_blob)["records"][0]
+    assert unknown["status"] == "unknown"
+    assert unknown["schedule"]["state"] == "market_closed"
+
+
+def test_existing_object_is_not_overwritten_and_unknown_write_is_not_retried_verified(monkeypatch) -> None:
+    exists = _Blob(fail=PreconditionFailed("already present"))
+    status, business_date, blob, _, _ = _publish_verified(monkeypatch, _env(), [], blob=exists)
+    assert status == "already_recorded"
+    assert business_date == "2026-09-28"
+    assert len(blob.uploads) == 1
+    assert blob.uploads[0]["kwargs"]["if_generation_match"] == 0
+
+    unknown = _Blob(fail=RuntimeError("token=secret"))
+    with pytest.raises(publisher._KnownFailure) as failure:
+        _publish_verified(monkeypatch, _env(), [], blob=unknown)
+    assert failure.value.code == "write_unknown"
+    assert "token=secret" not in str(failure.value)
+    assert len(unknown.uploads) == 1
+
+
+def test_runtime_daily_sync_posts_only_new_projection_and_checks_qrs_contract_verified(monkeypatch) -> None:
+    requests = []
+
+    def post(url, **kwargs):
+        requests.append((url, kwargs))
+        payload = json.loads(kwargs["data"])
+        record = payload["records"][0]
+        return _SyncResponse(payload={
+            "ok": True,
+            "stored": True,
+            "business_date": record["business_date"],
+            "target_key": "longbridge-quant-paper-service|russell_top50_leader_rotation|paper",
+            "account_key": "synthetic-account-key",
+        })
+
+    status, business_date, blob, _, calls = _publish_verified(
+        monkeypatch,
+        _sync_env(),
+        [],
+        http_post=post,
+        describe=_verified_sync_describe,
+    )
+    assert status == "recorded"
+    assert business_date == "2026-09-28"
+    assert calls["sync_status"] == "recorded"
+    assert len(requests) == 1
+    stored_projection = json.loads(blob.uploads[0]["data"])
+    assert stored_projection["records"][0]["target"]["account_scope"] == "paper"
+    url, kwargs = requests[0]
+    assert url == "https://qrs.example.com/api/runtime-daily/sync"
+    assert kwargs["allow_redirects"] is False
+    assert kwargs["timeout"] == publisher._RUNTIME_DAILY_SYNC_TIMEOUT_SECONDS
+    assert kwargs["stream"] is True
+    assert kwargs["data"] == blob.uploads[0]["data"].encode("utf-8")
+    assert kwargs["headers"]["Authorization"] == "Bearer synthetic-test-token"
+
+
+@pytest.mark.parametrize("jobs", [
+    [_verified_scheduler_job("lb-paper", state="PAUSED")],
+    [],
+    [_verified_scheduler_job("lb-paper"), _verified_scheduler_job("lb-paper", schedule="5 16 1-7 * *")],
+])
+def test_paused_missing_or_conflicting_scheduler_fails_before_report_reads_verified(monkeypatch, jobs) -> None:
+    context = _serving_context()
+    monkeypatch.setattr(heartbeat, "_describe_cloud_run_service", lambda *args, **kwargs: context["service"])
+    monkeypatch.setattr(heartbeat, "_list_scheduler_jobs", lambda **kwargs: jobs)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("report, archive or POST must not run")
+
+    blob = _Blob()
+    client = _Client(blob)
+    with pytest.raises(publisher._KnownFailure, match="schedule_unevaluable"):
+        publisher.publish_verified(_env(), now=OBSERVED, serving_context=context, client=client,
+                          list_objects=boom, read_payload=boom, report_globs=boom, http_post=boom)
+    assert blob.uploads == []
+    assert client.buckets == []
+
+
+@pytest.mark.parametrize("declared_path,other_path", [("/run", "/"), ("/", "/run")])
+def test_scheduler_identity_uses_only_independently_declared_route_verified(monkeypatch, declared_path, other_path) -> None:
+    context = _serving_context(path=declared_path)
+    status, _, blob, _, _ = _publish_verified(
+        monkeypatch, _env(), [], serving_context=context,
+        jobs=[
+            _verified_scheduler_job("lb-paper", schedule="5 16 1-7 * *", path=other_path),
+            _verified_scheduler_job("lb-paper", schedule="5 16 * * 1-5", path=declared_path),
+            _verified_scheduler_job("lb-paper", path="/probe"),
+        ],
+    )
+    assert status == "recorded"
+    assert _stored(blob)["records"][0]["schedule"]["state"] == "due"
+    rejected_blob = _Blob()
+    with pytest.raises(publisher._KnownFailure, match="schedule_unevaluable"):
+        _publish_verified(monkeypatch, _env(), [], blob=rejected_blob, serving_context=context,
+                 jobs=[_verified_scheduler_job("lb-paper", path=other_path)])
+    assert rejected_blob.uploads == []
+
+
+def test_missing_serving_context_fails_before_any_io_verified(monkeypatch) -> None:
+    def boom(*args, **kwargs):
+        raise AssertionError("unexpected I/O")
+
+    monkeypatch.setattr(heartbeat, "_describe_cloud_run_service", boom)
+    monkeypatch.setattr(heartbeat, "_list_scheduler_jobs", boom)
+    monkeypatch.setattr(publisher, "_storage_client", boom)
+    with pytest.raises(publisher._KnownFailure, match="schedule_unevaluable"):
+        publisher.publish_verified(_sync_env(), now=OBSERVED, list_objects=boom, read_payload=boom,
+                          report_globs=boom, http_post=boom)
+
+
+@pytest.mark.parametrize("drift", ["origin", "service", "revision", "traffic_split"])
+def test_changed_serving_readback_fails_before_report_storage_or_post_verified(monkeypatch, drift) -> None:
+    context = _serving_context()
+    readback = deepcopy(context["service"])
+    if drift == "origin":
+        readback["status"]["url"] = "https://other-service.a.run.app"
+    elif drift == "service":
+        readback["metadata"]["name"] = "other-service"
+    elif drift == "revision":
+        readback["status"]["traffic"][0]["revisionName"] = "lb-paper-r2"
+    else:
+        readback["status"]["traffic"] = [
+            {"revisionName": "lb-paper-r1", "percent": 50},
+            {"revisionName": "lb-paper-r2", "percent": 50},
+        ]
+    monkeypatch.setattr(heartbeat, "_describe_cloud_run_service", lambda *args, **kwargs: readback)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("unexpected I/O")
+
+    monkeypatch.setattr(heartbeat, "_list_scheduler_jobs", boom)
+    monkeypatch.setattr(publisher, "_storage_client", boom)
+    with pytest.raises(publisher._KnownFailure, match="schedule_unevaluable"):
+        publisher.publish_verified(_env(), now=OBSERVED, serving_context=context,
+                          list_objects=boom, read_payload=boom, report_globs=boom, http_post=boom)
+
+
+@pytest.mark.parametrize("problem", [
+    "origin_missing", "route_missing", "wrong_route_commit", "wrong_revision",
+    "unready_revision", "missing_revision_spec",
+])
+def test_unproven_serving_context_fails_before_any_io_verified(monkeypatch, problem) -> None:
+    context = _serving_context()
+    if problem == "origin_missing":
+        del context["service"]["status"]["url"]
+    elif problem == "route_missing":
+        del context["route_contract"]
+    elif problem == "wrong_route_commit":
+        context["route_contract"]["source_commit"] = "b" * 40
+    elif problem == "wrong_revision":
+        context["revision"]["metadata"]["name"] = "lb-paper-r2"
+    elif problem == "unready_revision":
+        context["revision"]["status"]["conditions"][0]["status"] = "False"
+    else:
+        del context["revision"]["spec"]
+
+    def boom(*args, **kwargs):
+        raise AssertionError("unexpected I/O")
+
+    monkeypatch.setattr(heartbeat, "_describe_cloud_run_service", boom)
+    monkeypatch.setattr(heartbeat, "_list_scheduler_jobs", boom)
+    with pytest.raises(publisher._KnownFailure, match="schedule_unevaluable"):
+        publisher.publish_verified(_env(), now=OBSERVED, serving_context=context,
+                          list_objects=boom, read_payload=boom, report_globs=boom, http_post=boom)
+
+
+def test_confirmed_scheduler_without_context_erases_template_without_lookup_verified(monkeypatch) -> None:
+    def boom(*args, **kwargs):
+        raise AssertionError("scheduler lookup must not run")
+
+    monkeypatch.setattr(heartbeat, "_list_scheduler_jobs", boom)
+    target = _target()
+    selected, error = publisher._confirmed_scheduler(target, project="synthetic")
+    assert error == "scheduler_context_unevaluable"
+    assert selected["scheduler"] == {}
+    assert target["scheduler"]["main_time"] == "5 16 * * 1-5"
+
+
+@pytest.mark.parametrize("problem", ["wrong_route", "wrong_origin", "wrong_method"])
+def test_unmatched_scheduler_cannot_archive_even_a_quiet_report_verified(monkeypatch, problem) -> None:
+    context = _context_for_env(_sync_env(), describe=_verified_sync_describe)
+    service = context["service"]["metadata"]["name"]
+    job = _verified_scheduler_job(service)
+    if problem == "wrong_route":
+        job["httpTarget"]["uri"] = context["service"]["status"]["url"] + "/"
+    elif problem == "wrong_origin":
+        job["httpTarget"]["uri"] = context["service"]["status"]["url"] + ".other.test/run"
+    else:
+        job["httpTarget"]["httpMethod"] = "GET"
+    monkeypatch.setattr(heartbeat, "_describe_cloud_run_service", lambda *args, **kwargs: context["service"])
+    monkeypatch.setattr(heartbeat, "_list_scheduler_jobs", lambda **kwargs: [job])
+    report = _entry("gs://reports/quiet.json", "2026-09-28T08:07:00Z")
+    report["payload"] = _report()
+    calls = {"listed": 0, "read": 0, "post": 0}
+
+    def listing(*args, **kwargs):
+        calls["listed"] += 1
+        return [report]
+
+    def read(*args, **kwargs):
+        calls["read"] += 1
+        return report["payload"]
+
+    def post(*args, **kwargs):
+        calls["post"] += 1
+        return _SyncResponse()
+
+    blob = _Blob()
+    client = _Client(blob)
+    with pytest.raises(publisher._KnownFailure, match="schedule_unevaluable"):
+        publisher.publish_verified(_sync_env(), now=OBSERVED, serving_context=context, client=client,
+                          list_objects=listing, read_payload=read, http_post=post)
+    assert calls == {"listed": 0, "read": 0, "post": 0}
+    assert blob.uploads == []
+    assert client.buckets == []
+
+
+def test_serving_revision_config_wins_over_a_staged_service_template_verified(monkeypatch) -> None:
+    context = _serving_context()
+    readback = deepcopy(context["service"])
+    staged = {
+        "strategy_profile": "staged-profile", "account_scope": "SG",
+        "service_name": "staged-service", "runtime_target_enabled": False,
+    }
+    readback["spec"] = _verified_cloud_run(staged)["spec"]
+    calls = []
+
+    def describe(service, *, project):
+        calls.append((service, project))
+        return readback
+
+    status, _, blob, _, _ = _publish_verified(monkeypatch, _env(), [], describe=describe, serving_context=context)
+    assert status == "recorded"
+    assert len(calls) == 1
+    assert _stored(blob)["records"][0]["target"] == {
+        "service": "lb-paper", "strategy_profile": "paper-profile", "account_scope": "PAPER",
+    }
+
+
+def test_staged_enabled_template_cannot_override_disabled_serving_revision_verified(monkeypatch) -> None:
+    context = _serving_context(runtime_target={
+        "strategy_profile": "paper-profile", "account_scope": "PAPER",
+        "service_name": "lb-paper", "runtime_target_enabled": False,
+    })
+    # The fresh service template is enabled, but it is not the serving config.
+    blob = _Blob()
+    with pytest.raises(publisher._Rejected, match="deployed_target_rejected"):
+        _publish_verified(monkeypatch, _env(), [], serving_context=context, describe=_verified_describe, blob=blob)
+    assert blob.uploads == []
+
+
+def test_transport_cannot_mutate_the_supplied_revision_observation_verified(monkeypatch) -> None:
+    context = _serving_context()
+    original = deepcopy(context)
+
+    def describe(service, *, project):
+        context["revision"]["spec"]["containers"][0]["env"][0]["value"] = json.dumps({
+            "strategy_profile": "changed-profile", "account_scope": "SG",
+            "service_name": service, "runtime_target_enabled": False,
+        })
+        return original["service"]
+
+    status, _, blob, _, _ = _publish_verified(monkeypatch, _env(), [], describe=describe, serving_context=context)
+    assert status == "recorded"
+    assert _stored(blob)["records"][0]["target"]["strategy_profile"] == "paper-profile"
+
+
+def test_legacy_default_does_not_silently_opt_in_or_emit_verified_health(monkeypatch) -> None:
+    def strict_path_must_not_run(*args, **kwargs):
+        raise AssertionError("default natural publication must remain unadopted")
+
+    monkeypatch.setattr(publisher, "publish_verified", strict_path_must_not_run)
+    monkeypatch.setattr(publisher, "_confirmed_scheduler", strict_path_must_not_run)
+    status, business_date, blob, _, calls = _publish(monkeypatch, _env(), [])
+    assert (status, business_date, calls["sync_status"]) == ("recorded", "2026-09-28", "disabled")
+    stored = _stored(blob)
+    assert stored["read_errors"] == []
+    assert stored["records"][0]["status"] == "missing_report"
+    serialized = json.dumps(stored)
+    assert "cycle_health" not in serialized
+    assert "route_contract" not in serialized
+    assert "verified_route" not in serialized
+
+
+def test_verified_and_legacy_daily_records_match_when_each_schedule_is_established(monkeypatch) -> None:
+    report = _entry("gs://reports/quiet.json", "2026-09-28T08:07:00Z")
+    report["payload"] = _report()
+    legacy_status, legacy_date, legacy_blob, _, legacy_calls = _publish(monkeypatch, _env(), [report])
+    verified_status, verified_date, verified_blob, _, verified_calls = _publish_verified(
+        monkeypatch, _env(), [report],
+    )
+    assert (legacy_status, legacy_date, legacy_calls["sync_status"]) == (
+        verified_status, verified_date, verified_calls["sync_status"],
+    )
+    assert legacy_blob.uploads[0]["data"] == verified_blob.uploads[0]["data"]
+    assert _stored(legacy_blob)["records"][0]["status"] == "no_submission"
+    with pytest.raises(publisher._KnownFailure, match="schedule_unevaluable"):
+        publisher.publish_verified(_env(), now=OBSERVED)

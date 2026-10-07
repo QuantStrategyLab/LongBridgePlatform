@@ -612,3 +612,257 @@ def test_business_date_schedule_separates_grace_closed_and_not_due() -> None:
     assert closed["state"] == "market_closed"
     assert outside["state"] == "outside_window"
     assert outside["publication_grace_ended"] is None
+
+
+
+# Exact serving-origin/route contract, independent of a Scheduler URI.
+def _serving_route_case(path="/run"):
+    service = {
+        "metadata": {"name": "lb-paper"},
+        "status": {
+            "url": "https://lb-paper.example.run.app",
+            "traffic": [{"revisionName": "lb-paper-r1", "percent": 100}],
+        },
+    }
+    revision = {
+        "metadata": {"name": "lb-paper-r1", "labels": {"commit-sha": "a" * 40}},
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+    context = {
+        "service": service,
+        "revision": revision,
+        "route_contract": {
+            "service": "lb-paper",
+            "source_commit": "a" * 40,
+            "path": path,
+            "http_method": "POST",
+        },
+    }
+    job = {
+        "name": "projects/synthetic/locations/test/jobs/paper",
+        "state": "ENABLED",
+        "schedule": "45 15 * * 1",
+        "timeZone": "America/New_York",
+        "httpTarget": {
+            "uri": f"https://lb-paper.example.run.app{path}",
+            "httpMethod": "POST",
+        },
+    }
+    return context, job
+
+
+def test_verified_route_selects_only_declared_path():
+    from scripts.runtime_heartbeat_policy import resolve_bound_scheduler
+
+    target = {"service": "lb-paper", "scheduler": {"main_time": "wrong template"}}
+    for path, other in [("/run", "/"), ("/", "/run")]:
+        context, job = _serving_route_case(path)
+        resolved, error = resolve_bound_scheduler(
+            target, [job], serving_context=context
+        )
+        assert error is None
+        assert resolved["scheduler"]["main_time"] == job["schedule"]
+        job["httpTarget"]["uri"] = "https://lb-paper.example.run.app" + other
+        unknown, error = resolve_bound_scheduler(target, [job], serving_context=context)
+        assert error is not None and unknown["scheduler"] == {}
+    unknown, error = resolve_bound_scheduler(target, [], serving_context=None)
+    assert error == "scheduler_context_unevaluable" and unknown["scheduler"] == {}
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "https://lb-paper.example.run.app.attacker.test/run",
+        "http://lb-paper.example.run.app/run",
+        "https://lb-paper.example.run.app:8443/run",
+        "https://user:secret@lb-paper.example.run.app/run",
+        "https://lb-paper.example.run.app/run?key=private",
+        "https://lb-paper.example.run.app/run#fragment",
+        "https://lb-paper.example.run.app/run/",
+        "https://lb-paper.example.run.app/%72un",
+    ],
+)
+def test_scheduler_uri_lookalikes_and_ambiguous_paths_are_not_ready(uri):
+    from scripts.runtime_heartbeat_policy import resolve_bound_scheduler
+
+    context, job = _serving_route_case()
+    job["httpTarget"]["uri"] = uri
+    resolved, error = resolve_bound_scheduler(
+        {"service": "lb-paper"}, [job], serving_context=context
+    )
+    assert error is not None and resolved["scheduler"] == {}
+
+
+def test_missing_changed_serving_route_and_duplicate_jobs_are_unknown():
+    from copy import deepcopy
+    from scripts.runtime_heartbeat_policy import resolve_bound_scheduler
+
+    context, job = _serving_route_case()
+    for mutate in [
+        lambda c: c.pop("route_contract"),
+        lambda c: c["route_contract"].update(source_commit="b" * 40),
+        lambda c: c["service"]["status"]["traffic"].append(
+            {"revisionName": "other", "percent": 1}
+        ),
+        lambda c: c["revision"]["status"].update(conditions=[]),
+        lambda c: c["service"]["metadata"].update(name="other"),
+    ]:
+        changed = deepcopy(context)
+        mutate(changed)
+        assert resolve_bound_scheduler(
+            {"service": "lb-paper"}, [job], serving_context=changed
+        )[1]
+    assert resolve_bound_scheduler(
+        {"service": "lb-paper"}, [job, deepcopy(job)], serving_context=context
+    )[1]
+    for field, value in [
+        ("state", ""),
+        ("timeZone", "Not/AZone"),
+        ("schedule", "bad"),
+        ("name", ""),
+    ]:
+        changed = deepcopy(job)
+        changed[field] = value
+        assert resolve_bound_scheduler(
+            {"service": "lb-paper"}, [changed], serving_context=context
+        )[1]
+
+
+def test_expectations_are_multiple_actual_slots_not_one_daily_requirement():
+    from scripts.runtime_heartbeat_policy import enumerate_cycle_expectations
+
+    target = {
+        "scheduler": {"main_time": "0 15 * * 1,3,5", "timezone": "UTC"},
+        "market_timezone": "UTC",
+        "market_calendar": "TEST",
+    }
+
+    def calendar(name, **kw):
+        return {
+            kw["start_date"] + dt.timedelta(days=n)
+            for n in range((kw["end_date"] - kw["start_date"]).days + 1)
+        }
+
+    result = enumerate_cycle_expectations(
+        target,
+        since=dt.datetime(2026, 10, 5, tzinfo=dt.timezone.utc),
+        now=dt.datetime(2026, 10, 9, 16, tzinfo=dt.timezone.utc),
+        session_dates_loader=calendar,
+    )
+    assert result["state"] == "ready"
+    assert [slot["scheduled_for"][:10] for slot in result["slots"]] == [
+        "2026-10-05",
+        "2026-10-07",
+        "2026-10-09",
+    ]
+    assert result["schedule"]["next_due_at"] == "2026-10-12T15:00:00Z"
+
+
+def _all_weekday_sessions(_name, *, start_date, end_date):
+    return {
+        start_date + dt.timedelta(days=i)
+        for i in range((end_date - start_date).days + 1)
+        if (start_date + dt.timedelta(days=i)).weekday() < 5
+    }
+
+
+def test_monthly_expectations_and_explicit_interval_do_not_demand_today():
+    from scripts.runtime_heartbeat_policy import enumerate_cycle_expectations
+
+    target = {
+        "scheduler": {"main_time": "0 15 1 * *", "timezone": "UTC"},
+        "market_timezone": "UTC",
+        "market_calendar": "TEST",
+    }
+    result = enumerate_cycle_expectations(
+        target,
+        since=dt.datetime(2026, 10, 2, tzinfo=dt.timezone.utc),
+        now=dt.datetime(2026, 10, 7, 16, tzinfo=dt.timezone.utc),
+        session_dates_loader=_all_weekday_sessions,
+    )
+    assert result["state"] == "ready" and result["slots"] == []
+    assert result["schedule"]["state"] == "not_due"
+    # Nov 1 falls on a closed test session; do not invent a shifted Nov 2 run.
+    assert result["schedule"]["next_due_at"] == "2026-12-01T15:00:00Z"
+
+
+def test_closed_session_keeps_prior_expectation_and_dst_uses_scheduler_timezone():
+    from scripts.runtime_heartbeat_policy import enumerate_cycle_expectations
+
+    target = {
+        "scheduler": {"main_time": "0 15 * * 1", "timezone": "America/New_York"},
+        "market_timezone": "America/New_York",
+        "market_calendar": "TEST",
+    }
+    result = enumerate_cycle_expectations(
+        target,
+        since=dt.datetime(2026, 10, 26, tzinfo=dt.timezone.utc),
+        now=dt.datetime(2026, 11, 2, 22, tzinfo=dt.timezone.utc),
+        session_dates_loader=_all_weekday_sessions,
+    )
+    assert [x["scheduled_for"] for x in result["slots"]] == [
+        "2026-10-26T19:00:00Z",
+        "2026-11-02T20:00:00Z",
+    ]
+
+    def holiday(name, **kw):
+        return _all_weekday_sessions(name, **kw) - {dt.date(2026, 11, 2)}
+
+    result = enumerate_cycle_expectations(
+        target,
+        since=dt.datetime(2026, 10, 26, tzinfo=dt.timezone.utc),
+        now=dt.datetime(2026, 11, 2, 22, tzinfo=dt.timezone.utc),
+        session_dates_loader=holiday,
+    )
+    assert result["schedule"]["state"] == "market_closed"
+    assert [x["scheduled_for"] for x in result["slots"]] == ["2026-10-26T19:00:00Z"]
+
+
+def test_cap_horizon_calendar_failure_and_bad_timezone_never_skip_ready():
+    from scripts.runtime_heartbeat_policy import enumerate_cycle_expectations
+
+    target = {
+        "scheduler": {"main_time": "* * * * *", "timezone": "UTC"},
+        "market_timezone": "UTC",
+        "market_calendar": "TEST",
+    }
+    kwargs = dict(
+        since=dt.datetime(2026, 10, 5, tzinfo=dt.timezone.utc),
+        now=dt.datetime(2026, 10, 7, tzinfo=dt.timezone.utc),
+        session_dates_loader=_all_weekday_sessions,
+    )
+    assert (
+        enumerate_cycle_expectations(target, **kwargs)["reason"]
+        == "expectation_limit_exceeded"
+    )
+    assert (
+        enumerate_cycle_expectations(target, **kwargs, horizon_days=1)["reason"]
+        == "expectation_horizon_exceeded"
+    )
+
+    def fail(*a, **kw):
+        raise RuntimeError("private provider detail")
+
+    result = enumerate_cycle_expectations(
+        target, **{**kwargs, "session_dates_loader": fail}
+    )
+    assert result["state"] == "unevaluable" and "private" not in str(result)
+    target["scheduler"]["timezone"] = "Invalid/Zone"
+    assert enumerate_cycle_expectations(target, **kwargs)["state"] == "unevaluable"
+
+
+def test_malformed_uri_and_conflicting_ready_conditions_are_unknown():
+    from scripts.runtime_heartbeat_policy import resolve_bound_scheduler
+
+    context, job = _serving_route_case()
+    job["httpTarget"]["uri"] = "https://[broken/run"
+    assert resolve_bound_scheduler(
+        {"service": "lb-paper"}, [job], serving_context=context
+    )[1]
+    context, job = _serving_route_case()
+    context["revision"]["status"]["conditions"].append(
+        {"type": "Ready", "status": "False"}
+    )
+    assert resolve_bound_scheduler(
+        {"service": "lb-paper"}, [job], serving_context=context
+    )[1]
