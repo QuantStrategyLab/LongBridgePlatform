@@ -17,6 +17,7 @@ import re
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
+from copy import deepcopy
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -24,7 +25,11 @@ from google.api_core.exceptions import Forbidden, GoogleAPICallError, Preconditi
 
 from scripts import execution_report_heartbeat as heartbeat
 from scripts.daily_runtime_projection import project_listed_reports
-from scripts.runtime_heartbeat_policy import load_runtime_targets
+from scripts.runtime_heartbeat_policy import (
+    canonical_serving_route,
+    load_runtime_targets,
+    resolve_bound_scheduler,
+)
 
 _BUCKET = re.compile(r"^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$")
 _MAX_REPORTS = 20
@@ -50,7 +55,8 @@ class _KnownFailure(RuntimeError):
     """A safe, fixed diagnostic category for a known failure phase."""
 
     _CODES = frozenset(
-        {"schedule_unavailable", "storage_write_permission_denied", "write_unknown"}
+        {"schedule_unavailable", "schedule_unevaluable",
+         "storage_write_permission_denied", "write_unknown"}
     )
 
     def __init__(self, code: str) -> None:
@@ -200,15 +206,16 @@ def _select_target(env: Mapping[str, str]) -> dict[str, Any]:
     return matched[0]
 
 
-def _scheduler_identity(job: Mapping[str, Any], service: str) -> bool:
+# Compatibility-only matching for the unadopted natural daily publisher.
+# It conveys no verified-route or cycle-health authority.
+def _legacy_scheduler_identity(job: Mapping[str, Any], service: str) -> bool:
     """Reuse the heartbeat helper's service and URI rule, including paused jobs."""
 
     probe = dict(job)
     probe["state"] = "ENABLED"
     return heartbeat._scheduler_job_targets_strategy_run(probe, service)
 
-
-def _confirmed_scheduler(
+def _legacy_confirmed_scheduler(
     target: Mapping[str, Any],
     *,
     project: str | None,
@@ -226,7 +233,7 @@ def _confirmed_scheduler(
         if not isinstance(job, Mapping):
             continue
         state = str(job.get("state") or "").strip().upper()
-        same_service = _scheduler_identity(job, service)
+        same_service = _legacy_scheduler_identity(job, service)
         if state == "ENABLED" and same_service:
             enabled.append(job)
         elif state == "PAUSED" and same_service:
@@ -248,6 +255,26 @@ def _confirmed_scheduler(
     if paused:
         return dict(target), "scheduler_paused"
     return dict(target), "scheduler_missing"
+
+
+def _confirmed_scheduler(
+    target: Mapping[str, Any],
+    *,
+    project: str | None,
+    serving_context: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], str | None]:
+    """Resolve only the independently established serving origin and route."""
+
+    try:
+        binding = canonical_serving_route(serving_context)
+        if binding["service"] != target.get("service"):
+            raise ValueError()
+    except ValueError:
+        return {**target, "scheduler": {}}, "scheduler_context_unevaluable"
+    jobs = heartbeat._list_scheduler_jobs(project=project)
+    if not isinstance(jobs, list):
+        raise RuntimeError("schedule_unavailable")
+    return resolve_bound_scheduler(target, jobs, serving_context=serving_context)
 
 
 def _quiet_read(uri: str, *, project: str | None) -> dict[str, Any] | None:
@@ -566,6 +593,7 @@ def _sync_runtime_daily(
     return "recorded"
 
 
+# Keep the existing daily chain unchanged until an explicit caller adoption.
 def publish(
     env: Mapping[str, str],
     *,
@@ -614,7 +642,7 @@ def publish(
     if len(hydrated) != 1:
         raise _Rejected("target_not_unique")
     try:
-        hydrated[0], scheduler_error = _confirmed_scheduler(hydrated[0], project=project)
+        hydrated[0], scheduler_error = _legacy_confirmed_scheduler(hydrated[0], project=project)
     except RuntimeError as exc:
         raise _KnownFailure("schedule_unavailable") from None
     since = observed - dt.timedelta(hours=lookback)
@@ -634,6 +662,165 @@ def publish(
         )
     if scheduler_error:
         read_errors.append(scheduler_error)
+    if read_payload is None:
+        kept: list[tuple[str, dt.datetime]] = []
+        cached: dict[str, dict[str, Any]] = {}
+        for uri, updated_at in objects:
+            payload_value, error = _read_bounded(store, uri)
+            if error or payload_value is None:
+                read_errors.append(error or "read_failed")
+                continue
+            cached[uri] = payload_value
+            kept.append((uri, updated_at))
+        objects = kept
+
+        def read_payload(
+            uri: str,
+            cached: dict[str, dict[str, Any]] = cached,
+        ) -> dict[str, Any] | None:
+            return cached.get(uri)
+
+    kwargs: dict[str, Any] = {
+        "observed_at": observed,
+        "publication_grace": dt.timedelta(minutes=grace),
+        "market_aware": str(env.get("RUNTIME_HEARTBEAT_MARKET_AWARE") or "true").strip().lower()
+        not in {"0", "false", "no", "off"},
+        "read_errors": read_errors,
+    }
+    if session_dates_loader is not None:
+        kwargs["session_dates_loader"] = session_dates_loader
+    projected = project_listed_reports(
+        targets=hydrated,
+        objects=objects,
+        read_payload=read_payload,
+        **kwargs,
+    )
+    records = projected.get("records")
+    if not isinstance(records, list) or len(records) != 1:
+        raise _Rejected("target_not_unique")
+    business_date = records[0].get("business_date")
+    if not isinstance(business_date, str) or not business_date:
+        raise _KnownFailure("schedule_unavailable")
+    # QRS stores the fixed PAPER target with its canonical lower-case scope.
+    # Keep the actual scope check above case-insensitive and serialize this
+    # normalized representation once so GCS and the optional POST share bytes.
+    if records[0].get("target_key") == _RUNTIME_DAILY_SYNC_TARGET_KEY:
+        records[0]["target"]["account_scope"] = "paper"
+    body = json.dumps(projected, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    uploaded = _upload(store, prefix, business_date, observed, body)
+    if uploaded == "already_recorded":
+        return "already_recorded", business_date, "skipped_existing"
+    sync_status = _sync_runtime_daily(
+        env,
+        body,
+        business_date=business_date,
+        target_key=str(records[0].get("target_key") or ""),
+        http_post=http_post,
+    )
+    return "recorded", business_date, sync_status
+
+
+def publish_verified(
+    env: Mapping[str, str],
+    *,
+    now: dt.datetime,
+    session_dates_loader: Any = None,
+    client: Any = None,
+    list_objects: Callable[..., list[dict[str, Any]]] | None = None,
+    read_payload: Callable[[str], Mapping[str, Any] | None] | None = None,
+    report_globs: Callable[[dt.datetime, dt.datetime], list[str]] | None = None,
+    http_post: Callable[..., Any] | None = None,
+    serving_context: Mapping[str, Any] | None = None,
+) -> tuple[str, str, str]:
+    """Return record status, date, and independently confirmed QRS sync status.
+
+    A caller must supply a separately admitted serving revision/route context.
+    Without it, this opt-in path remains explicitly unevaluable and writes nothing.
+    The natural daily CLI deliberately continues through legacy publish().
+    """
+
+    if not _enabled(env):
+        return "disabled", "", "disabled"
+    prefix = _require_config(env)
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise _Rejected("config_invalid")
+    observed = now.astimezone(dt.timezone.utc)
+    limit = _positive_int(env.get("RUNTIME_HEARTBEAT_MAX_REPORTS_TO_READ"), _MAX_REPORTS)
+    try:
+        lookback = float(env.get("RUNTIME_HEARTBEAT_LOOKBACK_HOURS") or _LOOKBACK_HOURS)
+        grace = float(env.get("RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES") or "30")
+    except ValueError as exc:
+        raise _Rejected("config_invalid") from exc
+    if lookback <= 0 or grace < 0:
+        raise _Rejected("config_invalid")
+    target = _select_target(env)
+    project = (
+        env.get("RUNTIME_HEARTBEAT_GCP_PROJECT_ID")
+        or env.get("GCP_PROJECT_ID")
+        or env.get("GOOGLE_CLOUD_PROJECT")
+    )
+    service = str(target.get("service") or "").strip()
+    try:
+        # Preserve one supplied observation even if a transport mutates its input.
+        serving_context = deepcopy(serving_context)
+        binding = canonical_serving_route(serving_context)
+        if binding["service"] != service:
+            raise ValueError()
+        revision = serving_context["revision"]
+        revision_spec = revision.get("spec") if isinstance(revision, Mapping) else None
+        if (not isinstance(revision_spec, Mapping)
+                or not isinstance(revision_spec.get("containers"), list)):
+            raise ValueError()
+    except (KeyError, TypeError, ValueError):
+        raise _KnownFailure("schedule_unevaluable") from None
+    try:
+        payload = heartbeat._describe_cloud_run_service(service, project=project)
+        if not isinstance(payload, dict):
+            raise RuntimeError("schedule_unavailable")
+    except RuntimeError:
+        raise _KnownFailure("schedule_unavailable") from None
+    try:
+        # The service template may be staged while an older revision serves.
+        # Compare serving identity, then use only that bound revision's config.
+        readback_binding = canonical_serving_route({**serving_context, "service": payload})
+        if readback_binding != binding:
+            raise ValueError()
+    except ValueError:
+        raise _KnownFailure("schedule_unevaluable") from None
+    serving_payload = {"spec": {"template": {"spec": dict(revision_spec)}}}
+    try:
+        deployed = heartbeat._deployed_runtime_target(serving_payload)
+        hydrated = _profiles_from_same_readback(target, serving_payload, project=project)
+    except RuntimeError:
+        raise _KnownFailure("schedule_unavailable") from None
+    if not _deployment_matches_paper(target, deployed) or not _deployment_enabled(serving_payload, deployed):
+        raise _Rejected("deployed_target_rejected")
+    if len(hydrated) != 1:
+        raise _Rejected("target_not_unique")
+    try:
+        hydrated[0], scheduler_error = _confirmed_scheduler(
+            hydrated[0], project=project, serving_context=serving_context,
+        )
+    except RuntimeError:
+        raise _KnownFailure("schedule_unavailable") from None
+    if scheduler_error:
+        # An unproven schedule cannot be archived as a plausible template day.
+        raise _KnownFailure("schedule_unevaluable")
+    since = observed - dt.timedelta(hours=lookback)
+    globs = (report_globs or heartbeat._report_globs)(since, observed)
+    if not globs:
+        raise _Rejected("config_invalid")
+    store = client if client is not None else _storage_client()
+    if list_objects is None:
+        objects, read_errors = _list_bounded(store, globs, since=since, limit=limit)
+    else:
+        objects, read_errors = _bounded_objects(
+            globs,
+            project=project,
+            since=since,
+            limit=limit,
+            list_objects=list_objects,
+        )
     if read_payload is None:
         kept: list[tuple[str, dt.datetime]] = []
         cached: dict[str, dict[str, Any]] = {}
@@ -735,3 +922,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
