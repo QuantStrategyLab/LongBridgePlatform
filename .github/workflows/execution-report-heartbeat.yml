@@ -137,6 +137,8 @@ jobs:
       RUNTIME_HEARTBEAT_EXPECTED_DAY_OF_MONTH: ${{ vars.RUNTIME_HEARTBEAT_EXPECTED_DAY_OF_MONTH }}
       RUNTIME_HEARTBEAT_EXPECTED_TIMEZONE: ${{ vars.RUNTIME_HEARTBEAT_EXPECTED_TIMEZONE }}
       RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
+      ACCOUNT_HISTORY_OBSERVATION_MODE: ${{ vars.ACCOUNT_HISTORY_OBSERVATION_MODE || 'scheduler_archive' }}
+      ACCOUNT_HISTORY_REQUESTED_TARGET: ${{ inputs.target || 'all' }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG || 'zh' }}
       RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
@@ -159,6 +161,21 @@ jobs:
           set -euo pipefail
           uv sync --frozen --no-dev
 
+      - name: Validate independent HK audience before authentication
+        id: independent_audience
+        if: ${{ env.ACCOUNT_HISTORY_OBSERVATION_MODE == 'independent_get' && vars.ACCOUNT_HISTORY_RECORDING_ENABLED == 'true' }}
+        continue-on-error: true
+        env:
+          ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ vars.ACCOUNT_HISTORY_RECORDING_ENABLED }}
+          ACCOUNT_HISTORY_SERVICE_URL: ${{ vars.ACCOUNT_HISTORY_SERVICE_URL }}
+          ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
+          ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
+          ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
+          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
+          SNAPSHOT_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+          SNAPSHOT_REGION: ${{ vars.CLOUD_RUN_REGION }}
+        run: uv run --no-sync python scripts/record_daily_account_snapshot.py --validate-independent-hk-audience >> "$GITHUB_OUTPUT"
+
       - name: Authenticate to Google Cloud
         id: gcp_auth_primary
         continue-on-error: true
@@ -166,6 +183,11 @@ jobs:
         with:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          # Reuse the explicit WIF identity and the prevalidated canonical audience.
+          # Send the token only after reconciled serving-metadata validation.
+          token_format: ${{ steps.independent_audience.outcome == 'success' && 'id_token' || '' }}
+          id_token_audience: ${{ steps.independent_audience.outputs.service_url || '' }}
+          id_token_include_email: true
 
       - name: Wait before Google Cloud authentication retry
         if: ${{ steps.gcp_auth_primary.outcome == 'failure' }}
@@ -178,6 +200,11 @@ jobs:
         with:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          # Reuse the explicit WIF identity and the prevalidated canonical audience.
+          # Send the token only after reconciled serving-metadata validation.
+          token_format: ${{ steps.independent_audience.outcome == 'success' && 'id_token' || '' }}
+          id_token_audience: ${{ steps.independent_audience.outputs.service_url || '' }}
+          id_token_include_email: true
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
@@ -195,7 +222,7 @@ jobs:
         continue-on-error: true
         env:
           ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ vars.ACCOUNT_HISTORY_RECORDING_ENABLED }}
-          ACCOUNT_HISTORY_SERVICE_URL: ${{ vars.ACCOUNT_HISTORY_SERVICE_URL }}
+          ACCOUNT_HISTORY_SERVICE_URL: ${{ env.ACCOUNT_HISTORY_OBSERVATION_MODE != 'independent_get' && vars.ACCOUNT_HISTORY_SERVICE_URL || steps.independent_audience.outputs.service_url }}
           ACCOUNT_HISTORY_GCS_PREFIX: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX }}
           ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
           ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
@@ -204,11 +231,28 @@ jobs:
           ACCOUNT_FACTS_SYNC_ENABLED: ${{ vars.ACCOUNT_FACTS_SYNC_ENABLED }}
           ACCOUNT_FACTS_SYNC_URL: ${{ vars.ACCOUNT_FACTS_SYNC_URL }}
           ACCOUNT_FACTS_SYNC_TOKEN: ${{ vars.ACCOUNT_FACTS_SYNC_ENABLED == 'true' && secrets.ACCOUNT_FACTS_SYNC_TOKEN || '' }}
+          ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN: ${{ steps.gcp_auth_primary.outputs.id_token || steps.gcp_auth_retry.outputs.id_token }}
+          SNAPSHOT_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+          SNAPSHOT_REGION: ${{ vars.CLOUD_RUN_REGION }}
         run: |
+          set -euo pipefail
           if [[ -n "$ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID" ]]; then
             printf '::add-mask::%s\n' "$ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID"
           fi
-          uv run --no-sync python scripts/record_daily_account_snapshot.py
+          case "$ACCOUNT_HISTORY_OBSERVATION_MODE" in
+            independent_get)
+              uv run --no-sync python scripts/record_daily_account_snapshot.py --validate-independent-hk-account-snapshot
+              # Private metadata stays in the pipe. No file, log, or artifact.
+              gcloud run services describe "${SNAPSHOT_SERVICE}" \
+                --project "${GOOGLE_CLOUD_PROJECT}" --region "${SNAPSHOT_REGION}" \
+                --format=json 2>/dev/null \
+                | uv run --no-sync python scripts/record_daily_account_snapshot.py --independent-hk-account-snapshot
+              ;;
+            *)
+              # The script rejects unknown modes before any Scheduler/GCS call.
+              uv run --no-sync python scripts/record_daily_account_snapshot.py
+              ;;
+          esac
 
       - name: Check recent execution report
         if: ${{ env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}
