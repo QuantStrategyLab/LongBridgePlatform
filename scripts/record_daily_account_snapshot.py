@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, time as datetime_time, timedelta, timezone
+from datetime import UTC, datetime, time as datetime_time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlsplit
@@ -244,6 +244,234 @@ def _producer_create_bounded(store, uri, body):
     return True
 
 
+
+@dataclass(frozen=True)
+class _IndependentConfig:
+    project_id: str
+    region: str
+    service: str
+    service_url: str
+    source_binding_id: str
+
+
+def _independent_hk_config(env: Mapping[str, str], *, require_id_token: bool = True) -> _IndependentConfig:
+    """This first opt-in is manual HK observation with the existing identity only."""
+    if (
+        env.get("ACCOUNT_HISTORY_OBSERVATION_MODE") != "independent_get"
+        or env.get("ACCOUNT_HISTORY_RECORDING_ENABLED") != "true"
+        or env.get("ACCOUNT_HISTORY_TARGET_ID") != "hk"
+        or env.get("ACCOUNT_HISTORY_EXPECTED_SCOPE") != "HK"
+        or env.get("GOOGLE_CLOUD_PROJECT") != "longbridgequant"
+        or env.get("RUNTIME_TARGET_ENABLED") != "false"
+        or env.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+        or env.get("ACCOUNT_HISTORY_REQUESTED_TARGET") != "hk"
+        or env.get("GITHUB_REF") != "refs/heads/main"
+        or env.get("GITHUB_WORKFLOW_REF") != (
+            "QuantStrategyLab/LongBridgePlatform/.github/workflows/"
+            "execution-report-heartbeat.yml@refs/heads/main"
+        )
+    ):
+        raise _Rejected("independent_config_invalid")
+    binding = str(env.get("ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID") or "")
+    token = str(env.get("ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN") or "")
+    if not _BINDING_ID.fullmatch(binding) or (
+        require_id_token and (not token or len(token) > 16384 or any(c.isspace() for c in token))
+    ):
+        raise _Rejected("independent_config_invalid")
+    from application.runtime_target_manifest import load_runtime_target_manifest
+
+    targets = [target for target in load_runtime_target_manifest().targets if target.id == "hk"]
+    if len(targets) != 1 or targets[0].mode != "live" or targets[0].account_scope != "HK":
+        raise _Rejected("independent_config_invalid")
+    target = targets[0]
+    if env.get("SNAPSHOT_SERVICE") != target.service or env.get("SNAPSHOT_REGION") != target.region:
+        raise _Rejected("independent_config_invalid")
+    raw_url = env.get("ACCOUNT_HISTORY_SERVICE_URL")
+    service_url = _service_url(str(raw_url or ""), service=target.service, region=target.region)
+    # Unlike the legacy Scheduler route, this exact string is also the token audience.
+    if raw_url != service_url:
+        raise _Rejected("independent_config_invalid")
+    return _IndependentConfig(
+        "longbridgequant", target.region, target.service,
+        service_url, binding,
+    )
+
+
+def _validate_independent_service(value: object, config: _IndependentConfig) -> None:
+    """Validate in-memory gcloud service readback before sending its audience token."""
+    try:
+        if not isinstance(value, Mapping):
+            raise TypeError
+        metadata, status = value["metadata"], value["status"]
+        annotations = metadata["annotations"]
+        template = value["spec"]["template"]
+        containers = template["spec"]["containers"]
+        generation = metadata["generation"]
+        observed_generation = status["observedGeneration"]
+        ready = [row for row in status["conditions"] if row.get("type") == "Ready"]
+        traffic = status["traffic"]
+        revision = status["latestReadyRevisionName"]
+        if (
+            metadata["name"] != config.service
+            or str(metadata["namespace"]) not in {config.project_id, "252919773759"}
+            or metadata["labels"]["cloud.googleapis.com/location"] != config.region
+            or annotations.get("run.googleapis.com/ingress") != "all"
+            or annotations.get("run.googleapis.com/ingress-status", "all") != "all"
+            or status["url"] != config.service_url
+            or len(ready) != 1 or ready[0].get("status") != "True"
+            or not isinstance(revision, str) or not revision.startswith(config.service + "-")
+            or type(generation) is not int or generation < 1
+            or type(observed_generation) is not int or observed_generation != generation
+            or status["latestCreatedRevisionName"] != revision
+            or template["metadata"]["name"] != revision
+            or not isinstance(traffic, list) or len(traffic) != 1
+            or type(traffic[0].get("percent")) is not int or traffic[0]["percent"] != 100
+            or traffic[0].get("revisionName") != revision or traffic[0].get("tag")
+            or not isinstance(containers, list) or len(containers) != 1
+        ):
+            raise ValueError
+        snapshot_flags = [
+            row for row in containers[0].get("env", [])
+            if row.get("name") == "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED"
+        ]
+        if len(snapshot_flags) != 1 or snapshot_flags[0].get("value") != "true" or "valueFrom" in snapshot_flags[0]:
+            raise ValueError
+    except (KeyError, TypeError, AttributeError, ValueError):
+        raise _Rejected("independent_service_unqualified") from None
+
+
+def _independent_money_rows(value: object, fields: tuple[str, ...]) -> list[dict[str, str]]:
+    if not isinstance(value, list) or not 1 <= len(value) <= 32:
+        raise _Rejected("snapshot_invalid")
+    if any(not isinstance(row, Mapping) or set(row) != set(fields) for row in value):
+        raise _Rejected("snapshot_invalid")
+    rows = _money_rows(value, fields)
+    # Match the existing QRS primary-money contract without rounding native facts.
+    for row in rows:
+        for field in fields:
+            if field == "currency":
+                continue
+            whole, _, fraction = row[field].lstrip("-").partition(".")
+            if len(whole) > 15 or len(fraction) > 8:
+                raise _Rejected("snapshot_invalid")
+    return rows
+
+
+def _project_independent_history(
+    payload: object, config: _IndependentConfig, started_at: datetime, now: datetime,
+) -> dict[str, Any]:
+    """Discard private positions/orders; retain only the existing history contract."""
+    if not isinstance(payload, Mapping):
+        raise _Rejected("snapshot_invalid")
+    binding = payload.get("source_binding")
+    if (
+        payload.get("schema_version") != SNAPSHOT_SCHEMA
+        or payload.get("status") != "partial"
+        or payload.get("account_scope") != "HK"
+        or payload.get("no_order") is not True
+        or payload.get("live_authority_granted") is not False
+        or payload.get("snapshot_atomic") is not False
+        or payload.get("cash_complete") is not True
+        or payload.get("positions_complete") is not True
+        or not isinstance(binding, Mapping)
+        or set(binding) != {"kind", "status", "id"}
+        or binding.get("kind") != SOURCE_KIND or binding.get("status") != "bound"
+        or binding.get("id") != config.source_binding_id
+    ):
+        raise _Rejected("snapshot_invalid")
+    try:
+        started = _aware(payload.get("observed_started_at"))
+        finished = _aware(payload.get("observed_finished_at"))
+        # Preserve the recorder's existing strict no-future and 15-minute policy.
+        if not started_at <= started <= finished <= now or not _is_fresh(payload, now):
+            raise _Rejected("snapshot_invalid")
+        balances = _independent_money_rows(payload.get("broker_reported_balances"), _BALANCE_FIELDS)
+        cash = _independent_money_rows(payload.get("cash"), _CASH_FIELDS)
+        record = {
+            "schema_version": HISTORY_SCHEMA, "snapshot_schema_version": SNAPSHOT_SCHEMA,
+            "account_scope": "HK", "target_id": "hk",
+            "source_binding": {"kind": SOURCE_KIND, "status": "bound", "id": config.source_binding_id},
+            "observed_started_at": payload["observed_started_at"],
+            "observed_finished_at": payload["observed_finished_at"],
+            "snapshot_atomic": False, "observation_date": started.date().isoformat(),
+            "broker_reported_balances": balances, "cash": cash,
+        }
+        if "financing" in payload:
+            record["financing"] = _producer_financing_rows(
+                payload["financing"], {row["currency"] for row in balances},
+            )
+        return record
+    except _Rejected:
+        raise _Rejected("snapshot_invalid") from None
+
+
+def observe_independent_hk_account_snapshot(
+    env: Mapping[str, str], *, service_metadata: object, http_get: Callable[..., Any],
+    http_post: Callable[..., Any], now_reader: Callable[[], datetime],
+) -> DailyAccountRecordResult:
+    """One qualified GET and optional QRS POST; never Scheduler, GCS or strategy."""
+    if str(env.get("ACCOUNT_HISTORY_RECORDING_ENABLED") or "").strip() != "true":
+        return DailyAccountRecordResult("disabled")
+    try:
+        config = _independent_hk_config(env)
+        sync_config = _account_facts_sync_config(env)
+        _validate_independent_service(service_metadata, config)
+        started_at = _utc_now(now_reader)
+    except _Rejected as rejected:
+        return DailyAccountRecordResult("error", rejected.category)
+    except Exception:  # noqa: BLE001 - fail closed without private provider details
+        return DailyAccountRecordResult("error", "independent_config_invalid")
+    response = None
+    try:
+        response = http_get(
+            config.service_url + "/account-snapshot",
+            headers={"Authorization": f"Bearer {env['ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN']}", "Accept": "application/json"},
+            timeout=HTTP_TIMEOUT_SECONDS, allow_redirects=False, stream=True,
+        )
+        if getattr(response, "status_code", None) != 200 or getattr(response, "is_redirect", False):
+            raise _Rejected("snapshot_http_rejected")
+        payload = _bounded_response_json(response)
+        record = _project_independent_history(payload, config, started_at, _utc_now(now_reader))
+    except _Rejected as rejected:
+        return DailyAccountRecordResult("error", rejected.category)
+    except Exception:  # noqa: BLE001 - an uncertain read is never retried or disclosed
+        return DailyAccountRecordResult("error", "snapshot_request_unknown")
+    finally:
+        _close(response)
+    if sync_config is None:
+        return DailyAccountRecordResult("observed")
+    if not _is_fresh(record, _utc_now(now_reader)):
+        return DailyAccountRecordResult("observed", publish_status="rejected", publish_category="observation_stale")
+    body = json.dumps(record, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    publish_status, publish_category = _publish_account_facts(sync_config, body, record, http_post=http_post)
+    return DailyAccountRecordResult("observed", publish_status=publish_status, publish_category=publish_category)
+
+
+def _default_http_get(url: str, **kwargs: Any):
+    import requests
+    from requests.adapters import HTTPAdapter
+
+    session = requests.Session()
+    session.mount("https://", HTTPAdapter(max_retries=0))
+    try:
+        response = session.get(url, **kwargs)
+    except Exception:
+        session.close()
+        raise
+    return _OwnedResponse(response, session)
+
+
+def _read_independent_service_metadata() -> object:
+    # gcloud stdout is piped directly here; never save or print its private env.
+    body = sys.stdin.buffer.read(256 * 1024 + 1)
+    if len(body) > 256 * 1024:
+        raise _Rejected("independent_service_unqualified")
+    try:
+        return json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise _Rejected("independent_service_unqualified") from None
+
+
 def record_daily_account_snapshot(
     env: Mapping[str, str],
     *,
@@ -258,6 +486,9 @@ def record_daily_account_snapshot(
 
     if str(env.get("ACCOUNT_HISTORY_RECORDING_ENABLED") or "").strip() != "true":
         return DailyAccountRecordResult("disabled", publish_status="disabled")
+    mode = env.get("ACCOUNT_HISTORY_OBSERVATION_MODE") or "scheduler_archive"
+    if mode != "scheduler_archive":
+        return DailyAccountRecordResult("error", "independent_entrypoint_required" if mode == "independent_get" else "observation_mode_invalid")
     try:
         config = _config(env)
         sync_config = _account_facts_sync_config(env)
@@ -1477,8 +1708,40 @@ def main(
     session_factory: Callable[[], Any] | None = None,
     http_post: Callable[..., Any] | None = None,
     now_reader: Callable[[], datetime] | None = None,
+    http_get: Callable[..., Any] | None = None,
+    service_metadata: object = None,
 ) -> int:
     args = sys.argv[1:] if argv is None else argv
+    if args == ["--validate-independent-hk-audience"]:
+        try:
+            config = _independent_hk_config(os.environ if environ is None else environ, require_id_token=False)
+        except Exception:  # noqa: BLE001 - never disclose invalid operational input
+            print("independent_audience=error:independent_config_invalid")
+            return 1
+        # The workflow redirects this one verified origin to GITHUB_OUTPUT.
+        print(f"service_url={config.service_url}")
+        return 0
+    if args in (["--validate-independent-hk-account-snapshot"], ["--independent-hk-account-snapshot"]):
+        env = os.environ if environ is None else environ
+        try:
+            _independent_hk_config(env)
+            _account_facts_sync_config(env)
+            if args == ["--validate-independent-hk-account-snapshot"]:
+                print("independent_config=ok")
+                return 0
+            metadata = _read_independent_service_metadata() if service_metadata is None else service_metadata
+            result = observe_independent_hk_account_snapshot(
+                env, service_metadata=metadata, http_get=http_get or _default_http_get,
+                http_post=http_post or _default_http_post,
+                now_reader=now_reader or (lambda: datetime.now(UTC)),
+            )
+        except _Rejected as rejected:
+            result = DailyAccountRecordResult("error", rejected.category)
+        except Exception:  # noqa: BLE001 - do not print private service metadata errors
+            result = DailyAccountRecordResult("error", "independent_config_invalid")
+        observation = f"error:{result.category}" if result.status == "error" else result.status
+        print(f"observation={observation} account_facts_publish={result.publish_status}")
+        return int(result.status == "error" or result.publish_status in {"rejected", "unknown"})
     if args == ["--inspect-sg-probe-permissions"]:
         try:
             result = inspect_sg_probe_permissions(

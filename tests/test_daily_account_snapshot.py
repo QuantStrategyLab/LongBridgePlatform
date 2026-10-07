@@ -1421,3 +1421,494 @@ def test_history_validator_accepts_optional_financing_and_rejects_malformed():
     )
     assert result["observations"][0]["schema_matches"] is True
     assert result["observations"][0]["historical_window_match"] is True
+
+
+# The independent observer never uses the Scheduler/GCS recorder or broker SDK.
+def _independent_env(**overrides):
+    value = _env(
+        "hk",
+        RUNTIME_TARGET_ENABLED="false",
+        ACCOUNT_HISTORY_OBSERVATION_MODE="independent_get",
+        SNAPSHOT_SERVICE="longbridge-quant-hk-service",
+        SNAPSHOT_REGION="asia-east2",
+        ACCOUNT_HISTORY_REQUESTED_TARGET="hk",
+        GITHUB_EVENT_NAME="workflow_dispatch",
+        GITHUB_REF="refs/heads/main",
+        GITHUB_WORKFLOW_REF="QuantStrategyLab/LongBridgePlatform/.github/workflows/execution-report-heartbeat.yml@refs/heads/main",
+        ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN="synthetic-cloud-run-id-token",
+        ACCOUNT_FACTS_SYNC_ENABLED="true",
+        ACCOUNT_FACTS_SYNC_URL=QRS_URL,
+        ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN,
+    )
+    value.pop("ACCOUNT_HISTORY_GCS_PREFIX")
+    value.update(overrides)
+    return value
+
+
+def _service_metadata():
+    return {
+        "metadata": {
+            "name": "longbridge-quant-hk-service",
+            "namespace": "252919773759",
+            "generation": 7,
+            "labels": {"cloud.googleapis.com/location": "asia-east2"},
+            "annotations": {"run.googleapis.com/ingress": "all"},
+        },
+        "spec": {"template": {"metadata": {"name": "longbridge-quant-hk-service-00001"}, "spec": {"containers": [{
+            "env": [{"name": "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED", "value": "true"}],
+        }]}}},
+        "status": {
+            "url": _independent_env()["ACCOUNT_HISTORY_SERVICE_URL"],
+            "latestReadyRevisionName": "longbridge-quant-hk-service-00001",
+            "latestCreatedRevisionName": "longbridge-quant-hk-service-00001",
+            "observedGeneration": 7,
+            "conditions": [{"type": "Ready", "status": "True"}],
+            "traffic": [{"revisionName": "longbridge-quant-hk-service-00001", "percent": 100}],
+        },
+    }
+
+
+def _independent_snapshot(**overrides):
+    value = {
+        "schema_version": "longbridge_account_snapshot.v1",
+        "status": "partial",
+        "account_scope": "HK",
+        "observed_started_at": (T0 + timedelta(seconds=1)).isoformat(),
+        "observed_finished_at": (T0 + timedelta(seconds=2)).isoformat(),
+        "snapshot_atomic": False,
+        "broker_reported_balances": [{"currency": "USD", "net_assets": "10.25", "total_cash": "-2.5"}],
+        "cash": [{"currency": "HKD", "available_cash": "0", "frozen_cash": "0", "settling_cash": "0"}],
+        "positions": [{"symbol": "synthetic-private-symbol", "currency": "HKD", "quantity": "3"}],
+        "known_non_terminal_orders_7d": [{"synthetic": "private-order"}],
+        "known_recent_executions_7d_count": 1,
+        "positions_complete": True,
+        "cash_complete": True,
+        "open_orders_complete": False,
+        "recent_executions_complete": False,
+        "stable_broker_account_id": None,
+        "unique_writer_confirmed": False,
+        "execution_fees": None,
+        "market_value": None,
+        "equity": None,
+        "no_order": True,
+        "live_authority_granted": False,
+        "source_binding": {"kind": "deployment_scope_token_version", "status": "bound", "id": BINDING},
+    }
+    value.update(overrides)
+    return value
+
+
+class _IndependentResponse:
+    def __init__(self, payload, *, status=200, raw=None, redirect=False):
+        self.status_code = status
+        self.is_redirect = redirect
+        self.content = raw if raw is not None else json.dumps(payload).encode()
+        self.closed = False
+
+    def iter_content(self, chunk_size):
+        for start in range(0, len(self.content), chunk_size):
+            yield self.content[start:start + chunk_size]
+
+    def close(self):
+        self.closed = True
+
+
+def _observe_independent(env=None, metadata=None, snapshot=None, *, get_error=None, response=None, post_response=None, post_error=None):
+    calls = {"gets": [], "posts": []}
+    response = response or _IndependentResponse(snapshot or _independent_snapshot())
+
+    def get(url, **kwargs):
+        calls["gets"].append((url, kwargs))
+        if get_error:
+            raise get_error
+        return response
+
+    def post(url, **kwargs):
+        calls["posts"].append((url, kwargs))
+        if post_error:
+            raise post_error
+        payload = json.loads(kwargs["data"])
+        return post_response or _IndependentResponse({
+            "ok": True, "stored": True, "target_id": payload["target_id"],
+            "observation_date": payload["observation_date"],
+            "observed_finished_at": payload["observed_finished_at"],
+        })
+
+    result = snapshots.observe_independent_hk_account_snapshot(
+        _independent_env() if env is None else env,
+        service_metadata=_service_metadata() if metadata is None else metadata,
+        http_get=get, http_post=post,
+        now_reader=_Clock([T0, T0 + timedelta(seconds=3), T0 + timedelta(seconds=4)]),
+    )
+    return result, calls, response
+
+
+def test_independent_hk_preserves_native_currency_and_only_publishes_existing_history_contract():
+    result, calls, response = _observe_independent()
+    assert result.status == "observed" and result.publish_status == "published"
+    assert response.closed
+    assert len(calls["gets"]) == len(calls["posts"]) == 1
+    url, request = calls["gets"][0]
+    assert url == _independent_env()["ACCOUNT_HISTORY_SERVICE_URL"] + "/account-snapshot"
+    assert request["headers"]["Authorization"] == "Bearer synthetic-cloud-run-id-token"
+    assert request["allow_redirects"] is False and request["stream"] is True
+    assert 0 < request["timeout"] <= snapshots.HTTP_TIMEOUT_SECONDS
+    outgoing = calls["posts"][0][1]["data"]
+    history = json.loads(outgoing)
+    assert set(history) == set(_history(target_id="hk"))
+    assert history["broker_reported_balances"] == _independent_snapshot()["broker_reported_balances"]
+    assert history["cash"] == _independent_snapshot()["cash"]
+    assert history["target_id"] == "hk" and history["account_scope"] == "HK"
+    assert history["observed_started_at"] == _independent_snapshot()["observed_started_at"]
+    assert history["observation_date"] == T0.date().isoformat()
+    assert b"synthetic-private" not in outgoing and b"private-order" not in outgoing
+    assert b"synthetic-cloud-run" not in outgoing
+
+
+@pytest.mark.parametrize("overrides", [
+    {"ACCOUNT_HISTORY_RECORDING_ENABLED": "false"},
+    {"ACCOUNT_HISTORY_OBSERVATION_MODE": ""},
+    {"ACCOUNT_HISTORY_OBSERVATION_MODE": "scheduler_archive"},
+    {"ACCOUNT_HISTORY_OBSERVATION_MODE": "invalid"},
+    {"ACCOUNT_HISTORY_TARGET_ID": "sg"},
+    {"ACCOUNT_HISTORY_EXPECTED_SCOPE": "SG"},
+    {"ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID": ""},
+    {"GOOGLE_CLOUD_PROJECT": "other-project"},
+    {"RUNTIME_TARGET_ENABLED": "true"},
+    {"GITHUB_EVENT_NAME": "schedule"},
+    {"ACCOUNT_HISTORY_REQUESTED_TARGET": "all"},
+    {"GITHUB_REF": "refs/heads/candidate"},
+    {"GITHUB_WORKFLOW_REF": "other/workflow@refs/heads/main"},
+    {"ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN": ""},
+    {"ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN": "token\n"},
+    {"ACCOUNT_HISTORY_SERVICE_URL": "http://untrusted.run.app"},
+])
+def test_independent_invalid_config_has_no_get_or_publish(overrides):
+    result, calls, _ = _observe_independent(_independent_env(**overrides))
+    assert result.status in {"disabled", "error"}
+    assert calls == {"gets": [], "posts": []}
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda v: v["metadata"].update(name="wrong-service"),
+    lambda v: v["metadata"].update(namespace="wrong-project"),
+    lambda v: v["metadata"]["labels"].update({"cloud.googleapis.com/location": "asia-east1"}),
+    lambda v: v["metadata"]["annotations"].update({"run.googleapis.com/ingress": "internal"}),
+    lambda v: v["metadata"]["annotations"].clear(),
+    lambda v: v["metadata"]["annotations"].update({"run.googleapis.com/ingress-status": "internal"}),
+    lambda v: v["status"].update(url="https://different.run.app"),
+    lambda v: v["status"].update(traffic=[{"revisionName": "old-revision", "percent": 100}]),
+    lambda v: v["status"].update(traffic=[{"revisionName": "longbridge-quant-hk-service-00001", "percent": 50}]),
+    lambda v: v["status"].update(conditions=[{"type": "Ready", "status": "False"}]),
+    lambda v: v["spec"]["template"]["spec"]["containers"][0].update(env=[]),
+    lambda v: v["spec"]["template"]["spec"]["containers"][0]["env"][0].update(value="false"),
+])
+def test_independent_service_gate_rejects_before_sending_id_token(mutate):
+    metadata = _service_metadata()
+    mutate(metadata)
+    result, calls, _ = _observe_independent(metadata=metadata)
+    assert result.status == "error"
+    assert calls == {"gets": [], "posts": []}
+
+
+@pytest.mark.parametrize("overrides", [
+    {"schema_version": "unknown"}, {"status": "ok"}, {"account_scope": "SG"},
+    {"positions_complete": False}, {"cash_complete": False},
+    {"no_order": False}, {"live_authority_granted": True}, {"snapshot_atomic": True},
+    {"source_binding": {"kind": "deployment_scope_token_version", "status": "bound", "id": OTHER_BINDING}},
+    {"source_binding": {"kind": "deployment_scope_token_version", "status": "unavailable", "id": None}},
+    {"observed_started_at": T0.isoformat().replace("+00:00", "")},
+    {"observed_started_at": (T0 - timedelta(seconds=1)).isoformat()},
+    {"observed_finished_at": (T0 + timedelta(seconds=4)).isoformat()},
+    {"observed_finished_at": T0.isoformat()},
+    {"broker_reported_balances": []},
+    {"cash": []},
+    {"broker_reported_balances": [{"currency": "USD", "net_assets": "0.123456789", "total_cash": "0"}]},
+    {"broker_reported_balances": [{"currency": "USD", "net_assets": "1234567890123456", "total_cash": "0"}]},
+    {"broker_reported_balances": [{"currency": "USD", "net_assets": "NaN", "total_cash": "0"}]},
+    {"cash": [{"currency": "HKD", "available_cash": "0", "frozen_cash": "0", "settling_cash": "0", "extra": "private"}]},
+])
+def test_independent_invalid_snapshot_never_posts(overrides):
+    result, calls, response = _observe_independent(snapshot=_independent_snapshot(**overrides))
+    assert result.status == "error"
+    assert len(calls["gets"]) == 1 and calls["posts"] == []
+    assert response.closed
+
+
+@pytest.mark.parametrize("response", [
+    _IndependentResponse({}, status=403),
+    _IndependentResponse({}, status=503),
+    _IndependentResponse({}, status=302, redirect=True),
+    _IndependentResponse({}, raw=b"x" * (64 * 1024 + 1)),
+    _IndependentResponse({}, raw=b"not json"),
+])
+def test_independent_get_failures_are_closed_without_retry_or_publish(response):
+    result, calls, _ = _observe_independent(response=response)
+    assert result.status == "error" and len(calls["gets"]) == 1
+    assert calls["posts"] == [] and response.closed
+
+
+def test_independent_get_unknown_is_not_retried():
+    result, calls, _ = _observe_independent(get_error=TimeoutError(SECRET))
+    assert result.status == "error" and len(calls["gets"]) == 1 and not calls["posts"]
+
+
+def test_independent_sync_disabled_observes_without_claiming_storage():
+    result, calls, _ = _observe_independent(_independent_env(ACCOUNT_FACTS_SYNC_ENABLED="false"))
+    assert result.status == "observed" and result.publish_status == "disabled"
+    assert len(calls["gets"]) == 1 and calls["posts"] == []
+
+
+@pytest.mark.parametrize("receipt", [
+    {"ok": True}, {"ok": True, "stored": False},
+    {"ok": True, "stored": True, "target_id": "sg"},
+])
+def test_independent_requires_exact_stored_ack(receipt):
+    result, calls, _ = _observe_independent(post_response=_IndependentResponse(receipt))
+    assert result.status == "observed" and result.publish_status == "unknown"
+    assert len(calls["gets"]) == len(calls["posts"]) == 1
+
+
+def test_independent_unknown_post_does_not_repeat_get_or_post():
+    result, calls, _ = _observe_independent(post_error=TimeoutError(QRS_TOKEN))
+    assert result.status == "observed" and result.publish_status == "unknown"
+    assert len(calls["gets"]) == len(calls["posts"]) == 1
+
+
+def test_independent_mode_cannot_fall_back_to_scheduler_or_storage():
+    result, spies = _record(_independent_env())
+    assert result.status == "error"
+    assert spies.session.calls == [] and spies.open_calls == [] and spies.posts == []
+
+
+def test_unknown_observation_mode_cannot_trigger_legacy_recorder():
+    result, spies = _record(_env(ACCOUNT_HISTORY_OBSERVATION_MODE="invalid"))
+    assert result.status == "error"
+    assert spies.session.calls == [] and spies.open_calls == [] and spies.posts == []
+
+
+def test_independent_hk_workflow_reuses_explicit_identity_and_exact_audience():
+    workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+    assert "ACCOUNT_HISTORY_OBSERVATION_MODE:" in workflow
+    assert "ACCOUNT_HISTORY_REQUESTED_TARGET: \u0024{{ inputs.target || 'all' }}" in workflow
+    assert "ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN:" in workflow
+    assert "--independent-hk-account-snapshot" in workflow
+    assert "token_format:" in workflow and "id_token_audience:" in workflow
+    assert 'gcloud run services describe "\u0024{SNAPSHOT_SERVICE}"' in workflow
+    assert '--project "\u0024{GOOGLE_CLOUD_PROJECT}"' in workflow
+    assert '--region "\u0024{SNAPSHOT_REGION}"' in workflow
+    assert "| uv run --no-sync python scripts/record_daily_account_snapshot.py --independent-hk-account-snapshot" in workflow
+    assert "uv run --no-sync python scripts/record_daily_account_snapshot.py\n" in workflow
+
+
+
+@pytest.mark.parametrize("overrides", [
+    {"SNAPSHOT_SERVICE": "other-service"}, {"SNAPSHOT_REGION": "asia-east1"},
+    {"ACCOUNT_FACTS_SYNC_TOKEN": ""},
+    {"ACCOUNT_FACTS_SYNC_URL": "https://qrs.example.test/other"},
+])
+def test_independent_wrong_target_or_sync_configuration_blocks_all_reads(overrides):
+    result, calls, _ = _observe_independent(_independent_env(**overrides))
+    assert result.status == "error" and calls == {"gets": [], "posts": []}
+
+
+def test_independent_keeps_hkd_net_assets_without_inventing_usd():
+    payload = _independent_snapshot()
+    payload["broker_reported_balances"][0]["currency"] = "HKD"
+    result, calls, _ = _observe_independent(snapshot=payload)
+    assert result.publish_status == "published"
+    assert json.loads(calls["posts"][0][1]["data"])["broker_reported_balances"][0]["currency"] == "HKD"
+
+
+@pytest.mark.parametrize("field", ["cash", "broker_reported_balances"])
+def test_independent_duplicate_currency_and_excessive_rows_rejected(field):
+    payload = _independent_snapshot()
+    payload[field] *= 33
+    result, calls, _ = _observe_independent(snapshot=payload)
+    assert result.status == "error" and calls["posts"] == []
+
+
+def test_independent_optional_native_financing_is_preserved():
+    financing = [{"currency": "USD", "buy_power": "11.25", "risk_level": "1"}]
+    result, calls, _ = _observe_independent(snapshot=_independent_snapshot(financing=financing))
+    assert result.publish_status == "published"
+    assert json.loads(calls["posts"][0][1]["data"])["financing"] == financing
+
+
+@pytest.mark.parametrize("financing", [
+    [], [{"currency": "HKD", "buy_power": "1"}],
+    [{"currency": "USD", "buy_power": "1", "private_extra": "must-not-send"}],
+])
+def test_independent_invalid_financing_cannot_expand_wire_contract(financing):
+    result, calls, _ = _observe_independent(snapshot=_independent_snapshot(financing=financing))
+    assert result.status == "error" and calls["posts"] == []
+
+
+def test_independent_observation_date_is_utc_and_original_instants_are_not_rewritten():
+    config = snapshots._independent_hk_config(_independent_env())
+    started = "2026-09-29T00:00:01+08:00"
+    finished = "2026-09-29T00:00:02+08:00"
+    request_started = datetime.fromisoformat(started) - timedelta(seconds=1)
+    payload = _independent_snapshot(observed_started_at=started, observed_finished_at=finished)
+    history = snapshots._project_independent_history(
+        payload, config, request_started, datetime.fromisoformat(finished) + timedelta(seconds=1),
+    )
+    assert history["observation_date"] == "2026-09-28"
+    assert history["observed_started_at"] == started and history["observed_finished_at"] == finished
+
+
+def test_independent_rechecks_existing_freshness_window_before_publish():
+    calls = []
+    result = snapshots.observe_independent_hk_account_snapshot(
+        _independent_env(), service_metadata=_service_metadata(),
+        http_get=lambda *_args, **_kwargs: _IndependentResponse(_independent_snapshot()),
+        http_post=lambda *_args, **_kwargs: calls.append("post"),
+        now_reader=_Clock([T0, T0 + timedelta(seconds=3), T0 + snapshots.OBSERVATION_WINDOW + timedelta(seconds=2)]),
+    )
+    assert result.status == "observed" and result.publish_status == "rejected"
+    assert result.publish_category == "observation_stale" and calls == []
+
+
+def test_independent_cli_reports_only_bounded_status(capsys):
+    def fail_get(*_args, **_kwargs):
+        raise TimeoutError(f"{SECRET} {QRS_TOKEN} synthetic-private-position")
+
+    code = snapshots.main(
+        ["--independent-hk-account-snapshot"],
+        environ=_independent_env(), service_metadata=_service_metadata(),
+        http_get=fail_get, http_post=lambda *_a, **_k: pytest.fail("must not publish"),
+        now_reader=lambda: T0,
+    )
+    assert code == 1
+    assert capsys.readouterr().out.strip() == "observation=error:snapshot_request_unknown account_facts_publish=disabled"
+
+
+def test_independent_configuration_check_never_reads_stdin_or_provider(monkeypatch, capsys):
+    monkeypatch.setattr(snapshots, "_read_independent_service_metadata", lambda: pytest.fail("must not read metadata"))
+    code = snapshots.main(["--validate-independent-hk-account-snapshot"], environ=_independent_env())
+    assert code == 0 and capsys.readouterr().out.strip() == "independent_config=ok"
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_independent_transport_disables_retries_and_closes_owned_session(monkeypatch, raises):
+    import requests
+
+    events = []
+    response = _IndependentResponse(_independent_snapshot())
+
+    class Session:
+        def mount(self, prefix, adapter):
+            events.append(("mount", prefix, adapter.max_retries.total))
+
+        def get(self, url, **kwargs):
+            events.append(("get", url, kwargs))
+            if raises:
+                raise TimeoutError("synthetic")
+            return response
+
+        def close(self):
+            events.append(("close",))
+
+    monkeypatch.setattr(requests, "Session", Session)
+    if raises:
+        with pytest.raises(TimeoutError):
+            snapshots._default_http_get("https://synthetic.run.app/account-snapshot", timeout=20, allow_redirects=False)
+    else:
+        owned = snapshots._default_http_get("https://synthetic.run.app/account-snapshot", timeout=20, allow_redirects=False)
+        assert events[-1][0] == "get"
+        owned.close()
+        assert response.closed
+    assert events[0] == ("mount", "https://", 0)
+    assert sum(event[0] == "get" for event in events) == 1
+    assert events[-1] == ("close",)
+
+
+def test_independent_workflow_keeps_cloud_resources_secret_and_no_new_auth_identity():
+    workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+    assert "SNAPSHOT_SERVICE: \u0024{{ secrets.CLOUD_RUN_SERVICE }}" in workflow
+    assert "SNAPSHOT_REGION: \u0024{{ vars.CLOUD_RUN_REGION }}" in workflow
+    assert "matrix.target.service" not in workflow
+    assert "ACCOUNT_HISTORY_OBSERVATION_MODE: \u0024{{ vars.ACCOUNT_HISTORY_OBSERVATION_MODE || 'scheduler_archive' }}" in workflow
+    assert "id_token_include_email: true" in workflow
+    assert "id_token_audience: \u0024{{ steps.independent_audience.outputs.service_url || '' }}" in workflow
+    assert "service_account: \u0024{{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in workflow
+    independent = workflow[workflow.index('            independent_get)'):workflow.index('            *)', workflow.index('            independent_get)'))]
+    assert "--validate-independent-hk-account-snapshot" in independent
+    assert independent.index("--validate-independent") < independent.index("gcloud run services describe")
+    assert "/probe" not in independent and "/run" not in independent
+    assert "scheduler" not in independent and "tee" not in independent and "upload-artifact" not in independent
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda v: v["metadata"].pop("generation"),
+    lambda v: v["metadata"].update(generation=0),
+    lambda v: v["metadata"].update(generation=True),
+    lambda v: v["metadata"].update(generation="7"),
+    lambda v: v["status"].pop("observedGeneration"),
+    lambda v: v["status"].update(observedGeneration=6),
+    lambda v: v["status"].update(observedGeneration=8),
+    lambda v: v["status"].update(observedGeneration="7"),
+    lambda v: v["status"].pop("latestCreatedRevisionName"),
+    lambda v: v["status"].update(latestCreatedRevisionName="longbridge-quant-hk-service-00002"),
+    lambda v: v["spec"]["template"].pop("metadata"),
+    lambda v: v["spec"]["template"]["metadata"].update(name="longbridge-quant-hk-service-00002"),
+])
+def test_independent_revision_and_generation_must_prove_serving_template(mutate):
+    metadata = _service_metadata()
+    mutate(metadata)
+    result, calls, _ = _observe_independent(metadata=metadata)
+    assert result.status == "error"
+    assert calls == {"gets": [], "posts": []}
+
+
+def test_independent_unreconciled_new_template_cannot_qualify_old_serving_revision():
+    metadata = _service_metadata()
+    metadata["metadata"]["generation"] = 2
+    metadata["status"]["observedGeneration"] = 1
+    metadata["status"]["latestCreatedRevisionName"] = "longbridge-quant-hk-service-00002"
+    metadata["spec"]["template"]["metadata"]["name"] = "longbridge-quant-hk-service-00002"
+    result, calls, _ = _observe_independent(metadata=metadata)
+    assert result.status == "error"
+    assert calls == {"gets": [], "posts": []}
+
+
+@pytest.mark.parametrize("raw_url", [
+    _independent_env()["ACCOUNT_HISTORY_SERVICE_URL"] + "/",
+    " " + _independent_env()["ACCOUNT_HISTORY_SERVICE_URL"],
+    _independent_env()["ACCOUNT_HISTORY_SERVICE_URL"] + " ",
+    _independent_env()["ACCOUNT_HISTORY_SERVICE_URL"].upper(),
+    _independent_env()["ACCOUNT_HISTORY_SERVICE_URL"] + "\n",
+])
+def test_independent_noncanonical_raw_audience_rejected_before_get(raw_url):
+    result, calls, _ = _observe_independent(_independent_env(ACCOUNT_HISTORY_SERVICE_URL=raw_url))
+    assert result.status == "error"
+    assert calls == {"gets": [], "posts": []}
+
+
+def test_independent_pre_auth_audience_output_is_canonical_without_token_or_metadata(monkeypatch, capsys):
+    env = _independent_env(ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN="")
+    monkeypatch.setattr(snapshots, "_read_independent_service_metadata", lambda: pytest.fail("no service read before auth"))
+    assert snapshots.main(["--validate-independent-hk-audience"], environ=env) == 0
+    assert capsys.readouterr().out.strip() == "service_url=" + env["ACCOUNT_HISTORY_SERVICE_URL"]
+
+
+@pytest.mark.parametrize("suffix", ["/", " ", "\n"])
+def test_independent_pre_auth_rejects_noncanonical_audience_without_printing_it(suffix, capsys):
+    env = _independent_env(ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN="")
+    env["ACCOUNT_HISTORY_SERVICE_URL"] += suffix
+    assert snapshots.main(["--validate-independent-hk-audience"], environ=env) == 1
+    output = capsys.readouterr().out
+    assert output.strip() == "independent_audience=error:independent_config_invalid"
+    assert env["ACCOUNT_HISTORY_SERVICE_URL"] not in output
+
+
+def test_independent_workflow_validates_one_audience_before_auth_and_reuses_it():
+    workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+    validation = workflow.index("id: independent_audience")
+    assert validation < workflow.index("id: gcp_auth_primary")
+    assert '--validate-independent-hk-audience >> "$GITHUB_OUTPUT"' in workflow
+    audience = "id_token_audience: \u0024{{ steps.independent_audience.outputs.service_url || '' }}"
+    assert workflow.count(audience) == 2
+    assert "token_format: \u0024{{ steps.independent_audience.outcome == 'success' && 'id_token' || '' }}" in workflow
+    record_step = workflow[workflow.index("      - name: Record and sync daily account snapshot"):workflow.index("      - name: Check recent execution report")]
+    assert "ACCOUNT_HISTORY_SERVICE_URL: \u0024{{ env.ACCOUNT_HISTORY_OBSERVATION_MODE != 'independent_get' && vars.ACCOUNT_HISTORY_SERVICE_URL || steps.independent_audience.outputs.service_url }}" in record_step
