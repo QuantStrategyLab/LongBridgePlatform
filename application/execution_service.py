@@ -400,6 +400,10 @@ def _positive_target_total(targets: dict) -> float:
 
 
 def _execution_is_blocked(*, plan, execution, allocation) -> bool:
+    # QPK's legacy and evidence gates both project their final action here.
+    # A missing/unknown action must never authorize the mapper's raw targets.
+    if (execution or {}).get("risk_gate") != "APPROVE":
+        return True
     payloads = (
         dict(execution or {}),
         dict((plan or {}).get("execution") or {}),
@@ -408,7 +412,9 @@ def _execution_is_blocked(*, plan, execution, allocation) -> bool:
     for payload in payloads:
         if bool(payload.get("no_execute")):
             return True
-        if str(payload.get("risk_gate") or "").strip().upper() == "REJECT":
+        if "risk_gate" in payload and payload["risk_gate"] != "APPROVE":
+            return True
+        if payload.get("no_order") is True or payload.get("execution_authorized") is False:
             return True
         flags = payload.get("risk_flags") or ()
         if isinstance(flags, str):
@@ -1088,6 +1094,7 @@ def execute_rebalance_cycle(
     # still observe COMPLETE/VERIFIED/CLOSED (or the fail-closed disposition).
     account_new_risk_buy_blocked = False
     account_new_risk_reason_codes: tuple[str, ...] = ()
+    cycle_combined_scale = None
     if is_account_new_risk_gate_enabled():
         portfolio = dict(portfolio)
         portfolio["account_new_risk_snapshot"] = build_account_new_risk_snapshot(
@@ -1097,6 +1104,7 @@ def execute_rebalance_cycle(
         admission = evaluate_portfolio_new_risk_admission(portfolio, execution=execution)
         account_new_risk_buy_blocked = new_risk_buy_prohibited(admission)
         account_new_risk_reason_codes = tuple(admission.reason_codes)
+        cycle_combined_scale = admission.combined_scale
         account_new_risk_cycle_snapshot = build_snapshot_from_portfolio(portfolio, execution=execution)
         set_cycle_snapshot(account_new_risk_cycle_snapshot)
         gate_diagnostic_message = (
@@ -1547,14 +1555,45 @@ def execute_rebalance_cycle(
             previous_investable_cash = investable_cash
             refresh_attempts = max(1, int(post_sell_refresh_attempts or 1))
             refresh_interval = max(0.0, float(post_sell_refresh_interval_sec or 0.0))
-            best_refreshed_state = None
             best_investable_cash = previous_investable_cash
             projected_sell_release_value = 0.0
             for attempt in range(refresh_attempts):
                 if attempt > 0:
                     sleeper(refresh_interval)
                 refreshed_state = fetch_replanned_state()
-                refreshed_execution = refreshed_state[2]
+                refreshed_plan, refreshed_portfolio, refreshed_execution, refreshed_allocation = refreshed_state
+                # Every observed refresh constrains this cycle, even when its
+                # cash forecast is lower than an earlier observation's.
+                if _execution_is_blocked(
+                    plan=refreshed_plan, execution=refreshed_execution, allocation=refreshed_allocation,
+                ):
+                    submission_halted = True
+                if is_account_new_risk_gate_enabled():
+                    refreshed_portfolio = dict(refreshed_portfolio)
+                    refreshed_portfolio["account_new_risk_snapshot"] = build_account_new_risk_snapshot(
+                        refreshed_portfolio, execution=refreshed_execution,
+                    )
+                    refreshed_admission = evaluate_portfolio_new_risk_admission(
+                        refreshed_portfolio, execution=refreshed_execution,
+                    )
+                    account_new_risk_buy_blocked = (
+                        account_new_risk_buy_blocked or new_risk_buy_prohibited(refreshed_admission)
+                    )
+                    account_new_risk_reason_codes = tuple(dict.fromkeys(
+                        (*account_new_risk_reason_codes, *refreshed_admission.reason_codes)
+                    ))
+                    set_cycle_snapshot(build_snapshot_from_portfolio(
+                        refreshed_portfolio, execution=refreshed_execution,
+                    ))
+                    refreshed_scale = refreshed_admission.combined_scale
+                    if refreshed_scale is not None:
+                        cycle_combined_scale = (
+                            refreshed_scale if cycle_combined_scale is None
+                            else min(cycle_combined_scale, refreshed_scale)
+                        )
+                    refreshed_state = (
+                        refreshed_plan, refreshed_portfolio, refreshed_execution, refreshed_allocation,
+                    )
                 refreshed_investable_cash = float(refreshed_execution["investable_cash"])
                 projected_sell_release_value = max(
                     projected_sell_release_value,
@@ -1564,13 +1603,18 @@ def execute_rebalance_cycle(
                         fetch_order_status=fetch_order_status,
                     ),
                 )
-                if best_refreshed_state is None or refreshed_investable_cash > best_investable_cash:
-                    best_refreshed_state = refreshed_state
-                    best_investable_cash = refreshed_investable_cash
+                best_investable_cash = max(best_investable_cash, refreshed_investable_cash)
                 if refreshed_investable_cash > previous_investable_cash:
-                    best_refreshed_state = refreshed_state
                     break
-            plan, portfolio, execution, allocation = best_refreshed_state
+            # Use the latest producer plan for risk/targets; retain the best
+            # cash forecast only for funding and the already-known sell facts.
+            plan, portfolio, execution, allocation = refreshed_state
+            if submission_halted:
+                execution = {**execution, "no_execute": True}
+            if is_account_new_risk_gate_enabled():
+                allocation = apply_combined_scale_to_allocation_targets(
+                    allocation, cycle_combined_scale,
+                )
             plan, allocation = _apply_safe_haven_cash_substitution(
                 plan=plan,
                 portfolio=portfolio,
@@ -1621,6 +1665,7 @@ def execute_rebalance_cycle(
             cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
             investable_cash = max(
                 float(execution["investable_cash"]),
+                best_investable_cash,
                 previous_investable_cash + projected_sell_release_value,
             )
             if fractional_buy_execution:

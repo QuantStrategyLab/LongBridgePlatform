@@ -506,6 +506,8 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
                 "cash_by_currency": {},
             },
             "execution": {
+                "risk_gate": "APPROVE",
+                "risk_flags": ("risk_gate:passed",),
                 "current_min_trade": 10.0,
                 "trade_threshold_value": 10.0,
                 "investable_cash": 500.0,
@@ -615,6 +617,8 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
                 "cash_by_currency": {},
             },
             "execution": {
+                "risk_gate": "APPROVE",
+                "risk_flags": ("risk_gate:passed",),
                 "current_min_trade": 10.0,
                 "trade_threshold_value": 10.0,
                 "investable_cash": 100.0,

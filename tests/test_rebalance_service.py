@@ -130,6 +130,8 @@ def _build_plan(
             "cash_by_currency": dict(cash_by_currency or {}),
         },
         "execution": {
+            "risk_gate": "APPROVE",
+            "risk_flags": ("risk_gate:passed",),
             "trade_threshold_value": float(trade_threshold_value),
             "status_display": market_status,
             "signal_display": signal_message,
