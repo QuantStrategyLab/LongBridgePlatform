@@ -92,6 +92,8 @@ heartbeat 的告警、返回码和交易链不变。这个步骤不调用 heartb
 
 ## 一次性 PAPER 日记录
 
+原有每日 heartbeat 的日报步骤复用下述已验证的 PAPER 只读入口；只有原环境的 `RUNTIME_DAILY_PROJECTION_ENABLED` 与 `RUNTIME_DAILY_SYNC_ENABLED` 同为 `true` 才执行。输出前缀从原受保护 secret 取得，原 `20 22 * * *` 时刻不变。每次生成独立观测对象并核对 QRS ACK；这不补造交易调度证明，运行计划未确认时继续保留 incomplete。自然定时结果与手动单次发布结果分别验收。
+
 手动 workflow `Publish PAPER Daily Runtime Once` 是单次补记入口，不是定时任务。它先验证原有 PAPER 选择和受保护 GCP 身份，再只读核对当前唯一 100% 流量的 Ready serving revision；报告根必须来自该 revision 中唯一、非 SecretRef 的明文 `EXECUTION_REPORT_GCS_URI`。普通 workflow 变量缺失时可使用这个已核实值；显式配置若与 serving revision 不一致、出现 SecretRef、空值或重复值，流程停止。代码不会输出报告 URI。
 
 输出目录单独由受保护 secret `RUNTIME_DAILY_PROJECTION_GCS_PREFIX` 提供；它必须是规范 `gs://` 前缀、末段为 `runtime_daily`，并与 serving 报告根位于同一桶。报告路径与日报路径可以是桶内不同目录。缺失、格式不符或跨桶都会在对象列表/写入和 QRS POST 之前停止；不会从报告根静默推导日报目录。该 secret 只在现有 protected Environment 配置，不放入普通 workflow 变量或源码。

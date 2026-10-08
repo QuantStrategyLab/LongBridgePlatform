@@ -1260,10 +1260,13 @@ def test_workflow_adds_a_paper_projection_after_auth_with_existing_sync_token() 
     projection = workflow.index("name: Publish daily runtime projection")
     assert heartbeat_step < projection
     assert "uv run --no-sync python scripts/execution_report_heartbeat.py" in workflow
-    assert "uv run --no-sync python scripts/publish_daily_runtime_projection.py" in workflow
+    assert "uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-paper" in workflow
     step = workflow.split("name: Publish daily runtime projection", 1)[1].split("\n      - ", 1)[0]
     assert "matrix.target.label == 'PAPER'" in step
     assert "vars.RUNTIME_DAILY_PROJECTION_ENABLED == 'true'" in step
+    assert "vars.RUNTIME_DAILY_SYNC_ENABLED == 'true'" in step
+    assert "secrets.RUNTIME_DAILY_PROJECTION_GCS_PREFIX" in step
+    assert "vars.RUNTIME_DAILY_PROJECTION_GCS_PREFIX" not in step
     assert "!cancelled()" in step
     assert "steps.gcp_auth_primary.outcome == 'success'" in step
     assert "steps.gcp_auth_retry.outcome == 'success'" in step
