@@ -1801,9 +1801,10 @@ def _one_shot_env(**overrides):
 
 def _one_shot_publish(
     monkeypatch, *, enabled=False, report=None, blob=None, http_post=None, changes=None,
-    private_result_path=None, without_workflow_report_root=False,
+    private_result_path=None, without_workflow_report_root=False, workflow_runtime_enabled="false",
 ):
     env = _one_shot_env(
+        RUNTIME_TARGET_ENABLED=workflow_runtime_enabled,
         RUNTIME_HEARTBEAT_GCS_URIS="" if without_workflow_report_root else "gs://synthetic-existing/reports",
         EXECUTION_REPORT_GCS_URI="",
     )
@@ -1888,6 +1889,21 @@ def test_one_shot_stopped_target_is_incomplete_without_scheduler(monkeypatch, en
     assert "synthetic-private-account" not in blob.uploads[0]["data"]
 
 
+def test_one_shot_active_paper_records_only_incomplete_schedule_observation(monkeypatch):
+    result, blob, observed = _one_shot_publish(
+        monkeypatch, enabled=True, workflow_runtime_enabled="true"
+    )
+    record = _stored(blob)["records"][0]
+    assert result == ("recorded", "2026-09-28", "recorded")
+    assert record["completeness"] == "incomplete"
+    assert record["status"] == "read_incomplete"
+    assert record["schedule"]["reason"] == "runtime_target_enabled_schedule_unverified"
+    assert record["runs"] == [] and record["fills"]["count"] is None
+    # The fixture prohibits heartbeat, Scheduler and broker/run paths; only the
+    # one readback and existing daily QRS ACK occur.
+    assert observed == {"described": 1, "post": 1}
+
+
 def test_one_shot_uses_verified_serving_report_root_when_workflow_root_is_absent(monkeypatch):
     result, _blob, observed = _one_shot_publish(monkeypatch, without_workflow_report_root=True)
     assert result == ("recorded", "2026-09-28", "recorded")
@@ -1930,7 +1946,7 @@ def test_one_shot_report_base_must_be_unique_canonical_gs_uri(value):
 
 
 @pytest.mark.parametrize("field,value", [
-    ("RUNTIME_TARGET_ENABLED", "true"), ("RUNTIME_TARGET_ENABLED", ""),
+    ("RUNTIME_TARGET_ENABLED", ""), ("RUNTIME_TARGET_ENABLED", "maybe"),
     ("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE", "SG"), ("CLOUD_RUN_SERVICE", "synthetic-other-service"),
     ("GOOGLE_APPLICATION_CREDENTIALS", ""), ("CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE", ""),
     ("CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE", "/synthetic/other.json"), ("CLOUD_RUN_REGION", ""),
@@ -2134,7 +2150,9 @@ def test_single_observation_uses_served_enabled_config_over_staged_disabled_temp
     )
     monkeypatch.setattr(heartbeat, "_run_gcloud", lambda *_: SimpleNamespace(returncode=0, stdout=json.dumps(revision)))
     effective = publisher._one_shot_serving_deployment(staged, service="synthetic-paper", project="synthetic-project", region="synthetic-region")
-    assert publisher._one_shot_disabled_reason(effective, heartbeat._deployed_runtime_target(effective)) == "runtime_target_enablement_conflict"
+    assert publisher._one_shot_disabled_reason(
+        effective, heartbeat._deployed_runtime_target(effective), declared_runtime_enabled="true"
+    ) == "runtime_target_enabled_schedule_unverified"
 
 
 @pytest.mark.parametrize("rows", [
