@@ -1,5 +1,25 @@
 # LB PAPER cycle-health projection v1 (local policy increment)
 
+## Daily notification handoff
+
+The existing scheduled PAPER projection step also creates
+`<approved runtime_daily prefix>/longbridge/paper/<business date>/handoff.json`
+after its immutable projection has been created and the existing QRS sync has
+been attempted. The handoff contains exactly `schema_version` (value
+`runtime_daily_handoff.v1`), `business_date`, and `object_uri`. The URI points to
+that day's immutable UTC observation file; it is not a financial-data copy.
+Both writes use create-only generation zero, bounded timeouts and no retry.
+The first handoff for a business day is retained; an unknown write outcome is
+reported as a fixed failure category. QRS acknowledgement and notification
+delivery remain independent results.
+
+`RUNTIME_DAILY_HANDOFF_ENABLED` defaults off. The workflow sets it to true only
+for its existing natural schedule, so a manual diagnostic or one-shot run cannot
+create a new automatic notification handoff. AAB reads the exact business-day
+handoff, validates its scope and consumes the immutable object with its original
+persistent delivery ledger. Installing the consumer on the existing VPS and
+confirming a natural delivery remain separate from merging this code.
+
 `scripts/runtime_cycle_health.py` is a pure source-policy module. It projects
 already-read facts and validates recovery evidence. It has no CLI, network,
 storage, environment, strategy, broker, workflow or notification operations.

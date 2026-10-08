@@ -282,6 +282,79 @@ def _stored(blob: _Blob) -> dict:
     return json.loads(upload["data"])
 
 
+def test_daily_handoff_is_created_after_immutable_projection(monkeypatch):
+    env = _env(RUNTIME_DAILY_HANDOFF_ENABLED="true")
+    status, day, blob, client, _ = _publish(monkeypatch, env, [])
+    assert status == "recorded"
+    assert len(blob.uploads) == 2
+    projection, handoff = [json.loads(item["data"]) for item in blob.uploads]
+    assert handoff == {
+        "schema_version": "runtime_daily_handoff.v1",
+        "business_date": day,
+        "object_uri": "gs://paper-bucket/" + client._bucket.names[0],
+    }
+    assert projection["records"][0]["business_date"] == day
+    assert client._bucket.names[1] == f"runtime_daily/longbridge/paper/{day}/handoff.json"
+    for upload in blob.uploads:
+        assert upload["kwargs"] == {
+            "content_type": "application/json", "if_generation_match": 0,
+            "timeout": 20, "retry": None,
+        }
+
+
+def test_existing_projection_does_not_create_handoff_or_post(monkeypatch):
+    blob = _Blob(PreconditionFailed("synthetic-existing"))
+    env = _env(RUNTIME_DAILY_HANDOFF_ENABLED="true")
+    status, _, blob, client, _ = _publish(monkeypatch, env, [], blob=blob)
+    assert status == "already_recorded"
+    assert len(blob.uploads) == len(client._bucket.names) == 1
+
+
+def test_handoff_default_disabled_has_no_storage_access():
+    assert publisher._publish_handoff({}, None, "", "", OBSERVED, "") == "disabled"
+
+
+@pytest.mark.parametrize("error,expected", [
+    (Forbidden("private-location"), "handoff_write_permission_denied"),
+    (RuntimeError("private-location"), "handoff_write_unknown"),
+])
+def test_handoff_write_failure_is_one_attempt_and_fixed(error, expected):
+    blob = _Blob(error)
+    _, _, uri = publisher._object_uri("gs://paper-bucket/runtime_daily", "2026-09-28", OBSERVED)
+    with pytest.raises(publisher._KnownFailure) as exc:
+        publisher._publish_handoff(
+            {"RUNTIME_DAILY_HANDOFF_ENABLED": "true"}, _Client(blob),
+            "gs://paper-bucket/runtime_daily", "2026-09-28", OBSERVED, uri,
+        )
+    assert str(exc.value) == expected
+    assert len(blob.uploads) == 1
+
+
+def test_handoff_first_pointer_is_preserved():
+    blob = _Blob(PreconditionFailed("existing-day-pointer"))
+    _, _, uri = publisher._object_uri("gs://paper-bucket/runtime_daily", "2026-09-28", OBSERVED)
+    assert publisher._publish_handoff(
+        {"RUNTIME_DAILY_HANDOFF_ENABLED": "true"}, _Client(blob),
+        "gs://paper-bucket/runtime_daily", "2026-09-28", OBSERVED, uri,
+    ) == "already_recorded"
+    assert len(blob.uploads) == 1
+    assert blob.uploads[0]["kwargs"]["if_generation_match"] == 0
+
+
+def test_handoff_rejects_another_object_before_storage_access():
+    with pytest.raises(publisher._Rejected, match="handoff_invalid"):
+        publisher._publish_handoff(
+            {"RUNTIME_DAILY_HANDOFF_ENABLED": "true"}, None,
+            "gs://paper-bucket/runtime_daily", "2026-09-28", OBSERVED,
+            "gs://another-bucket/runtime_daily/longbridge/paper/2026-09-28/foreign.json",
+        )
+
+
+def test_workflow_handoff_only_enabled_on_existing_natural_schedule():
+    workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+    assert "RUNTIME_DAILY_HANDOFF_ENABLED: ${{ github.event_name == 'schedule' && 'true' || 'false' }}" in workflow
+
+
 def test_disabled_switch_performs_no_io(monkeypatch) -> None:
     def boom(*args, **kwargs):
         raise AssertionError((args, kwargs))
