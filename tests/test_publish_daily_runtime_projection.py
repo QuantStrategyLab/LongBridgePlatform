@@ -1790,6 +1790,7 @@ def _one_shot_env(**overrides):
     env = _sync_env(
         RUNTIME_TARGET_ENABLED="false",
         RUNTIME_HEARTBEAT_GCS_URIS="gs://synthetic-existing/reports",
+        RUNTIME_DAILY_PROJECTION_GCS_PREFIX="gs://synthetic-existing/runtime_daily",
         CLOUD_RUN_SERVICE="longbridge-quant-paper-service",
         CLOUD_RUN_REGION="synthetic-region",
         GOOGLE_APPLICATION_CREDENTIALS="/synthetic/wif.json",
@@ -1802,11 +1803,13 @@ def _one_shot_env(**overrides):
 def _one_shot_publish(
     monkeypatch, *, enabled=False, report=None, blob=None, http_post=None, changes=None,
     private_result_path=None, without_workflow_report_root=False, workflow_runtime_enabled="false",
+    workflow_output_prefix="gs://synthetic-existing/runtime_daily", observed_state=None, list_events=None,
 ):
     env = _one_shot_env(
         RUNTIME_TARGET_ENABLED=workflow_runtime_enabled,
         RUNTIME_HEARTBEAT_GCS_URIS="" if without_workflow_report_root else "gs://synthetic-existing/reports",
         EXECUTION_REPORT_GCS_URI="",
+        RUNTIME_DAILY_PROJECTION_GCS_PREFIX=workflow_output_prefix,
     )
     deployed = {
         "strategy_profile": "russell_top50_leader_rotation", "account_scope": "PAPER",
@@ -1815,7 +1818,8 @@ def _one_shot_publish(
     if enabled is not None:
         deployed["runtime_target_enabled"] = enabled
     deployed.update(changes or {})
-    observed = {"described": 0, "post": 0}
+    observed = observed_state if observed_state is not None else {"described": 0, "post": 0}
+    list_events = list_events if list_events is not None else []
     blob = blob or _Blob()
     def describe(service, *, project):
         observed["described"] += 1
@@ -1858,9 +1862,13 @@ def _one_shot_publish(
             "ok": True, "stored": True, "business_date": body["records"][0]["business_date"],
             "target_key": publisher._RUNTIME_DAILY_SYNC_TARGET_KEY, "account_key": "synthetic-private-account",
         })
+    def list_objects(*_args, **_kwargs):
+        list_events.append("listed")
+        return objects
+
     result = publisher.publish(
         env, now=OBSERVED, one_shot_only=True, client=_Client(blob),
-        list_objects=lambda *_a, **_kw: objects,
+        list_objects=list_objects,
         read_payload=lambda _: report,
         report_globs=lambda *_: ["gs://synthetic-existing/reports/*.json"],
         http_post=post,
@@ -1923,16 +1931,56 @@ def test_disabled_observation_does_not_erase_historical_unresolved_fact(monkeypa
     assert len(record["runs"]) == 1 and record["runs"][0]["activity"] == status
 
 
-def test_single_observation_derives_same_bucket_child_and_does_not_enable_runtime():
+@pytest.mark.parametrize("value", ["gs://synthetic-existing", "gs://synthetic-existing/"])
+def test_one_shot_report_root_preserves_bucket_root_compatibility(value):
+    assert publisher._one_shot_report_root(value) == "gs://synthetic-existing"
+
+
+def test_single_observation_uses_protected_output_prefix_separate_from_report_root():
     original = _one_shot_env(
-        RUNTIME_DAILY_PROJECTION_GCS_PREFIX="gs://unapproved-bucket/runtime_daily",
+        RUNTIME_DAILY_PROJECTION_GCS_PREFIX="gs://synthetic-existing/runtime_daily",
         RUNTIME_DAILY_SYNC_URL="https://unapproved.example.com/api/runtime-daily/sync",
     )
-    scoped = publisher._one_shot_environment(original)
-    assert scoped["RUNTIME_DAILY_PROJECTION_GCS_PREFIX"] == "gs://synthetic-existing/reports/runtime_daily"
+    scoped = publisher._one_shot_environment(original, report_root_uri="gs://synthetic-existing/reports")
+    assert scoped["RUNTIME_DAILY_PROJECTION_GCS_PREFIX"] == "gs://synthetic-existing/runtime_daily"
+    assert scoped["RUNTIME_DAILY_PROJECTION_GCS_PREFIX"] != "gs://synthetic-existing/reports/runtime_daily"
     assert scoped["RUNTIME_DAILY_SYNC_URL"] == publisher._ONE_SHOT_SYNC_URL
     assert scoped["RUNTIME_TARGET_ENABLED"] == original["RUNTIME_TARGET_ENABLED"] == "false"
-    assert original["RUNTIME_DAILY_PROJECTION_GCS_PREFIX"].startswith("gs://unapproved-bucket")
+
+
+@pytest.mark.parametrize("value", [
+    "", "gs://synthetic-existing/reports", "gs://synthetic-other/runtime_daily",
+    "gs://synthetic-existing//runtime_daily", "gs://synthetic-existing/runtime_daily/",
+])
+def test_one_shot_output_prefix_requires_canonical_same_bucket_runtime_daily(value):
+    with pytest.raises(publisher._Rejected, match="one_shot_output_prefix_unavailable"):
+        publisher._one_shot_environment(
+            _one_shot_env(RUNTIME_DAILY_PROJECTION_GCS_PREFIX=value),
+            report_root_uri="gs://synthetic-existing/reports",
+        )
+
+
+@pytest.mark.parametrize(("output_prefix", "described"), [
+    ("", 0),
+    ("gs://synthetic-other/runtime_daily", 1),
+])
+def test_one_shot_output_prefix_failure_stops_before_gcs_or_qrs_io(
+    monkeypatch, output_prefix, described,
+):
+    observed = {"described": 0, "post": 0}
+    list_events = []
+    blob = _Blob()
+    with pytest.raises(publisher._Rejected, match="one_shot_output_prefix_unavailable"):
+        _one_shot_publish(
+            monkeypatch,
+            blob=blob,
+            workflow_output_prefix=output_prefix,
+            observed_state=observed,
+            list_events=list_events,
+        )
+    assert observed == {"described": described, "post": 0}
+    assert list_events == []
+    assert blob.uploads == []
 
 
 @pytest.mark.parametrize("value", [
@@ -1985,12 +2033,12 @@ def test_private_result_matches_new_incomplete_projection_without_claiming_healt
     assert handoff == {
         "business_date": "2026-09-28",
         "projection_completeness": "incomplete",
-        "projection_uri": "gs://synthetic-existing/reports/runtime_daily/longbridge/paper/2026-09-28/20260928T084000000000Z.json",
+        "projection_uri": "gs://synthetic-existing/runtime_daily/longbridge/paper/2026-09-28/20260928T084000000000Z.json",
         "target_keys": [publisher._RUNTIME_DAILY_SYNC_TARGET_KEY],
     }
     assert handoff["projection_uri"].endswith(
         "/" + publisher._object_uri(
-            "gs://synthetic-existing/reports/runtime_daily",
+            "gs://synthetic-existing/runtime_daily",
             "2026-09-28",
             OBSERVED,
         )[1]
