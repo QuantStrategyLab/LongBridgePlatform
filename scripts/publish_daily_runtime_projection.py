@@ -59,7 +59,8 @@ class _KnownFailure(RuntimeError):
 
     _CODES = frozenset(
         {"schedule_unavailable", "schedule_unevaluable",
-         "storage_write_permission_denied", "write_unknown", "private_result_write_failed"}
+         "storage_write_permission_denied", "write_unknown", "private_result_write_failed",
+         "handoff_write_permission_denied", "handoff_write_unknown"}
     )
 
     def __init__(self, code: str) -> None:
@@ -643,6 +644,48 @@ def _upload(
     return uri
 
 
+def _publish_handoff(
+    env: Mapping[str, str],
+    client: Any,
+    prefix: str,
+    business_date: str,
+    observed_at: dt.datetime,
+    object_uri: str,
+) -> str:
+    """Create the first immutable-object handoff for the existing daily consumer."""
+    if env.get("RUNTIME_DAILY_HANDOFF_ENABLED") != "true":
+        return "disabled"
+    if dt.date.fromisoformat(business_date).isoformat() != business_date:
+        raise _Rejected("handoff_invalid")
+    bucket_name, object_name, expected_uri = _object_uri(
+        _prefix(prefix), business_date, observed_at
+    )
+    if object_uri != expected_uri:
+        raise _Rejected("handoff_invalid")
+    handoff_name = object_name.rsplit("/", 1)[0] + "/handoff.json"
+    body = json.dumps({
+        "schema_version": "runtime_daily_handoff.v1",
+        "business_date": business_date,
+        "object_uri": object_uri,
+    }, sort_keys=True, separators=(",", ":"))
+    try:
+        client.bucket(bucket_name).blob(handoff_name).upload_from_string(
+            body,
+            content_type="application/json",
+            if_generation_match=0,
+            timeout=20,
+            retry=None,
+        )
+    except PreconditionFailed:
+        return "already_recorded"
+    except Forbidden:
+        raise _KnownFailure("handoff_write_permission_denied") from None
+    except Exception:
+        # The outcome can be unknown; do not overwrite or retry this day.
+        raise _KnownFailure("handoff_write_unknown") from None
+    return "recorded"
+
+
 def _validate_private_result_path(path: str | os.PathLike[str]) -> str:
     """Require a caller-provisioned private directory and an unused filename."""
     destination = os.path.abspath(os.fspath(path))
@@ -977,6 +1020,7 @@ def publish(
         target_key=str(records[0].get("target_key") or ""),
         http_post=http_post,
     )
+    _publish_handoff(env, store, prefix, business_date, observed, uploaded)
     if private_result_destination is not None:
         _write_private_result(private_result_destination, {
             "projection_uri": uploaded,
@@ -1143,6 +1187,7 @@ def publish_verified(
         target_key=str(records[0].get("target_key") or ""),
         http_post=http_post,
     )
+    _publish_handoff(env, store, prefix, business_date, observed, uploaded)
     return "recorded", business_date, sync_status
 
 
