@@ -20,13 +20,13 @@ def test_one_shot_workflow_has_only_original_paper_identity_and_publisher():
 
 
 @pytest.mark.parametrize("field,value", [
-    ("RUNTIME_TARGET_ENABLED", "true"), ("RUNTIME_TARGET_ENABLED", ""),
+    ("RUNTIME_TARGET_ENABLED", ""), ("RUNTIME_TARGET_ENABLED", "maybe"),
     ("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE", "SG"), ("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE", "HK"),
     ("CLOUD_RUN_SERVICE", ""), ("CLOUD_RUN_REGION", ""),
 ])
 def test_daily_selection_rejects_before_cloud_identity(field, value):
     text = PATH.read_text()
-    block = text.split("      - name: Validate disabled PAPER selection\n", 1)[1].split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    block = text.split("      - name: Validate PAPER selection\n", 1)[1].split("        run: |\n", 1)[1].split("      - name:", 1)[0]
     script = "\n".join(line[10:] for line in block.splitlines())
     env = {"RUNTIME_TARGET_ENABLED": "false", "RUNTIME_HEARTBEAT_ACCOUNT_SCOPE": "PAPER", "CLOUD_RUN_SERVICE": "synthetic-paper", "CLOUD_RUN_REGION": "synthetic-region", "RUNTIME_HEARTBEAT_GCS_URIS": "gs://synthetic-existing/reports"}
     env[field] = value
@@ -37,6 +37,21 @@ def test_daily_selection_rejects_before_cloud_identity(field, value):
 
 def test_daily_selection_defers_report_root_until_serving_revision_readback():
     text = PATH.read_text()
-    block = text.split("      - name: Validate disabled PAPER selection\n", 1)[1].split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    block = text.split("      - name: Validate PAPER selection\n", 1)[1].split("        run: |\n", 1)[1].split("      - name:", 1)[0]
     assert "RUNTIME_HEARTBEAT_GCS_URIS" not in block
     assert "EXECUTION_REPORT_GCS_URI" not in block
+
+
+@pytest.mark.parametrize("runtime_enabled", ["true", "false"])
+def test_daily_selection_accepts_both_canonical_runtime_states(runtime_enabled):
+    text = PATH.read_text()
+    block = text.split("      - name: Validate PAPER selection\n", 1)[1].split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    script = "\n".join(line[10:] for line in block.splitlines())
+    env = {
+        "RUNTIME_TARGET_ENABLED": runtime_enabled,
+        "RUNTIME_HEARTBEAT_ACCOUNT_SCOPE": "PAPER",
+        "CLOUD_RUN_SERVICE": "synthetic-paper",
+        "CLOUD_RUN_REGION": "synthetic-region",
+    }
+    result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+    assert result.returncode == 0 and result.stdout == "" and result.stderr == ""

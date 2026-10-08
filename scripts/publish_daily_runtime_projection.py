@@ -183,9 +183,9 @@ def _one_shot_report_root(value: str) -> str:
 def _one_shot_environment(
     env: Mapping[str, str], *, report_root_uri: str | None = None, defer_report_root: bool = False,
 ) -> dict[str, str]:
-    """Enable only this projection process, preserving disabled runtime control."""
+    """Enable only this projection process without changing runtime control."""
     if (
-        env.get("RUNTIME_TARGET_ENABLED") != "false"
+        env.get("RUNTIME_TARGET_ENABLED") not in {"true", "false"}
         or env.get("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE") != "PAPER"
         or not env.get("CLOUD_RUN_REGION")
         or not env.get("GOOGLE_APPLICATION_CREDENTIALS")
@@ -272,14 +272,19 @@ def _one_shot_serving_deployment(
         raise _Rejected("one_shot_serving_unavailable") from None
 
 
-def _one_shot_disabled_reason(payload: Mapping[str, Any], deployed: Mapping[str, Any]) -> str:
+def _one_shot_disabled_reason(
+    payload: Mapping[str, Any],
+    deployed: Mapping[str, Any],
+    *,
+    declared_runtime_enabled: str,
+) -> str:
     values = []
     if "runtime_target_enabled" in deployed:
         values.append(deployed["runtime_target_enabled"])
     env_value = _container_env_value(payload, "RUNTIME_TARGET_ENABLED")
     if env_value is not None:
         values.append(env_value)
-    resolved = []
+    resolved: list[bool] = []
     for value in values:
         if value is True or value == "true":
             resolved.append(True)
@@ -289,9 +294,14 @@ def _one_shot_disabled_reason(payload: Mapping[str, Any], deployed: Mapping[str,
             return "runtime_target_enablement_unknown"
     if not resolved:
         return "runtime_target_enablement_unknown"
-    if not all(resolved):
-        return "runtime_target_disabled"
-    return "runtime_target_enablement_conflict"
+    if len(set(resolved)) != 1:
+        return "runtime_target_enablement_conflict"
+    if declared_runtime_enabled not in {"true", "false"}:
+        return "runtime_target_enablement_unknown"
+    effective = resolved[0]
+    if effective != (declared_runtime_enabled == "true"):
+        return "runtime_target_enablement_conflict"
+    return "runtime_target_enabled_schedule_unverified" if effective else "runtime_target_disabled"
 
 
 def _deployment_matches_paper(candidate: Mapping[str, Any], deployed: Mapping[str, Any]) -> bool:
@@ -850,7 +860,9 @@ def publish(
         ):
             raise _Rejected("one_shot_target_invalid")
         hydrated[0] = {**hydrated[0], "scheduler": {}}
-        scheduler_error = _one_shot_disabled_reason(payload, deployed)
+        scheduler_error = _one_shot_disabled_reason(
+            payload, deployed, declared_runtime_enabled=env["RUNTIME_TARGET_ENABLED"]
+        )
     else:
         try:
             hydrated[0], scheduler_error = _legacy_confirmed_scheduler(hydrated[0], project=project)
