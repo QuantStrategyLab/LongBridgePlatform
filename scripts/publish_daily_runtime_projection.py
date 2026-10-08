@@ -169,15 +169,37 @@ def _one_shot_report_root(value: str) -> str:
         raise _Rejected("one_shot_report_prefix_unavailable")
     base = bases[0].rstrip("/")
     parsed = urlsplit(base)
-    segments = parsed.path.lstrip("/").split("/") if parsed.path else []
+    segments = parsed.path[1:].split("/") if parsed.path else []
     if (
         parsed.scheme != "gs" or _BUCKET.fullmatch(parsed.netloc or "") is None
         or parsed.username or parsed.password or parsed.query or parsed.fragment
         or parsed.port is not None or any(c in parsed.path for c in "*?[]%")
+        or parsed.path.startswith("//")
         or any(segment in {".", "..", ""} for segment in segments)
     ):
         raise _Rejected("one_shot_report_prefix_unavailable")
     return base
+
+
+def _one_shot_output_prefix(value: str, *, report_root_uri: str | None = None) -> str:
+    raw = str(value or "").strip()
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        raise _Rejected("one_shot_output_prefix_unavailable") from None
+    if any(char in parsed.path for char in "*?[]%"):
+        raise _Rejected("one_shot_output_prefix_unavailable")
+    try:
+        normalized = _prefix(raw)
+        report_root = _one_shot_report_root(report_root_uri) if report_root_uri is not None else None
+    except _Rejected:
+        raise _Rejected("one_shot_output_prefix_unavailable") from None
+    if (
+        normalized != raw
+        or (report_root is not None and urlsplit(normalized).netloc != urlsplit(report_root).netloc)
+    ):
+        raise _Rejected("one_shot_output_prefix_unavailable")
+    return normalized
 
 
 def _one_shot_environment(
@@ -205,11 +227,10 @@ def _one_shot_environment(
             configured = str(env.get(name) or "").strip()
             if configured and _one_shot_report_root(configured) != base:
                 raise _Rejected("one_shot_report_prefix_conflict")
-        prefix = _prefix(base + "/runtime_daily")
-        if prefix != base + "/runtime_daily":
-            raise _Rejected("one_shot_report_prefix_unavailable")
-    else:
-        prefix = ""
+    prefix = _one_shot_output_prefix(
+        env.get("RUNTIME_DAILY_PROJECTION_GCS_PREFIX") or "",
+        report_root_uri=base,
+    )
     scoped = {
         **env, "RUNTIME_DAILY_PROJECTION_ENABLED": "true", "RUNTIME_DAILY_PROJECTION_TARGET_ID": "paper",
         "RUNTIME_DAILY_PROJECTION_GCS_PREFIX": prefix, "RUNTIME_DAILY_SYNC_ENABLED": "true",

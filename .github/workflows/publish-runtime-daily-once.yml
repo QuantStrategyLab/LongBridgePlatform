@@ -31,6 +31,7 @@ jobs:
       RUNTIME_HEARTBEAT_MARKET_TIMEZONE: ${{ vars.LONGBRIDGE_MARKET_TIMEZONE }}
       RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
       RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+      RUNTIME_DAILY_PROJECTION_GCS_PREFIX: ${{ secrets.RUNTIME_DAILY_PROJECTION_GCS_PREFIX }}
       CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
     steps:
@@ -53,7 +54,8 @@ jobs:
             *) echo '{"status":"selection_unavailable","qrs_ack_valid":false}'; exit 2 ;;
           esac
           if [ "${RUNTIME_HEARTBEAT_ACCOUNT_SCOPE}" != "PAPER" ] || \
-             [ -z "${CLOUD_RUN_SERVICE}" ] || [ -z "${CLOUD_RUN_REGION}" ]; then
+             [ -z "${CLOUD_RUN_SERVICE}" ] || [ -z "${CLOUD_RUN_REGION}" ] || \
+             [ -z "${RUNTIME_DAILY_PROJECTION_GCS_PREFIX}" ]; then
             echo '{"status":"selection_unavailable","qrs_ack_valid":false}'
             exit 2
           fi

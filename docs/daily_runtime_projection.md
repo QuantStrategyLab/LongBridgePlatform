@@ -94,6 +94,8 @@ heartbeat 的告警、返回码和交易链不变。这个步骤不调用 heartb
 
 手动 workflow `Publish PAPER Daily Runtime Once` 是单次补记入口，不是定时任务。它先验证原有 PAPER 选择和受保护 GCP 身份，再只读核对当前唯一 100% 流量的 Ready serving revision；报告根必须来自该 revision 中唯一、非 SecretRef 的明文 `EXECUTION_REPORT_GCS_URI`。普通 workflow 变量缺失时可使用这个已核实值；显式配置若与 serving revision 不一致、出现 SecretRef、空值或重复值，流程停止。代码不会输出报告 URI。
 
+输出目录单独由受保护 secret `RUNTIME_DAILY_PROJECTION_GCS_PREFIX` 提供；它必须是规范 `gs://` 前缀、末段为 `runtime_daily`，并与 serving 报告根位于同一桶。报告路径与日报路径可以是桶内不同目录。缺失、格式不符或跨桶都会在对象列表/写入和 QRS POST 之前停止；不会从报告根静默推导日报目录。该 secret 只在现有 protected Environment 配置，不放入普通 workflow 变量或源码。
+
 workflow接收原运行标记的规范值 `true` 或 `false`，保持现有服务和调度不变。它对照 GitHub 声明与 serving revision 的 `RUNTIME_TARGET_JSON` / `RUNTIME_TARGET_ENABLED`：两边不一致记为 `runtime_target_enablement_conflict`；两边均为 `true` 时只标记 `runtime_target_enabled_schedule_unverified`；只有服务侧证据和声明都确认 `false` 才报告 `runtime_target_disabled`。缺少服务侧证据记为 unknown。每种情况都保留 `incomplete`，不宣称健康或完整日报。
 
 这条入口不调用 heartbeat、Scheduler、`/run`、券商或通知发送。它只读取现有报告并按 create-only 写入当日投影，然后用本批 JSON 同步现有 QRS 日记录。即使运行标记为 active，它也只保存 schedule 未核实的 incomplete 观察，不执行服务或开关变更。没有完成受保护环境和服务读回前，代码候选不能代表生产日报已接通。
