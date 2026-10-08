@@ -1,0 +1,69 @@
+name: Publish PAPER Daily Runtime Once
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: paper-runtime-daily-once
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: longbridge-paper
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_PROJECT_ID: longbridgequant
+      GOOGLE_CLOUD_PROJECT: longbridgequant
+      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+      RUNTIME_HEARTBEAT_ACCOUNT_SCOPE: ${{ vars.ACCOUNT_REGION }}
+      RUNTIME_HEARTBEAT_REPORT_PLATFORM: longbridge
+      RUNTIME_HEARTBEAT_GCS_URIS: ${{ vars.RUNTIME_HEARTBEAT_GCS_URIS || vars.EXECUTION_REPORT_GCS_URI }}
+      RUNTIME_HEARTBEAT_LOOKBACK_HOURS: ${{ vars.RUNTIME_HEARTBEAT_LOOKBACK_HOURS || '36' }}
+      RUNTIME_HEARTBEAT_MAX_REPORTS_TO_READ: ${{ vars.RUNTIME_HEARTBEAT_MAX_REPORTS_TO_READ || '20' }}
+      RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES: ${{ vars.RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES || '30' }}
+      RUNTIME_HEARTBEAT_MARKET_AWARE: ${{ vars.RUNTIME_HEARTBEAT_MARKET_AWARE || 'true' }}
+      RUNTIME_HEARTBEAT_MARKET_CALENDAR: ${{ vars.LONGBRIDGE_MARKET_CALENDAR }}
+      RUNTIME_HEARTBEAT_MARKET_TIMEZONE: ${{ vars.LONGBRIDGE_MARKET_TIMEZONE }}
+      RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
+      RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+      CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+    steps:
+      - name: Check out publisher
+        uses: actions/checkout@v6
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+      - name: Install locked runtime dependencies
+        run: |
+          set -euo pipefail
+          if ! uv sync --frozen --no-dev >"${RUNNER_TEMP}/daily-once-dependencies.log" 2>&1; then
+            echo '{"status":"dependency_setup_unavailable","qrs_ack_valid":false}'
+            exit 2
+          fi
+      - name: Validate disabled PAPER selection
+        run: |
+          set -euo pipefail
+          if [ "${RUNTIME_TARGET_ENABLED}" != "false" ] || \
+             [ "${RUNTIME_HEARTBEAT_ACCOUNT_SCOPE}" != "PAPER" ] || \
+             [ -z "${CLOUD_RUN_SERVICE}" ] || [ -z "${CLOUD_RUN_REGION}" ]; then
+            echo '{"status":"selection_unavailable","qrs_ack_valid":false}'
+            exit 2
+          fi
+      - name: Authenticate original protected identity
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+      - name: Set up gcloud read client
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+      - name: Create one truthful daily projection and verify QRS ACK
+        env:
+          EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+        run: uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-paper

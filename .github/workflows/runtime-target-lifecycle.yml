@@ -259,6 +259,22 @@ jobs:
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
 
+      - name: Publish admitted PAPER runtime cycle observations
+        if: ${{ steps.selection.outputs.selected == 'true' && matrix.target.id == 'paper' && steps.target_state.outputs.configured_state == 'enabled' && vars.RUNTIME_CYCLE_HEALTH_ENABLED == 'true' }}
+        env:
+          RUNTIME_CYCLE_HEALTH_ENABLED: ${{ vars.RUNTIME_CYCLE_HEALTH_ENABLED }}
+          RUNTIME_CYCLE_HEALTH_SYNC_URL: ${{ vars.RUNTIME_CYCLE_HEALTH_SYNC_URL }}
+          RUNTIME_CYCLE_HEALTH_SOURCE_BINDING_ID: ${{ secrets.RUNTIME_CYCLE_HEALTH_SOURCE_BINDING_ID }}
+          ACCOUNT_FACTS_SYNC_TOKEN: ${{ secrets.ACCOUNT_FACTS_SYNC_TOKEN }}
+          RUNTIME_TARGET_CONFIGURED_STATE: ${{ steps.target_state.outputs.configured_state }}
+          RUNTIME_TARGET_EXECUTION_MODE: ${{ steps.target_state.outputs.execution_mode }}
+          RUNTIME_GUARD_STATUS: ${{ steps.runtime_guard.outputs.status }}
+          EXECUTION_HEARTBEAT_STATUS: ${{ steps.execution_heartbeat.outputs.status }}
+          GCP_PROJECT_ID: ${{ env.GCP_PROJECT_ID }}
+          CLOUD_RUN_REGION: ${{ matrix.target.region }}
+          CLOUD_RUN_SERVICE: ${{ matrix.target.service }}
+        run: uv run --no-sync python scripts/publish_runtime_cycle_health.py
+
       - name: Observe production drift without optimization side effects
         if: ${{ steps.selection.outputs.selected == 'true' }}
         id: production_drift

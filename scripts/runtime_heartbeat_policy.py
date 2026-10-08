@@ -368,6 +368,7 @@ def enumerate_cycle_expectations(
     *,
     since: dt.datetime,
     now: dt.datetime,
+    coverage_through: dt.datetime | None = None,
     publication_grace: dt.timedelta = dt.timedelta(minutes=30),
     session_dates_loader: SessionDatesLoader = _market_session_dates,
     expected_window: Callable[[dt.datetime], bool] | None = None,
@@ -392,11 +393,24 @@ def enumerate_cycle_expectations(
             or now.tzinfo is None
             or since.utcoffset() is None
             or now.utcoffset() is None
+            or (
+                coverage_through is not None
+                and (
+                    coverage_through.tzinfo is None
+                    or coverage_through.utcoffset() is None
+                )
+            )
         ):
             raise ValueError()
         since, now = since.astimezone(dt.timezone.utc), now.astimezone(dt.timezone.utc)
+        coverage_end = (
+            now
+            if coverage_through is None
+            else coverage_through.astimezone(dt.timezone.utc)
+        )
         if (
-            since > now
+            since > coverage_end
+            or coverage_end > now
             or type(max_slots) is not int
             or not 1 <= max_slots <= 20
             or type(horizon_days) is not int
@@ -404,7 +418,7 @@ def enumerate_cycle_expectations(
             or publication_grace < dt.timedelta()
         ):
             raise ValueError()
-        if now - since > dt.timedelta(days=horizon_days):
+        if coverage_end - since > dt.timedelta(days=horizon_days):
             return {
                 **empty,
                 "state": "incomplete",
@@ -446,13 +460,15 @@ def enumerate_cycle_expectations(
         if cursor < since:
             cursor += dt.timedelta(minutes=1)
         slots = []
-        while cursor <= now:
+        while cursor <= coverage_end:
             if eligible(cursor):
                 if len(slots) == max_slots:
                     return {
                         **empty,
                         "state": "incomplete",
                         "reason": "expectation_limit_exceeded",
+                        "slots": slots,
+                        "overflow_at": cursor.isoformat().replace("+00:00", "Z"),
                     }
                 slots.append(
                     {
@@ -490,17 +506,22 @@ def enumerate_cycle_expectations(
             session_dates_loader=cached_sessions,
             within_expected_window=window_now,
         )
-        latest = slots[-1] if slots else None
+        latest_due = today["latest_due_at"]
+        grace_ends_at = today["grace_ends_at"]
         state, reason = today["state"], today["reason"]
-        if state in {"due", "within_grace"} and latest is None:
+        if state in {"due", "within_grace"} and latest_due is None:
             state, reason = "not_due", "before_schedule"
         schedule = {
             "state": state,
             "reason": reason,
             "timezone": str(market_zone),
-            "latest_due_at": latest["scheduled_for"] if latest else None,
-            "next_due_at": next_due.isoformat().replace("+00:00", "Z"),
-            "deadline_at": latest["deadline_at"] if latest else None,
+        "latest_due_at": latest_due.isoformat().replace("+00:00", "Z")
+        if latest_due
+        else None,
+        "next_due_at": next_due.isoformat().replace("+00:00", "Z"),
+        "deadline_at": grace_ends_at.isoformat().replace("+00:00", "Z")
+        if grace_ends_at is not None
+        else None,
         }
         return {"state": "ready", "reason": None, "slots": slots, "schedule": schedule}
     except (ValueError, TypeError, KeyError, AttributeError, OverflowError):

@@ -16,6 +16,7 @@ import json
 import math
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 from scripts.runtime_cycle_health import (
     CycleContext,
@@ -56,6 +57,14 @@ def _digest(value: Any) -> str:
     ).hexdigest()
 
 
+def _configuration_digest(material: Mapping[str, Any], report_root_uri: str | None) -> str:
+    serving_digest = _digest(material)
+    if report_root_uri is None:
+        return serving_digest
+    root_digest = hashlib.sha256(report_root_uri.encode("utf-8")).hexdigest()
+    return _digest({"serving_configuration_sha256": serving_digest, "report_root_sha256": root_digest})
+
+
 def _instant(value: Any) -> dt.datetime:
     parsed = (
         value
@@ -65,6 +74,96 @@ def _instant(value: Any) -> dt.datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("timestamp_unavailable")
     return parsed.astimezone(dt.timezone.utc)
+
+
+def runtime_report_prefix_ranges(
+    report_root_uri: str,
+    *,
+    strategy_profile: str,
+    account_scope: str,
+    since: dt.datetime,
+    through: dt.datetime,
+) -> dict[str, tuple[str, str]]:
+    """Build exact GCS object-name ranges for the producer's month layout.
+
+    LongBridge reports use ``<root>/longbridge/<profile>/<scope>/<YYYY-MM>/<run_id>.json``;
+    the UTC run id is ``%Y%m%dT%H%M%SZ``. GCS start/end offsets therefore keep
+    old objects outside this bounded interval out of the listing itself.
+    Values are ``object_prefix -> (inclusive_start, exclusive_end)``.
+    """
+    start, end = _instant(since), _instant(through)
+    parsed = urlsplit(str(report_root_uri or "").strip())
+    if (
+        parsed.scheme != "gs"
+        or not parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or parsed.username
+        or parsed.password
+        or parsed.port is not None
+        or any(char in parsed.path for char in "*?[]%")
+        or start > end
+    ):
+        raise CollectionUnavailable("report_prefix_unavailable")
+
+    def segment(value):
+        text = str(value or "").strip()
+        safe = "".join(char if char.isalnum() or char in "-_." else "_" for char in text)
+        if not safe or safe in {".", ".."}:
+            raise CollectionUnavailable("report_prefix_unavailable")
+        return safe
+
+    root = parsed.path.strip("/")
+    target_path = "/".join(
+        part for part in (root, "longbridge", segment(strategy_profile), segment(account_scope)) if part
+    )
+    month = dt.datetime(start.year, start.month, 1, tzinfo=dt.timezone.utc)
+    last_month = dt.datetime(end.year, end.month, 1, tzinfo=dt.timezone.utc)
+    ranges = {}
+    while month <= last_month:
+        if month.month == 12:
+            next_month = dt.datetime(month.year + 1, 1, 1, tzinfo=dt.timezone.utc)
+        else:
+            next_month = dt.datetime(month.year, month.month + 1, 1, tzinfo=dt.timezone.utc)
+        left = max(start, month)
+        right = min(end, next_month - dt.timedelta(seconds=1))
+        prefix = f"{target_path}/{month:%Y-%m}/"
+        lower = left.replace(microsecond=0).strftime("%Y%m%dT%H%M%SZ")
+        upper = (right.replace(microsecond=0) + dt.timedelta(seconds=1)).strftime("%Y%m%dT%H%M%SZ")
+        ranges[prefix] = (prefix + lower, prefix + upper)
+        month = next_month
+    return ranges
+
+
+def bounded_cycle_window_end(
+    target: Mapping[str, Any],
+    *,
+    since: dt.datetime,
+    through: dt.datetime,
+    publication_grace: dt.timedelta,
+    session_dates_loader: Callable,
+    expected_window: Callable[[dt.datetime], bool] | None = None,
+) -> tuple[dt.datetime | None, str | None]:
+    """End an initial backfill chunk before its 21st scheduled slot."""
+    start = _instant(since)
+    end = min(_instant(through), start + dt.timedelta(days=365))
+    expectation = enumerate_cycle_expectations(
+        target,
+        since=start,
+        now=end,
+        publication_grace=publication_grace,
+        session_dates_loader=session_dates_loader,
+        expected_window=expected_window,
+    )
+    if expectation["state"] != "incomplete" or expectation.get("reason") != "expectation_limit_exceeded":
+        if expectation["state"] == "ready":
+            return end, None
+        return None, str(expectation.get("reason") or "schedule_unavailable")
+    overflow = _instant(expectation.get("overflow_at"))
+    chunk_end = min(end, overflow - dt.timedelta(seconds=1))
+    if chunk_end < start:
+        return None, "collection_window_unavailable"
+    return chunk_end, None
 
 
 def _source_material(source: Mapping[str, Any]) -> tuple[dict, dict, dict]:
@@ -174,9 +273,11 @@ def _source_material(source: Mapping[str, Any]) -> tuple[dict, dict, dict]:
         raise CollectionUnavailable("serving_context_unevaluable") from None
 
 
-def cycle_configuration_sha256(source: Mapping[str, Any]) -> str:
-    """Digest the allowlisted effective facts; this does not admit a source."""
-    return _digest(_source_material(source)[1])
+def cycle_configuration_sha256(
+    source: Mapping[str, Any], *, report_root_uri: str | None = None
+) -> str:
+    """Digest effective serving facts and, when supplied, the report domain."""
+    return _configuration_digest(_source_material(source)[1], report_root_uri)
 
 
 def _admit(source, context):
@@ -190,11 +291,19 @@ def _admit(source, context):
         or target["scheduler"]["job_name"] != context.scheduler_job_name
     ):
         raise CollectionUnavailable("source_binding_unconfirmed")
-    if _digest(material) != context.configuration_sha256:
+    if _configuration_digest(material, source.get("report_root_uri")) != context.configuration_sha256:
         raise CollectionUnavailable("configuration_unconfirmed")
     return (
         target,
-        _digest({"material": material, "binding": binding}),
+        _digest({
+            "material": material,
+            "binding": binding,
+            "report_root_sha256": hashlib.sha256(
+                source["report_root_uri"].encode("utf-8")
+            ).hexdigest()
+            if isinstance(source.get("report_root_uri"), str)
+            else None,
+        }),
         dt.timedelta(minutes=material["monitor_policy"]["publication_grace_minutes"]),
     )
 
@@ -204,11 +313,14 @@ def collect_runtime_cycle_health(
     context: CycleContext,
     read_source: Callable[[], Mapping[str, Any]],
     list_page: Callable[[str, str | None], Mapping[str, Any]],
+    list_page_range: Callable[[str, str | None, str, str], Mapping[str, Any]] | None = None,
+    list_ranges: Mapping[str, tuple[str, str]] | None = None,
     read_report: Callable[[str], Mapping[str, Any] | None],
     required_prefixes: Sequence[str],
     since: dt.datetime,
     now: dt.datetime,
     session_dates_loader: Callable,
+    coverage_through: dt.datetime | None = None,
     expected_window: Callable[[dt.datetime], bool] | None = None,
     checkpoint: Mapping[str, Any] | None = None,
     recovery_requests: Sequence[Mapping[str, Any]] = (),
@@ -217,8 +329,9 @@ def collect_runtime_cycle_health(
 ) -> dict[str, Any]:
     """Collect one bounded same-configuration interval through injected reads.
 
-    since/cutoff and required prefixes come from the admitted source/checkpoint,
-    not a freshness TTL. No existing binding or initial baseline is invented.
+    now is the current snapshot time; coverage_through may bound an older
+    contiguous history chunk. Neither time advances QRS state by itself; only
+    its complete ACK moves the persistent cursor.
     Missing context and material drift prevent even a partial ready projection.
     """
     preserved = deepcopy(checkpoint)
@@ -235,8 +348,11 @@ def collect_runtime_cycle_health(
 
     try:
         since, now = _instant(since), _instant(now)
+        coverage_through = _instant(coverage_through or now)
         if (
-            not required_prefixes
+            coverage_through < since
+            or coverage_through > now
+            or not required_prefixes
             or len(required_prefixes) > 366
             or len(set(required_prefixes)) != len(required_prefixes)
             or any(
@@ -245,6 +361,8 @@ def collect_runtime_cycle_health(
             )
             or not 0 < max_seconds <= 60
             or len(recovery_requests) > MAX_CYCLES
+            or (list_ranges is not None and set(list_ranges) != set(required_prefixes))
+            or (list_ranges is not None and list_page_range is None)
         ):
             raise CollectionUnavailable("collection_scope_invalid")
         started = monotonic()
@@ -267,6 +385,7 @@ def collect_runtime_cycle_health(
             publication_grace=grace,
             since=since,
             now=now,
+            coverage_through=coverage_through,
             session_dates_loader=session_dates_loader,
             expected_window=expected_window,
         )
@@ -283,7 +402,11 @@ def collect_runtime_cycle_health(
                     aborted = True
                     break
                 try:
-                    page = list_page(prefix, token)
+                    page = (
+                        list_page_range(prefix, token, *list_ranges[prefix])
+                        if list_ranges is not None
+                        else list_page(prefix, token)
+                    )
                     if not isinstance(page, Mapping):
                         raise ValueError()
                     listed_bytes += _json_size(page)
@@ -344,7 +467,7 @@ def collect_runtime_cycle_health(
             pages=pages,
             reads=reads,
             read_from=since,
-            read_through=now,
+            read_through=coverage_through,
             aborted=aborted,
         )
         slots = expectation["slots"]
