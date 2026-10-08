@@ -125,30 +125,66 @@ Focused validation: `python -m pytest -q tests/test_runtime_cycle_health.py` and
 Use the repository's pinned QPK validators; all test accounts and evidence are
 synthetic. Run the repository aggregate suite before publication/integration.
 
-## A: offline source wiring candidate (2026-10-07)
+## A: bounded source adapter (2026-10-08)
 
-The preceding pure helper remains byte-identical to reviewed revision2. This
-additive candidate introduces one injected collector and shared exact Scheduler
-selection / interval enumeration in the existing heartbeat policy module.
-It does not wire a lifecycle workflow, receiver, frontend or live transport.
+The pure projection and injected collector remain free of credentials and
+transport. A separate opt-in publisher now connects the LongBridge PAPER
+lifecycle workflow to the QRS internal source GET/POST; it remains disabled by
+default and emits no order authority or recovery proof.
 
 ### Compatibility and adoption
 
-`publish()` and its existing CLI remain on the original daily path. Their
-historical route matcher is explicitly named `_legacy_confirmed_scheduler`;
-retaining it does not make that matcher verified or confer new cycle-health
-authority. `publish_verified(..., serving_context=...)` is a separate, unwired
-opt-in. Missing proven context rejects this new path as `schedule_unevaluable`
-before I/O. Merely merging these source files does not adopt it or interrupt the
-currently publishing natural PAPER daily report. Neither daily path emits
-`cycle_health`; calendar-day history and source cycle health remain separate.
+`publish()` and its original CLI remain on the original daily path. Their
+historical route matcher does not confer cycle-health authority. The separate
+`publish_runtime_cycle_health.py` path runs only when the protected
+`RUNTIME_CYCLE_HEALTH_ENABLED` flag is exactly `true`; its missing or unadmitted
+source configuration stops before report listing. The daily projection and
+cycle-health observation remain separate records.
 
-Roll out receiver-first: accept the optional six-member envelope and persist
-attempt-aware state transactionally in the existing DO, establish the protected
-binding/checkpoint and serving-context inputs, then explicitly wire PAPER's
-existing lifecycle producer. Verify coexistence and natural daily delivery
-before any separate strict daily caller switch. Do not flip all platforms or
-require new fields from producers that have not adopted them.
+An uninitialized or blocked GET is accepted only with the authenticated
+top-level configuration/binding, fixed `required_from`, revision zero and no
+checkpoint or prior observation. Existing prior-partition history is preserved;
+it does not establish continuity or clear blocked status. A checkpoint carrying
+an old configuration digest is rejected rather than reused.
+
+The workflow step is restricted to enabled LongBridge PAPER and requires
+protected Environment configuration plus QRS source admission. The underlying
+collector rejects a disabled serving target, so this source does not create a
+disabled-day cycle-health record; keep the existing daily lifecycle/report path
+for stopped targets and do not enable execution to make this source run. A merge,
+local test or successful source POST is not a natural-cycle recovery result.
+
+The outer `generated_at` and `computed_at` identify the actual current source
+observation. The nested `coverage.from` and `coverage.through` bound the
+historical report scan; `through` must not be later than `computed_at`, and
+cycle timestamps must not be later than `through`. Freshness and observation
+ordering use `computed_at`; only a complete, continuous ACK advances
+`covered_through` to `coverage.through`. A gap or partial page is stored as
+incomplete and leaves the cursor unchanged.
+
+The publisher caps each observation at 20 scheduled slots and the collector at
+20 candidate reports. A long interval can continue through later invocations:
+each run reads the last ACK cursor (with the existing grace overlap), uses a
+new current observation time, and posts only its bounded historical range. It
+does not sweep repeatedly within one workflow run. If one chunk contains more
+than 20 candidate reports, or any required prefix/page is incomplete, that
+observation does not advance the cursor; retries or a corrected source listing
+are required. This cap does not guarantee every unusually dense retry history
+will fit a chunk.
+
+The report root comes only from the verified 100%-traffic Ready serving
+revision's unique plain `EXECUTION_REPORT_GCS_URI`. The root is included in the
+configuration identity by its SHA-256; a changed root therefore requires a new
+QRS admission and does not inherit the prior cursor. Secret references,
+missing/duplicate roots and conflicting explicit workflow values stop before
+report listing. The URI itself is not included in logs or the configuration
+digest.
+
+This path still does not backfill authenticated recovery proof. Scheduler
+headers alone do not prove the exact invocation, and report provenance is not
+independently tied to a verified `/run` invocation. `resolutions` remains empty;
+the QRS durable archive is authoritative for faults and no source summary may
+be treated as complete incident history.
 
 ### Required injected facts
 
@@ -179,13 +215,17 @@ invent that boundary. Neither current repository main nor the job URI proves
 which route a serving artifact exposes. Unknown route/context stays unevaluable.
 
 `list_page(prefix, token)` supplies actual provider pages with items and
-continuation tokens. `read_report(name)` supplies bounded decoded raw reports.
+continuation tokens. The workflow adapter uses `list_page_range` with exact
+UTC-month object prefixes and inclusive/exclusive GCS name offsets derived from
+the producer's report path and UTC run-id format. This keeps older objects in
+the same month outside the bounded interval's report cap. `read_report(name)`
+supplies bounded decoded raw reports.
 The collector records requested tokens and requires every supplied prefix's
 positive terminal page plus successful canonical receipt validation. Limits:
 20 reports/events, 21 pages per prefix, 366-day expectation horizon, 20-second
 default total budget (maximum 60), 1 MiB decoded report and 256 KiB cumulative
-listing JSON. The future transport must independently enforce wire/download
-limits and callback timeouts before decoding; Python cannot preempt an injected
+listing JSON. The GCS adapter enforces provider paging and per-report byte
+limits before decoding; Python cannot preempt an injected
 callback. Post-callback budget overruns cannot return ready. Timeouts, caps,
 malformed pages, byte failures and late-after-cutoff receipts never become
 complete evidence. Paired source reads detect drift; they are not an atomic
@@ -201,8 +241,8 @@ it cannot erase expected invocations or past faults. Monthly strategy action
 windows do not exempt a daily invocation: a valid `no_action` receipt satisfies
 that cycle. Missing invocation receipts remain execution uncertainty.
 
-Current LB source does not establish authenticated per-run Scheduler invocation
-provenance. Consequently A removes untrusted `invocation` fields from report
+Current LB reports do not independently bind report origin to the authenticated
+request or deployed revision. Consequently the collector removes untrusted `invocation` fields from report
 copies and emits only `window_matched` correlation. Adding job/time fields to a
 legacy report cannot grant recovery authority. A rejects
 `same_cycle_retry_succeeded` with `invocation_provenance_unavailable`; the frozen
@@ -214,10 +254,13 @@ producer and does not promise full production recovery without usable evidence.
 
 Outer `data_status=ready` means this bounded evidence collection completed. It
 is not the website's healthy label, a first-baseline assertion or execution
-permission. A returned checkpoint is an in-memory proposal, not durable ACK.
-The receiver still owns adoption state, authenticated binding, source ordering,
-idempotent transactions, freshness and the two-label user status. Incomplete
-and changed-config/binding cases cannot clear prior incidents. Same physical
+permission. The collector's returned reducer checkpoint remains in-memory and
+is not sent as authority; QRS's persisted attempt archive and `covered_through`
+are the durable source state. GET's summary is never loaded into the local
+reducer. A complete ACK must match the exact submitted normalized snapshot;
+partial coverage can be stored but cannot advance the QRS cursor. Missing
+protected configuration, changed source binding or unknown responses remain
+blocked. Same physical
 account history should eventually survive deployment changes, but present LB
 binding has no independently established physical continuity: no cross-binding
 migration or revision-wide history filtering is performed here.

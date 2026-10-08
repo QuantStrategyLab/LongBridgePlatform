@@ -89,3 +89,9 @@ projected = project_listed_reports(
 heartbeat 的告警、返回码和交易链不变。这个步骤不调用 heartbeat 的 `main`。workflow 只在 PAPER、变量显式为 `true`、任务未取消且 Google 认证成功时运行；heartbeat 业务失败后仍可以写出异常投影。
 
 该同步仍默认关闭；此前的只读核验记录（非本次线上配置确认）显示 LongBridge PAPER 环境当时尚无 `RUNTIME_DAILY_SYNC_ENABLED` 或 `RUNTIME_DAILY_SYNC_URL` variable。它复用已有 execution-evidence secret 名称，不新增 secret。真实报告前缀、桶权限及第一份对象仍需在获准身份上验收。bot 送达不在这一步。
+
+## 一次性停用 PAPER 日记录
+
+手动 workflow `Publish PAPER Daily Runtime Once` 是单次补记入口，不是定时任务。它先验证原有 PAPER 选择和受保护 GCP 身份，再只读核对当前唯一 100% 流量的 Ready serving revision；报告根必须来自该 revision 中唯一、非 SecretRef 的明文 `EXECUTION_REPORT_GCS_URI`。普通 workflow 变量缺失时可使用这个已核实值；显式配置若与 serving revision 不一致、出现 SecretRef、空值或重复值，流程停止。代码不会输出报告 URI。
+
+这条入口不调用 heartbeat、Scheduler、`/run`、券商或通知发送。它只读取现有报告并按 create-only 写入当日投影，然后用本批 JSON 同步现有 QRS 日记录。停用证据、运行开关冲突或状态未知都会保留为 `incomplete`，不会被写成健康或完整日报；流程也不会改动运行开关。没有完成受保护环境和服务读回前，这只是候选实现，不能代表生产日报已接通。

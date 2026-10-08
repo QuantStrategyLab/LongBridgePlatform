@@ -15,11 +15,13 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 from google.api_core.exceptions import Forbidden, GoogleAPICallError, PreconditionFailed
 
@@ -45,6 +47,7 @@ _RUNTIME_DAILY_SYNC_MAX_BODY_BYTES = 64 * 1024
 _RUNTIME_DAILY_SYNC_MAX_RESPONSE_BYTES = 64 * 1024
 _HTTPS_HOST = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _RUNTIME_DAILY_SYNC_TARGET_KEY = "longbridge-quant-paper-service|russell_top50_leader_rotation|paper"
+_ONE_SHOT_SYNC_URL = "https://qsl-strategy-switch-console.pigbibi.workers.dev/api/runtime-daily/sync"
 
 
 class _Rejected(Exception):
@@ -56,7 +59,7 @@ class _KnownFailure(RuntimeError):
 
     _CODES = frozenset(
         {"schedule_unavailable", "schedule_unevaluable",
-         "storage_write_permission_denied", "write_unknown"}
+         "storage_write_permission_denied", "write_unknown", "private_result_write_failed"}
     )
 
     def __init__(self, code: str) -> None:
@@ -158,6 +161,137 @@ def _deployment_enabled(payload: Mapping[str, Any], deployed: Mapping[str, Any])
         seen = True
         enabled = enabled and _explicitly_enabled(env_enabled)
     return seen and enabled
+
+
+def _one_shot_report_root(value: str) -> str:
+    bases = heartbeat._split_values(value)
+    if len(bases) != 1:
+        raise _Rejected("one_shot_report_prefix_unavailable")
+    base = bases[0].rstrip("/")
+    parsed = urlsplit(base)
+    segments = parsed.path.lstrip("/").split("/") if parsed.path else []
+    if (
+        parsed.scheme != "gs" or _BUCKET.fullmatch(parsed.netloc or "") is None
+        or parsed.username or parsed.password or parsed.query or parsed.fragment
+        or parsed.port is not None or any(c in parsed.path for c in "*?[]%")
+        or any(segment in {".", "..", ""} for segment in segments)
+    ):
+        raise _Rejected("one_shot_report_prefix_unavailable")
+    return base
+
+
+def _one_shot_environment(
+    env: Mapping[str, str], *, report_root_uri: str | None = None, defer_report_root: bool = False,
+) -> dict[str, str]:
+    """Enable only this projection process, preserving disabled runtime control."""
+    if (
+        env.get("RUNTIME_TARGET_ENABLED") != "false"
+        or env.get("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE") != "PAPER"
+        or not env.get("CLOUD_RUN_REGION")
+        or not env.get("GOOGLE_APPLICATION_CREDENTIALS")
+        or not env.get("CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE")
+        or env["GOOGLE_APPLICATION_CREDENTIALS"] != env["CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE"]
+    ):
+        raise _Rejected("one_shot_config_invalid")
+    base = report_root_uri
+    if base is None and not defer_report_root:
+        # Retain direct helper compatibility; the production one-shot path defers
+        # this choice until it has verified the active serving revision.
+        configured = env.get("RUNTIME_HEARTBEAT_GCS_URIS") or env.get("EXECUTION_REPORT_GCS_URI") or ""
+        base = _one_shot_report_root(configured)
+    if base is not None:
+        base = _one_shot_report_root(base)
+        for name in ("RUNTIME_HEARTBEAT_GCS_URIS", "EXECUTION_REPORT_GCS_URI"):
+            configured = str(env.get(name) or "").strip()
+            if configured and _one_shot_report_root(configured) != base:
+                raise _Rejected("one_shot_report_prefix_conflict")
+        prefix = _prefix(base + "/runtime_daily")
+        if prefix != base + "/runtime_daily":
+            raise _Rejected("one_shot_report_prefix_unavailable")
+    else:
+        prefix = ""
+    scoped = {
+        **env, "RUNTIME_DAILY_PROJECTION_ENABLED": "true", "RUNTIME_DAILY_PROJECTION_TARGET_ID": "paper",
+        "RUNTIME_DAILY_PROJECTION_GCS_PREFIX": prefix, "RUNTIME_DAILY_SYNC_ENABLED": "true",
+        "RUNTIME_DAILY_SYNC_URL": _ONE_SHOT_SYNC_URL,
+    }
+    target = _select_target(scoped)
+    if not env.get("CLOUD_RUN_SERVICE") or target.get("service") != env["CLOUD_RUN_SERVICE"]:
+        raise _Rejected("one_shot_config_invalid")
+    return scoped
+
+
+def _one_shot_serving_deployment(
+    service_payload: Mapping[str, Any], *, service: str, project: str | None, region: str,
+) -> dict[str, Any]:
+    """A staged template is not the effective configuration of the served target."""
+    try:
+        rows = [row for row in service_payload["status"]["traffic"] if row.get("percent", 0) > 0]
+        if len(rows) != 1 or rows[0].get("percent") != 100:
+            raise _Rejected("one_shot_serving_unavailable")
+        revision_name = rows[0]["revisionName"]
+        if not isinstance(revision_name, str) or not re.fullmatch(r"[a-z][a-z0-9-]{1,62}", revision_name):
+            raise _Rejected("one_shot_serving_unavailable")
+        command = ["gcloud", "run", "revisions", "describe", revision_name,
+                   "--region", region, "--format=json"]
+        if not project or not region:
+            raise _Rejected("one_shot_serving_unavailable")
+        command.extend(["--project", project])
+        result = heartbeat._run_gcloud(command)
+        if result.returncode != 0 or len(result.stdout.encode()) > _MAX_REPORT_BYTES:
+            raise _Rejected("one_shot_serving_unavailable")
+        revision = json.loads(result.stdout)
+        metadata = revision["metadata"]
+        ready = [row for row in revision["status"]["conditions"] if row.get("type") == "Ready"]
+        containers = revision["spec"]["containers"]
+        if (
+            metadata.get("name") != revision_name
+            or (metadata.get("labels") or {}).get("serving.knative.dev/service") != service
+            or len(ready) != 1 or ready[0].get("status") != "True"
+            or len(containers) != 1
+        ):
+            raise _Rejected("one_shot_serving_unavailable")
+        report_rows = [
+            row for row in containers[0].get("env", [])
+            if isinstance(row, dict) and row.get("name") == "EXECUTION_REPORT_GCS_URI"
+        ]
+        if (
+            len(report_rows) != 1 or "valueSource" in report_rows[0]
+            or not isinstance(report_rows[0].get("value"), str)
+            or not report_rows[0]["value"].strip()
+        ):
+            raise _Rejected("one_shot_report_prefix_unavailable")
+        report_root = _one_shot_report_root(report_rows[0]["value"])
+        return {
+            "spec": {"template": {"metadata": metadata, "spec": revision["spec"]}},
+            "one_shot_report_root_uri": report_root,
+        }
+    except _Rejected:
+        raise
+    except Exception:
+        raise _Rejected("one_shot_serving_unavailable") from None
+
+
+def _one_shot_disabled_reason(payload: Mapping[str, Any], deployed: Mapping[str, Any]) -> str:
+    values = []
+    if "runtime_target_enabled" in deployed:
+        values.append(deployed["runtime_target_enabled"])
+    env_value = _container_env_value(payload, "RUNTIME_TARGET_ENABLED")
+    if env_value is not None:
+        values.append(env_value)
+    resolved = []
+    for value in values:
+        if value is True or value == "true":
+            resolved.append(True)
+        elif value is False or value == "false":
+            resolved.append(False)
+        else:
+            return "runtime_target_enablement_unknown"
+    if not resolved:
+        return "runtime_target_enablement_unknown"
+    if not all(resolved):
+        return "runtime_target_disabled"
+    return "runtime_target_enablement_conflict"
 
 
 def _deployment_matches_paper(candidate: Mapping[str, Any], deployed: Mapping[str, Any]) -> bool:
@@ -478,6 +612,57 @@ def _upload(
     return uri
 
 
+def _validate_private_result_path(path: str | os.PathLike[str]) -> str:
+    """Require a caller-provisioned private directory and an unused filename."""
+    destination = os.path.abspath(os.fspath(path))
+    parent = os.path.dirname(destination)
+    name = os.path.basename(destination)
+    if not name or name in {".", ".."}:
+        raise _Rejected("private_result_path_invalid")
+    try:
+        info = os.stat(parent, follow_symlinks=False)
+    except OSError:
+        raise _Rejected("private_result_path_invalid") from None
+    if (
+        not os.path.isdir(parent)
+        or os.path.islink(parent)
+        or info.st_uid != os.getuid()
+        or info.st_mode & 0o077
+    ):
+        raise _Rejected("private_result_path_invalid")
+    if os.path.lexists(destination):
+        raise _Rejected("private_result_path_exists")
+    return destination
+
+
+def _write_private_result(path: str, result: Mapping[str, Any]) -> None:
+    """Create a small private handoff file atomically without overwriting."""
+    parent = os.path.dirname(path)
+    temporary_path = ""
+    try:
+        descriptor, temporary_path = tempfile.mkstemp(prefix=".runtime-daily-result-", dir=parent)
+        os.fchmod(descriptor, 0o600)
+        payload = json.dumps(result, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # link() is create-only: an existing result is never replaced.
+        os.link(temporary_path, path)
+        os.unlink(temporary_path)
+        temporary_path = ""
+        directory_fd = os.open(parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except Exception:
+        if temporary_path:
+            with contextlib.suppress(OSError):
+                os.unlink(temporary_path)
+        raise _KnownFailure("private_result_write_failed") from None
+
+
 def _runtime_daily_sync_url(value: str) -> str:
     try:
         parsed = urlsplit(value.strip())
@@ -604,16 +789,25 @@ def publish(
     read_payload: Callable[[str], Mapping[str, Any] | None] | None = None,
     report_globs: Callable[[dt.datetime, dt.datetime], list[str]] | None = None,
     http_post: Callable[..., Any] | None = None,
+    one_shot_only: bool = False,
+    private_result_path: str | os.PathLike[str] | None = None,
 ) -> tuple[str, str, str]:
     """Return record status, date, and independently confirmed QRS sync status."""
 
+    if one_shot_only:
+        env = _one_shot_environment(env, defer_report_root=True)
+    private_result_destination = (
+        _validate_private_result_path(private_result_path) if private_result_path is not None else None
+    )
     if not _enabled(env):
         return "disabled", "", "disabled"
-    prefix = _require_config(env)
+    prefix = None if one_shot_only else _require_config(env)
     if now.tzinfo is None or now.utcoffset() is None:
         raise _Rejected("config_invalid")
     observed = now.astimezone(dt.timezone.utc)
     limit = _positive_int(env.get("RUNTIME_HEARTBEAT_MAX_REPORTS_TO_READ"), _MAX_REPORTS)
+    if one_shot_only and limit > _MAX_REPORTS:
+        raise _Rejected("one_shot_config_invalid")
     try:
         lookback = float(env.get("RUNTIME_HEARTBEAT_LOOKBACK_HOURS") or _LOOKBACK_HOURS)
         grace = float(env.get("RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES") or "30")
@@ -632,24 +826,41 @@ def publish(
         payload = heartbeat._describe_cloud_run_service(service, project=project)
         if not isinstance(payload, dict):
             raise _KnownFailure("schedule_unavailable")
+        if one_shot_only:
+            payload = _one_shot_serving_deployment(payload, service=service, project=project, region=env["CLOUD_RUN_REGION"])
+            env = _one_shot_environment(
+                env, report_root_uri=payload.get("one_shot_report_root_uri")
+            )
+            prefix = _require_config(env)
         deployed = heartbeat._deployed_runtime_target(payload)
         hydrated = _profiles_from_same_readback(target, payload, project=project)
-        hydrated = heartbeat._hydrate_runtime_target_schedules(hydrated, project=project)
+        if not one_shot_only:
+            hydrated = heartbeat._hydrate_runtime_target_schedules(hydrated, project=project)
     except RuntimeError as exc:
         raise _KnownFailure("schedule_unavailable") from None
-    if not _deployment_matches_paper(target, deployed) or not _deployment_enabled(payload, deployed):
+    if not _deployment_matches_paper(target, deployed) or (not one_shot_only and not _deployment_enabled(payload, deployed)):
         raise _Rejected("deployed_target_rejected")
     if len(hydrated) != 1:
         raise _Rejected("target_not_unique")
-    try:
-        hydrated[0], scheduler_error = _legacy_confirmed_scheduler(hydrated[0], project=project)
-    except RuntimeError as exc:
-        raise _KnownFailure("schedule_unavailable") from None
+    if one_shot_only:
+        timezone_name = str(deployed.get("market_timezone") or _container_env_value(payload, "LONGBRIDGE_MARKET_TIMEZONE") or "")
+        if (
+            timezone_name != "America/New_York" or hydrated[0].get("market_timezone") != timezone_name
+            or f"{service}|{hydrated[0].get('strategy_profile')}|paper" != _RUNTIME_DAILY_SYNC_TARGET_KEY
+        ):
+            raise _Rejected("one_shot_target_invalid")
+        hydrated[0] = {**hydrated[0], "scheduler": {}}
+        scheduler_error = _one_shot_disabled_reason(payload, deployed)
+    else:
+        try:
+            hydrated[0], scheduler_error = _legacy_confirmed_scheduler(hydrated[0], project=project)
+        except RuntimeError as exc:
+            raise _KnownFailure("schedule_unavailable") from None
     since = observed - dt.timedelta(hours=lookback)
     globs = (report_globs or heartbeat._report_globs)(since, observed)
     if not globs:
         raise _Rejected("config_invalid")
-    store = client if client is not None else _storage_client()
+    store = client if client is not None else (_one_shot_storage_client(env) if one_shot_only else _storage_client())
     if list_objects is None:
         objects, read_errors = _list_bounded(store, globs, since=since, limit=limit)
     else:
@@ -689,6 +900,8 @@ def publish(
     }
     if session_dates_loader is not None:
         kwargs["session_dates_loader"] = session_dates_loader
+    if one_shot_only:
+        kwargs["business_date"] = observed.astimezone(ZoneInfo(timezone_name)).date()
     projected = project_listed_reports(
         targets=hydrated,
         objects=objects,
@@ -698,6 +911,12 @@ def publish(
     records = projected.get("records")
     if not isinstance(records, list) or len(records) != 1:
         raise _Rejected("target_not_unique")
+    if one_shot_only:
+        projected["completeness"] = records[0]["completeness"] = "incomplete"
+        records[0]["schedule"]["reason"] = scheduler_error
+        if records[0]["status"] not in {"unknown", "reconciliation_required", "failed", "blocked", "conflict"}:
+            records[0]["status"] = "read_incomplete"
+            records[0]["kind"] = "incomplete"
     business_date = records[0].get("business_date")
     if not isinstance(business_date, str) or not business_date:
         raise _KnownFailure("schedule_unavailable")
@@ -707,6 +926,14 @@ def publish(
     if records[0].get("target_key") == _RUNTIME_DAILY_SYNC_TARGET_KEY:
         records[0]["target"]["account_scope"] = "paper"
     body = json.dumps(projected, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    target_keys = [record.get("target_key") for record in records]
+    if private_result_destination is not None and (
+        any(not isinstance(key, str) or not key for key in target_keys)
+        or len(set(target_keys)) != len(target_keys)
+    ):
+        raise _Rejected("private_result_target_invalid")
+    if prefix is None:
+        raise _Rejected("one_shot_report_prefix_unavailable")
     uploaded = _upload(store, prefix, business_date, observed, body)
     if uploaded == "already_recorded":
         return "already_recorded", business_date, "skipped_existing"
@@ -717,6 +944,13 @@ def publish(
         target_key=str(records[0].get("target_key") or ""),
         http_post=http_post,
     )
+    if private_result_destination is not None:
+        _write_private_result(private_result_destination, {
+            "projection_uri": uploaded,
+            "business_date": business_date,
+            "target_keys": target_keys,
+            "projection_completeness": projected.get("completeness"),
+        })
     return "recorded", business_date, sync_status
 
 
@@ -885,6 +1119,17 @@ def _storage_client() -> Any:
     return storage.Client()
 
 
+def _one_shot_storage_client(env: Mapping[str, str]) -> Any:
+    import google.auth
+    from google.cloud import storage
+
+    credentials, _ = google.auth.load_credentials_from_file(env["GOOGLE_APPLICATION_CREDENTIALS"])
+    project = env.get("GCP_PROJECT_ID") or env.get("GOOGLE_CLOUD_PROJECT")
+    if not project:
+        raise _Rejected("one_shot_config_invalid")
+    return storage.Client(project=project, credentials=credentials)
+
+
 def _sync_exit_code(env: Mapping[str, str], sync_status: str) -> int:
     """An explicitly requested sync needs an ACK; the GCS fact stays separate."""
     if env.get("RUNTIME_DAILY_SYNC_ENABLED") != "true" or sync_status == "recorded":
@@ -895,9 +1140,38 @@ def _sync_exit_code(env: Mapping[str, str], sync_status: str) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    del argv
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    one_shot_only = False
+    private_result_path = None
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--one-shot-paper" and not one_shot_only:
+            one_shot_only = True
+            index += 1
+        elif argument == "--private-result-file" and private_result_path is None and index + 1 < len(arguments):
+            private_result_path = arguments[index + 1]
+            index += 2
+        else:
+            print("daily runtime projection rejected")
+            return 2
+    if private_result_path is not None and not private_result_path:
+        print("daily runtime projection rejected")
+        return 2
     try:
-        status, business_date, sync_status = publish(os.environ, now=dt.datetime.now(dt.timezone.utc))
+        if one_shot_only:
+            kwargs = {"one_shot_only": True}
+            if private_result_path is not None:
+                kwargs["private_result_path"] = private_result_path
+            status, business_date, sync_status = publish(os.environ, now=dt.datetime.now(dt.timezone.utc), **kwargs)
+        elif private_result_path is not None:
+            status, business_date, sync_status = publish(
+                os.environ,
+                now=dt.datetime.now(dt.timezone.utc),
+                private_result_path=private_result_path,
+            )
+        else:
+            status, business_date, sync_status = publish(os.environ, now=dt.datetime.now(dt.timezone.utc))
     except _KnownFailure as exc:
         print(f"daily runtime projection failed; category={exc.code}")
         return 1
@@ -907,6 +1181,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception:
         print("daily runtime projection failed")
         return 1
+    if one_shot_only:
+        print(json.dumps({
+            "status": status if status in {"recorded", "already_recorded"} else "failed",
+            "projection_created": status == "recorded", "qrs_ack_valid": sync_status == "recorded",
+        }, sort_keys=True, separators=(",", ":")))
+        return _sync_exit_code({"RUNTIME_DAILY_SYNC_ENABLED": "true"}, sync_status)
     if status == "disabled":
         print("daily runtime projection disabled")
         return 0
@@ -922,4 +1202,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

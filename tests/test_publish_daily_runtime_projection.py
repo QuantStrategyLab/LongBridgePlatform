@@ -221,6 +221,7 @@ def _publish(
     jobs="default",
     http_post=None,
     describe=_describe,
+    private_result_path=None,
 ):
     blob = blob or _Blob()
     client = _Client(blob)
@@ -250,6 +251,9 @@ def _publish(
 
     monkeypatch.setattr(heartbeat, "_describe_cloud_run_service", describe)
     monkeypatch.setattr(heartbeat, "_list_scheduler_jobs", list_jobs)
+    publish_kwargs = {}
+    if private_result_path is not None:
+        publish_kwargs["private_result_path"] = private_result_path
     status, business_date, sync_status = publisher.publish(
         env,
         now=OBSERVED,
@@ -259,6 +263,7 @@ def _publish(
         read_payload=read_payload,
         report_globs=lambda since, now: ["gs://reports/longbridge/**/2026-09/*.json"],
         http_post=http_post,
+        **publish_kwargs,
     )
     calls["sync_status"] = sync_status
     return status, business_date, blob, client, calls
@@ -1779,3 +1784,386 @@ def test_verified_and_legacy_daily_records_match_when_each_schedule_is_establish
     assert _stored(legacy_blob)["records"][0]["status"] == "no_submission"
     with pytest.raises(publisher._KnownFailure, match="schedule_unevaluable"):
         publisher.publish_verified(_env(), now=OBSERVED)
+
+
+def _one_shot_env(**overrides):
+    env = _sync_env(
+        RUNTIME_TARGET_ENABLED="false",
+        RUNTIME_HEARTBEAT_GCS_URIS="gs://synthetic-existing/reports",
+        CLOUD_RUN_SERVICE="longbridge-quant-paper-service",
+        CLOUD_RUN_REGION="synthetic-region",
+        GOOGLE_APPLICATION_CREDENTIALS="/synthetic/wif.json",
+        CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE="/synthetic/wif.json",
+    )
+    env.update(overrides)
+    return env
+
+
+def _one_shot_publish(
+    monkeypatch, *, enabled=False, report=None, blob=None, http_post=None, changes=None,
+    private_result_path=None, without_workflow_report_root=False,
+):
+    env = _one_shot_env(
+        RUNTIME_HEARTBEAT_GCS_URIS="" if without_workflow_report_root else "gs://synthetic-existing/reports",
+        EXECUTION_REPORT_GCS_URI="",
+    )
+    deployed = {
+        "strategy_profile": "russell_top50_leader_rotation", "account_scope": "PAPER",
+        "service_name": env["CLOUD_RUN_SERVICE"], "market_timezone": "America/New_York",
+    }
+    if enabled is not None:
+        deployed["runtime_target_enabled"] = enabled
+    deployed.update(changes or {})
+    observed = {"described": 0, "post": 0}
+    blob = blob or _Blob()
+    def describe(service, *, project):
+        observed["described"] += 1
+        assert service == env["CLOUD_RUN_SERVICE"]
+        result = _cloud_run(deployed)
+        result["status"] = {"traffic": [{"revisionName": "synthetic-paper-001", "percent": 100}]}
+        return result
+    def read_revision(command):
+        assert command[:5] == ["gcloud", "run", "revisions", "describe", "synthetic-paper-001"]
+        from types import SimpleNamespace
+        revision = {
+            "metadata": {"name": "synthetic-paper-001", "labels": {"serving.knative.dev/service": env["CLOUD_RUN_SERVICE"]}},
+            "spec": _cloud_run(deployed)["spec"]["template"]["spec"],
+            "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+        }
+        revision["spec"]["containers"][0].setdefault("env", []).append(
+            {"name": "EXECUTION_REPORT_GCS_URI", "value": "gs://synthetic-existing/reports"}
+        )
+        return SimpleNamespace(returncode=0, stdout=json.dumps(revision))
+    monkeypatch.setattr(heartbeat, "_run_gcloud", read_revision)
+    def prohibited(*_a, **_kw):
+        pytest.fail("single disabled observation must not invoke Scheduler/heartbeat")
+    monkeypatch.setattr(heartbeat, "_describe_cloud_run_service", describe)
+    monkeypatch.setattr(heartbeat, "_hydrate_runtime_target_schedules", prohibited)
+    monkeypatch.setattr(heartbeat, "_list_scheduler_jobs", prohibited)
+    monkeypatch.setattr(heartbeat, "_describe_scheduler_job", prohibited)
+    monkeypatch.setattr(heartbeat, "main", prohibited)
+    monkeypatch.setattr(publisher, "_storage_client", prohibited)
+    monkeypatch.setattr(publisher, "_legacy_confirmed_scheduler", prohibited)
+    objects = [] if report is None else [{"url": "gs://synthetic-existing/reports/run.json", "metadata": {"updated": OBSERVED.isoformat()}}]
+    def post(url, **kwargs):
+        observed["post"] += 1
+        assert url == publisher._ONE_SHOT_SYNC_URL
+        assert kwargs["allow_redirects"] is False
+        assert kwargs["data"].decode() == blob.uploads[0]["data"]
+        if http_post is not None:
+            return http_post(url, **kwargs)
+        body = json.loads(kwargs["data"])
+        return _SyncResponse(payload={
+            "ok": True, "stored": True, "business_date": body["records"][0]["business_date"],
+            "target_key": publisher._RUNTIME_DAILY_SYNC_TARGET_KEY, "account_key": "synthetic-private-account",
+        })
+    result = publisher.publish(
+        env, now=OBSERVED, one_shot_only=True, client=_Client(blob),
+        list_objects=lambda *_a, **_kw: objects,
+        read_payload=lambda _: report,
+        report_globs=lambda *_: ["gs://synthetic-existing/reports/*.json"],
+        http_post=post,
+        private_result_path=private_result_path,
+    )
+    return result, blob, observed
+
+
+@pytest.mark.parametrize("enabled,reason", [
+    (False, "runtime_target_disabled"), (True, "runtime_target_enablement_conflict"),
+    (None, "runtime_target_enablement_unknown"), ("invalid", "runtime_target_enablement_unknown"),
+])
+def test_one_shot_stopped_target_is_incomplete_without_scheduler(monkeypatch, enabled, reason):
+    result, blob, observed = _one_shot_publish(monkeypatch, enabled=enabled)
+    assert result == ("recorded", "2026-09-28", "recorded")
+    body = _stored(blob)
+    record = body["records"][0]
+    assert body["completeness"] == record["completeness"] == "incomplete"
+    assert record["status"] == "read_incomplete"
+    assert record["schedule"]["state"] == "unevaluable"
+    assert record["schedule"]["reason"] == reason
+    assert body["read_errors"] == [reason]
+    assert all(record["schedule"][key] is None for key in ("latest_due_at", "next_due_at", "grace_ends_at", "publication_grace_ended"))
+    assert record["runs"] == [] and record["fills"]["count"] is None
+    assert observed == {"described": 1, "post": 1}
+    assert "synthetic-private-account" not in blob.uploads[0]["data"]
+
+
+def test_one_shot_uses_verified_serving_report_root_when_workflow_root_is_absent(monkeypatch):
+    result, _blob, observed = _one_shot_publish(monkeypatch, without_workflow_report_root=True)
+    assert result == ("recorded", "2026-09-28", "recorded")
+    assert observed == {"described": 1, "post": 1}
+
+
+@pytest.mark.parametrize("status", ["unknown", "reconciliation_required"])
+def test_disabled_observation_does_not_erase_historical_unresolved_fact(monkeypatch, status):
+    report = _report(
+        service_name="longbridge-quant-paper-service", strategy_profile="russell_top50_leader_rotation",
+        started_at="2026-09-27T12:00:00Z", finished_at="2026-09-27T12:01:00Z",
+        summary={"execution_status": status, "broker_submission_done": False, "action_done": False, "orders_pending_count": 1 if status == "reconciliation_required" else 0},
+    )
+    _result, blob, _observed = _one_shot_publish(monkeypatch, report=report)
+    record = _stored(blob)["records"][0]
+    assert record["status"] == status and record["completeness"] == "incomplete"
+    assert len(record["runs"]) == 1 and record["runs"][0]["activity"] == status
+
+
+def test_single_observation_derives_same_bucket_child_and_does_not_enable_runtime():
+    original = _one_shot_env(
+        RUNTIME_DAILY_PROJECTION_GCS_PREFIX="gs://unapproved-bucket/runtime_daily",
+        RUNTIME_DAILY_SYNC_URL="https://unapproved.example.com/api/runtime-daily/sync",
+    )
+    scoped = publisher._one_shot_environment(original)
+    assert scoped["RUNTIME_DAILY_PROJECTION_GCS_PREFIX"] == "gs://synthetic-existing/reports/runtime_daily"
+    assert scoped["RUNTIME_DAILY_SYNC_URL"] == publisher._ONE_SHOT_SYNC_URL
+    assert scoped["RUNTIME_TARGET_ENABLED"] == original["RUNTIME_TARGET_ENABLED"] == "false"
+    assert original["RUNTIME_DAILY_PROJECTION_GCS_PREFIX"].startswith("gs://unapproved-bucket")
+
+
+@pytest.mark.parametrize("value", [
+    "", "gs://synthetic-existing/one,gs://synthetic-existing/two", "https://synthetic.example.com/reports",
+    "gs://synthetic-existing/reports/**", "gs://synthetic-existing/reports/../other", "gs://synthetic-existing//reports",
+    "gs://synthetic-existing/reports?query=x", "gs://synthetic-existing/reports%2Fother",
+])
+def test_one_shot_report_base_must_be_unique_canonical_gs_uri(value):
+    with pytest.raises(publisher._Rejected):
+        publisher._one_shot_environment(_one_shot_env(RUNTIME_HEARTBEAT_GCS_URIS=value, EXECUTION_REPORT_GCS_URI=""))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("RUNTIME_TARGET_ENABLED", "true"), ("RUNTIME_TARGET_ENABLED", ""),
+    ("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE", "SG"), ("CLOUD_RUN_SERVICE", "synthetic-other-service"),
+    ("GOOGLE_APPLICATION_CREDENTIALS", ""), ("CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE", ""),
+    ("CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE", "/synthetic/other.json"), ("CLOUD_RUN_REGION", ""),
+])
+def test_one_shot_selection_and_explicit_identity_fail_before_io(field, value):
+    with pytest.raises(publisher._Rejected):
+        publisher._one_shot_environment(_one_shot_env(**{field: value}))
+
+
+@pytest.mark.parametrize("changes", [
+    {"account_scope": "SG"}, {"service_name": "synthetic-other-service"},
+    {"strategy_profile": "synthetic-other-profile"}, {"market_timezone": "Asia/Hong_Kong"}, {"market_timezone": ""},
+])
+def test_one_shot_deployment_mismatch_cannot_write_or_sync(monkeypatch, changes):
+    with pytest.raises(publisher._Rejected):
+        _one_shot_publish(monkeypatch, changes=changes)
+
+
+def test_one_shot_create_only_conflict_never_posts(monkeypatch):
+    result, blob, observed = _one_shot_publish(monkeypatch, blob=_Blob(PreconditionFailed("synthetic")))
+    assert result == ("already_recorded", "2026-09-28", "skipped_existing")
+    assert observed["post"] == 0 and len(blob.uploads) == 1
+
+
+def test_private_result_matches_new_incomplete_projection_without_claiming_health(monkeypatch, tmp_path):
+    private_dir = tmp_path / "private"
+    private_dir.mkdir(mode=0o700)
+    destination = private_dir / "runtime-daily.json"
+    result, blob, _observed = _one_shot_publish(
+        monkeypatch, private_result_path=destination,
+    )
+
+    assert result == ("recorded", "2026-09-28", "recorded")
+    handoff = json.loads(destination.read_text(encoding="utf-8"))
+    stored = _stored(blob)
+    assert handoff == {
+        "business_date": "2026-09-28",
+        "projection_completeness": "incomplete",
+        "projection_uri": "gs://synthetic-existing/reports/runtime_daily/longbridge/paper/2026-09-28/20260928T084000000000Z.json",
+        "target_keys": [publisher._RUNTIME_DAILY_SYNC_TARGET_KEY],
+    }
+    assert handoff["projection_uri"].endswith(
+        "/" + publisher._object_uri(
+            "gs://synthetic-existing/reports/runtime_daily",
+            "2026-09-28",
+            OBSERVED,
+        )[1]
+    )
+    assert handoff["projection_completeness"] == stored["completeness"] == "incomplete"
+    assert handoff["target_keys"] == [stored["records"][0]["target_key"]]
+    assert handoff["projection_uri"] not in json.dumps(stored)
+    assert private_dir.stat().st_mode & 0o777 == 0o700
+    assert destination.stat().st_mode & 0o777 == 0o600
+
+
+def test_natural_publish_can_return_its_new_object_through_private_file(monkeypatch, tmp_path):
+    private_dir = tmp_path / "private"
+    private_dir.mkdir(mode=0o700)
+    destination = private_dir / "runtime-daily.json"
+    status, business_date, blob, client, _calls = _publish(
+        monkeypatch, _env(), [], private_result_path=destination,
+    )
+
+    handoff = json.loads(destination.read_text(encoding="utf-8"))
+    stored = _stored(blob)
+    assert status == "recorded"
+    assert handoff["business_date"] == business_date == stored["records"][0]["business_date"]
+    assert handoff["projection_uri"] == f"gs://paper-bucket/{client._bucket.names[0]}"
+    assert handoff["target_keys"] == [stored["records"][0]["target_key"]]
+    assert handoff["projection_completeness"] == stored["completeness"]
+
+
+def test_private_result_is_not_written_for_create_only_conflict_or_unknown_upload(monkeypatch, tmp_path):
+    private_dir = tmp_path / "private"
+    private_dir.mkdir(mode=0o700)
+    conflict_path = private_dir / "conflict.json"
+    result, _blob, _observed = _one_shot_publish(
+        monkeypatch,
+        blob=_Blob(PreconditionFailed("synthetic")),
+        private_result_path=conflict_path,
+    )
+    assert result == ("already_recorded", "2026-09-28", "skipped_existing")
+    assert not conflict_path.exists()
+
+    unknown_path = private_dir / "unknown.json"
+    with pytest.raises(publisher._KnownFailure, match="write_unknown"):
+        _one_shot_publish(
+            monkeypatch,
+            blob=_Blob(RuntimeError("synthetic-private-upload-error")),
+            private_result_path=unknown_path,
+        )
+    assert not unknown_path.exists()
+    assert "synthetic-private-upload-error" not in str(unknown_path)
+
+
+def test_private_result_requires_owner_only_directory_before_publication(monkeypatch, tmp_path):
+    public_dir = tmp_path / "public"
+    public_dir.mkdir(mode=0o755)
+    public_dir.chmod(0o755)
+    blob = _Blob()
+    with pytest.raises(publisher._Rejected, match="private_result_path_invalid"):
+        _one_shot_publish(
+            monkeypatch,
+            blob=blob,
+            private_result_path=public_dir / "runtime-daily.json",
+        )
+    assert blob.uploads == []
+
+
+def test_one_shot_unknown_post_does_not_retry_or_discard_created_object(monkeypatch):
+    def post(*_a, **_kw):
+        raise RuntimeError("synthetic-private-transport-error")
+    result, blob, observed = _one_shot_publish(monkeypatch, http_post=post)
+    assert result == ("recorded", "2026-09-28", "unknown")
+    assert len(blob.uploads) == 1 and observed["post"] == 1
+
+
+def test_one_shot_main_only_emits_fixed_storage_and_ack_status(monkeypatch, capsys):
+    observed = []
+    def publish(env, *, now, one_shot_only):
+        assert one_shot_only is True
+        observed.append(1)
+        return "recorded", "2026-09-28", "unknown"
+    monkeypatch.setattr(publisher, "publish", publish)
+    assert publisher.main(["--one-shot-paper"]) == 1
+    output = capsys.readouterr().out
+    assert json.loads(output) == {"status": "recorded", "projection_created": True, "qrs_ack_valid": False}
+    assert "projection_uri" not in output and "target_key" not in output
+    assert observed == [1]
+
+
+def test_main_private_result_file_keeps_projection_uri_off_stdout(monkeypatch, capsys, tmp_path):
+    private_dir = tmp_path / "private"
+    private_dir.mkdir(mode=0o700)
+    destination = private_dir / "runtime-daily.json"
+
+    def publish(_env, *, now, private_result_path):
+        assert now.tzinfo is not None
+        publisher._write_private_result(private_result_path, {
+            "projection_uri": "gs://synthetic-private/object.json",
+            "business_date": "2026-09-28",
+            "target_keys": ["synthetic-target"],
+            "projection_completeness": "incomplete",
+        })
+        return "recorded", "2026-09-28", "disabled"
+
+    monkeypatch.setattr(publisher, "publish", publish)
+    assert publisher.main(["--private-result-file", str(destination)]) == 0
+    output = capsys.readouterr().out
+    assert "gs://synthetic-private/object.json" not in output
+    assert json.loads(destination.read_text(encoding="utf-8"))["projection_uri"] == "gs://synthetic-private/object.json"
+
+
+@pytest.mark.parametrize("traffic", [
+    [], [{"latestRevision": True, "percent": 100}],
+    [{"revisionName": "synthetic-paper-001", "percent": 99}],
+    [{"revisionName": "synthetic-paper-001", "percent": 50}, {"revisionName": "synthetic-paper-002", "percent": 50}],
+    [{"revisionName": "synthetic-paper-001;unsafe", "percent": 100}],
+])
+def test_single_observation_requires_unique_named_full_traffic_revision(monkeypatch, traffic):
+    monkeypatch.setattr(heartbeat, "_run_gcloud", lambda *_: pytest.fail("ambiguous routing must reject before read"))
+    with pytest.raises(publisher._Rejected, match="one_shot_serving_unavailable"):
+        publisher._one_shot_serving_deployment({"status": {"traffic": traffic}}, service="synthetic-paper", project="synthetic-project", region="synthetic-region")
+
+
+@pytest.mark.parametrize("change", ["name", "service", "not_ready", "duplicate_ready", "multi_container"])
+def test_single_observation_rejects_revision_identity_or_readiness_mismatch(monkeypatch, change):
+    from types import SimpleNamespace
+    revision = {
+        "metadata": {"name": "synthetic-paper-001", "labels": {"serving.knative.dev/service": "synthetic-paper"}},
+        "spec": {"containers": [{"env": [{"name": "EXECUTION_REPORT_GCS_URI", "value": "gs://synthetic-existing/reports"}]}]},
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+    if change == "name":
+        revision["metadata"]["name"] = "synthetic-paper-002"
+    elif change == "service":
+        revision["metadata"]["labels"]["serving.knative.dev/service"] = "synthetic-other"
+    elif change == "not_ready":
+        revision["status"]["conditions"][0]["status"] = "False"
+    elif change == "duplicate_ready":
+        revision["status"]["conditions"] *= 2
+    else:
+        revision["spec"]["containers"] *= 2
+    monkeypatch.setattr(heartbeat, "_run_gcloud", lambda *_: SimpleNamespace(returncode=0, stdout=json.dumps(revision)))
+    with pytest.raises(publisher._Rejected, match="one_shot_serving_unavailable"):
+        publisher._one_shot_serving_deployment({"status": {"traffic": [{"revisionName": "synthetic-paper-001", "percent": 100}]}}, service="synthetic-paper", project="synthetic-project", region="synthetic-region")
+
+
+def test_single_observation_uses_served_enabled_config_over_staged_disabled_template(monkeypatch):
+    from types import SimpleNamespace
+    staged = _cloud_run({"runtime_target_enabled": False})
+    staged["status"] = {"traffic": [{"revisionName": "synthetic-paper-001", "percent": 100}]}
+    served = _cloud_run({"runtime_target_enabled": True})
+    revision = {
+        "metadata": {"name": "synthetic-paper-001", "labels": {"serving.knative.dev/service": "synthetic-paper"}},
+        "spec": served["spec"]["template"]["spec"],
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+    revision["spec"]["containers"][0].setdefault("env", []).append(
+        {"name": "EXECUTION_REPORT_GCS_URI", "value": "gs://synthetic-existing/reports"}
+    )
+    monkeypatch.setattr(heartbeat, "_run_gcloud", lambda *_: SimpleNamespace(returncode=0, stdout=json.dumps(revision)))
+    effective = publisher._one_shot_serving_deployment(staged, service="synthetic-paper", project="synthetic-project", region="synthetic-region")
+    assert publisher._one_shot_disabled_reason(effective, heartbeat._deployed_runtime_target(effective)) == "runtime_target_enablement_conflict"
+
+
+@pytest.mark.parametrize("rows", [
+    [],
+    [{"name": "EXECUTION_REPORT_GCS_URI", "valueSource": {"secretKeyRef": {"secret": "synthetic"}}}],
+    [{"name": "EXECUTION_REPORT_GCS_URI", "value": ""}],
+    [
+        {"name": "EXECUTION_REPORT_GCS_URI", "value": "gs://synthetic-existing/reports"},
+        {"name": "EXECUTION_REPORT_GCS_URI", "value": "gs://synthetic-other/reports"},
+    ],
+])
+def test_single_observation_requires_unique_plain_serving_report_root(monkeypatch, rows):
+    from types import SimpleNamespace
+    revision = {
+        "metadata": {"name": "synthetic-paper-001", "labels": {"serving.knative.dev/service": "synthetic-paper"}},
+        "spec": {"containers": [{"env": rows}]},
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+    monkeypatch.setattr(heartbeat, "_run_gcloud", lambda *_: SimpleNamespace(returncode=0, stdout=json.dumps(revision)))
+    with pytest.raises(publisher._Rejected, match="one_shot_report_prefix_unavailable"):
+        publisher._one_shot_serving_deployment(
+            {"status": {"traffic": [{"revisionName": "synthetic-paper-001", "percent": 100}]}},
+            service="synthetic-paper", project="synthetic-project", region="synthetic-region",
+        )
+
+
+def test_one_shot_rejects_explicit_workflow_root_conflicting_with_serving_root():
+    with pytest.raises(publisher._Rejected, match="one_shot_report_prefix_conflict"):
+        publisher._one_shot_environment(
+            _one_shot_env(RUNTIME_HEARTBEAT_GCS_URIS="gs://synthetic-other/reports"),
+            report_root_uri="gs://synthetic-existing/reports",
+        )

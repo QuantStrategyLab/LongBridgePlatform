@@ -12,8 +12,10 @@ import subprocess
 import pytest
 
 from scripts.collect_runtime_cycle_health import (
+    bounded_cycle_window_end,
     collect_runtime_cycle_health,
     cycle_configuration_sha256,
+    runtime_report_prefix_ranges,
 )
 from scripts.runtime_cycle_health import project_cycle, reduce_incidents
 
@@ -128,6 +130,15 @@ def context(value):
     return replace(f.CTX, configuration_sha256=cycle_configuration_sha256(value))
 
 
+def test_report_root_hash_is_optional_but_changes_admitted_configuration_digest():
+    value = source()
+    legacy = cycle_configuration_sha256(value)
+    reports_a = cycle_configuration_sha256(value, report_root_uri="gs://synthetic-a/reports")
+    reports_b = cycle_configuration_sha256(value, report_root_uri="gs://synthetic-b/reports")
+    assert reports_a != legacy
+    assert reports_a != reports_b
+
+
 def collect(value=None, reports=None, **kwargs):
     value = source() if value is None else value
     reports = {} if reports is None else reports
@@ -165,6 +176,19 @@ def test_multiple_missing_slots_are_covered_without_today_daily_gate():
     }
 
 
+def test_historical_chunk_keeps_current_schedule_separate_from_coverage_end():
+    historical_through = dt.datetime(2026, 10, 6, 16, tzinfo=UTC)
+    result = collect(coverage_through=historical_through)
+    assert result["data_status"] == "ready"
+    health = result["cycle_health"]
+    assert health["coverage"]["through"] == "2026-10-06T16:00:00Z"
+    assert health["schedule"]["latest_due_at"] == "2026-10-07T15:00:00Z"
+    assert health["schedule"]["next_due_at"] == "2026-10-09T15:00:00Z"
+    assert all(
+        row["scheduled_for"] <= health["coverage"]["through"]
+        and (row["completed_at"] is None or row["completed_at"] <= health["coverage"]["through"])
+        for row in health["cycles"]
+    )
 def test_daily_invocation_with_monthly_no_action_still_has_receipt():
     value = source("0 15 * * 1-5")
     reports = {
@@ -178,6 +202,134 @@ def test_daily_invocation_with_monthly_no_action_still_has_receipt():
     assert len(result["cycle_health"]["cycles"]) == 3
     assert {row["outcome"] for row in result["cycle_health"]["cycles"]} == {"no_action"}
     assert result["checkpoint"]["state"]["unresolved_count"] == 0
+
+
+def test_runtime_report_listing_ranges_exclude_old_objects_and_cover_month_boundary():
+    ranges = runtime_report_prefix_ranges(
+        "gs://synthetic-bucket/reports",
+        strategy_profile="paper_profile",
+        account_scope="PAPER",
+        since=dt.datetime(2026, 9, 30, 23, 59, 59, 500000, tzinfo=UTC),
+        through=dt.datetime(2026, 10, 1, 0, 0, 0, tzinfo=UTC),
+    )
+    assert list(ranges) == [
+        "reports/longbridge/paper_profile/PAPER/2026-09/",
+        "reports/longbridge/paper_profile/PAPER/2026-10/",
+    ]
+    assert ranges["reports/longbridge/paper_profile/PAPER/2026-09/"] == (
+        "reports/longbridge/paper_profile/PAPER/2026-09/20260930T235959Z",
+        "reports/longbridge/paper_profile/PAPER/2026-09/20261001T000000Z",
+    )
+    assert ranges["reports/longbridge/paper_profile/PAPER/2026-10/"] == (
+        "reports/longbridge/paper_profile/PAPER/2026-10/20261001T000000Z",
+        "reports/longbridge/paper_profile/PAPER/2026-10/20261001T000001Z",
+    )
+
+
+def test_long_initial_history_is_split_before_twenty_first_scheduled_cycle():
+    from scripts.runtime_heartbeat_policy import enumerate_cycle_expectations
+
+    target = {
+        "scheduler": {"main_time": "0 15 * * 1-5", "timezone": "UTC"},
+        "market_timezone": "UTC",
+        "market_calendar": "TEST",
+    }
+    end, reason = bounded_cycle_window_end(
+        target,
+        since=dt.datetime(2026, 9, 1, tzinfo=UTC),
+        through=dt.datetime(2026, 10, 8, 16, tzinfo=UTC),
+        publication_grace=dt.timedelta(minutes=30),
+        session_dates_loader=calendar,
+    )
+    assert reason is None
+    bounded = enumerate_cycle_expectations(
+        target,
+        since=dt.datetime(2026, 9, 1, tzinfo=UTC),
+        now=end,
+        publication_grace=dt.timedelta(minutes=30),
+        session_dates_loader=calendar,
+    )
+    assert bounded["state"] == "ready"
+    assert len(bounded["slots"]) == 20
+    current = enumerate_cycle_expectations(
+        target,
+        since=dt.datetime(2026, 9, 1, tzinfo=UTC),
+        now=dt.datetime(2026, 10, 8, 16, tzinfo=UTC),
+        coverage_through=end,
+        publication_grace=dt.timedelta(minutes=30),
+        session_dates_loader=calendar,
+    )
+    assert current["state"] == "ready"
+    assert len(current["slots"]) == 20
+    assert current["schedule"]["latest_due_at"] == "2026-10-08T15:00:00Z"
+    assert current["schedule"]["next_due_at"] == "2026-10-09T15:00:00Z"
+
+
+def test_baseline_horizon_is_backfilled_in_bounded_year_segments():
+    target = {
+        "scheduler": {"main_time": "0 15 1 * *", "timezone": "UTC"},
+        "market_timezone": "UTC",
+        "market_calendar": "TEST",
+    }
+    start = dt.datetime(2024, 1, 1, tzinfo=UTC)
+    requested_through = dt.datetime(2026, 10, 8, 16, tzinfo=UTC)
+    end, reason = bounded_cycle_window_end(
+        target,
+        since=start,
+        through=requested_through,
+        publication_grace=dt.timedelta(minutes=30),
+        session_dates_loader=calendar,
+    )
+    assert reason is None
+    assert end == start + dt.timedelta(days=365)
+
+
+def test_collector_uses_provider_object_name_offsets_for_bounded_interval():
+    value = source("0 15 * * 1-5")
+    ranges = {
+        "synthetic/2026-10/": (
+            "synthetic/2026-10/20261005T000000Z",
+            "synthetic/2026-10/20261008T000000Z",
+        )
+    }
+    observed = []
+    reports = {
+        "synthetic/2026-10/20261006T150000Z.json": f.report(
+            slot="2026-10-06T15:00:00Z", completed="2026-10-06T15:01:00Z"
+        )
+    }
+    reports.update(
+        {
+            f"synthetic/2026-10/202609{day:02}T150000Z.json": f.report(
+                slot=f"2026-09-{day:02}T15:00:00Z",
+                completed=f"2026-09-{day:02}T15:01:00Z",
+            )
+            for day in range(1, 22)
+        }
+    )
+
+    def list_range(prefix, token, start_offset, end_offset):
+        observed.append((prefix, token, start_offset, end_offset))
+        # Old historical names must be filtered by the provider range, not
+        # loaded and rejected after consuming the collector's 20-report cap.
+        names = [
+            name
+            for name in reports
+            if name.startswith(prefix) and start_offset <= name < end_offset
+        ]
+        return {"items": [{"name": name} for name in names]}
+
+    result = collect(
+        value,
+        reports,
+        list_page_range=list_range,
+        list_ranges=ranges,
+        required_prefixes=list(ranges),
+    )
+    assert observed == [(next(iter(ranges)), None, *next(iter(ranges.values())))]
+    assert result["data_status"] == "ready"
+    assert result["cycle_health"]["coverage"]["listed_count"] == 1
+    assert sum(row["receipt_ref"] is not None for row in result["cycle_health"]["cycles"]) == 1
 
 
 def test_weekly_not_due_still_reads_and_keeps_old_uncertainty():

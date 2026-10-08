@@ -113,6 +113,13 @@ def test_runtime_monitor_workflows_use_frozen_runtime_environment() -> None:
     assert "resolve-matrix:" in lifecycle
     assert "render_runtime_target_matrix.py --profile lifecycle --github-output" in lifecycle
     assert "matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}" in lifecycle
+    cycle_source = lifecycle.split("      - name: Publish admitted PAPER runtime cycle observations", 1)[1].split("      - name: Observe production drift", 1)[0]
+    assert "matrix.target.id == 'paper'" in cycle_source
+    assert "vars.RUNTIME_CYCLE_HEALTH_ENABLED == 'true'" in cycle_source
+    assert "secrets.RUNTIME_CYCLE_HEALTH_SOURCE_BINDING_ID" in cycle_source
+    assert "secrets.ACCOUNT_FACTS_SYNC_TOKEN" in cycle_source
+    assert "scripts/publish_runtime_cycle_health.py" in cycle_source
+    assert "continue-on-error" not in cycle_source
 
     heartbeat = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
     assert "resolve-matrix:" in heartbeat
