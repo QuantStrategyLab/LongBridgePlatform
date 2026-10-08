@@ -270,16 +270,16 @@ jobs:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
 
       - name: Publish daily runtime projection
-        if: ${{ !cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && matrix.target.label == 'PAPER' && vars.RUNTIME_DAILY_PROJECTION_ENABLED == 'true' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
+        if: ${{ !cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && matrix.target.label == 'PAPER' && vars.RUNTIME_DAILY_PROJECTION_ENABLED == 'true' && vars.RUNTIME_DAILY_SYNC_ENABLED == 'true' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
         env:
           RUNTIME_DAILY_PROJECTION_ENABLED: ${{ vars.RUNTIME_DAILY_PROJECTION_ENABLED }}
-          RUNTIME_DAILY_PROJECTION_GCS_PREFIX: ${{ vars.RUNTIME_DAILY_PROJECTION_GCS_PREFIX }}
+          RUNTIME_DAILY_PROJECTION_GCS_PREFIX: ${{ secrets.RUNTIME_DAILY_PROJECTION_GCS_PREFIX }}
           RUNTIME_DAILY_PROJECTION_TARGET_ID: ${{ vars.RUNTIME_DAILY_PROJECTION_TARGET_ID }}
           RUNTIME_DAILY_SYNC_ENABLED: ${{ vars.RUNTIME_DAILY_SYNC_ENABLED }}
           RUNTIME_DAILY_SYNC_URL: ${{ vars.RUNTIME_DAILY_SYNC_URL }}
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ vars.RUNTIME_DAILY_SYNC_ENABLED == 'true' && secrets.EXECUTION_EVIDENCE_SYNC_TOKEN || '' }}
           GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
-        run: uv run --no-sync python scripts/publish_daily_runtime_projection.py
+        run: uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-paper
 
       - name: Fail after completing heartbeat checks if account snapshot sync failed
         if: ${{ !cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && steps.account_history.outcome == 'failure' }}
