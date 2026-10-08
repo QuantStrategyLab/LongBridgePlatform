@@ -507,6 +507,7 @@ def enumerate_cycle_expectations(
             within_expected_window=window_now,
         )
         latest_due = today["latest_due_at"]
+        grace_ends_at = today["grace_ends_at"]
         state, reason = today["state"], today["reason"]
         if state in {"due", "within_grace"} and latest_due is None:
             state, reason = "not_due", "before_schedule"
@@ -518,8 +519,8 @@ def enumerate_cycle_expectations(
         if latest_due
         else None,
         "next_due_at": next_due.isoformat().replace("+00:00", "Z"),
-        "deadline_at": today["grace_ends_at"].isoformat().replace("+00:00", "Z")
-        if latest_due
+        "deadline_at": grace_ends_at.isoformat().replace("+00:00", "Z")
+        if grace_ends_at is not None
         else None,
         }
         return {"state": "ready", "reason": None, "slots": slots, "schedule": schedule}
