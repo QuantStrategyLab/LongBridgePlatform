@@ -45,11 +45,14 @@ jobs:
             echo '{"status":"dependency_setup_unavailable","qrs_ack_valid":false}'
             exit 2
           fi
-      - name: Validate disabled PAPER selection
+      - name: Validate PAPER selection
         run: |
           set -euo pipefail
-          if [ "${RUNTIME_TARGET_ENABLED}" != "false" ] || \
-             [ "${RUNTIME_HEARTBEAT_ACCOUNT_SCOPE}" != "PAPER" ] || \
+          case "${RUNTIME_TARGET_ENABLED}" in
+            true|false) ;;
+            *) echo '{"status":"selection_unavailable","qrs_ack_valid":false}'; exit 2 ;;
+          esac
+          if [ "${RUNTIME_HEARTBEAT_ACCOUNT_SCOPE}" != "PAPER" ] || \
              [ -z "${CLOUD_RUN_SERVICE}" ] || [ -z "${CLOUD_RUN_REGION}" ]; then
             echo '{"status":"selection_unavailable","qrs_ack_valid":false}'
             exit 2
