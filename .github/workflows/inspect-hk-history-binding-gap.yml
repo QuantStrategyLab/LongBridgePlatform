@@ -87,34 +87,44 @@ jobs:
           print("history_values=" + json.dumps(history, sort_keys=True))
           print("longbridge_account_snapshot_enabled=" + json.dumps(snapshot_flag))
 
-          # Secret version name without secret payload.
-          ver = run([
-              "gcloud", "secrets", "versions", "describe", "latest",
-              f"--secret={token_secret}", f"--project={project}", "--format=value(name)",
-          ]).strip()
-          print("token_version_present=" + ("true" if ver else "false"))
+          # Secret version name without secret payload. Deploy SA may lack versions.get.
+          ver = ""
+          try:
+              ver = run([
+                  "gcloud", "secrets", "versions", "describe", "latest",
+                  f"--secret={token_secret}", f"--project={project}", "--format=value(name)",
+              ]).strip()
+          except Exception:
+              print("token_version_present=false")
+              print("token_version_error=permission_or_missing")
+          else:
+              print("token_version_present=" + ("true" if ver else "false"))
 
-          # Match application.broker_reconciliation.build_account_snapshot_source_binding
-          region_from_env = (literals.get("CLOUD_RUN_REGION") or literals.get("GOOGLE_CLOUD_REGION") or "").strip()
-          payload = {
-              "account_scope": "HK",
-              "project_id": project,
-              "revision": revision,
-              "service": service,
-              "version_name": ver,
-          }
-          if region_from_env:
-              payload["region"] = region_from_env
-          digest = hashlib.sha256(
-              json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
-          ).hexdigest()
-          print("binding_region_included=" + ("true" if region_from_env else "false"))
-          print("computed_binding_matches_expected=" + ("true" if digest == expected else "false"))
-          print("computed_binding=" + digest)
-          print("expected_binding=" + expected)
-          if digest != expected:
-              print("gap=source_binding_drift_after_revision")
-              print("action=update_ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID_and_QRS_hk_binding")
+          if ver:
+              region_from_env = (literals.get("CLOUD_RUN_REGION") or literals.get("GOOGLE_CLOUD_REGION") or "").strip()
+              payload = {
+                  "account_scope": "HK",
+                  "project_id": project,
+                  "revision": revision,
+                  "service": service,
+                  "version_name": ver,
+              }
+              if region_from_env:
+                  payload["region"] = region_from_env
+              digest = hashlib.sha256(
+                  json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
+              ).hexdigest()
+              print("binding_region_included=" + ("true" if region_from_env else "false"))
+              print("computed_binding_matches_expected=" + ("true" if digest == expected else "false"))
+              print("computed_binding=" + digest)
+              print("expected_binding=" + expected)
+              if digest != expected:
+                  print("gap=source_binding_drift_after_revision")
+                  print("action=update_ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID_and_QRS_hk_binding")
+          else:
+              print("expected_binding=" + expected)
+              print("gap=cannot_compute_binding_without_token_version")
+              print("action=use_gcs_sibling_folder_today_as_diagnostic_only")
 
           # GCS sibling folders under hk/
           from google.cloud import storage
