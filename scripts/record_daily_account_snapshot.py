@@ -50,9 +50,11 @@ _BALANCE_FIELDS = ("currency", "net_assets", "total_cash")
 _CASH_FIELDS = ("currency", "available_cash", "frozen_cash", "settling_cash")
 # Restricted resume→run→pause is allowed only for these live targets when
 # RUNTIME_TARGET_ENABLED is exactly false. Cron matches platform hk_daily / us_daily.
+# HK GitHub Environment currently declares LONGBRIDGE_MARKET_TIMEZONE=America/New_York
+# (same US session as SG probe). Match the live Scheduler job, not the ideal HK calendar.
 _PAUSED_PROBE_CONTRACTS = {
     "sg": ("35 9,15 * * 1-5", "America/New_York"),
-    "hk": ("35 9,15 * * 1-5", "Asia/Hong_Kong"),
+    "hk": ("35 9,15 * * 1-5", "America/New_York"),
 }
 _PAUSED_PROBE_HOURS = (9, 15)
 _PAUSED_PROBE_MINUTE = 35
