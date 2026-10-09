@@ -803,6 +803,17 @@ def _validate_paused_probe_schedule(
         raise _Rejected("scheduler_schedule_mismatch")
     expected_schedule, expected_timezone = contract
     if job.get("schedule") != expected_schedule or job.get("timeZone") != expected_timezone:
+        # Schedule/timezone are non-secret control fields; print once so ops can
+        # align the paused-probe contract without a separate describe workflow.
+        print(
+            "scheduler_schedule_mismatch"
+            f" target={target_id}"
+            f" observed_schedule={job.get('schedule')!r}"
+            f" observed_timezone={job.get('timeZone')!r}"
+            f" expected_schedule={expected_schedule!r}"
+            f" expected_timezone={expected_timezone!r}",
+            flush=True,
+        )
         raise _Rejected("scheduler_schedule_mismatch")
     try:
         zone = ZoneInfo(expected_timezone)
