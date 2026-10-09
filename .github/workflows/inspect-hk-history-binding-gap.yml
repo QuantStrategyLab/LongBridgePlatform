@@ -86,6 +86,14 @@ jobs:
           print("serving_revision=" + revision)
           print("history_values=" + json.dumps(history, sort_keys=True))
           print("longbridge_account_snapshot_enabled=" + json.dumps(snapshot_flag))
+          print("account_region=" + json.dumps(literals.get("ACCOUNT_REGION")))
+          print("account_prefix=" + json.dumps(literals.get("ACCOUNT_PREFIX")))
+          print("k_service=" + json.dumps(literals.get("K_SERVICE")))
+          print("k_revision_env=" + json.dumps(literals.get("K_REVISION")))
+          print("cloud_run_region_env=" + json.dumps(literals.get("CLOUD_RUN_REGION") or literals.get("GOOGLE_CLOUD_REGION")))
+          recording = str(history.get("ACCOUNT_HISTORY_RECORDING_ENABLED") or "").strip() == "true"
+          region_ok = str(literals.get("ACCOUNT_REGION") or "").strip() in {"HK", "SG"}
+          print("probe_would_record_history=" + ("true" if recording and region_ok else "false"))
 
           # Secret version name without secret payload. Deploy SA may lack versions.get.
           ver = ""
@@ -148,14 +156,17 @@ jobs:
               if found:
                   sibling_with_today += 1
           print("sibling_bindings_with_objects_today=" + str(sibling_with_today))
+          sg_iterator = client.list_blobs("qsl-runtime-logs-shared", prefix="longbridge/account_snapshots/sg/", delimiter="/")
+          _ = list(sg_iterator)
+          print("sg_binding_folder_count=" + str(len(sorted(getattr(sg_iterator, "prefixes", []) or []))))
 
           # Cloud Run logs around last heartbeat window
           filt = (
-              f'resource.type="cloud_run_revision" '
-              f'resource.labels.service_name="{service}" '
-              f'resource.labels.revision_name="{revision}" '
-              f'timestamp>="2026-10-09T04:08:00Z" timestamp<="2026-10-09T04:12:00Z" '
-              f'textPayload:"account_history" OR textPayload:"Probe" OR textPayload:"/probe"'
+              f'resource.type="cloud_run_revision"\n'
+              f'resource.labels.service_name="{service}"\n'
+              f'resource.labels.revision_name="{revision}"\n'
+              f'timestamp>="2026-10-09T04:08:00Z"\n'
+              f'timestamp<="2026-10-09T04:12:00Z"'
           )
           try:
               logs = run([
@@ -164,6 +175,7 @@ jobs:
               ])
               entries = json.loads(logs or "[]")
               print("probe_log_entries=" + str(len(entries)))
+              print("probe_log_http_status_samples=" + str(sum(1 for e in entries if (e.get("httpRequest") or e.get("protoPayload")))) )
               for entry in entries[:10]:
                   text = entry.get("textPayload") or ""
                   if not text:
