@@ -15,7 +15,7 @@
 
 仅需核验部署身份在项目级的 SG probe 权限时，手动选择 `target=sg` 并开启默认关闭的 `inspect_sg_probe_permissions`。其他 target 会在 matrix 解析阶段拒绝。检查只调用 Cloud Resource Manager `testIamPermissions`，输出 `context=project` 及 `cloudscheduler.jobs.get/run/enable/pause` 四项布尔值；该模式跳过采样、heartbeat 检查和发布。项目级结果不证明某个 job 上的条件角色生效，也不替代 SG probe 的实际 job 读回。
 
-target label 只表示这份清单配置的 scope，不能据此推断券商账户身份。脚本从已校验的 runtime target manifest 读取准确 service/region，并先读回 `{service}-probe-scheduler` 的完整 job。默认路径仅接受 `ENABLED` job；PAPER 与 HK 的 `PAUSED` job 仍在任何 mutation 或 GCS 读取前拒绝。SG 只有在 `RUNTIME_TARGET_ENABLED` 精确为 `false`、`ACCOUNT_HISTORY_RECORDING_ENABLED` 精确为 `true`，且暂停任务完整身份、`POST {service_url}/probe`、空 body、Scheduler OIDC service account/audience、零重试、原控制字段、schedule `35 9,15 * * 1-5` 与 `America/New_York` timezone 全部匹配时，才可走一次受限恢复：避开自然触发前后 10 分钟，resume 一次并读回，run 一次后立即 pause 一次并读回原控制配置。只有恢复确认后才读取归档；resume/run/pause 结果不明或恢复读回失败时不重触发、不读取或发布归档。旧 Scheduler/GCS 模式的任何路径都不直连 internal Cloud Run，也不使用 `/account-snapshot`。
+target label 只表示这份清单配置的 scope，不能据此推断券商账户身份。脚本从已校验的 runtime target manifest 读取准确 service/region，并先读回 `{service}-probe-scheduler` 的完整 job。默认路径仅接受 `ENABLED` job；PAPER 的 `PAUSED` job 仍在任何 mutation 或 GCS 读取前拒绝。SG 与 HK 在 `RUNTIME_TARGET_ENABLED` 精确为 `false`、`ACCOUNT_HISTORY_RECORDING_ENABLED` 精确为 `true`，且暂停任务完整身份、`POST {service_url}/probe`、空 body、Scheduler OIDC service account/audience、零重试、原控制字段、schedule `35 9,15 * * 1-5` 与对应时区（SG=`America/New_York`，HK=`Asia/Hong_Kong`）全部匹配时，才可走一次受限恢复：避开自然触发前后 10 分钟，resume 一次并读回，run 一次后立即 pause 一次并读回原控制配置。只有恢复确认后才读取归档；resume/run/pause 结果不明或恢复读回失败时不重触发、不读取或发布归档。旧 Scheduler/GCS 模式的任何路径都不直连 internal Cloud Run，也不使用 `/account-snapshot`；HK 与 SG 统一走 `scheduler_archive`，不以 `independent_get` 或放宽 ingress 作为日常路径。
 
 `ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID` 必须由部署后的可信读回提供，并与 QRS 的预期绑定完全相同；不能从第一个 GCS 对象反推信任。Workflow 对注入值发出 GitHub mask 命令，Secret 优先，旧 variable 兼容回退。GCS 前缀最后一段必须是 `account_snapshots`，不能落在 execution report 路径上。脚本只查本次触发 UTC 日期与当前 UTC 日期下准确的 target/source 前缀，限单页和 64KiB 对象。列举与固定 generation 读取都带超时、`retry=None`；若分页截断、对象变大或 generation 改变则失败，不把部分结果当完整结果。
 
@@ -35,7 +35,7 @@ producer 为每次观察写入 `{prefix}/{target_id}/{source_binding_id}/{observ
 
 ## HK 独立只读观察模式（默认关闭，仅手动）
 
-新增的 `ACCOUNT_HISTORY_OBSERVATION_MODE=independent_get` 是与旧归档路线分开的 HK-only 模式。缺省仍为 `scheduler_archive`，旧模式继续保留一次 Scheduler 触发、受限 GCS listing、固定 generation、原字节发布及原有 SG 受限恢复保证。选择独立模式后，失败不会回退到 Scheduler、`/probe`、`/run`、`/dry-run` 或策略 canary。
+新增的 `ACCOUNT_HISTORY_OBSERVATION_MODE=independent_get` 是与旧归档路线分开的 HK-only 模式。缺省仍为 `scheduler_archive`，旧模式继续保留一次 Scheduler 触发、受限 GCS listing、固定 generation、原字节发布及原有 SG/HK 受限恢复保证。选择独立模式后，失败不会回退到 Scheduler、`/probe`、`/run`、`/dry-run` 或策略 canary。
 
 独立模式仍要求当前 Environment 的 `ACCOUNT_HISTORY_RECORDING_ENABLED=true`，但这个开关在此模式仅允许观察，不表示创建 GCS 归档。它目前只接受：
 - 同仓 main 的 `execution-report-heartbeat.yml`，`workflow_dispatch target=hk`

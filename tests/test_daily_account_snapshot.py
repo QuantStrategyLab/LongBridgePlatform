@@ -68,6 +68,8 @@ def _job(target_id="paper", *, state="ENABLED", service_url=None, region=None, *
     }
     if target_id == "sg":
         job.update(schedule="35 9,15 * * 1-5", timeZone="America/New_York", description="synthetic control field")
+    elif target_id == "hk":
+        job.update(schedule="35 9,15 * * 1-5", timeZone="Asia/Hong_Kong", description="synthetic control field")
     job.update(overrides)
     return job
 
@@ -468,11 +470,10 @@ def test_sghk_targets_use_exact_manifest_identity_and_publish_matching_history(t
     assert json.loads(spies.posts[0][1]["data"])["account_scope"] == {"hk": "HK", "sg": "SG"}[target_id]
 
 
-@pytest.mark.parametrize("target_id", ["paper", "hk"])
-def test_paused_scheduler_is_rejected_before_run_or_gcs_for_every_target(target_id):
+def test_paused_scheduler_is_rejected_before_run_or_gcs_for_paper():
     result, spies = _record(
-        _env(target_id),
-        _Spies(job=_job(target_id, state="PAUSED")),
+        _env("paper"),
+        _Spies(job=_job("paper", state="PAUSED")),
     )
 
     assert result.category == "scheduler_job_mismatch"
@@ -480,8 +481,9 @@ def test_paused_scheduler_is_rejected_before_run_or_gcs_for_every_target(target_
     assert spies.open_calls == []
 
 
-def test_paused_sg_observes_delayed_archive_before_restoring_then_publishes():
-    payload = _history(T0 + timedelta(seconds=6), T0 + timedelta(seconds=7), target_id="sg")
+@pytest.mark.parametrize("target_id", ["sg", "hk"])
+def test_paused_live_observes_delayed_archive_before_restoring_then_publishes(target_id):
+    payload = _history(T0 + timedelta(seconds=6), T0 + timedelta(seconds=7), target_id=target_id)
     raw = json.dumps(payload, indent=2).encode()
     delayed_object = _object(payload, raw=raw)
     list_count = {"value": 0}
@@ -491,12 +493,12 @@ def test_paused_sg_observes_delayed_archive_before_restoring_then_publishes():
         if list_count["value"] == 2:
             storage.objects.append(delayed_object)
 
-    job = _job("sg", state="PAUSED", lastAttemptTime=(T0 - timedelta(days=2)).isoformat())
+    job = _job(target_id, state="PAUSED", lastAttemptTime=(T0 - timedelta(days=2)).isoformat())
     original = json.loads(json.dumps(job))
     spies = _Spies(objects=[], job=job, storage_before_list=reveal_after_first_empty_list)
     result, spies = _record(
         _env(
-            "sg",
+            target_id,
             RUNTIME_TARGET_ENABLED="false",
             ACCOUNT_FACTS_SYNC_ENABLED="true",
             ACCOUNT_FACTS_SYNC_URL=QRS_URL,
@@ -634,17 +636,19 @@ def test_paused_sg_restore_failure_blocks_publish_after_archive_is_observed():
     assert spies.posts == []
 
 
+@pytest.mark.parametrize("target_id", ["sg", "hk"])
 @pytest.mark.parametrize("runtime_flag", ["true", "False", " false", ""])
-def test_paused_sg_requires_exact_false_runtime_flag(runtime_flag):
+def test_paused_live_requires_exact_false_runtime_flag(target_id, runtime_flag):
     result, spies = _record(
-        _env("sg", RUNTIME_TARGET_ENABLED=runtime_flag),
-        _Spies(job=_job("sg", state="PAUSED")),
+        _env(target_id, RUNTIME_TARGET_ENABLED=runtime_flag),
+        _Spies(job=_job(target_id, state="PAUSED")),
     )
     assert result.category == "runtime_target_not_disabled"
     assert [call[0] for call in spies.session.calls] == ["get"]
     assert spies.open_calls == []
 
 
+@pytest.mark.parametrize("target_id", ["sg", "hk"])
 @pytest.mark.parametrize(
     ("mutate", "expected"),
     [
@@ -660,11 +664,11 @@ def test_paused_sg_requires_exact_false_runtime_flag(runtime_flag):
         (lambda job: job["retryConfig"].update(maxRetryDuration="1s"), "scheduler_job_mismatch"),
     ],
 )
-def test_paused_sg_mismatched_job_or_schedule_fails_before_mutation(mutate, expected):
-    job = _job("sg", state="PAUSED")
+def test_paused_live_mismatched_job_or_schedule_fails_before_mutation(target_id, mutate, expected):
+    job = _job(target_id, state="PAUSED")
     mutate(job)
     result, spies = _record(
-        _env("sg", RUNTIME_TARGET_ENABLED="false"),
+        _env(target_id, RUNTIME_TARGET_ENABLED="false"),
         _Spies(job=job),
     )
     assert result.category == expected
@@ -683,6 +687,25 @@ def test_paused_sg_natural_schedule_guard_blocks_within_ten_minutes(near_trigger
     result, spies = _record(
         _env("sg", RUNTIME_TARGET_ENABLED="false"),
         _Spies(job=_job("sg", state="PAUSED")),
+        times=[near_trigger],
+    )
+    assert result.category == "scheduler_natural_window"
+    assert [call[0] for call in spies.session.calls] == ["get"]
+    assert spies.open_calls == []
+
+
+@pytest.mark.parametrize(
+    "near_trigger",
+    [
+        # Asia/Hong_Kong is UTC+8; 09:35 HKT == 01:35 UTC.
+        datetime(2026, 9, 28, 1, 34, 59, tzinfo=timezone.utc),
+        datetime(2026, 9, 28, 1, 35, 1, tzinfo=timezone.utc),
+    ],
+)
+def test_paused_hk_natural_schedule_guard_blocks_within_ten_minutes(near_trigger):
+    result, spies = _record(
+        _env("hk", RUNTIME_TARGET_ENABLED="false"),
+        _Spies(job=_job("hk", state="PAUSED")),
         times=[near_trigger],
     )
     assert result.category == "scheduler_natural_window"
