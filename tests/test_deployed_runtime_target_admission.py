@@ -403,6 +403,58 @@ def _prepare_sghk(target_label: str, *, target_overrides=None, history_overrides
     return plan, candidate_env
 
 
+def test_hk_sghk_candidate_admits_snapshot_enable_with_retained_history():
+    target = _sghk_target("HK")
+    service = target["service_name"]
+    history = _sghk_history("HK")
+    env = [
+        {"name": "RUNTIME_TARGET_JSON", "value": json.dumps(target)},
+        {"name": "STRATEGY_PROFILE", "value": target["strategy_profile"]},
+        {"name": "LONGBRIDGE_DRY_RUN_ONLY", "value": "false"},
+        {"name": "RUNTIME_TARGET_ENABLED", "value": "false"},
+        *[{"name": key, "value": history[key]} for key in admission._HISTORY_KEYS],
+    ]
+    service_json = {
+        "metadata": {"annotations": {"run.googleapis.com/ingress": "all"}},
+        "spec": {"template": {"spec": {"serviceAccountName": "runtime@example.invalid", "containers": [{"env": env}]}}},
+        "status": {"traffic": [{"revisionName": "serving-rev", "percent": 100}]},
+    }
+
+    def run(command):
+        if command[:3] == ["gcloud", "run", "revisions"]:
+            return json.dumps({
+                "metadata": {"name": "serving-rev", "labels": {"commit-sha": SERVING}},
+                "spec": {"serviceAccountName": "runtime@example.invalid", "containers": [{"env": env, "image": "serving-image"}]},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            })
+        sha, name = command[2].split(":", 1)
+        return _declaration(name, UES)
+
+    plan = admission.prepare_image_only_staging(
+        service=service,
+        project="longbridgequant",
+        region="asia-east2",
+        service_json=service_json,
+        env={"WORKFLOW_TARGET": "HK", "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true"},
+        image_commit=SGHK_SNAPSHOT_CANDIDATE,
+        run=run,
+    )
+    assert plan["history_values"] == {}
+    assert plan["retained_history_values"]["ACCOUNT_HISTORY_TARGET_ID"] == "hk"
+    assert plan["snapshot_value"] == "true"
+    assert plan["snapshot_arg"] == "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED=true"
+
+
+def test_hk_sghk_candidate_rejects_snapshot_enable_without_retained_history():
+    with pytest.raises(admission.AdmissionError):
+        _prepare_sghk("HK", history_overrides={"ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true", **{key: "" for key in (
+            "ACCOUNT_HISTORY_RECORDING_ENABLED",
+            "ACCOUNT_HISTORY_GCS_PREFIX",
+            "ACCOUNT_HISTORY_TARGET_ID",
+            "ACCOUNT_HISTORY_EXPECTED_SCOPE",
+        )}})
+
+
 @pytest.mark.parametrize("target_label", ["HK", "SG"])
 def test_sghk_snapshot_candidate_requires_exact_target_and_history_quartet(target_label):
     plan, env = _prepare_sghk(target_label)

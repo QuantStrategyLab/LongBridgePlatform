@@ -556,16 +556,25 @@ def _image_digest(image: str) -> str:
 
 
 def _retained_history_values(
-    configuration: Mapping[str, Any], *, project_id: str
+    configuration: Mapping[str, Any],
+    *,
+    project_id: str,
+    workflow_target: str = "PAPER",
+    allow_sghk: bool = False,
 ) -> dict[str, str]:
-    """Keep the exact literal PAPER history quartet already on the template."""
+    """Keep the exact literal history quartet already on the template."""
 
     literals = _literal_values(configuration)
     values = {key: str(literals.get(key) or "") for key in _HISTORY_KEYS}
     if any(not values[key] for key in _HISTORY_KEYS):
         raise AdmissionError("retained history settings are incomplete")
     try:
-        retained = history_update(values, workflow_target="PAPER", project_id=project_id)
+        retained = history_update(
+            values,
+            workflow_target=workflow_target,
+            project_id=project_id,
+            allow_sghk=allow_sghk,
+        )
     except AdmissionError as exc:
         raise AdmissionError("retained history settings are invalid") from exc
     if retained is None:
@@ -771,6 +780,20 @@ def prepare_image_only_staging(
             image_commit=image_commit,
             run=run,
         )
+    elif (
+        image_commit == APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE
+        and snapshot_value is not None
+    ):
+        # Snapshot-only HK enable keeps the already-serving history quartet.
+        configuration = verify_template_matches_serving(
+            service=service, service_json=service_json, serving_revisions=revisions
+        )
+        retained_history = _retained_history_values(
+            configuration,
+            project_id=project,
+            workflow_target=str(env.get("WORKFLOW_TARGET") or ""),
+            allow_sghk=True,
+        )
     else:
         configuration = verify_template_matches_serving(
             service=service, service_json=service_json, serving_revisions=revisions
@@ -837,11 +860,16 @@ def _validate_image_only_source(
         ):
             raise AdmissionError("image source is not approved")
     elif image_commit == APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE:
-        if (
-            str(env.get("WORKFLOW_TARGET") or "") not in {"HK", "SG"}
-            or history is None
-            or snapshot_value is not None
-        ):
+        target = str(env.get("WORKFLOW_TARGET") or "")
+        if target not in {"HK", "SG"}:
+            raise AdmissionError("image source is not approved")
+        # History quartet and endpoint switch stay mutually exclusive.
+        if history is not None and snapshot_value is not None:
+            raise AdmissionError("image source is not approved")
+        if history is None and snapshot_value is None:
+            raise AdmissionError("image source is not approved")
+        # HK endpoint enable is the reviewed exception; SG keeps history-only staging.
+        if snapshot_value is not None and (target != "HK" or snapshot_value != "true"):
             raise AdmissionError("image source is not approved")
     elif image_commit == APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE:
         if (
@@ -864,9 +892,14 @@ def _account_snapshot_update(
     value = str(env.get(_ACCOUNT_SNAPSHOT_INPUT) or "")
     if value not in {"", "true", "false"}:
         raise AdmissionError("account snapshot setting is invalid")
-    if value and workflow_target != "PAPER":
-        raise AdmissionError("account snapshot setting is only admitted for PAPER")
-    return value or None
+    if value and workflow_target == "PAPER":
+        return value
+    # Reviewed HK-only enablement for independent GET /account-snapshot on serving.
+    if value == "true" and workflow_target == "HK":
+        return value
+    if value:
+        raise AdmissionError("account snapshot setting is only admitted for PAPER or HK enable")
+    return None
 
 
 def _is_exact_main_image(image_commit: str, env: Mapping[str, str]) -> bool:

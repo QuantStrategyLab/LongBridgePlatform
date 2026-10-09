@@ -455,8 +455,11 @@ assert "approved_probe_financing_candidate=82788aa7c73690d2b87f63540a9102943e937
 assert 'image_mode=probe-financing' in job
 assert '[ "${GITHUB_REPOSITORY:-}" != "QuantStrategyLab/LongBridgePlatform" ]' in job
 assert '[ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] || [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]' not in job
-for forbidden in ("sync_plan", "scheduler", "cleanup", "retire", "update-traffic"):
+for forbidden in ("sync_plan", "scheduler", "cleanup", "retire"):
     assert forbidden not in job.lower(), forbidden
+assert "hk-account-snapshot" in job
+assert "update-traffic" in job.lower()
+assert 'if [ "${image_mode}" = "hk-account-snapshot" ]; then' in job
 
 
 def run_block(name):
@@ -537,6 +540,14 @@ def base_env():
         {"name": "RUNTIME_TARGET_ENABLED", "value": os.environ.get("TARGET_RUNTIME_ENABLED", "false") if os.environ.get("SOURCE_COMMIT") == hk_probe_diagnostics_candidate else "true"},
     ]
 
+def hk_retained_history():
+    return {
+        "ACCOUNT_HISTORY_RECORDING_ENABLED": "true",
+        "ACCOUNT_HISTORY_GCS_PREFIX": "gs://qsl-runtime-logs-shared/longbridge/account_snapshots",
+        "ACCOUNT_HISTORY_TARGET_ID": "hk",
+        "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK",
+    }
+
 def service_document(ingress):
     env = base_env()
     template = {"spec": {"serviceAccountName": "runtime@example.invalid", "containers": [{"env": env, "image": "serving-image"}]}}
@@ -546,6 +557,12 @@ def service_document(ingress):
         template["metadata"] = {"name": staged_source_revision}
         template["spec"]["containers"][0]["image"] = staged_source_image
         status["latestCreatedRevisionName"] = staged_source_revision
+    if (
+        os.environ.get("SOURCE_COMMIT") == sghk_snapshot_candidate
+        and os.environ.get("ACCOUNT_SNAPSHOT_ENABLED_INPUT") == "true"
+        and os.environ.get("WORKFLOW_TARGET") == "HK"
+    ):
+        env.extend({"name": key, "value": value} for key, value in hk_retained_history().items())
     return {
         "metadata": {
             "name": os.environ["CLOUD_RUN_SERVICE"],
@@ -556,11 +573,18 @@ def service_document(ingress):
     }
 
 def serving_revision():
+    env = base_env()
+    if (
+        os.environ.get("SOURCE_COMMIT") == sghk_snapshot_candidate
+        and os.environ.get("ACCOUNT_SNAPSHOT_ENABLED_INPUT") == "true"
+        and os.environ.get("WORKFLOW_TARGET") == "HK"
+    ):
+        env.extend({"name": key, "value": value} for key, value in hk_retained_history().items())
     return {
         "metadata": {"name": "serving-rev", "labels": {"commit-sha": serving_sha}},
         "spec": {
             "serviceAccountName": "runtime@example.invalid",
-            "containers": [{"env": base_env(), "image": "serving-image"}],
+            "containers": [{"env": env, "image": "serving-image"}],
         },
         "status": {"conditions": [{"type": "Ready", "status": "True"}]},
     }
@@ -594,6 +618,12 @@ def staged_revision():
     )
     if os.environ.get("SOURCE_COMMIT") == http_snapshot_candidate:
         env.extend({"name": key, "value": value} for key, value in history.items())
+    if (
+        os.environ.get("SOURCE_COMMIT") == sghk_snapshot_candidate
+        and os.environ.get("ACCOUNT_SNAPSHOT_ENABLED_INPUT") == "true"
+        and os.environ.get("WORKFLOW_TARGET") == "HK"
+    ):
+        env.extend({"name": key, "value": value} for key, value in hk_retained_history().items())
     if os.environ.get("CONFIG_DRIFT") == "1":
         env.append({"name": "UNRELATED_SETTING", "value": "1"})
     update_path = Path(os.environ["HOME"]) / "updated-env.json"
@@ -672,7 +702,17 @@ elif command == "gcloud" and args[:3] == ["run", "services", "describe"]:
             document["status"]["traffic"] = [{"revisionName": "other-rev", "percent": 100}]
         print(json.dumps(document))
     else:
-        print(os.environ["CLOUD_RUN_SERVICE"])
+        fmt = next((arg.partition("=")[2] for arg in args if arg.startswith("--format=")), "")
+        shifted = (Path(os.environ["HOME"]) / "traffic-shifted").exists()
+        staged_name = os.environ["CLOUD_RUN_SERVICE"] + "-r" + os.environ["GITHUB_RUN_ID"]
+        if fmt == "value(status.traffic[0].revisionName)":
+            print(staged_name if shifted else "serving-rev")
+        elif fmt == "value(status.traffic[0].percent)":
+            print("100")
+        elif fmt == "value(status.latestReadyRevisionName)":
+            print(staged_name if shifted else "serving-rev")
+        else:
+            print(os.environ["CLOUD_RUN_SERVICE"])
 elif command == "gcloud" and args[:3] == ["run", "revisions", "describe"]:
     revision_name = args[3]
     if os.environ.get("UNKNOWN_READBACK") == "1" and revision_name.endswith("-r" + os.environ["GITHUB_RUN_ID"]):
@@ -699,6 +739,8 @@ elif command == "gcloud" and args[:3] == ["run", "services", "update"]:
                 raise SystemExit("invalid synthetic environment update")
             values[key] = value
     (Path(os.environ["HOME"]) / "updated-env.json").write_text(json.dumps(values))
+elif command == "gcloud" and args[:3] == ["run", "services", "update-traffic"]:
+    (Path(os.environ["HOME"]) / "traffic-shifted").write_text("1")
 else:
     raise SystemExit("unexpected command in image-only workflow")
 '''
@@ -752,6 +794,9 @@ else:
         count_path = root / "service-json-count"
         if count_path.exists():
             count_path.unlink()
+        traffic_path = root / "traffic-shifted"
+        if traffic_path.exists():
+            traffic_path.unlink()
         step_env_path = root / "github-env"
         step_env_path.write_text("")
         step_env = {**base, **overrides, "GITHUB_ENV": str(step_env_path)}
@@ -968,10 +1013,45 @@ else:
             "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false",
             **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "hk", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK"},
         },
+        {
+            "SOURCE_COMMIT": sghk_snapshot_candidate,
+            "WORKFLOW_TARGET": "HK",
+            "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
+            "CLOUD_RUN_REGION": "asia-east2",
+            "GCP_PROJECT_ID": "longbridgequant",
+            "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true",
+            **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "hk", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK"},
+        },
+        {
+            "SOURCE_COMMIT": sghk_snapshot_candidate,
+            "WORKFLOW_TARGET": "SG",
+            "CLOUD_RUN_SERVICE": "longbridge-quant-sg-service",
+            "CLOUD_RUN_REGION": "asia-southeast1",
+            "GCP_PROJECT_ID": "longbridgequant",
+            "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true",
+        },
     ):
         code, calls = execute(**overrides)
         assert code != 0 and calls == [], overrides
         cases += 1
+    code, calls = execute(
+        SOURCE_COMMIT=sghk_snapshot_candidate,
+        CHECKOUT_SHA="a" * 40,
+        WORKFLOW_TARGET="HK",
+        CLOUD_RUN_SERVICE="longbridge-quant-hk-service",
+        CLOUD_RUN_REGION="asia-east2",
+        GCP_PROJECT_ID="longbridgequant",
+        ACCOUNT_SNAPSHOT_ENABLED_INPUT="true",
+    )
+    assert code == 0, (code, calls)
+    updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
+    assert len(updates) == 1
+    assert "--update-env-vars=LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED=true" in updates[0]
+    assert updates[0][-1] == "--revision-suffix=r123"
+    traffic_calls = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update-traffic"]]
+    assert len(traffic_calls) == 1
+    assert "--to-revisions=longbridge-quant-hk-service-r123=100" in traffic_calls[0]
+    cases += 1
     code, calls = execute(
         SOURCE_COMMIT=hk_probe_diagnostics_candidate,
         CHECKOUT_SHA="a" * 40,
