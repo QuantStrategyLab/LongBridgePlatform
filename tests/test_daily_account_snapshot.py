@@ -69,7 +69,7 @@ def _job(target_id="paper", *, state="ENABLED", service_url=None, region=None, *
     if target_id == "sg":
         job.update(schedule="35 9,15 * * 1-5", timeZone="America/New_York", description="synthetic control field")
     elif target_id == "hk":
-        job.update(schedule="35 9,15 * * 1-5", timeZone="Asia/Hong_Kong", description="synthetic control field")
+        job.update(schedule="35 9,15 * * 1-5", timeZone="America/New_York", description="synthetic control field")
     job.update(overrides)
     return job
 
@@ -697,9 +697,9 @@ def test_paused_sg_natural_schedule_guard_blocks_within_ten_minutes(near_trigger
 @pytest.mark.parametrize(
     "near_trigger",
     [
-        # Asia/Hong_Kong is UTC+8; 09:35 HKT == 01:35 UTC.
-        datetime(2026, 9, 28, 1, 34, 59, tzinfo=timezone.utc),
-        datetime(2026, 9, 28, 1, 35, 1, tzinfo=timezone.utc),
+        # Same America/New_York contract as SG (Environment LONGBRIDGE_MARKET_TIMEZONE).
+        datetime(2026, 9, 28, 13, 34, 59, tzinfo=timezone.utc),
+        datetime(2026, 9, 28, 13, 35, 1, tzinfo=timezone.utc),
     ],
 )
 def test_paused_hk_natural_schedule_guard_blocks_within_ten_minutes(near_trigger):
