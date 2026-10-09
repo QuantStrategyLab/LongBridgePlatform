@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   inspect:
-    if: github.ref == 'refs/heads/main' && github.repository == 'QuantStrategyLab/LongBridgePlatform'
+    if: github.repository == 'QuantStrategyLab/LongBridgePlatform' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ops/hk-binding-gap-post-rotate-inspect')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: longbridge-hk
@@ -147,26 +147,46 @@ jobs:
           expected_blobs = list(client.list_blobs("qsl-runtime-logs-shared", prefix=expected_prefix, max_results=5))
           print("expected_binding_objects_today=" + str(len(expected_blobs)))
           sibling_with_today = 0
+          sibling_ids_today = []
           for folder in folders:
               binding = folder[len(prefix):].rstrip("/")
               if binding == expected:
                   continue
               day_prefix = f"{folder}{today}/"
-              found = list(client.list_blobs("qsl-runtime-logs-shared", prefix=day_prefix, max_results=1))
+              found = list(client.list_blobs("qsl-runtime-logs-shared", prefix=day_prefix, max_results=3))
               if found:
                   sibling_with_today += 1
+                  sibling_ids_today.append(binding)
+                  names = [b.name.rsplit("/", 1)[-1] for b in found]
+                  print("sibling_binding_today=" + binding)
+                  print("sibling_object_names=" + json.dumps(names))
           print("sibling_bindings_with_objects_today=" + str(sibling_with_today))
+          print("sibling_binding_ids_today=" + json.dumps(sibling_ids_today))
           sg_iterator = client.list_blobs("qsl-runtime-logs-shared", prefix="longbridge/account_snapshots/sg/", delimiter="/")
           _ = list(sg_iterator)
           print("sg_binding_folder_count=" + str(len(sorted(getattr(sg_iterator, "prefixes", []) or []))))
 
           # Cloud Run logs around last heartbeat window
+          # Non-secret env/secret refs on serving revision
+          secret_refs = []
+          for item in env_list:
+              name = item.get("name") or ""
+              src = (item.get("valueFrom") or {}).get("secretKeyRef") or {}
+              if src:
+                  secret_refs.append({
+                      "env": name,
+                      "secret": src.get("name"),
+                      "version": src.get("key"),
+                  })
+          print("secret_mount_refs=" + json.dumps(secret_refs, sort_keys=True))
+          print("revision_create_time=" + json.dumps(rev.get("metadata", {}).get("creationTimestamp")))
+
           filt = (
               f'resource.type="cloud_run_revision"\n'
               f'resource.labels.service_name="{service}"\n'
               f'resource.labels.revision_name="{revision}"\n'
-              f'timestamp>="2026-10-09T04:08:00Z"\n'
-              f'timestamp<="2026-10-09T04:12:00Z"'
+              f'timestamp>="2026-10-09T05:41:00Z"\n'
+              f'timestamp<="2026-10-09T05:46:00Z"'
           )
           try:
               logs = run([
