@@ -48,8 +48,15 @@ _FILENAME = re.compile(r"^\d{12}Z\.json$")
 _FORBIDDEN_PREFIX_PARTS = ("execution-report", "execution_report", "runtime-report")
 _BALANCE_FIELDS = ("currency", "net_assets", "total_cash")
 _CASH_FIELDS = ("currency", "available_cash", "frozen_cash", "settling_cash")
-_SG_PROBE_SCHEDULE = "35 9,15 * * 1-5"
-_SG_PROBE_TIMEZONE = "America/New_York"
+# Restricted resume→run→pause is allowed only for these live targets when
+# RUNTIME_TARGET_ENABLED is exactly false. Cron matches platform hk_daily / us_daily.
+_PAUSED_PROBE_CONTRACTS = {
+    "sg": ("35 9,15 * * 1-5", "America/New_York"),
+    "hk": ("35 9,15 * * 1-5", "Asia/Hong_Kong"),
+}
+_PAUSED_PROBE_HOURS = (9, 15)
+_PAUSED_PROBE_MINUTE = 35
+_PAUSED_PROBE_SCHEDULE_GUARD = timedelta(minutes=10)
 _SG_PROBE_REQUIRED_PERMISSIONS = (
     "cloudscheduler.jobs.get",
     "cloudscheduler.jobs.run",
@@ -59,7 +66,6 @@ _SG_PROBE_REQUIRED_PERMISSIONS = (
 _SCHEDULER_OUTPUT_FIELDS = frozenset({
     "state", "status", "lastAttemptTime", "scheduleTime", "userUpdateTime", "updateTime", "etag",
 })
-_SG_SCHEDULE_GUARD = timedelta(minutes=10)
 _PRODUCER_WRITE_TIMEOUT_SECONDS = 20.0
 _PRODUCER_DECIMAL = re.compile(r"^-?(?:0|[1-9]\d*)(?:\.\d+)?$")
 
@@ -506,14 +512,16 @@ def record_daily_account_snapshot(
         _close(session)
         return DailyAccountRecordResult("error", "scheduler_read_failed")
 
-    paused_sg = config.target_id == "sg" and job.get("state") == "PAUSED"
+    paused_resumable = (
+        config.target_id in _PAUSED_PROBE_CONTRACTS and job.get("state") == "PAUSED"
+    )
     try:
-        if paused_sg:
+        if paused_resumable:
             if env.get("RUNTIME_TARGET_ENABLED") != "false":
                 raise _Rejected("runtime_target_not_disabled")
             _validate_scheduler_job(job, config, allow_paused=True)
-            _validate_sg_schedule(job, now_reader)
-            selected = _run_paused_sg_probe(
+            _validate_paused_probe_schedule(job, config.target_id, now_reader)
+            selected = _run_paused_probe(
                 session,
                 config,
                 job,
@@ -536,12 +544,12 @@ def record_daily_account_snapshot(
     except _Rejected as rejected:
         return DailyAccountRecordResult("error", rejected.category)
     except Exception:
-        category = "scheduler_run_unknown" if not paused_sg else "scheduler_transition_failed"
+        category = "scheduler_run_unknown" if not paused_resumable else "scheduler_transition_failed"
         return DailyAccountRecordResult("error", category)
     finally:
         _close(session)
 
-    if not paused_sg:
+    if not paused_resumable:
         try:
             selected = _observe_archived_snapshot(
                 open_store,
@@ -785,11 +793,17 @@ def _validate_scheduler_job(
         raise _Rejected("scheduler_job_mismatch")
 
 
-def _validate_sg_schedule(job: Mapping[str, Any], now_reader: Callable[[], datetime]) -> None:
-    if job.get("schedule") != _SG_PROBE_SCHEDULE or job.get("timeZone") != _SG_PROBE_TIMEZONE:
+def _validate_paused_probe_schedule(
+    job: Mapping[str, Any], target_id: str, now_reader: Callable[[], datetime]
+) -> None:
+    contract = _PAUSED_PROBE_CONTRACTS.get(target_id)
+    if contract is None:
+        raise _Rejected("scheduler_schedule_mismatch")
+    expected_schedule, expected_timezone = contract
+    if job.get("schedule") != expected_schedule or job.get("timeZone") != expected_timezone:
         raise _Rejected("scheduler_schedule_mismatch")
     try:
-        zone = ZoneInfo(_SG_PROBE_TIMEZONE)
+        zone = ZoneInfo(expected_timezone)
     except ZoneInfoNotFoundError:
         raise _Rejected("scheduler_schedule_mismatch") from None
     now = _utc_now(now_reader)
@@ -799,10 +813,15 @@ def _validate_sg_schedule(job: Mapping[str, Any], now_reader: Callable[[], datet
         day = local_day + timedelta(days=offset)
         if day.weekday() >= 5:
             continue
-        for hour in (9, 15):
-            occurrence = datetime.combine(day, datetime_time(hour, 35), tzinfo=zone)
+        for hour in _PAUSED_PROBE_HOURS:
+            occurrence = datetime.combine(
+                day, datetime_time(hour, _PAUSED_PROBE_MINUTE), tzinfo=zone
+            )
             occurrences.append(occurrence.astimezone(timezone.utc))
-    if not occurrences or min(abs(now - item) for item in occurrences) < _SG_SCHEDULE_GUARD:
+    if (
+        not occurrences
+        or min(abs(now - item) for item in occurrences) < _PAUSED_PROBE_SCHEDULE_GUARD
+    ):
         raise _Rejected("scheduler_natural_window")
 
 
@@ -874,7 +893,7 @@ def _pause_and_verify(
         raise _Rejected(pause_error)
 
 
-def _run_paused_sg_probe(
+def _run_paused_probe(
     session: Any,
     config: _Config,
     original_job: Mapping[str, Any],
