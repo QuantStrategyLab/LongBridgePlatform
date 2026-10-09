@@ -69,7 +69,7 @@ def _job(target_id="paper", *, state="ENABLED", service_url=None, region=None, *
     if target_id == "sg":
         job.update(schedule="35 9,15 * * 1-5", timeZone="America/New_York", description="synthetic control field")
     elif target_id == "hk":
-        job.update(schedule="35 9,15 * * 1-5", timeZone="America/New_York", description="synthetic control field")
+        job.update(schedule="35 9,15 * * *", timeZone="America/New_York", description="synthetic control field")
     job.update(overrides)
     return job
 

@@ -52,9 +52,20 @@ _CASH_FIELDS = ("currency", "available_cash", "frozen_cash", "settling_cash")
 # RUNTIME_TARGET_ENABLED is exactly false. Cron matches platform hk_daily / us_daily.
 # HK GitHub Environment currently declares LONGBRIDGE_MARKET_TIMEZONE=America/New_York
 # (same US session as SG probe). Match the live Scheduler job, not the ideal HK calendar.
+# Restricted resume→run→pause is allowed only for these live targets when
+# RUNTIME_TARGET_ENABLED is exactly false. Values must match the live Scheduler job.
+# HK probe is daily (`* * *`) with America/New_York (Environment LONGBRIDGE_MARKET_TIMEZONE).
 _PAUSED_PROBE_CONTRACTS = {
-    "sg": ("35 9,15 * * 1-5", "America/New_York"),
-    "hk": ("35 9,15 * * 1-5", "America/New_York"),
+    "sg": {
+        "schedule": "35 9,15 * * 1-5",
+        "timezone": "America/New_York",
+        "weekdays_only": True,
+    },
+    "hk": {
+        "schedule": "35 9,15 * * *",
+        "timezone": "America/New_York",
+        "weekdays_only": False,
+    },
 }
 _PAUSED_PROBE_HOURS = (9, 15)
 _PAUSED_PROBE_MINUTE = 35
@@ -801,7 +812,9 @@ def _validate_paused_probe_schedule(
     contract = _PAUSED_PROBE_CONTRACTS.get(target_id)
     if contract is None:
         raise _Rejected("scheduler_schedule_mismatch")
-    expected_schedule, expected_timezone = contract
+    expected_schedule = contract["schedule"]
+    expected_timezone = contract["timezone"]
+    weekdays_only = bool(contract["weekdays_only"])
     if job.get("schedule") != expected_schedule or job.get("timeZone") != expected_timezone:
         # Schedule/timezone are non-secret control fields; print once so ops can
         # align the paused-probe contract without a separate describe workflow.
@@ -824,7 +837,7 @@ def _validate_paused_probe_schedule(
     occurrences = []
     for offset in range(-7, 8):
         day = local_day + timedelta(days=offset)
-        if day.weekday() >= 5:
+        if weekdays_only and day.weekday() >= 5:
             continue
         for hour in _PAUSED_PROBE_HOURS:
             occurrence = datetime.combine(
