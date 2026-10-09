@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   inspect:
-    if: github.ref == 'refs/heads/main' && github.repository == 'QuantStrategyLab/LongBridgePlatform'
+    if: github.repository == 'QuantStrategyLab/LongBridgePlatform' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ops/hk-binding-gap-post-rotate-inspect')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: longbridge-hk
