@@ -1791,6 +1791,27 @@ jobs:
           probe_job_name="${CLOUD_RUN_SERVICE}-probe-scheduler"
           probe_uri="${service_url}/probe"
           probe_job_created=false
+          # A PAUSED HK/SG probe job is driven only by the Execution Report Heartbeat
+          # resume->run->pause path, which requires zero Scheduler retries
+          # (scripts/record_daily_account_snapshot.py _validate_scheduler_job).
+          # Active probe jobs keep capacity-429 retries. Enabled state is never changed here.
+          probe_retry_args=(
+            --max-retry-attempts=3
+            --min-backoff=120s
+            --max-backoff=300s
+            --max-retry-duration=900s
+          )
+          probe_job_state="$(gcloud scheduler jobs describe "${probe_job_name}" \
+            --project="${GCP_PROJECT_ID}" \
+            --location="${scheduler_location}" \
+            --format='value(state)' 2>/dev/null || true)"
+          if [ "${probe_job_state}" = "PAUSED" ] \
+            && { [ "${DEPLOYMENT_LABEL:-}" = "HK" ] || [ "${DEPLOYMENT_LABEL:-}" = "SG" ]; }; then
+            probe_retry_args=(
+              --max-retry-attempts=0
+              --max-retry-duration=0s
+            )
+          fi
           if gcloud scheduler jobs describe "${probe_job_name}" \
             --project="${GCP_PROJECT_ID}" \
             --location="${scheduler_location}" >/dev/null 2>&1; then
@@ -1805,10 +1826,7 @@ jobs:
               --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
               --oidc-token-audience="${service_url}" \
               --attempt-deadline=180s \
-              --max-retry-attempts=3 \
-              --min-backoff=120s \
-              --max-backoff=300s \
-              --max-retry-duration=900s \
+              "${probe_retry_args[@]}" \
               --quiet
           else
             echo "Creating Cloud Scheduler probe ${probe_job_name} at ${desired_probe_schedule}."
@@ -1822,10 +1840,7 @@ jobs:
               --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
               --oidc-token-audience="${service_url}" \
               --attempt-deadline=180s \
-              --max-retry-attempts=3 \
-              --min-backoff=120s \
-              --max-backoff=300s \
-              --max-retry-duration=900s \
+              "${probe_retry_args[@]}" \
               --quiet
             probe_job_created=true
           fi
