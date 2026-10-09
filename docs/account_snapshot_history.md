@@ -56,7 +56,7 @@ source binding 是 deployment/scope/token-version 来源摘要，含 revision；
 
 ### 上线前仍需满足的边界
 
-源码实现不证明当前 HK 已具备以上状态或权限。现有部署准入脚本只允许 PAPER 修改 `LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED`；HK 未启用时必须单独审查并取得授权，不能手动绕过准入。若当前 HK 为 internal ingress，此 GitHub-hosted runner 模式会拒绝，不能放宽 ingress、增加 IAM、创建 Scheduler 或借用暂停的 probe。WIF/ID-token签发、service只读及 invoker 权限不足时，同样停止；不新建 token secret 或切换主体。
+源码实现不证明当前 HK 已具备以上状态或权限。部署准入默认只允许 PAPER 修改 `LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED`。HK 在取得授权后，可通过 image-only 模式对已审 SGHK 候选设置 `account_snapshot_enabled=true`（与 history 四元组互斥），暂存读回成功后把该 revision 切到 100% 流量；不能手动绕过准入或直接改 IAM。若当前 HK 为 internal ingress，此 GitHub-hosted runner 模式会拒绝，不能放宽 ingress、增加 IAM、创建 Scheduler 或借用暂停的 probe。WIF/ID-token签发、service只读及 invoker 权限不足时，同样停止；不新建 token secret 或切换主体。
 
 当前候选仅允许手动单次验收；即使 Environment 中设置 independent_get，定时运行也会拒绝采样，原 heartbeat 仍继续后再汇总失败。把它扩为每日独立观察必须在单次受限真实 GET、准确 QRS stored ACK 和登录页面 readback 验收后另行批准。回滚可将采样 master 开关设回 false；不可为回滚自动恢复 HK Scheduler。代码修改、合成测试通过和配置开关存在，都不表示真实账户读数已经同步。
 

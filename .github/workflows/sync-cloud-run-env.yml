@@ -41,7 +41,7 @@ on:
         type: string
         default: ""
       account_snapshot_enabled:
-        description: "Optional PAPER account-snapshot endpoint switch. Blank preserves the current value."
+        description: "Optional account-snapshot endpoint switch. PAPER true/false, or HK true on the approved SGHK candidate. Blank preserves the current value."
         required: false
         type: string
         default: ""
@@ -255,8 +255,12 @@ jobs:
             echo "Account snapshot setting is invalid." >&2
             exit 1
           fi
-          if [ -n "${snapshot_setting}" ] && [ "${WORKFLOW_TARGET}" != "PAPER" ]; then
-            echo "Account snapshot setting is only admitted for PAPER." >&2
+          if [ -n "${snapshot_setting}" ] && [ "${WORKFLOW_TARGET}" = "PAPER" ]; then
+            :
+          elif [ "${snapshot_setting}" = "true" ] && [ "${WORKFLOW_TARGET}" = "HK" ]; then
+            :
+          elif [ -n "${snapshot_setting}" ]; then
+            echo "Account snapshot setting is only admitted for PAPER, or HK enable=true." >&2
             exit 1
           fi
           if [ -n "${snapshot_setting}" ] && [ "${history_count}" -ne 0 ]; then
@@ -283,6 +287,10 @@ jobs:
             && [ "${history_count}" -eq 4 ] && [ -z "${snapshot_setting}" ] \
             && [ "${SOURCE_COMMIT}" = "${approved_sghk_snapshot_candidate}" ]; then
             image_mode=account-history
+          elif [ "${WORKFLOW_TARGET}" = "HK" ] && [ "${history_count}" -eq 0 ] \
+            && [ "${snapshot_setting}" = "true" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_sghk_snapshot_candidate}" ]; then
+            image_mode=hk-account-snapshot
           elif [ "${WORKFLOW_TARGET}" = "HK" ] && [ "${history_count}" -eq 0 ] \
             && [ -z "${snapshot_setting}" ] \
             && [ "${SOURCE_COMMIT}" = "${approved_hk_probe_diagnostics_candidate}" ]; then
@@ -386,6 +394,10 @@ jobs:
             && [ "${SOURCE_COMMIT}" = "${approved_sghk_snapshot_candidate}" ]; then
             image_mode=account-history
           elif [ "${WORKFLOW_TARGET}" = "HK" ] && [ "${history_count}" -eq 0 ] \
+            && [ "${snapshot_setting}" = "true" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_sghk_snapshot_candidate}" ]; then
+            image_mode=hk-account-snapshot
+          elif [ "${WORKFLOW_TARGET}" = "HK" ] && [ "${history_count}" -eq 0 ] \
             && [ -z "${snapshot_setting}" ] \
             && [ "${SOURCE_COMMIT}" = "${approved_hk_probe_diagnostics_candidate}" ]; then
             image_mode=hk-probe-diagnostics
@@ -405,7 +417,7 @@ jobs:
           elif [ "${image_mode}" = "probe-financing" ]; then
             archive_ref="${approved_probe_financing_candidate}"
             image_tag="${approved_probe_financing_candidate}"
-          elif [ "${image_mode}" = "account-history" ]; then
+          elif [ "${image_mode}" = "account-history" ] || [ "${image_mode}" = "hk-account-snapshot" ]; then
             archive_ref="${approved_sghk_snapshot_candidate}"
             image_tag="${approved_sghk_snapshot_candidate}"
           elif [ "${image_mode}" = "hk-probe-diagnostics" ]; then
@@ -434,6 +446,7 @@ jobs:
             fi
           fi
           if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ] \
+            || [ "${image_mode}" = "hk-account-snapshot" ] \
             || [ "${image_mode}" = "hk-probe-diagnostics" ]; then
             plan="$(mktemp)"
             uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_deployed_runtime_target_admission.py" \
@@ -474,6 +487,7 @@ jobs:
             update_command+=(--update-env-vars="${env_update_arg}")
           fi
           if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ] \
+            || [ "${image_mode}" = "hk-account-snapshot" ] \
             || [ "${image_mode}" = "hk-probe-diagnostics" ]; then
             revision_suffix="r${GITHUB_RUN_ID}"
             revision_name="${CLOUD_RUN_SERVICE}-${revision_suffix}"
@@ -486,6 +500,7 @@ jobs:
           fi
           "${update_command[@]}"
           if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ] \
+            || [ "${image_mode}" = "hk-account-snapshot" ] \
             || [ "${image_mode}" = "hk-probe-diagnostics" ]; then
             uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_deployed_runtime_target_admission.py" \
               --project="${GCP_PROJECT_ID}" \
@@ -496,6 +511,27 @@ jobs:
               --expected-image="${image_repo}@${digest}" \
               --expected-commit="${image_tag}" \
               --expected-revision="${revision_name}"
+          fi
+          # Independent HK GET requires the endpoint flag on the single serving revision.
+          if [ "${image_mode}" = "hk-account-snapshot" ]; then
+            gcloud run services update-traffic "${CLOUD_RUN_SERVICE}" \
+              --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
+              --to-revisions="${revision_name}=100" --quiet
+            traffic_revision="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+              --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
+              --format='value(status.traffic[0].revisionName)')"
+            traffic_percent="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+              --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
+              --format='value(status.traffic[0].percent)')"
+            latest_ready="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+              --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
+              --format='value(status.latestReadyRevisionName)')"
+            if [ "${traffic_revision}" != "${revision_name}" ] \
+              || [ "${traffic_percent}" != "100" ] \
+              || [ "${latest_ready}" != "${revision_name}" ]; then
+              echo "HK account-snapshot revision did not receive coordinated 100% traffic." >&2
+              exit 1
+            fi
           fi
 
   resolve-matrix:
