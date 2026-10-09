@@ -68,7 +68,7 @@ Treat OAuth as a **follow-on migration** after path A is green, not the emergenc
 | --- | --- | --- | --- |
 | A0 (this PR) | Runbook + read-only JWT expiry inspector (no refresh, no SM write) | paper / hk / sg | Docs + optional manual inspect only |
 | A1 | QPK: send `expired_at`; fail closed on pre-expiry refresh failure; keep SM write via store_rw | kit first | Shared kit; pin bump in platform after |
-| A2 | Dedicated refresh job (Actions `workflow_dispatch` → then schedule) calling refresh **before** expiry, independent of `RUNTIME_TARGET_ENABLED` | **paper first**, then **sg**, **hk last** | Mutates token SM version; invalidates previous Access Token on success |
+| A2 | Dedicated refresh job ([`refresh-longport-token.yml`](../.github/workflows/refresh-longport-token.yml), default `dry_run=true`) calling refresh **before** expiry, independent of `RUNTIME_TARGET_ENABLED`; schedule only after paper/sg live succeed | **paper first**, then **sg**, **hk last** | Mutates token SM version when `dry_run=false`; invalidates previous Access Token on success |
 | A3 | Alert when days-to-exp &lt; threshold (reuse inspector) | all | Notify only |
 | B (later) | OAuth spike on paper only, SDK 4.x, SM-backed refresh token | paper → sg → hk | Large: auth model + SDK + deploy |
 
@@ -104,3 +104,4 @@ Constraints this plan respects: no `independent_get` / ingress changes, no produ
 - Probe history branch (no refresh): `main.py` `run_probe`
 - Rotate workflow: `.github/workflows/rotate-longport-secrets.yml`
 - Read-only expiry inspect: `.github/workflows/inspect-longport-token-expiry.yml` + `scripts/inspect_longport_token_expiry.py`
+- Pre-expiry refresh job (manual, dry-run default): `.github/workflows/refresh-longport-token.yml` + `scripts/refresh_longport_access_token.py`
