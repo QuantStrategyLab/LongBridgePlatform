@@ -3,6 +3,7 @@ LongPort Cloud Run strategy executor.
 Runs the configured shared UsEquityStrategies profile for the deployed LongBridge account.
 Runs on Cloud Run; token from Secret Manager, orders via LongPort OpenAPI, alerts via Telegram.
 """
+import dataclasses
 import json
 import importlib
 import os
@@ -14,6 +15,12 @@ from flask import Flask, request
 import google.auth
 import requests
 from application.monitor_dispatcher import dispatch_due_monitors, load_monitor_targets
+from application.startup_config import (
+    StartupConfigReceipt,
+    normalize_monitor_dispatch_targets,
+    normalize_plugin_mounts_strategy,
+    overlay_env,
+)
 from application.broker_reconciliation import (
     account_snapshot_enabled,
     collect_read_only_reconciliation_observations,
@@ -102,56 +109,56 @@ STRATEGY_DISPLAY_NAME = RUNTIME_SETTINGS.strategy_display_name
 
 
 def _normalize_plugin_mounts_strategy(raw_mounts_json: str | None) -> str | None:
-    if not raw_mounts_json:
-        return raw_mounts_json
-    try:
-        mounts = json.loads(raw_mounts_json)
-    except json.JSONDecodeError:
-        return raw_mounts_json
-    if not isinstance(mounts, dict):
-        return raw_mounts_json
-    plugins = mounts.get("strategy_plugins")
-    if not isinstance(plugins, list):
-        return raw_mounts_json
-    changed = False
-    for entry in plugins:
-        if not isinstance(entry, dict):
-            continue
-        old = entry.get("strategy")
-        if old and old != STRATEGY_PROFILE:
-            entry["strategy"] = STRATEGY_PROFILE
-            changed = True
-            print(f"[config-sync] Plugin mount strategy corrected: {old} → {STRATEGY_PROFILE}", flush=True)
-    return json.dumps(mounts, ensure_ascii=False) if changed else raw_mounts_json
+    normalized, _corrections = normalize_plugin_mounts_strategy(
+        raw_mounts_json,
+        strategy_profile=STRATEGY_PROFILE,
+    )
+    return normalized
 
 
-if hasattr(RUNTIME_SETTINGS, "strategy_plugin_mounts_json"):
-    normalized = _normalize_plugin_mounts_strategy(RUNTIME_SETTINGS.strategy_plugin_mounts_json)
-    if normalized != RUNTIME_SETTINGS.strategy_plugin_mounts_json:
-        object.__setattr__(RUNTIME_SETTINGS, "strategy_plugin_mounts_json", normalized)
+def _adopt_startup_config(settings, env):
+    """Explicitly normalize startup config without mutating ``os.environ`` (B08).
 
-for _env_name in ("MONITOR_DISPATCH_TARGETS_JSON", "LONGBRIDGE_MONITOR_DISPATCH_TARGETS_JSON"):
-    _raw = os.environ.get(_env_name)
-    if _raw:
-        try:
-            _targets = json.loads(_raw)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(_targets, dict):
-            continue
-        _entries = _targets.get("targets")
-        if not isinstance(_entries, list):
-            continue
-        _changed = False
-        for _entry in _entries:
-            if isinstance(_entry, dict):
-                _old = _entry.get("strategy_profile")
-                if _old and _old != STRATEGY_PROFILE:
-                    _entry["strategy_profile"] = STRATEGY_PROFILE
-                    _changed = True
-                    print(f"[config-sync] {_env_name} strategy_profile corrected: {_old} → {STRATEGY_PROFILE}", flush=True)
-        if _changed:
-            os.environ[_env_name] = json.dumps(_targets, ensure_ascii=False)
+    Returns ``(settings, monitor_dispatch_env_overrides, receipt)``.
+    """
+    corrections = []
+    if hasattr(settings, "strategy_plugin_mounts_json"):
+        normalized, plugin_corrections = normalize_plugin_mounts_strategy(
+            settings.strategy_plugin_mounts_json,
+            strategy_profile=STRATEGY_PROFILE,
+        )
+        corrections.extend(plugin_corrections)
+        if normalized != settings.strategy_plugin_mounts_json:
+            if dataclasses.is_dataclass(settings) and not isinstance(settings, type):
+                settings = dataclasses.replace(settings, strategy_plugin_mounts_json=normalized)
+            else:  # non-dataclass settings objects (test doubles)
+                setattr(settings, "strategy_plugin_mounts_json", normalized)
+    overrides, monitor_corrections = normalize_monitor_dispatch_targets(
+        env,
+        strategy_profile=STRATEGY_PROFILE,
+    )
+    corrections.extend(monitor_corrections)
+    receipt = StartupConfigReceipt(
+        strategy_profile=STRATEGY_PROFILE,
+        corrections=tuple(corrections),
+        env_overrides=tuple(sorted(overrides)),
+    )
+    return settings, overrides, receipt
+
+
+RUNTIME_SETTINGS, MONITOR_DISPATCH_ENV_OVERRIDES, STARTUP_CONFIG_RECEIPT = _adopt_startup_config(
+    RUNTIME_SETTINGS,
+    os.environ,
+)
+
+
+def _load_monitor_dispatch_targets():
+    # No corrections: identical call to before. Corrections: read through an
+    # explicit overlay instead of the previously mutated ``os.environ``.
+    if not MONITOR_DISPATCH_ENV_OVERRIDES:
+        return load_monitor_targets()
+    return load_monitor_targets(overlay_env(os.environ, MONITOR_DISPATCH_ENV_OVERRIDES))
+
 
 ACCOUNT_REGION = RUNTIME_SETTINGS.account_region
 MARKET = RUNTIME_SETTINGS.market
@@ -1415,7 +1422,7 @@ def handle_monitor_dispatch():
     if request_method() == "GET":
         return "Monitor Dispatch OK - use POST to dispatch due monitor checks", 200
     try:
-        result = dispatch_due_monitors(load_monitor_targets())
+        result = dispatch_due_monitors(_load_monitor_dispatch_targets())
     except Exception as exc:
         return _handle_route_runtime_error(exc, route_label="POST /monitor-dispatch")
     return json.dumps(result, ensure_ascii=False), 200, {"Content-Type": "application/json"}
