@@ -35,4 +35,4 @@ jobs:
           python scripts/review_shared_dependency_delta.py \
             --base-ref "$BASE_SHA" --head-ref "$HEAD_SHA" \
             --output "$RUNNER_TEMP/shared-dependency-impact.md"
-          cat "$RUNNER_TEMP/shared-dependency-impact.md" >> "$GITHUB_STEP_SUMMARY"
+          tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/shared-dependency-impact.md"
