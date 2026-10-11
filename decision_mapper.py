@@ -7,14 +7,18 @@ from typing import Any
 from quant_platform_kit.common.strategy_contracts import (
     PositionTarget,
     StrategyDecision,
-    ValueTargetExecutionAnnotations,
-    build_value_target_execution_annotations,
 )
 from quant_platform_kit.common.execution_translation import (
+    build_value_target_execution_runtime_plan,
     build_value_target_portfolio_inputs_from_account_state,
-    build_value_target_runtime_plan,
     resolve_decision_target_mode,
     translate_decision_to_target_mode,
+)
+from quant_platform_kit.common.presentation import (
+    ValueTargetDisplayAnnotations,
+    ValueTargetExecutionSemantics,
+    ValueTargetPlanPresentation,
+    split_value_target_annotation_parts,
 )
 from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
 
@@ -337,31 +341,35 @@ def _attach_soxl_risk_control_execution_fields(
             execution[field] = value
 
 
+# (semantics, display) pair; merged into the wire aggregate only inside QPK.
+ValueTargetAnnotationParts = tuple[ValueTargetExecutionSemantics, ValueTargetDisplayAnnotations]
+
+
 def _apply_reserved_cash_policy(
-    annotations: ValueTargetExecutionAnnotations,
+    semantics: ValueTargetExecutionSemantics,
     *,
     portfolio_inputs,
     runtime_metadata: Mapping[str, Any] | None,
-) -> ValueTargetExecutionAnnotations:
+) -> ValueTargetExecutionSemantics:
     reserved_cash = max(
-        float(annotations.reserved_cash or 0.0),
+        float(semantics.reserved_cash or 0.0),
         _resolve_platform_reserved_cash(
             total_equity=float(portfolio_inputs.total_equity),
             runtime_metadata=runtime_metadata,
         ),
     )
-    base_investable_cash = annotations.investable_cash
+    base_investable_cash = semantics.investable_cash
     if base_investable_cash is None:
         base_investable_cash = max(
             0.0,
-            float(portfolio_inputs.liquid_cash) - float(annotations.reserved_cash or 0.0),
+            float(portfolio_inputs.liquid_cash) - float(semantics.reserved_cash or 0.0),
         )
     investable_cash = min(
         max(0.0, float(base_investable_cash)),
         max(0.0, float(portfolio_inputs.liquid_cash) - reserved_cash),
     )
     return replace(
-        annotations,
+        semantics,
         reserved_cash=reserved_cash,
         investable_cash=investable_cash,
     )
@@ -373,7 +381,7 @@ def _build_weight_translation_annotations(
     total_equity: float,
     liquid_cash: float,
     runtime_metadata: Mapping[str, Any] | None = None,
-) -> ValueTargetExecutionAnnotations:
+) -> ValueTargetAnnotationParts:
     diagnostics = {**dict(runtime_metadata or {}), **dict(decision.diagnostics)}
     execution_annotations: dict[str, Any] = {}
     raw_runtime_annotations = runtime_metadata.get("execution_annotations") if isinstance(runtime_metadata, Mapping) else None
@@ -401,12 +409,9 @@ def _build_weight_translation_annotations(
         or ""
     ).strip() or None
     benchmark_symbol = str(diagnostics.get("benchmark_symbol") or "").strip().upper() or None
-    return ValueTargetExecutionAnnotations(
+    semantics = ValueTargetExecutionSemantics(
         trade_threshold_value=threshold_value,
         reserved_cash=0.0,
-        signal_display=signal_display,
-        status_display=status_display,
-        dashboard_text=dashboard_text,
         benchmark_symbol=benchmark_symbol,
         benchmark_price=(
             float(diagnostics["benchmark_price"])
@@ -466,6 +471,12 @@ def _build_weight_translation_annotations(
         current_min_trade=threshold_value,
         investable_cash=max(0.0, float(liquid_cash)),
     )
+    display = ValueTargetDisplayAnnotations(
+        signal_display=signal_display,
+        status_display=status_display,
+        dashboard_text=dashboard_text,
+    )
+    return semantics, display
 
 
 def _decision_blocks_execution(decision: StrategyDecision) -> bool:
@@ -534,7 +545,7 @@ def _normalize_to_value_target_decision(
     portfolio_inputs,
     runtime_metadata: Mapping[str, Any] | None = None,
     cash_only_execution: bool = True,
-) -> tuple[StrategyDecision, ValueTargetExecutionAnnotations | None]:
+) -> tuple[StrategyDecision, ValueTargetAnnotationParts | None]:
     target_mode = resolve_decision_target_mode(decision)
     blocked = _decision_blocks_execution(decision)
 
@@ -788,42 +799,28 @@ def map_strategy_decision_to_plan(
                 "execution_annotations": merged_execution_annotations,
             },
         )
-        annotations = build_value_target_execution_annotations(merged_decision)
-        investable_cash = annotations.investable_cash
+        semantics, display = split_value_target_annotation_parts(merged_decision)
+        investable_cash = semantics.investable_cash
         if investable_cash is None:
             investable_cash = max(
                 0.0,
-                portfolio_inputs.liquid_cash - annotations.reserved_cash,
+                portfolio_inputs.liquid_cash - semantics.reserved_cash,
             )
-        current_min_trade = annotations.current_min_trade
+        current_min_trade = semantics.current_min_trade
         if current_min_trade is None:
-            current_min_trade = annotations.trade_threshold_value
-        annotations = ValueTargetExecutionAnnotations(
-            trade_threshold_value=annotations.trade_threshold_value,
-            reserved_cash=annotations.reserved_cash,
-            signal_display=annotations.signal_display,
-            status_display=annotations.status_display,
-            dashboard_text=annotations.dashboard_text,
-            separator=annotations.separator,
-            benchmark_symbol=annotations.benchmark_symbol,
-            benchmark_price=annotations.benchmark_price,
-            long_trend_value=annotations.long_trend_value,
-            exit_line=annotations.exit_line,
-            signal_date=annotations.signal_date,
-            effective_date=annotations.effective_date,
-            execution_timing_contract=annotations.execution_timing_contract,
-            execution_calendar_source=annotations.execution_calendar_source,
-            signal_effective_after_trading_days=annotations.signal_effective_after_trading_days,
-            deploy_ratio_text=annotations.deploy_ratio_text,
-            income_ratio_text=annotations.income_ratio_text,
-            income_locked_ratio_text=annotations.income_locked_ratio_text,
-            active_risk_asset=annotations.active_risk_asset,
-            current_min_trade=current_min_trade,
-            investable_cash=investable_cash,
+            current_min_trade = semantics.trade_threshold_value
+        annotations = (
+            replace(
+                semantics,
+                current_min_trade=current_min_trade,
+                investable_cash=investable_cash,
+            ),
+            display,
         )
 
-    annotations = _apply_reserved_cash_policy(
-        annotations,
+    semantics, display = annotations
+    semantics = _apply_reserved_cash_policy(
+        semantics,
         portfolio_inputs=portfolio_inputs,
         runtime_metadata=runtime_metadata,
     )
@@ -831,16 +828,19 @@ def map_strategy_decision_to_plan(
     strategy_symbols_order, portfolio_rows_layout, execution_fields, execution_defaults = _resolve_layout(
         canonical_profile
     )
-    plan = build_value_target_runtime_plan(
+    plan = build_value_target_execution_runtime_plan(
         normalized_decision,
         strategy_profile=canonical_profile,
         portfolio_inputs=portfolio_inputs,
-        annotations=annotations,
+        semantics=semantics,
+        display=display,
         strategy_symbols_order=strategy_symbols_order,
-        portfolio_rows_layout=portfolio_rows_layout,
         include_sellable_quantities=True,
-        execution_fields=execution_fields,
-        execution_defaults=execution_defaults,
+        presentation=ValueTargetPlanPresentation(
+            portfolio_rows_layout=portfolio_rows_layout,
+            execution_fields=execution_fields,
+            execution_defaults=execution_defaults,
+        ),
     )
     cash_by_currency = _cash_by_currency_from_account_state(account_state)
     if not cash_by_currency:
