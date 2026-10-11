@@ -1,0 +1,38 @@
+name: Shared dependency impact (advisory)
+
+on:
+  pull_request:
+    paths:
+      - pyproject.toml
+      - uv.lock
+      - scripts/review_shared_dependency_delta.py
+      - tests/test_review_shared_dependency_delta.py
+      - .github/workflows/shared-dependency-impact.yml
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Test report with synthetic offline fixtures
+        run: python -m unittest discover -s tests -p test_review_shared_dependency_delta.py -v
+      - name: Report exact base/head dependency changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GIT_TERMINAL_PROMPT: '0'
+        run: |
+          python scripts/review_shared_dependency_delta.py \
+            --base-ref "$BASE_SHA" --head-ref "$HEAD_SHA" \
+            --output "$RUNNER_TEMP/shared-dependency-impact.md"
+          cat "$RUNNER_TEMP/shared-dependency-impact.md" >> "$GITHUB_STEP_SUMMARY"
