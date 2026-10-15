@@ -426,6 +426,14 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
     account_identity = execution.get("account_identity")
     if isinstance(account_identity, dict):
         summary["account_identity"] = dict(account_identity)
+    from notifications.digest_snapshot.digest_routing import daily_digest_enabled
+    if daily_digest_enabled():
+        from notifications.digest_snapshot.digest_candidates import cycle_evidence
+        evidence = {**dict(getattr(cycle_result, "allocation", {}) or {}), **execution}
+        evidence.setdefault("execution_status", "completed" if broker_submission_done else "no_action")
+        evidence["orders_pending_count"] = len(pending_orders)
+        summary["notification_digest"] = cycle_evidence(evidence,
+            tuple(getattr(cycle_result, "submitted_orders", ()) or ()), dry_run=dry_run)
     return summary
 
 
@@ -716,8 +724,9 @@ def build_strategy_plugin_alert_context_label() -> str:
 
 
 def publish_strategy_plugin_alerts(signals, *, report=None):
+    from notifications.digest_snapshot.digest_routing import immediate_plugin_signals
     result = dispatch_strategy_plugin_alerts(
-        signals,
+        immediate_plugin_signals(signals),
         notification_settings=RUNTIME_SETTINGS,
         translator=t,
         strategy_label=STRATEGY_PROFILE,
