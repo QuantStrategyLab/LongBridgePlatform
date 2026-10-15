@@ -31,10 +31,12 @@ class FakeQuoteContext:
 
 
 class FakePosition:
-    def __init__(self, symbol, quantity, available_quantity=None):
+    def __init__(self, symbol, quantity, available_quantity=None, currency=None):
         self.symbol = symbol
         self.quantity = quantity
         self.available_quantity = available_quantity if available_quantity is not None else quantity
+        if currency is not None:
+            self.currency = currency
 
 
 class FakeChannel:
@@ -43,8 +45,8 @@ class FakeChannel:
 
 
 class FakePositionsResponse:
-    def __init__(self):
-        self.channels = [FakeChannel([FakePosition("SOXL.US", 3), FakePosition("QQQI.US", 2, 1)])]
+    def __init__(self, positions=None):
+        self.channels = [FakeChannel(positions or [FakePosition("SOXL.US", 3), FakePosition("QQQI.US", 2, 1)])]
 
 
 class LongBridgeLocalHelpersTests(unittest.TestCase):
@@ -109,6 +111,38 @@ class LongBridgeLocalHelpersTests(unittest.TestCase):
         self.assertEqual(snapshot["net_assets"], 2500.50)
         self.assertEqual(snapshot["equity_currency"], "SGD")
         self.assertIn("observed_at", snapshot)
+
+    def test_position_currency_projection_uses_only_consistent_native_position_currency(self):
+        balance = types.SimpleNamespace(currency="SGD", net_assets="2500.50", cash_infos=[])
+        positions = FakePositionsResponse([
+            FakePosition("SOXL.US", 1, currency="USD"),
+            FakePosition("00700.HK", 1, currency="HKD"),
+            FakePosition("QQQI.US", 1),
+        ])
+        trade = types.SimpleNamespace(
+            account_balance=lambda: [balance], stock_positions=lambda: positions,
+        )
+        state = fetch_strategy_account_state(
+            FakeQuoteContext(), trade, ["SOXL", "00700", "QQQI"],
+        )
+        self.assertEqual(
+            state["position_currency_by_symbol"],
+            {"SOXL": "USD", "00700": "HKD", "QQQI": None},
+        )
+        self.assertEqual(state["market_values"], {"SOXL": 50.0, "00700": 320.0, "QQQI": 20.0})
+
+    def test_conflicting_position_currencies_withhold_symbol_currency(self):
+        balance = types.SimpleNamespace(currency="SGD", net_assets="2500.50", cash_infos=[])
+        positions = FakePositionsResponse([
+            FakePosition("SOXL.US", 1, currency="USD"),
+            FakePosition("SOXL.US", 1, currency="SGD"),
+        ])
+        trade = types.SimpleNamespace(
+            account_balance=lambda: [balance], stock_positions=lambda: positions,
+        )
+        state = fetch_strategy_account_state(FakeQuoteContext(), trade, ["SOXL"])
+        self.assertEqual(state["position_currency_by_symbol"], {"SOXL": None})
+        self.assertEqual(state["market_values"]["SOXL"], 100.0)
 
     def test_fetch_strategy_account_state_rejects_account_balance_failure(self):
         class BalanceFailingTradeContext:

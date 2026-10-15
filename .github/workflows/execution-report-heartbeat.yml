@@ -3,6 +3,16 @@ name: Execution Report Heartbeat
 on:
   workflow_dispatch:
     inputs:
+      target:
+        description: "Target account to check; scheduled runs always use all targets."
+        required: false
+        type: choice
+        default: "all"
+        options:
+          - "all"
+          - "paper"
+          - "sg"
+          - "hk"
       lookback_hours:
         description: "Report lookback window in hours."
         required: false
@@ -16,6 +26,31 @@ on:
         options:
           - "true"
           - "false"
+      inspect_sg_probe_permissions:
+        description: "Read-only check of the SG probe Scheduler permissions; requires target=sg."
+        required: false
+        type: boolean
+        default: false
+      inspect_sg_account_snapshot:
+        description: "Read an existing SG account snapshot after the supplied UTC trigger time; requires target=sg."
+        required: false
+        type: boolean
+        default: false
+      inspect_paper_account_snapshot:
+        description: "Read an existing paper account snapshot after the supplied UTC trigger time; requires target=paper."
+        required: false
+        type: boolean
+        default: false
+      snapshot_triggered_at:
+        description: "UTC time at which the existing account snapshot probe was triggered (ISO-8601)."
+        required: false
+        type: string
+        default: ""
+      snapshot_inspection_completed_at:
+        description: "UTC time by which the original snapshot inspection window had completed (ISO-8601)."
+        required: false
+        type: string
+        default: ""
   schedule:
     - cron: "20 22 * * *"
 
@@ -41,12 +76,34 @@ jobs:
 
       - name: Render validated matrix from public manifest
         id: render
+        env:
+          MATRIX_TARGET: ${{ inputs.target || 'all' }}
+          INSPECT_SG_PROBE_PERMISSIONS: ${{ inputs.inspect_sg_probe_permissions || 'false' }}
+          INSPECT_SG_ACCOUNT_SNAPSHOT: ${{ inputs.inspect_sg_account_snapshot || 'false' }}
+          INSPECT_PAPER_ACCOUNT_SNAPSHOT: ${{ inputs.inspect_paper_account_snapshot || 'false' }}
         run: |
           set -euo pipefail
-          python3 scripts/render_runtime_target_matrix.py --profile heartbeat --github-output
+          if [[ "$INSPECT_SG_PROBE_PERMISSIONS" == 'true' && "$MATRIX_TARGET" != 'sg' ]]; then
+            echo "SG probe permission inspection requires target=sg" >&2
+            exit 1
+          fi
+          if [[ "$INSPECT_SG_ACCOUNT_SNAPSHOT" == 'true' && ( "$MATRIX_TARGET" != 'sg' || "$INSPECT_SG_PROBE_PERMISSIONS" == 'true' ) ]]; then
+            echo "SG account snapshot inspection requires target=sg and cannot be combined with permission inspection" >&2
+            exit 1
+          fi
+          if [[ "$INSPECT_PAPER_ACCOUNT_SNAPSHOT" == 'true' && ( "$MATRIX_TARGET" != 'paper' || "$INSPECT_SG_PROBE_PERMISSIONS" == 'true' ) ]]; then
+            echo "Paper account snapshot inspection requires target=paper and cannot be combined with permission inspection" >&2
+            exit 1
+          fi
+          if [[ "$INSPECT_SG_ACCOUNT_SNAPSHOT" == 'true' && "$INSPECT_PAPER_ACCOUNT_SNAPSHOT" == 'true' ]]; then
+            echo "Account snapshot inspection accepts exactly one target" >&2
+            exit 1
+          fi
+          python3 scripts/render_runtime_target_matrix.py --profile heartbeat --target "$MATRIX_TARGET" --github-output
 
   heartbeat:
     needs: resolve-matrix
+    if: ${{ needs.resolve-matrix.result == 'success' && (github.event_name != 'workflow_dispatch' || (inputs.inspect_sg_account_snapshot != true && inputs.inspect_paper_account_snapshot != true)) }}
     name: Check ${{ matrix.target.label }} execution report heartbeat
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -58,6 +115,9 @@ jobs:
       id-token: write
     environment: ${{ matrix.target.environment }}
     env:
+      INSPECT_SG_PROBE_PERMISSIONS: ${{ inputs.inspect_sg_probe_permissions || 'false' }}
+      INSPECT_SG_ACCOUNT_SNAPSHOT: ${{ inputs.inspect_sg_account_snapshot || 'false' }}
+      INSPECT_PAPER_ACCOUNT_SNAPSHOT: ${{ inputs.inspect_paper_account_snapshot || 'false' }}
       RUNTIME_HEARTBEAT_NAME: LongBridgePlatform ${{ matrix.target.label }}
       RUNTIME_HEARTBEAT_REPORT_PLATFORM: longbridge
       RUNTIME_HEARTBEAT_ACCOUNT_SCOPE: ${{ vars.ACCOUNT_REGION }}
@@ -77,6 +137,8 @@ jobs:
       RUNTIME_HEARTBEAT_EXPECTED_DAY_OF_MONTH: ${{ vars.RUNTIME_HEARTBEAT_EXPECTED_DAY_OF_MONTH }}
       RUNTIME_HEARTBEAT_EXPECTED_TIMEZONE: ${{ vars.RUNTIME_HEARTBEAT_EXPECTED_TIMEZONE }}
       RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
+      ACCOUNT_HISTORY_OBSERVATION_MODE: ${{ vars.ACCOUNT_HISTORY_OBSERVATION_MODE || 'scheduler_archive' }}
+      ACCOUNT_HISTORY_REQUESTED_TARGET: ${{ inputs.target || 'all' }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG || 'zh' }}
       RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
@@ -99,6 +161,21 @@ jobs:
           set -euo pipefail
           uv sync --frozen --no-dev
 
+      - name: Validate independent HK audience before authentication
+        id: independent_audience
+        if: ${{ env.ACCOUNT_HISTORY_OBSERVATION_MODE == 'independent_get' && vars.ACCOUNT_HISTORY_RECORDING_ENABLED == 'true' }}
+        continue-on-error: true
+        env:
+          ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ vars.ACCOUNT_HISTORY_RECORDING_ENABLED }}
+          ACCOUNT_HISTORY_SERVICE_URL: ${{ vars.ACCOUNT_HISTORY_SERVICE_URL }}
+          ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
+          ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
+          ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
+          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
+          SNAPSHOT_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+          SNAPSHOT_REGION: ${{ vars.CLOUD_RUN_REGION }}
+        run: uv run --no-sync python scripts/record_daily_account_snapshot.py --validate-independent-hk-audience >> "$GITHUB_OUTPUT"
+
       - name: Authenticate to Google Cloud
         id: gcp_auth_primary
         continue-on-error: true
@@ -106,27 +183,84 @@ jobs:
         with:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          # Reuse the explicit WIF identity and the prevalidated canonical audience.
+          # Send the token only after reconciled serving-metadata validation.
+          token_format: ${{ steps.independent_audience.outcome == 'success' && 'id_token' || '' }}
+          id_token_audience: ${{ steps.independent_audience.outputs.service_url || '' }}
+          id_token_include_email: true
 
       - name: Wait before Google Cloud authentication retry
         if: ${{ steps.gcp_auth_primary.outcome == 'failure' }}
         run: sleep 10
 
       - name: Retry Google Cloud authentication
+        id: gcp_auth_retry
         if: ${{ steps.gcp_auth_primary.outcome == 'failure' }}
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          # Reuse the explicit WIF identity and the prevalidated canonical audience.
+          # Send the token only after reconciled serving-metadata validation.
+          token_format: ${{ steps.independent_audience.outcome == 'success' && 'id_token' || '' }}
+          id_token_audience: ${{ steps.independent_audience.outputs.service_url || '' }}
+          id_token_include_email: true
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
 
+      - name: Inspect SG probe project permissions
+        if: ${{ env.INSPECT_SG_PROBE_PERMISSIONS == 'true' }}
+        env:
+          ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
+          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
+        run: uv run --no-sync python scripts/record_daily_account_snapshot.py --inspect-sg-probe-permissions
+
+      - name: Record and sync daily account snapshot
+        id: account_history
+        if: ${{ !cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && contains(fromJSON('["PAPER","HK","SG"]'), matrix.target.label) && vars.ACCOUNT_HISTORY_RECORDING_ENABLED == 'true' }}
+        continue-on-error: true
+        env:
+          ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ vars.ACCOUNT_HISTORY_RECORDING_ENABLED }}
+          ACCOUNT_HISTORY_SERVICE_URL: ${{ env.ACCOUNT_HISTORY_OBSERVATION_MODE != 'independent_get' && vars.ACCOUNT_HISTORY_SERVICE_URL || steps.independent_audience.outputs.service_url }}
+          ACCOUNT_HISTORY_GCS_PREFIX: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX }}
+          ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
+          ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
+          ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
+          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
+          ACCOUNT_FACTS_SYNC_ENABLED: ${{ vars.ACCOUNT_FACTS_SYNC_ENABLED }}
+          ACCOUNT_FACTS_SYNC_URL: ${{ vars.ACCOUNT_FACTS_SYNC_URL }}
+          ACCOUNT_FACTS_SYNC_TOKEN: ${{ vars.ACCOUNT_FACTS_SYNC_ENABLED == 'true' && secrets.ACCOUNT_FACTS_SYNC_TOKEN || '' }}
+          ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN: ${{ steps.gcp_auth_primary.outputs.id_token || steps.gcp_auth_retry.outputs.id_token }}
+          SNAPSHOT_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+          SNAPSHOT_REGION: ${{ vars.CLOUD_RUN_REGION }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID" ]]; then
+            printf '::add-mask::%s\n' "$ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID"
+          fi
+          case "$ACCOUNT_HISTORY_OBSERVATION_MODE" in
+            independent_get)
+              uv run --no-sync python scripts/record_daily_account_snapshot.py --validate-independent-hk-account-snapshot
+              # Private metadata stays in the pipe. No file, log, or artifact.
+              gcloud run services describe "${SNAPSHOT_SERVICE}" \
+                --project "${GOOGLE_CLOUD_PROJECT}" --region "${SNAPSHOT_REGION}" \
+                --format=json 2>/dev/null \
+                | uv run --no-sync python scripts/record_daily_account_snapshot.py --independent-hk-account-snapshot
+              ;;
+            *)
+              # The script rejects unknown modes before any Scheduler/GCS call.
+              uv run --no-sync python scripts/record_daily_account_snapshot.py
+              ;;
+          esac
+
       - name: Check recent execution report
+        if: ${{ env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}
         run: uv run --no-sync python scripts/execution_report_heartbeat.py
 
       - name: Publish read-only runtime execution evidence
-        if: matrix.target.label == 'PAPER'
-        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@bbacba04baccbca91e4ba59c4dcaf460847e29f7
+        if: ${{ matrix.target.label == 'PAPER' && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}
+        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@9cdea1c8014a844360c812165330bebfdcc7b91b
         with:
           source-id: runtime-reports-longbridge
           report-platform: longbridge
@@ -134,3 +268,65 @@ jobs:
           sync-url: ${{ vars.EXECUTION_EVIDENCE_SYNC_URL }}
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+
+      - name: Publish daily runtime projection
+        if: ${{ !cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && matrix.target.label == 'PAPER' && vars.RUNTIME_DAILY_PROJECTION_ENABLED == 'true' && vars.RUNTIME_DAILY_SYNC_ENABLED == 'true' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
+        env:
+          RUNTIME_DAILY_PROJECTION_ENABLED: ${{ vars.RUNTIME_DAILY_PROJECTION_ENABLED }}
+          RUNTIME_DAILY_PROJECTION_GCS_PREFIX: ${{ secrets.RUNTIME_DAILY_PROJECTION_GCS_PREFIX }}
+          RUNTIME_DAILY_PROJECTION_TARGET_ID: ${{ vars.RUNTIME_DAILY_PROJECTION_TARGET_ID }}
+          RUNTIME_DAILY_HANDOFF_ENABLED: ${{ github.event_name == 'schedule' && 'true' || 'false' }}
+          RUNTIME_DAILY_SYNC_ENABLED: ${{ vars.RUNTIME_DAILY_SYNC_ENABLED }}
+          RUNTIME_DAILY_SYNC_URL: ${{ vars.RUNTIME_DAILY_SYNC_URL }}
+          EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ vars.RUNTIME_DAILY_SYNC_ENABLED == 'true' && secrets.EXECUTION_EVIDENCE_SYNC_TOKEN || '' }}
+          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
+        run: uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-paper
+
+      - name: Fail after completing heartbeat checks if account snapshot sync failed
+        if: ${{ !cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && steps.account_history.outcome == 'failure' }}
+        run: exit 1
+
+  inspect-account-snapshot:
+    needs: resolve-matrix
+    if: ${{ github.event_name == 'workflow_dispatch' && ((inputs.inspect_sg_account_snapshot == true && inputs.target == 'sg') || (inputs.inspect_paper_account_snapshot == true && inputs.target == 'paper')) }}
+    name: Inspect existing ${{ matrix.target.label }} account snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}
+    permissions:
+      contents: read
+      id-token: write
+    environment: ${{ matrix.target.environment }}
+    env:
+      GCP_PROJECT_ID: longbridgequant
+      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+      ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
+      ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
+      ACCOUNT_HISTORY_SERVICE_URL: ${{ vars.ACCOUNT_HISTORY_SERVICE_URL }}
+      ACCOUNT_HISTORY_GCS_PREFIX: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX }}
+      ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
+      ACCOUNT_HISTORY_INSPECTION_TRIGGERED_AT: ${{ inputs.snapshot_triggered_at }}
+      ACCOUNT_HISTORY_INSPECTION_COMPLETED_AT: ${{ inputs.snapshot_inspection_completed_at }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+
+      - name: Install locked runtime dependencies
+        run: |
+          set -euo pipefail
+          uv sync --frozen --no-dev
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Inspect the existing snapshot object
+        run: uv run --no-sync python scripts/record_daily_account_snapshot.py --inspect-archived-account-snapshot --target "$ACCOUNT_HISTORY_TARGET_ID" --triggered-at "$ACCOUNT_HISTORY_INSPECTION_TRIGGERED_AT" --completed-at "$ACCOUNT_HISTORY_INSPECTION_COMPLETED_AT"

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import math
 
+from notifications.compact_adapter import adapt_compact_sections, label_holding_currencies
 from notifications.events import RenderedNotification
 from quant_platform_kit.common.notification_localization import (
     localize_notification_text as _base_localize_notification_text,
@@ -149,7 +150,13 @@ def _build_risk_control_lines(execution, *, translator):
     )
 
 
-def _format_dashboard_text(text, *, translator=None, cash_only_execution: bool = True) -> str:
+def _format_dashboard_text(
+    text,
+    *,
+    translator=None,
+    cash_only_execution: bool = True,
+    position_currency_by_symbol=None,
+) -> str:
     lines = []
     for raw_line in str(text or "").splitlines():
         line = raw_line.rstrip()
@@ -159,6 +166,12 @@ def _format_dashboard_text(text, *, translator=None, cash_only_execution: bool =
             line = _localize_notification_text(line, translator=translator)
         lines.append(line)
     result = "\n".join(lines)
+    if translator is not None:
+        result = label_holding_currencies(
+            result,
+            position_currency_by_symbol=position_currency_by_symbol,
+            unknown_currency_label=translator("holding_currency_unverified"),
+        )
     if translator is not None:
         result = _relabel_dashboard_cash_labels_shared(
             result,
@@ -174,6 +187,7 @@ def _append_dashboard_block(lines, *, execution, separator, translator, compact:
         execution.get("dashboard_text"),
         translator=translator,
         cash_only_execution=cash_only_execution,
+        position_currency_by_symbol=execution.get("position_currency_by_symbol"),
     )
     dashboard_lines = [
         line for line in dashboard_text.splitlines()
@@ -310,6 +324,51 @@ def _append_extra_notification_lines(lines, extra_notification_lines) -> None:
             lines.append(text)
 
 
+def _compact_total_assets_line(execution, *, translator) -> str:
+    dashboard = _format_dashboard_text(
+        execution.get("dashboard_text"),
+        translator=translator,
+        cash_only_execution=bool(execution.get("cash_only_execution", True)),
+        position_currency_by_symbol=execution.get("position_currency_by_symbol"),
+    )
+    labels = (
+        "总资产",
+        "账户总权益",
+        "净值",
+        "total assets",
+        "total account equity",
+        "net assets",
+        "net value",
+        "equity",
+    )
+    for raw_line in dashboard.splitlines():
+        for segment in raw_line.split(" | "):
+            line = segment.strip().lstrip("- ").strip()
+            lowered = line.lower()
+            if any(label in lowered for label in labels) and ":" in line:
+                return line if line.startswith("💰") else f"💰 {line}"
+    return ""
+
+
+def _heartbeat_account_equity_line(execution, *, translator) -> str:
+    snapshot = execution.get("heartbeat_account_snapshot")
+    snapshot = snapshot if isinstance(snapshot, Mapping) else {}
+    observed_at = str(snapshot.get("observed_at") or "").strip()
+    currency = str(snapshot.get("equity_currency") or snapshot.get("currency") or "").strip()
+    amount = snapshot.get("net_assets")
+    valid = (
+        isinstance(amount, (int, float))
+        and not isinstance(amount, bool)
+        and math.isfinite(amount)
+        and amount > 0
+        and bool(currency)
+        and bool(observed_at)
+    )
+    if not valid:
+        return ""
+    return translator("heartbeat_account_equity", value=f"{currency} {amount:,.2f}")
+
+
 def render_rebalance_notification(
     *,
     execution,
@@ -345,10 +404,23 @@ def render_rebalance_notification(
     _append_strategy_line(compact_lines, strategy_display_name=strategy_display_name, translator=translator)
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
-    _append_extra_notification_lines(compact_lines, extra_notification_lines)
-    _append_dashboard_block(compact_lines, execution=execution, separator=separator, translator=translator, compact=True)
-    compact_lines.append(separator)
-    compact_lines.append(formatted_logs)
+    total_assets_line = _compact_total_assets_line(execution, translator=translator)
+    if total_assets_line:
+        compact_lines.append(total_assets_line)
+    compact_dashboard = _format_dashboard_text(
+        execution.get("dashboard_text"),
+        translator=translator,
+        cash_only_execution=bool(execution.get("cash_only_execution", True)),
+        position_currency_by_symbol=execution.get("position_currency_by_symbol"),
+    )
+    compact_lines.extend(
+        adapt_compact_sections(
+            compact_dashboard,
+            locale="zh" if _translator_uses_zh(translator) else "en",
+            supplemental_lines=execution.get("compact_supplemental_lines", ()),
+        )
+    )
+    compact_lines.extend(str(log).strip() for log in logs if str(log).strip())
     return RenderedNotification(
         detailed_text="\n".join(detailed_lines),
         compact_text="\n".join(compact_lines),
@@ -410,10 +482,11 @@ def render_heartbeat_notification(
         translator=translator,
         signal_key="heartbeat_signal",
     )
+    outcome_key = _heartbeat_outcome_key(execution, skip_logs=skip_logs, note_logs=note_logs)
     detailed_lines.extend(
         [
             separator,
-            translator("no_executable_orders") if (skip_logs or note_logs) else translator("no_trades"),
+            translator(outcome_key),
         ]
     )
     detailed_text = "\n".join(detailed_lines)
@@ -434,23 +507,47 @@ def render_heartbeat_notification(
     _append_strategy_line(compact_lines, strategy_display_name=strategy_display_name, translator=translator)
     if dry_run_only:
         compact_lines.append(translator("dry_run_banner"))
-    _append_extra_notification_lines(compact_lines, extra_notification_lines)
-    _append_heartbeat_account_lines(compact_lines, execution=execution, translator=translator)
-    _append_dashboard_block(compact_lines, execution=execution, separator=separator, translator=translator, compact=True)
-    compact_lines.extend(
-        [
-            separator,
-            translator("no_executable_orders") if (skip_logs or note_logs) else translator("no_trades"),
-        ]
+    total_assets_line = _heartbeat_account_equity_line(execution, translator=translator)
+    if not total_assets_line:
+        total_assets_line = _compact_total_assets_line(execution, translator=translator)
+    if total_assets_line:
+        compact_lines.append(total_assets_line)
+    compact_dashboard = _format_dashboard_text(
+        execution.get("dashboard_text"),
+        translator=translator,
+        cash_only_execution=bool(execution.get("cash_only_execution", True)),
+        position_currency_by_symbol=execution.get("position_currency_by_symbol"),
     )
-    if skip_logs:
-        compact_lines.extend([separator, translator("skipped_actions")])
-        compact_lines.extend(f"  - {log}" for log in skip_logs)
-    if note_logs:
-        compact_lines.extend([separator, translator("notes_title")])
-        compact_lines.extend(f"  - {log}" for log in note_logs)
+    compact_lines.extend(
+        adapt_compact_sections(
+            compact_dashboard,
+            locale="zh" if _translator_uses_zh(translator) else "en",
+            supplemental_lines=execution.get("compact_supplemental_lines", ()),
+        )
+    )
+    compact_lines.append(translator(outcome_key))
 
     return RenderedNotification(
         detailed_text=detailed_text,
         compact_text="\n".join(compact_lines),
     )
+
+
+def _heartbeat_outcome_key(execution, *, skip_logs, note_logs) -> str:
+    state = str(execution.get("heartbeat_execution_state") or "").strip().lower()
+    durable = execution.get("durable_live_execution_command")
+    durable = durable if isinstance(durable, Mapping) else {}
+    is_hard_blocked = (
+        state == "blocked"
+        or str(execution.get("execution_status") or "").strip().lower() == "blocked"
+        or bool(execution.get("account_identity_blocked"))
+        or bool(execution.get("live_command_blocked"))
+        or str(durable.get("status") or "").strip().upper() == "BLOCKED_INVALID_BINDING"
+    )
+    if is_hard_blocked:
+        return "heartbeat_execution_blocked"
+    if state == "waiting_window":
+        return "heartbeat_waiting_window"
+    if bool(execution.get("direct_live_routing_blocked")):
+        return "heartbeat_execution_blocked"
+    return "no_executable_orders" if (skip_logs or note_logs) else "no_trades"

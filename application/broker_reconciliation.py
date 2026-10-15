@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from decimal import Decimal, InvalidOperation
@@ -20,9 +21,12 @@ from quant_platform_kit.common.broker_reconciliation import (
 )
 from quant_platform_kit.common.execution_state import build_execution_marker_store_from_env
 
+from application.account_financing import project_native_financing
+
 
 ENABLED_ENV_NAME = "LONGBRIDGE_BROKER_RECONCILIATION_ENABLED"
 ACCOUNT_SNAPSHOT_ENABLED_ENV_NAME = "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED"
+ACCOUNT_SNAPSHOT_SOURCE_BINDING_KIND = "deployment_scope_token_version"
 EXPECTED_DIGESTS_ENV_NAME = "LONGBRIDGE_RECONCILIATION_EXPECTED_DIGESTS_JSON"
 SUPPORTED_ACCOUNT_SCOPES = frozenset({"PAPER", "HK", "SG"})
 _EXPECTED_DIGEST_KEYS = (
@@ -64,6 +68,70 @@ def account_snapshot_enabled(env_reader: Callable[[str, str], str | None]) -> bo
         str(env_reader(ACCOUNT_SNAPSHOT_ENABLED_ENV_NAME, "") or "").strip().lower()
         == "true"
     )
+
+
+def build_account_snapshot_source_binding(
+    *,
+    version_name: str | None,
+    project_id: str | None,
+    service: str | None,
+    revision: str | None,
+    account_scope: str,
+    region: str | None = None,
+) -> dict[str, object]:
+    """Hash one deployment, scope, and token version. Missing parts stay unbound."""
+
+    version = _text(version_name)
+    project = _text(project_id)
+    service_name = _text(service)
+    revision_name = _text(revision)
+    scope = _text(account_scope).upper()
+    if not version or not project or not service_name or not revision_name or not scope:
+        return _unavailable_account_snapshot_source_binding()
+    payload = {
+        "account_scope": scope,
+        "project_id": project,
+        "revision": revision_name,
+        "service": service_name,
+        "version_name": version,
+    }
+    region_name = _text(region)
+    if region_name:
+        payload["region"] = region_name
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return {
+        "kind": ACCOUNT_SNAPSHOT_SOURCE_BINDING_KIND,
+        "status": "bound",
+        "id": digest,
+    }
+
+
+def _unavailable_account_snapshot_source_binding() -> dict[str, object]:
+    return {
+        "kind": ACCOUNT_SNAPSHOT_SOURCE_BINDING_KIND,
+        "status": "unavailable",
+        "id": None,
+    }
+
+
+def _public_account_snapshot_source_binding(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return _unavailable_account_snapshot_source_binding()
+    binding_id = value.get("id")
+    if (
+        value.get("kind") == ACCOUNT_SNAPSHOT_SOURCE_BINDING_KIND
+        and value.get("status") == "bound"
+        and isinstance(binding_id, str)
+        and _SHA256_PATTERN.fullmatch(binding_id)
+    ):
+        return {
+            "kind": ACCOUNT_SNAPSHOT_SOURCE_BINDING_KIND,
+            "status": "bound",
+            "id": binding_id,
+        }
+    return _unavailable_account_snapshot_source_binding()
 
 
 def _text(value: object) -> str:
@@ -223,6 +291,8 @@ class LongBridgeReconciliationObservations:
     recent_executions_complete: bool
     # Dynamic valuation is diagnostic only; excluded from reconciliation digests.
     broker_reported_balances: tuple[Mapping[str, object], ...] = ()
+    # Optional native financing; display/diagnostic only; never enters digests.
+    financing: tuple[Mapping[str, object], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -321,6 +391,26 @@ def collect_read_only_reconciliation_observations(
         )
     normalized_orders = [_normalize_order(order) for order in orders]
     open_orders = [order for order in normalized_orders if order["status"] not in _TERMINAL_ORDER_STATUSES]
+    broker_balances = (
+        _canonical_records([_normalize_broker_balance(balance) for balance in balances])
+        if include_broker_balances
+        else ()
+    )
+    if broker_balances:
+        financing_currencies = {
+            str(row["currency"])
+            for row in broker_balances
+            if isinstance(row, Mapping) and isinstance(row.get("currency"), str)
+        }
+    else:
+        financing_currencies = {
+            _text(getattr(balance, "currency", "")).upper()
+            for balance in balances
+            if _text(getattr(balance, "currency", "")).upper()
+        }
+    financing = tuple(
+        project_native_financing(balances, balance_currencies=financing_currencies)
+    )
     return LongBridgeReconciliationObservations(
         account_scope={"configured_scope": scope, "account_channels": sorted(set(account_channels))},
         # The SDK exposes account channels, not a stable account identity or paper/live marker.
@@ -333,11 +423,11 @@ def collect_read_only_reconciliation_observations(
         cash_complete=True,
         # A bounded history query cannot prove every long-lived active order is present.
         open_orders_complete=False,
-        recent_executions_complete=len(executions) < 1000,
-        broker_reported_balances=(
-            _canonical_records([_normalize_broker_balance(balance) for balance in balances])
-            if include_broker_balances else ()
-        ),
+        # longport 3.0.23 returns rows without the HTTP has_more field or page
+        # coverage evidence. A short or empty result cannot prove completeness.
+        recent_executions_complete=False,
+        broker_reported_balances=broker_balances,
+        financing=financing,
     )
 
 
@@ -521,7 +611,7 @@ def run_read_only_account_snapshot(
     *,
     enabled: bool,
     account_scope: object,
-    build_read_only_contexts: Callable[[], tuple[Any, Any]],
+    build_read_only_contexts: Callable[[], tuple[Any, Any, Mapping[str, object]]],
     collect_evidence: Callable[..., LongBridgeReconciliationObservations] | None,
     now_reader: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> tuple[dict[str, object], int]:
@@ -543,7 +633,10 @@ def run_read_only_account_snapshot(
         if not isinstance(started_at, datetime) or started_at.utcoffset() is None:
             raise LongBridgeReconciliationReadError("Account snapshot time is invalid.")
         started_at = started_at.astimezone(timezone.utc)
-        quote_context, trade_context = build_read_only_contexts()
+        built = build_read_only_contexts()
+        if not isinstance(built, tuple) or len(built) != 3:
+            raise LongBridgeReconciliationReadError("Account snapshot data is invalid.")
+        quote_context, trade_context, source_binding = built
         observations = collect_evidence(
             quote_context,
             trade_context,
@@ -617,7 +710,7 @@ def run_read_only_account_snapshot(
         ):
             raise LongBridgeReconciliationReadError("Account snapshot order is invalid.")
 
-        return {
+        payload: dict[str, object] = {
             "schema_version": "longbridge_account_snapshot.v1",
             "status": "partial",
             "account_scope": scope,
@@ -641,7 +734,11 @@ def run_read_only_account_snapshot(
             "equity": None,
             "no_order": True,
             "live_authority_granted": False,
-        }, 200
+            "source_binding": _public_account_snapshot_source_binding(source_binding),
+        }
+        if observations.financing:
+            payload["financing"] = list(observations.financing)
+        return payload, 200
     except Exception:
         return {"status": "blocked", "reason": "account_snapshot_collection_failed"}, 503
 
@@ -653,7 +750,9 @@ __all__ = [
     "LongBridgeReconciliationCandidate",
     "LongBridgeReconciliationObservations",
     "LongBridgeReconciliationReadError",
+    "ACCOUNT_SNAPSHOT_SOURCE_BINDING_KIND",
     "account_snapshot_enabled",
+    "build_account_snapshot_source_binding",
     "build_reconciliation_candidate",
     "collect_read_only_reconciliation_observations",
     "reconciliation_enabled",

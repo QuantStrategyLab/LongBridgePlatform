@@ -17,9 +17,34 @@ on:
         required: false
         type: string
       source_commit:
-        description: "Full approved source SHA; must equal the dispatched workflow SHA."
+        description: "Application image SHA. Staging accepts the current workflow SHA or an explicitly admitted fixed candidate."
         required: false
         type: string
+      account_history_recording_enabled:
+        description: "Optional PAPER history switch. Leave blank to keep the current service value."
+        required: false
+        type: string
+        default: ""
+      account_history_gcs_prefix:
+        description: "Optional PAPER history prefix. Required together with the other three history inputs."
+        required: false
+        type: string
+        default: ""
+      account_history_target_id:
+        description: "Optional PAPER history object label. Required together with the other three history inputs."
+        required: false
+        type: string
+        default: ""
+      account_history_expected_scope:
+        description: "Optional PAPER history scope. Required together with the other three history inputs."
+        required: false
+        type: string
+        default: ""
+      account_snapshot_enabled:
+        description: "Optional account-snapshot endpoint switch. PAPER true/false, or HK true on the approved SGHK candidate. Blank preserves the current value."
+        required: false
+        type: string
+        default: ""
       target:
         description: "Legacy: configured or isolated verify targets. Image-only: exactly PAPER, HK, or SG."
         required: true
@@ -141,6 +166,11 @@ jobs:
       WORKFLOW_TARGET: ${{ inputs.target }}
       APPROVED_REF: ${{ inputs.approved_ref }}
       SOURCE_COMMIT: ${{ inputs.source_commit }}
+      ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ inputs.account_history_recording_enabled }}
+      ACCOUNT_HISTORY_GCS_PREFIX: ${{ inputs.account_history_gcs_prefix }}
+      ACCOUNT_HISTORY_TARGET_ID: ${{ inputs.account_history_target_id }}
+      ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ inputs.account_history_expected_scope }}
+      ACCOUNT_SNAPSHOT_ENABLED_INPUT: ${{ inputs.account_snapshot_enabled }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
       GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
@@ -156,9 +186,13 @@ jobs:
             PAPER|HK|SG) ;;
             *) echo "Image-only staging requires exactly one configured target." >&2; exit 1 ;;
           esac
-          if [ -z "${APPROVED_REF:-}" ] || [ "${APPROVED_REF}" != "${GITHUB_REF_NAME:-}" ] \
-            || [[ ! "${SOURCE_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]] || [ "${SOURCE_COMMIT}" != "${GITHUB_SHA:-}" ] \
-            || [ "${SOURCE_COMMIT}" != "${GITHUB_WORKFLOW_SHA:-}" ] \
+          if [ -z "${APPROVED_REF:-}" ] || [ "${APPROVED_REF}" != "main" ] \
+            || [ "${APPROVED_REF}" != "${GITHUB_REF_NAME:-}" ] \
+            || [ "${GITHUB_REF:-}" != "refs/heads/main" ] \
+            || [[ ! "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] \
+            || [ "${GITHUB_SHA}" != "${GITHUB_WORKFLOW_SHA:-}" ] \
+            || [[ ! "${SOURCE_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]] \
+            || [ "${GITHUB_REPOSITORY:-}" != "QuantStrategyLab/LongBridgePlatform" ] \
             || [ "${GITHUB_WORKFLOW_REF:-}" != "${GITHUB_REPOSITORY}/.github/workflows/sync-cloud-run-env.yml@${GITHUB_REF}" ]; then
             echo "Approved workflow ref and source SHA must match the dispatch." >&2
             exit 1
@@ -167,20 +201,135 @@ jobs:
             echo "Configured service and region are required." >&2
             exit 1
           fi
+          # Trusted control code stays on this main checkout. The application archive is chosen below.
+          approved_candidate=0b939723c1db3ef59175535998b470cbcd4b8824
+          approved_http_snapshot_candidate=d8314a61df697cae1dd03a78ddc5c2fc4179ec67
+          approved_probe_snapshot_candidate=318bf0419ec91002fd0f0dfd1bc80a0664a85e79
+          approved_probe_financing_candidate=82788aa7c73690d2b87f63540a9102943e9372eb
+          approved_sghk_snapshot_candidate=df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f
+          approved_hk_probe_diagnostics_candidate=779d8e1c39d161144bc34ae8503ce34d87971b16
+          history_count=0
+          for history_value in \
+            "${ACCOUNT_HISTORY_RECORDING_ENABLED:-}" \
+            "${ACCOUNT_HISTORY_GCS_PREFIX:-}" \
+            "${ACCOUNT_HISTORY_TARGET_ID:-}" \
+            "${ACCOUNT_HISTORY_EXPECTED_SCOPE:-}"
+          do
+            if [ -n "${history_value}" ]; then
+              history_count=$((history_count + 1))
+              case "${history_value}" in
+                *","*|*"="*|*[[:space:]]*|-*|*"$"*|*"\`"*)
+                  echo "History settings are invalid." >&2
+                  exit 1
+                  ;;
+              esac
+            fi
+          done
+          if [ "${history_count}" -ne 0 ] && [ "${WORKFLOW_TARGET}" != "PAPER" ] \
+            && [ "${WORKFLOW_TARGET}" != "HK" ] && [ "${WORKFLOW_TARGET}" != "SG" ]; then
+            echo "History settings are not admitted for this target." >&2
+            exit 1
+          fi
+          if [ "${history_count}" -ne 0 ] && [ "${history_count}" -ne 4 ]; then
+            echo "History settings are invalid." >&2
+            exit 1
+          fi
+          if [ "${history_count}" -eq 4 ] && [ "${WORKFLOW_TARGET}" != "PAPER" ]; then
+            case "${WORKFLOW_TARGET}" in
+              HK) expected_target=hk ;;
+              SG) expected_target=sg ;;
+              *) echo "History settings are not admitted for this target." >&2; exit 1 ;;
+            esac
+            if [ "${ACCOUNT_HISTORY_RECORDING_ENABLED}" != "true" ] \
+              || [ "${ACCOUNT_HISTORY_TARGET_ID}" != "${expected_target}" ] \
+              || [ "${ACCOUNT_HISTORY_EXPECTED_SCOPE}" != "${WORKFLOW_TARGET}" ] \
+              || [ "${ACCOUNT_HISTORY_GCS_PREFIX}" != "gs://qsl-runtime-logs-shared/longbridge/account_snapshots" ]; then
+              echo "History settings do not match the approved account." >&2
+              exit 1
+            fi
+          fi
+          snapshot_setting="${ACCOUNT_SNAPSHOT_ENABLED_INPUT:-}"
+          if [ -n "${snapshot_setting}" ] \
+            && [ "${snapshot_setting}" != "true" ] \
+            && [ "${snapshot_setting}" != "false" ]; then
+            echo "Account snapshot setting is invalid." >&2
+            exit 1
+          fi
+          if [ -n "${snapshot_setting}" ] && [ "${WORKFLOW_TARGET}" = "PAPER" ]; then
+            :
+          elif [ "${snapshot_setting}" = "true" ] && [ "${WORKFLOW_TARGET}" = "HK" ]; then
+            :
+          elif [ -n "${snapshot_setting}" ]; then
+            echo "Account snapshot setting is only admitted for PAPER, or HK enable=true." >&2
+            exit 1
+          fi
+          if [ -n "${snapshot_setting}" ] && [ "${history_count}" -ne 0 ]; then
+            echo "Account snapshot and history updates must be staged separately." >&2
+            exit 1
+          fi
+          if [ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] && [ "${history_count}" -eq 0 ]; then
+            image_mode=same
+          elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 4 ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]; then
+            image_mode=history
+          elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 0 ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_http_snapshot_candidate}" ]; then
+            image_mode=snapshot
+          elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 0 ] \
+            && [ -z "${snapshot_setting}" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_probe_snapshot_candidate}" ]; then
+            image_mode=probe
+          elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 0 ] \
+            && [ -z "${snapshot_setting}" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_probe_financing_candidate}" ]; then
+            image_mode=probe-financing
+          elif { [ "${WORKFLOW_TARGET}" = "HK" ] || [ "${WORKFLOW_TARGET}" = "SG" ]; } \
+            && [ "${history_count}" -eq 4 ] && [ -z "${snapshot_setting}" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_sghk_snapshot_candidate}" ]; then
+            image_mode=account-history
+          elif [ "${WORKFLOW_TARGET}" = "HK" ] && [ "${history_count}" -eq 0 ] \
+            && [ "${snapshot_setting}" = "true" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_sghk_snapshot_candidate}" ]; then
+            image_mode=hk-account-snapshot
+          elif [ "${WORKFLOW_TARGET}" = "HK" ] && [ "${history_count}" -eq 0 ] \
+            && [ -z "${snapshot_setting}" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_hk_probe_diagnostics_candidate}" ]; then
+            image_mode=hk-probe-diagnostics
+          else
+            echo "Image source is not approved." >&2
+            exit 1
+          fi
+          if [ -n "${GITHUB_ENV:-}" ]; then
+            echo "IMAGE_STAGING_MODE=${image_mode}" >> "${GITHUB_ENV}"
+          fi
 
       - name: Checkout exact image-only source
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Verify exact image-only source
         run: |
           set -euo pipefail
-          if [ "$(git rev-parse HEAD)" != "${SOURCE_COMMIT}" ]; then
-            echo "Checked-out source does not match the approved SHA." >&2
+          if [ "$(git rev-parse HEAD)" != "${GITHUB_SHA}" ]; then
+            echo "Checked-out source does not match the approved workflow SHA." >&2
             exit 1
           fi
+
+      - name: Set up Python for image-only admission
+        if: inputs.target == 'PAPER' || inputs.target == 'HK' || inputs.target == 'SG'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install frozen image-only admission dependencies
+        if: inputs.target == 'PAPER' || inputs.target == 'HK' || inputs.target == 'SG'
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip uv
+          uv sync --frozen --no-dev
 
       - name: Authenticate selected image-only target
         uses: google-github-actions/auth@v3
@@ -197,6 +346,87 @@ jobs:
       - name: Build and stage image without traffic
         run: |
           set -euo pipefail
+          approved_candidate=0b939723c1db3ef59175535998b470cbcd4b8824
+          approved_http_snapshot_candidate=d8314a61df697cae1dd03a78ddc5c2fc4179ec67
+          approved_probe_snapshot_candidate=318bf0419ec91002fd0f0dfd1bc80a0664a85e79
+          approved_probe_financing_candidate=82788aa7c73690d2b87f63540a9102943e9372eb
+          approved_sghk_snapshot_candidate=df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f
+          approved_hk_probe_diagnostics_candidate=779d8e1c39d161144bc34ae8503ce34d87971b16
+          case "${WORKFLOW_TARGET}" in
+            HK) expected_sghk_target=hk ;;
+            SG) expected_sghk_target=sg ;;
+            *) expected_sghk_target="" ;;
+          esac
+          history_count=0
+          for history_value in \
+            "${ACCOUNT_HISTORY_RECORDING_ENABLED:-}" \
+            "${ACCOUNT_HISTORY_GCS_PREFIX:-}" \
+            "${ACCOUNT_HISTORY_TARGET_ID:-}" \
+            "${ACCOUNT_HISTORY_EXPECTED_SCOPE:-}"
+          do
+            if [ -n "${history_value}" ]; then
+              history_count=$((history_count + 1))
+            fi
+          done
+          snapshot_setting="${ACCOUNT_SNAPSHOT_ENABLED_INPUT:-}"
+          if [ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] && [ "${history_count}" -eq 0 ]; then
+            image_mode=same
+          elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 4 ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]; then
+            image_mode=history
+          elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 0 ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_http_snapshot_candidate}" ]; then
+            image_mode=snapshot
+          elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 0 ] \
+            && [ -z "${snapshot_setting}" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_probe_snapshot_candidate}" ]; then
+            image_mode=probe
+          elif [ "${WORKFLOW_TARGET}" = "PAPER" ] && [ "${history_count}" -eq 0 ] \
+            && [ -z "${snapshot_setting}" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_probe_financing_candidate}" ]; then
+            image_mode=probe-financing
+          elif { [ "${WORKFLOW_TARGET}" = "HK" ] || [ "${WORKFLOW_TARGET}" = "SG" ]; } \
+            && [ "${history_count}" -eq 4 ] && [ -z "${snapshot_setting}" ] \
+            && [ "${ACCOUNT_HISTORY_RECORDING_ENABLED}" = "true" ] \
+            && [ "${ACCOUNT_HISTORY_TARGET_ID}" = "${expected_sghk_target}" ] \
+            && [ "${ACCOUNT_HISTORY_EXPECTED_SCOPE}" = "${WORKFLOW_TARGET}" ] \
+            && [ "${ACCOUNT_HISTORY_GCS_PREFIX}" = "gs://qsl-runtime-logs-shared/longbridge/account_snapshots" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_sghk_snapshot_candidate}" ]; then
+            image_mode=account-history
+          elif [ "${WORKFLOW_TARGET}" = "HK" ] && [ "${history_count}" -eq 0 ] \
+            && [ "${snapshot_setting}" = "true" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_sghk_snapshot_candidate}" ]; then
+            image_mode=hk-account-snapshot
+          elif [ "${WORKFLOW_TARGET}" = "HK" ] && [ "${history_count}" -eq 0 ] \
+            && [ -z "${snapshot_setting}" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_hk_probe_diagnostics_candidate}" ]; then
+            image_mode=hk-probe-diagnostics
+          else
+            echo "Image source is not approved." >&2
+            exit 1
+          fi
+          if [ "${image_mode}" = "same" ]; then
+            archive_ref=HEAD
+            image_tag="${GITHUB_SHA}"
+          elif [ "${image_mode}" = "snapshot" ]; then
+            archive_ref="${approved_http_snapshot_candidate}"
+            image_tag="${approved_http_snapshot_candidate}"
+          elif [ "${image_mode}" = "probe" ]; then
+            archive_ref="${approved_probe_snapshot_candidate}"
+            image_tag="${approved_probe_snapshot_candidate}"
+          elif [ "${image_mode}" = "probe-financing" ]; then
+            archive_ref="${approved_probe_financing_candidate}"
+            image_tag="${approved_probe_financing_candidate}"
+          elif [ "${image_mode}" = "account-history" ] || [ "${image_mode}" = "hk-account-snapshot" ]; then
+            archive_ref="${approved_sghk_snapshot_candidate}"
+            image_tag="${approved_sghk_snapshot_candidate}"
+          elif [ "${image_mode}" = "hk-probe-diagnostics" ]; then
+            archive_ref="${approved_hk_probe_diagnostics_candidate}"
+            image_tag="${approved_hk_probe_diagnostics_candidate}"
+          else
+            archive_ref="${approved_candidate}"
+            image_tag="${approved_candidate}"
+          fi
           # Updating, rather than deploying, requires an existing configured service.
           existing_service="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
             --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" --format='value(metadata.name)')"
@@ -204,12 +434,40 @@ jobs:
             echo "Configured service readback did not match." >&2
             exit 1
           fi
+          history_arg=""
+          snapshot_arg=""
+          plan=""
+          if [ "${image_mode}" != "same" ]; then
+            git fetch --depth 1 origin "${archive_ref}"
+            if [ "$(git cat-file -t "${archive_ref}")" != "commit" ] \
+              || [ "$(git rev-parse "${archive_ref}^{commit}")" != "${archive_ref}" ]; then
+              echo "Approved candidate commit is not available in this repository." >&2
+              exit 1
+            fi
+          fi
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ] \
+            || [ "${image_mode}" = "hk-account-snapshot" ] \
+            || [ "${image_mode}" = "hk-probe-diagnostics" ]; then
+            plan="$(mktemp)"
+            uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_deployed_runtime_target_admission.py" \
+              --project="${GCP_PROJECT_ID}" \
+              --region="${CLOUD_RUN_REGION}" \
+              --service="${CLOUD_RUN_SERVICE}" \
+              --image-only-staging \
+              --plan-out="${plan}"
+            history_arg="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("history_arg") or "")' "${plan}")"
+            snapshot_arg="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("snapshot_arg") or "")' "${plan}")"
+            if [ -n "${history_arg}" ] && [ -n "${snapshot_arg}" ]; then
+              echo "Image-only environment update plan is invalid." >&2
+              exit 1
+            fi
+          fi
           artifact_registry_hostname="${GCP_ARTIFACT_REGISTRY_HOSTNAME:-${CLOUD_RUN_REGION}-docker.pkg.dev}"
           image_repo="${artifact_registry_hostname}/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY_REPOSITORY}/longbridgeplatform/${CLOUD_RUN_SERVICE}"
-          image="${image_repo}:${SOURCE_COMMIT}-${GITHUB_RUN_ID}"
+          image="${image_repo}:${image_tag}-${GITHUB_RUN_ID}"
           gcloud auth configure-docker "${artifact_registry_hostname}" --quiet
-          # Auth writes temporary credentials into the workspace; build tracked source only.
-          git archive HEAD | docker build --pull -t "${image}" -
+          # Auth writes temporary credentials into the workspace; build the selected commit only.
+          git archive "${archive_ref}" | docker build --pull -t "${image}" -
           docker push "${image}"
           digest="$(gcloud artifacts docker images describe "${image}" --format='value(image_summary.digest)')"
           if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -218,10 +476,63 @@ jobs:
           fi
           # Preserve existing configuration and serving revisions. --no-traffic
           # pins an existing LATEST selector to its current revision, without moving traffic.
-          gcloud run services update "${CLOUD_RUN_SERVICE}" \
-            --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
-            --image="${image_repo}@${digest}" --no-traffic \
-            --update-labels="commit-sha=${SOURCE_COMMIT},github-run-id=${GITHUB_RUN_ID}" --quiet
+          update_command=(
+            gcloud run services update "${CLOUD_RUN_SERVICE}"
+            --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}"
+            --image="${image_repo}@${digest}" --no-traffic
+            --update-labels="commit-sha=${image_tag},github-run-id=${GITHUB_RUN_ID}" --quiet
+          )
+          env_update_arg="${history_arg:-${snapshot_arg}}"
+          if [ -n "${env_update_arg}" ]; then
+            update_command+=(--update-env-vars="${env_update_arg}")
+          fi
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ] \
+            || [ "${image_mode}" = "hk-account-snapshot" ] \
+            || [ "${image_mode}" = "hk-probe-diagnostics" ]; then
+            revision_suffix="r${GITHUB_RUN_ID}"
+            revision_name="${CLOUD_RUN_SERVICE}-${revision_suffix}"
+            if [[ ! "${GITHUB_RUN_ID}" =~ ^[0-9]+$ ]] \
+              || [[ ! "${revision_name}" =~ ^[a-z][a-z0-9-]{0,61}[a-z0-9]$ ]]; then
+              echo "Staged revision name is invalid." >&2
+              exit 1
+            fi
+            update_command+=(--revision-suffix="${revision_suffix}")
+          fi
+          "${update_command[@]}"
+          if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ] \
+            || [ "${image_mode}" = "hk-account-snapshot" ] \
+            || [ "${image_mode}" = "hk-probe-diagnostics" ]; then
+            uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_deployed_runtime_target_admission.py" \
+              --project="${GCP_PROJECT_ID}" \
+              --region="${CLOUD_RUN_REGION}" \
+              --service="${CLOUD_RUN_SERVICE}" \
+              --image-only-readback \
+              --plan="${plan}" \
+              --expected-image="${image_repo}@${digest}" \
+              --expected-commit="${image_tag}" \
+              --expected-revision="${revision_name}"
+          fi
+          # Independent HK GET requires the endpoint flag on the single serving revision.
+          if [ "${image_mode}" = "hk-account-snapshot" ]; then
+            gcloud run services update-traffic "${CLOUD_RUN_SERVICE}" \
+              --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
+              --to-revisions="${revision_name}=100" --quiet
+            traffic_revision="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+              --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
+              --format='value(status.traffic[0].revisionName)')"
+            traffic_percent="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+              --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
+              --format='value(status.traffic[0].percent)')"
+            latest_ready="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+              --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
+              --format='value(status.latestReadyRevisionName)')"
+            if [ "${traffic_revision}" != "${revision_name}" ] \
+              || [ "${traffic_percent}" != "100" ] \
+              || [ "${latest_ready}" != "${revision_name}" ]; then
+              echo "HK account-snapshot revision did not receive coordinated 100% traffic." >&2
+              exit 1
+            fi
+          fi
 
   resolve-matrix:
     name: Resolve runtime-target matrix
@@ -840,7 +1151,7 @@ jobs:
             --concurrency=1 \
             --memory=512Mi \
             --cpu=1 \
-            --timeout=300s \
+            --timeout=600s \
             --no-traffic \
             --labels="managed-by=github-actions,commit-sha=${GITHUB_SHA},github-run-id=${GITHUB_RUN_ID},deployment-label=${deployment_label}" \
             --quiet
@@ -1480,6 +1791,27 @@ jobs:
           probe_job_name="${CLOUD_RUN_SERVICE}-probe-scheduler"
           probe_uri="${service_url}/probe"
           probe_job_created=false
+          # A PAUSED HK/SG probe job is driven only by the Execution Report Heartbeat
+          # resume->run->pause path, which requires zero Scheduler retries
+          # (scripts/record_daily_account_snapshot.py _validate_scheduler_job).
+          # Active probe jobs keep capacity-429 retries. Enabled state is never changed here.
+          probe_retry_args=(
+            --max-retry-attempts=3
+            --min-backoff=120s
+            --max-backoff=300s
+            --max-retry-duration=900s
+          )
+          probe_job_state="$(gcloud scheduler jobs describe "${probe_job_name}" \
+            --project="${GCP_PROJECT_ID}" \
+            --location="${scheduler_location}" \
+            --format='value(state)' 2>/dev/null || true)"
+          if [ "${probe_job_state}" = "PAUSED" ] \
+            && { [ "${DEPLOYMENT_LABEL:-}" = "HK" ] || [ "${DEPLOYMENT_LABEL:-}" = "SG" ]; }; then
+            probe_retry_args=(
+              --max-retry-attempts=0
+              --max-retry-duration=0s
+            )
+          fi
           if gcloud scheduler jobs describe "${probe_job_name}" \
             --project="${GCP_PROJECT_ID}" \
             --location="${scheduler_location}" >/dev/null 2>&1; then
@@ -1494,10 +1826,7 @@ jobs:
               --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
               --oidc-token-audience="${service_url}" \
               --attempt-deadline=180s \
-              --max-retry-attempts=3 \
-              --min-backoff=120s \
-              --max-backoff=300s \
-              --max-retry-duration=900s \
+              "${probe_retry_args[@]}" \
               --quiet
           else
             echo "Creating Cloud Scheduler probe ${probe_job_name} at ${desired_probe_schedule}."
@@ -1511,10 +1840,7 @@ jobs:
               --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
               --oidc-token-audience="${service_url}" \
               --attempt-deadline=180s \
-              --max-retry-attempts=3 \
-              --min-backoff=120s \
-              --max-backoff=300s \
-              --max-retry-duration=900s \
+              "${probe_retry_args[@]}" \
               --quiet
             probe_job_created=true
           fi

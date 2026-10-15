@@ -1,0 +1,208 @@
+name: Inspect HK History Binding Gap
+
+# Names-only + version metadata; does not call broker or publish facts.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hk-history-binding-gap
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: github.repository == 'QuantStrategyLab/LongBridgePlatform' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ops/hk-binding-gap-post-rotate-inspect')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: longbridge-hk
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_PROJECT_ID: longbridgequant
+      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+    steps:
+      - uses: actions/checkout@v6
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+      - uses: astral-sh/setup-uv@v6
+      - name: Install locked runtime dependencies
+        run: uv sync --frozen --no-dev
+      - name: Inspect serving env, binding, GCS, and probe logs
+        env:
+          EXPECTED_BINDING: ${{ vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
+          SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+          REGION: ${{ vars.CLOUD_RUN_REGION }}
+          TOKEN_SECRET: ${{ vars.LONGPORT_SECRET_NAME }}
+        run: |
+          set -euo pipefail
+          printf '::add-mask::%s\n' "$EXPECTED_BINDING"
+          PYTHONPATH=. uv run --no-sync python <<'PY'
+          import hashlib, json, os, subprocess, sys
+          from datetime import datetime, timezone
+
+          def run(cmd):
+              out = subprocess.check_output(cmd, text=True)
+              return out
+
+          expected = os.environ["EXPECTED_BINDING"].strip()
+          service = os.environ["SERVICE"].strip()
+          region = os.environ["REGION"].strip()
+          project = os.environ["GCP_PROJECT_ID"].strip()
+          token_secret = os.environ["TOKEN_SECRET"].strip()
+
+          svc = json.loads(run([
+              "gcloud", "run", "services", "describe", service,
+              f"--project={project}", f"--region={region}", "--format=json",
+          ]))
+          traffic = svc.get("status", {}).get("traffic") or []
+          serving = [t for t in traffic if int(t.get("percent") or 0) == 100]
+          if len(serving) != 1:
+              print("gap=serving_traffic_not_unique")
+              sys.exit(1)
+          revision = serving[0]["revisionName"]
+          rev = json.loads(run([
+              "gcloud", "run", "revisions", "describe", revision,
+              f"--project={project}", f"--region={region}", "--format=json",
+          ]))
+          env_list = rev["spec"]["containers"][0].get("env") or []
+          literals = {i["name"]: i.get("value") for i in env_list if "value" in i}
+          history_keys = [
+              "ACCOUNT_HISTORY_RECORDING_ENABLED",
+              "ACCOUNT_HISTORY_GCS_PREFIX",
+              "ACCOUNT_HISTORY_TARGET_ID",
+              "ACCOUNT_HISTORY_EXPECTED_SCOPE",
+          ]
+          history = {k: literals.get(k) for k in history_keys}
+          snapshot_flag = literals.get("LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED")
+          print("serving_revision=" + revision)
+          print("history_values=" + json.dumps(history, sort_keys=True))
+          print("longbridge_account_snapshot_enabled=" + json.dumps(snapshot_flag))
+          print("account_region=" + json.dumps(literals.get("ACCOUNT_REGION")))
+          print("account_prefix=" + json.dumps(literals.get("ACCOUNT_PREFIX")))
+          print("k_service=" + json.dumps(literals.get("K_SERVICE")))
+          print("k_revision_env=" + json.dumps(literals.get("K_REVISION")))
+          print("cloud_run_region_env=" + json.dumps(literals.get("CLOUD_RUN_REGION") or literals.get("GOOGLE_CLOUD_REGION")))
+          recording = str(history.get("ACCOUNT_HISTORY_RECORDING_ENABLED") or "").strip() == "true"
+          region_ok = str(literals.get("ACCOUNT_REGION") or "").strip() in {"HK", "SG"}
+          print("probe_would_record_history=" + ("true" if recording and region_ok else "false"))
+
+          # Secret version name without secret payload. Deploy SA may lack versions.get.
+          ver = ""
+          try:
+              ver = run([
+                  "gcloud", "secrets", "versions", "describe", "latest",
+                  f"--secret={token_secret}", f"--project={project}", "--format=value(name)",
+              ]).strip()
+          except Exception:
+              print("token_version_present=false")
+              print("token_version_error=permission_or_missing")
+          else:
+              print("token_version_present=" + ("true" if ver else "false"))
+
+          if ver:
+              region_from_env = (literals.get("CLOUD_RUN_REGION") or literals.get("GOOGLE_CLOUD_REGION") or "").strip()
+              payload = {
+                  "account_scope": "HK",
+                  "project_id": project,
+                  "revision": revision,
+                  "service": service,
+                  "version_name": ver,
+              }
+              if region_from_env:
+                  payload["region"] = region_from_env
+              digest = hashlib.sha256(
+                  json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("utf-8")
+              ).hexdigest()
+              print("binding_region_included=" + ("true" if region_from_env else "false"))
+              print("computed_binding_matches_expected=" + ("true" if digest == expected else "false"))
+              print("computed_binding=" + digest)
+              print("expected_binding=" + expected)
+              if digest != expected:
+                  print("gap=source_binding_drift_after_revision")
+                  print("action=update_ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID_and_QRS_hk_binding")
+          else:
+              print("expected_binding=" + expected)
+              print("gap=cannot_compute_binding_without_token_version")
+              print("action=use_gcs_sibling_folder_today_as_diagnostic_only")
+
+          # GCS sibling folders under hk/
+          from google.cloud import storage
+          client = storage.Client(project=project)
+          prefix = "longbridge/account_snapshots/hk/"
+          iterator = client.list_blobs("qsl-runtime-logs-shared", prefix=prefix, delimiter="/")
+          _ = list(iterator)
+          folders = sorted(getattr(iterator, "prefixes", []) or [])
+          print("hk_binding_folder_count=" + str(len(folders)))
+          today = datetime.now(timezone.utc).date().isoformat()
+          expected_prefix = f"{prefix}{expected}/{today}/"
+          expected_blobs = list(client.list_blobs("qsl-runtime-logs-shared", prefix=expected_prefix, max_results=5))
+          print("expected_binding_objects_today=" + str(len(expected_blobs)))
+          sibling_with_today = 0
+          sibling_ids_today = []
+          for folder in folders:
+              binding = folder[len(prefix):].rstrip("/")
+              if binding == expected:
+                  continue
+              day_prefix = f"{folder}{today}/"
+              found = list(client.list_blobs("qsl-runtime-logs-shared", prefix=day_prefix, max_results=3))
+              if found:
+                  sibling_with_today += 1
+                  sibling_ids_today.append(binding)
+                  names = [b.name.rsplit("/", 1)[-1] for b in found]
+                  print("sibling_binding_today=" + binding)
+                  print("sibling_object_names=" + json.dumps(names))
+          print("sibling_bindings_with_objects_today=" + str(sibling_with_today))
+          print("sibling_binding_ids_today=" + json.dumps(sibling_ids_today))
+          sg_iterator = client.list_blobs("qsl-runtime-logs-shared", prefix="longbridge/account_snapshots/sg/", delimiter="/")
+          _ = list(sg_iterator)
+          print("sg_binding_folder_count=" + str(len(sorted(getattr(sg_iterator, "prefixes", []) or []))))
+
+          # Cloud Run logs around last heartbeat window
+          # Non-secret env/secret refs on serving revision
+          secret_refs = []
+          for item in env_list:
+              name = item.get("name") or ""
+              src = (item.get("valueFrom") or {}).get("secretKeyRef") or {}
+              if src:
+                  secret_refs.append({
+                      "env": name,
+                      "secret": src.get("name"),
+                      "version": src.get("key"),
+                  })
+          print("secret_mount_refs=" + json.dumps(secret_refs, sort_keys=True))
+          print("revision_create_time=" + json.dumps(rev.get("metadata", {}).get("creationTimestamp")))
+
+          filt = (
+              f'resource.type="cloud_run_revision"\n'
+              f'resource.labels.service_name="{service}"\n'
+              f'resource.labels.revision_name="{revision}"\n'
+              f'timestamp>="2026-10-09T05:41:00Z"\n'
+              f'timestamp<="2026-10-09T05:46:00Z"'
+          )
+          try:
+              logs = run([
+                  "gcloud", "logging", "read", filt,
+                  f"--project={project}", "--limit=20", "--format=json", "--freshness=1d",
+              ])
+              entries = json.loads(logs or "[]")
+              print("probe_log_entries=" + str(len(entries)))
+              print("probe_log_http_status_samples=" + str(sum(1 for e in entries if (e.get("httpRequest") or e.get("protoPayload")))) )
+              for entry in entries[:10]:
+                  text = entry.get("textPayload") or ""
+                  if not text:
+                      payload = entry.get("jsonPayload") or {}
+                      text = str(payload.get("message") or payload)[:200]
+                  # redact potential secrets
+                  print("log=" + text.replace(expected, "REDACTED")[:240])
+          except Exception as exc:
+              print("probe_logs_error=" + type(exc).__name__)
+          PY

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,18 @@ if QPK_SRC.exists() and str(QPK_SRC) not in sys.path:
     sys.path.insert(0, str(QPK_SRC))
 
 from application import broker_reconciliation as reconciliation
+
+
+def _unavailable_source_binding():
+    return {
+        "kind": "deployment_scope_token_version",
+        "status": "unavailable",
+        "id": None,
+    }
+
+
+def _snapshot_contexts(context, binding=None):
+    return lambda: (object(), context, binding or _unavailable_source_binding())
 
 
 def _runtime_target():
@@ -151,7 +164,7 @@ def test_account_snapshot_returns_only_safe_partial_account_facts():
     payload, status = reconciliation.run_read_only_account_snapshot(
         enabled=True,
         account_scope="paper",
-        build_read_only_contexts=lambda: (object(), context),
+        build_read_only_contexts=_snapshot_contexts(context),
         collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
         now_reader=lambda: now,
     )
@@ -173,6 +186,7 @@ def test_account_snapshot_returns_only_safe_partial_account_facts():
                 "settling_cash": "0",
             }
         ],
+        "financing": [{"currency": "USD", "buy_power": "10"}],
         "positions": [{"symbol": "SOXL.US", "currency": "USD", "quantity": "1"}],
         "known_non_terminal_orders_7d": [
             {
@@ -199,6 +213,7 @@ def test_account_snapshot_returns_only_safe_partial_account_facts():
         "equity": None,
         "no_order": True,
         "live_authority_granted": False,
+        "source_binding": _unavailable_source_binding(),
     }
     serialized = json.dumps(payload)
     assert "private-order-id" not in serialized
@@ -216,7 +231,7 @@ def test_account_snapshot_preserves_a_known_empty_position_list():
     payload, status = reconciliation.run_read_only_account_snapshot(
         enabled=True,
         account_scope="SG",
-        build_read_only_contexts=lambda: (object(), context),
+        build_read_only_contexts=_snapshot_contexts(context),
         collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
     )
 
@@ -247,7 +262,7 @@ def test_account_snapshot_preserves_broker_balances_without_currency_aggregation
     context.account_balance = read_balances
     payload, status = reconciliation.run_read_only_account_snapshot(
         enabled=True, account_scope=account_scope,
-        build_read_only_contexts=lambda: (object(), context),
+        build_read_only_contexts=_snapshot_contexts(context),
         collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
     )
     assert status == 200
@@ -279,7 +294,7 @@ def test_account_snapshot_rejects_invalid_broker_balance_but_reconcile_is_unchan
     assert observations.cash_complete is True
     payload, status = reconciliation.run_read_only_account_snapshot(
         enabled=True, account_scope="SG",
-        build_read_only_contexts=lambda: (object(), context),
+        build_read_only_contexts=_snapshot_contexts(context),
         collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
     )
     assert status == 503
@@ -306,6 +321,7 @@ def test_snapshot_valuation_does_not_change_reconciliation_observations_or_diges
     assert after.broker_reported_balances == (
         {"currency": "USD", "net_assets": "999", "total_cash": "888"},
     )
+    assert before.financing == after.financing == ({"currency": "USD", "buy_power": "10"},)
 
 
 @pytest.mark.parametrize("bad_cash", [[], None, "NaN", "Infinity"])
@@ -332,7 +348,7 @@ def test_account_snapshot_rejects_missing_or_invalid_cash_without_partial_payloa
     payload, status = reconciliation.run_read_only_account_snapshot(
         enabled=True,
         account_scope="HK",
-        build_read_only_contexts=lambda: (object(), context),
+        build_read_only_contexts=_snapshot_contexts(context),
         collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
     )
 
@@ -341,13 +357,138 @@ def test_account_snapshot_rejects_missing_or_invalid_cash_without_partial_payloa
     assert "cash" not in payload
 
 
+def test_account_snapshot_source_binding_changes_with_version_deployment_or_scope():
+    common = {
+        "version_name": "projects/p/secrets/token/versions/3",
+        "project_id": "project-1",
+        "service": "lb-service",
+        "revision": "lb-service-00001",
+        "account_scope": "HK",
+        "region": "asia-east1",
+    }
+    bound = reconciliation.build_account_snapshot_source_binding(**common)
+    assert bound["status"] == "bound"
+    assert bound["kind"] == "deployment_scope_token_version"
+    assert bound["id"] != common["version_name"]
+    assert len(bound["id"]) == 64
+    assert "secrets" not in bound["id"]
+
+    changed = [
+        {**common, "version_name": "projects/p/secrets/token/versions/4"},
+        {**common, "project_id": "project-2"},
+        {**common, "service": "lb-service-b"},
+        {**common, "revision": "lb-service-00002"},
+        {**common, "account_scope": "SG"},
+        {**common, "region": "asia-southeast1"},
+    ]
+    assert len({reconciliation.build_account_snapshot_source_binding(**item)["id"] for item in changed}) == len(changed)
+    assert reconciliation.build_account_snapshot_source_binding(**common)["id"] == bound["id"]
+    without_region = dict(common)
+    without_region.pop("region")
+    assert (
+        reconciliation.build_account_snapshot_source_binding(**without_region)["id"]
+        != bound["id"]
+    )
+    assert (
+        reconciliation.build_account_snapshot_source_binding(**without_region, region="")["id"]
+        == reconciliation.build_account_snapshot_source_binding(**without_region)["id"]
+    )
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        {"version_name": None},
+        {"version_name": " "},
+        {"project_id": None},
+        {"project_id": ""},
+        {"service": None},
+        {"revision": " "},
+        {"account_scope": ""},
+    ],
+)
+def test_account_snapshot_source_binding_is_unavailable_without_required_parts(missing):
+    payload = {
+        "version_name": "projects/p/secrets/token/versions/3",
+        "project_id": "project-1",
+        "service": "lb-service",
+        "revision": "lb-service-00001",
+        "account_scope": "PAPER",
+    }
+    payload.update(missing)
+    assert reconciliation.build_account_snapshot_source_binding(**payload) == (
+        _unavailable_source_binding()
+    )
+
+
+def test_account_snapshot_keeps_assets_and_hides_raw_source_material():
+    context, _calls = _read_only_trade_context()
+    secret_path = "projects/p/secrets/token/versions/3"
+    leaked = {
+        "kind": "deployment_scope_token_version",
+        "status": "bound",
+        "id": secret_path,
+        "token": "raw-token-value",
+    }
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True,
+        account_scope="HK",
+        build_read_only_contexts=_snapshot_contexts(context, leaked),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+    )
+    assert status == 200
+    assert payload["cash"][0]["currency"] == "USD"
+    assert payload["cash"][0]["available_cash"] == "10"
+    assert payload["snapshot_atomic"] is False
+    assert payload["source_binding"] == _unavailable_source_binding()
+    serialized = json.dumps(payload)
+    assert secret_path not in serialized
+    assert "raw-token-value" not in serialized
+
+    bound = reconciliation.build_account_snapshot_source_binding(
+        version_name=secret_path,
+        project_id="project-1",
+        service="lb-service",
+        revision="lb-service-00001",
+        account_scope="HK",
+    )
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True,
+        account_scope="HK",
+        build_read_only_contexts=_snapshot_contexts(context, bound),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+    )
+    assert status == 200
+    assert payload["source_binding"] == bound
+    assert payload["broker_reported_balances"][0]["total_cash"] == "10"
+    serialized = json.dumps(payload)
+    assert secret_path not in serialized
+    assert "raw-token-value" not in serialized
+
+
+def test_account_snapshot_read_failure_does_not_echo_secret_material():
+    secret_path = "projects/p/secrets/token/versions/latest"
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True,
+        account_scope="PAPER",
+        build_read_only_contexts=lambda: (_ for _ in ()).throw(
+            RuntimeError(f"{secret_path} token=raw-token-value")
+        ),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+    )
+    assert status == 503
+    assert payload == {"status": "blocked", "reason": "account_snapshot_collection_failed"}
+    assert secret_path not in json.dumps(payload)
+    assert "raw-token-value" not in json.dumps(payload)
+
+
 def test_account_snapshot_provider_failure_is_sanitized():
     context, _calls = _read_only_trade_context(fail_surface="account_balance")
 
     payload, status = reconciliation.run_read_only_account_snapshot(
         enabled=True,
         account_scope="PAPER",
-        build_read_only_contexts=lambda: (object(), context),
+        build_read_only_contexts=_snapshot_contexts(context),
         collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
     )
 
@@ -563,9 +704,24 @@ def test_recent_executions_include_today_and_deduplicate_window_overlap():
 
     assert {row["trade_id"] for row in observations.recent_executions} == {"old", "current"}
     assert len(observations.recent_executions) == 2
-    assert observations.recent_executions_complete is True
+    assert observations.recent_executions_complete is False
     assert observations.account_identity_match is False
     assert observations.open_orders_complete is False
+
+
+def test_duplicate_identical_execution_rows_collapse_by_stable_trade_id():
+    context, _calls = _read_only_trade_context()
+    now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+    context.history_executions = lambda **_kwargs: [
+        _execution("replayed-trade", now - timedelta(minutes=1)),
+        _execution("replayed-trade", now - timedelta(minutes=1)),
+    ]
+
+    observations = reconciliation.collect_read_only_reconciliation_observations(
+        object(), context, account_scope="SG", now=now,
+    )
+
+    assert [row["trade_id"] for row in observations.recent_executions] == ["replayed-trade"]
 
 
 def test_today_only_execution_is_not_silently_omitted():
@@ -580,16 +736,95 @@ def test_today_only_execution_is_not_silently_omitted():
     assert [row["trade_id"] for row in observations.recent_executions] == ["today-only"]
 
 
-def test_result_at_sdk_limit_cannot_claim_complete_executions():
+@pytest.mark.parametrize("execution_count", [0, 1, 999, 1000])
+def test_execution_counts_without_page_coverage_cannot_claim_complete(execution_count):
     context, _calls = _read_only_trade_context()
     now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
-    context.history_executions = lambda **_kwargs: [_execution(str(i), now) for i in range(1000)]
+    context.history_executions = lambda **_kwargs: [
+        _execution(str(i), now) for i in range(execution_count)
+    ]
 
     observations = reconciliation.collect_read_only_reconciliation_observations(
         object(), context, account_scope="SG", now=now,
     )
 
+    assert len(observations.recent_executions) == execution_count
     assert observations.recent_executions_complete is False
+
+
+@pytest.mark.parametrize("execution_count", [1, 1000])
+def test_account_snapshot_preserves_balance_facts_with_incomplete_executions(execution_count):
+    context, _calls = _read_only_trade_context()
+    now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+    context.history_executions = lambda **_kwargs: [
+        _execution(str(i), now - timedelta(minutes=1)) for i in range(execution_count)
+    ]
+
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True,
+        account_scope="PAPER",
+        build_read_only_contexts=_snapshot_contexts(context),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+        now_reader=lambda: now,
+    )
+
+    assert status == 200
+    assert payload["status"] == "partial"
+    assert payload["broker_reported_balances"] == [
+        {"currency": "USD", "net_assets": "10", "total_cash": "10"}
+    ]
+    assert payload["cash_complete"] is True
+    assert payload["positions_complete"] is True
+    assert payload["known_recent_executions_7d_count"] == execution_count
+    assert payload["recent_executions_complete"] is False
+    assert payload["execution_fees"] is None
+    assert payload["equity"] is None
+    assert payload["no_order"] is True
+    assert payload["live_authority_granted"] is False
+
+
+def test_incomplete_executions_cannot_match_a_trusted_digest(monkeypatch):
+    context, _calls = _read_only_trade_context()
+    now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+    context.history_executions = lambda **_kwargs: [_execution("synthetic-trade", now)]
+    observations = reconciliation.collect_read_only_reconciliation_observations(
+        object(), context, account_scope="PAPER", now=now,
+    )
+    # Isolate execution coverage from the other synthetic reconciliation gates.
+    observations = replace(observations, account_identity_match=True, open_orders_complete=True)
+    ledger_digest = "2" * 64
+    expected = {
+        f"{name}_sha256": reconciliation.calculate_broker_observation_sha256(
+            getattr(observations, name)
+        )
+        for name in ("account_scope", "positions", "cash", "open_orders", "recent_executions")
+    }
+    expected["local_execution_ledger_sha256"] = ledger_digest
+
+    class MarkerStore:
+        def calculate_recent_ledger_digest(self, **_kwargs):
+            return ledger_digest, 1
+
+    monkeypatch.setattr(
+        reconciliation, "build_execution_marker_store_from_env", lambda **_kwargs: MarkerStore(),
+    )
+    candidate = reconciliation.build_reconciliation_candidate(
+        observations=observations,
+        runtime_target=_runtime_target(),
+        project_id=None,
+        env_reader=lambda key, default=None: (
+            json.dumps(expected) if key == reconciliation.EXPECTED_DIGESTS_ENV_NAME else default
+        ),
+        observed_at=now,
+    )
+
+    assert candidate.expected_digests_configured is True
+    assert candidate.evidence.recent_executions_sha256 == expected["recent_executions_sha256"]
+    assert candidate.evidence.recent_executions_match is False
+    assert set(candidate.recovery_blockers) == {
+        reconciliation.BrokerReconciliationFinding.RECENT_EXECUTIONS_MISMATCH
+    }
+    assert candidate.permits_active_lkg is False
 
 
 @pytest.mark.parametrize("bad_time", [None, "private-invalid-time"])

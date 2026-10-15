@@ -16,9 +16,7 @@ QPK_DRIFT_WORKTREE_SRC = (
     REPO_ROOT.parent / "QuantPlatformKit" / ".worktrees" / "drift-to-new-risk-a" / "src"
 )
 QPK_SRC = REPO_ROOT.parent / "QuantPlatformKit" / "src"
-QPK_ATTENTION_WIRE_SRC = Path("/Users/lisiyi/Projects/.worktrees/qpk-attention-wire-20260918/src")
-QPK_ENVELOPE_SRC = Path("/Users/lisiyi/Projects/.worktrees/qpk-envelope-scale-20260918/src")
-for qpk_src in (QPK_ENVELOPE_SRC, QPK_ATTENTION_WIRE_SRC, QPK_DRIFT_WORKTREE_SRC, QPK_SRC, QPK_PIN_WORKTREE_SRC):
+for qpk_src in (QPK_DRIFT_WORKTREE_SRC, QPK_SRC, QPK_PIN_WORKTREE_SRC):
     if (qpk_src / "quant_platform_kit").exists() and str(qpk_src) not in sys.path:
         sys.path.insert(0, str(qpk_src))
 
@@ -506,6 +504,8 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
                 "cash_by_currency": {},
             },
             "execution": {
+                "risk_gate": "APPROVE",
+                "risk_flags": ("risk_gate:passed",),
                 "current_min_trade": 10.0,
                 "trade_threshold_value": 10.0,
                 "investable_cash": 500.0,
@@ -615,6 +615,8 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
                 "cash_by_currency": {},
             },
             "execution": {
+                "risk_gate": "APPROVE",
+                "risk_flags": ("risk_gate:passed",),
                 "current_min_trade": 10.0,
                 "trade_threshold_value": 10.0,
                 "investable_cash": 100.0,

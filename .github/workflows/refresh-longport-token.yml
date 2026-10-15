@@ -1,0 +1,92 @@
+name: Refresh LongPort Access Token
+
+# Pre-expiry Legacy token refresh into Secret Manager.
+# Default dry_run=true (plan only). Live mode: paper → sg → hk last.
+# Never prints secret values. No schedule (manual only).
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Account target (prefer paper, then sg; hk last)."
+        required: true
+        type: choice
+        options:
+          - paper
+          - sg
+          - hk
+      dry_run:
+        description: "When true (default), only plan; do not call LongPort or write SM."
+        required: true
+        type: boolean
+        default: true
+      force:
+        description: "Refresh even when days remaining >= threshold (still blocked if expired)."
+        required: false
+        type: boolean
+        default: false
+      refresh_threshold_days:
+        description: "Refresh when days remaining is below this value."
+        required: false
+        type: string
+        default: "30"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh-longport-token-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: github.repository == 'QuantStrategyLab/LongBridgePlatform' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_PROJECT_ID: longbridgequant
+      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+      TARGET: ${{ inputs.target }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      FORCE: ${{ inputs.force }}
+      REFRESH_THRESHOLD_DAYS: ${{ inputs.refresh_threshold_days }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Authenticate to Google Cloud (deploy SA)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --quiet 'google-cloud-secret-manager>=2.20' 'requests>=2.31'
+
+      - name: Refresh or dry-run plan (names + days only)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          args=(
+            --project "$GCP_PROJECT_ID"
+            --target "$TARGET"
+            --refresh-threshold-days "$REFRESH_THRESHOLD_DAYS"
+          )
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            args+=(--dry-run)
+          else
+            args+=(--no-dry-run)
+          fi
+          if [[ "${FORCE}" == "true" ]]; then
+            args+=(--force)
+          fi
+          python scripts/refresh_longport_access_token.py "${args[@]}" | tee "$GITHUB_STEP_SUMMARY"

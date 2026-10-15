@@ -298,6 +298,7 @@ def load_platform_runtime_settings(
         expected_platform_id=LONGBRIDGE_PLATFORM,
     )
     trusted_runtime_risk_policy = _load_trusted_runtime_risk_policy()
+    dry_run_only = _resolve_dry_run_consistent_with_target(runtime_target)
     strategy_definition = None
     strategy_metadata = None
     if runtime_target.strategy_profile == _bound_v7_profile():
@@ -377,7 +378,7 @@ def load_platform_runtime_settings(
         dingtalk_webhook_url=os.getenv("NOTIFICATION_DINGTALK_WEBHOOK_URL"),
         feishu_webhook_url=os.getenv("NOTIFICATION_FEISHU_WEBHOOK_URL"),
         serverchan_webhook_url=os.getenv("NOTIFICATION_SERVERCHAN_WEBHOOK_URL"),
-        dry_run_only=resolve_dry_run_env(os.environ, "LONGBRIDGE_DRY_RUN_ONLY"),
+        dry_run_only=dry_run_only,
         runtime_target_enabled=(
             _runtime_target_enabled_env()
             and runtime_target_permits_standard_execution(runtime_target)
@@ -557,6 +558,21 @@ def _qqqi_income_ratio_env() -> float | None:
     if value is not None and not (0.0 <= value <= 1.0):
         raise ValueError(f"QQQI_INCOME_RATIO must be in [0,1], got {value}")
     return value
+
+
+def _resolve_dry_run_consistent_with_target(runtime_target: Any) -> bool:
+    """Resolve LONGBRIDGE_DRY_RUN_ONLY and refuse to loosen the declared target.
+
+    The environment flag may be *safer* than ``RUNTIME_TARGET_JSON.dry_run_only``
+    (stop and staging paths force dry-run on a live target), but it must never
+    turn a target declared as dry-run into live order submission.
+    """
+    dry_run_only = resolve_dry_run_env(os.environ, "LONGBRIDGE_DRY_RUN_ONLY")
+    if getattr(runtime_target, "dry_run_only", None) is True and not dry_run_only:
+        raise EnvironmentError(
+            "LONGBRIDGE_DRY_RUN_ONLY=false conflicts with RUNTIME_TARGET_JSON.dry_run_only=true"
+        )
+    return dry_run_only
 
 
 def _runtime_target_enabled_env() -> bool:

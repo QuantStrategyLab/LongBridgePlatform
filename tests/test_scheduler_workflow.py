@@ -91,7 +91,31 @@ def test_probe_and_precheck_retry_transient_capacity_errors() -> None:
         assert "--min-backoff=120s" in section
         assert "--max-backoff=300s" in section
         assert "--max-retry-duration=900s" in section
-        assert "--max-retry-attempts=0" not in section
+        if "precheck_job_name=" in marker:
+            assert "--max-retry-attempts=0" not in section
+
+
+def test_paused_hk_sg_probe_scheduler_has_zero_retries() -> None:
+    """Heartbeat paused-probe contract requires retryCount=0 and zero maxRetryDuration."""
+
+    workflow = Path(".github/workflows/sync-cloud-run-env.yml").read_text(encoding="utf-8")
+    section = workflow[workflow.index('probe_job_name="${CLOUD_RUN_SERVICE}-probe-scheduler"') :]
+    section = section[: section.index('precheck_job_name="${CLOUD_RUN_SERVICE}-precheck-scheduler"')]
+    paused = section[section.index('if [ "${probe_job_state}" = "PAUSED" ]') :]
+    paused = paused[: paused.index("fi\n")]
+    assert '"${DEPLOYMENT_LABEL:-}" = "HK"' in paused
+    assert '"${DEPLOYMENT_LABEL:-}" = "SG"' in paused
+    assert "--max-retry-attempts=0" in paused
+    assert "--max-retry-duration=0s" in paused
+    assert "--max-retry-attempts=3" not in paused
+    for command in (
+        'gcloud scheduler jobs update http "${probe_job_name}"',
+        'gcloud scheduler jobs create http "${probe_job_name}"',
+    ):
+        command_section = section[section.index(command) :]
+        command_section = command_section[: command_section.index("--quiet")]
+        assert '"${probe_retry_args[@]}"' in command_section
+        assert "--max-retry-attempts" not in command_section
 
 
 def test_cloud_run_deploy_stays_private_and_serial() -> None:

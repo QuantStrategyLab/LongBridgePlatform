@@ -32,3 +32,12 @@ def test_ci_docker_and_env_sync_use_uv_lock() -> None:
     assert "--no-install-project" not in ci
     assert "--no-install-project" not in env_sync
     assert "--no-install-project" not in dockerfile
+
+
+def test_cloud_run_and_gunicorn_timeouts_leave_response_margin() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    env_sync = Path(".github/workflows/sync-cloud-run-env.yml").read_text(encoding="utf-8")
+
+    assert '"--timeout", "570"' in dockerfile
+    assert "--timeout=600s" in env_sync
+    assert "--timeout=300s" not in env_sync

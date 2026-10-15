@@ -384,6 +384,47 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
                 dry_run=True,
             )
 
+    def test_serving_traffic_rows_rejects_unknown_or_contradictory_traffic(self) -> None:
+        ready = {
+            "status": {
+                "latestReadyRevisionName": "guessed-latest",
+                "traffic": [{"revisionName": "serving-a", "percent": 100}],
+            }
+        }
+        self.assertEqual(
+            reconcile.serving_traffic_rows(ready),
+            [{"revisionName": "serving-a", "percent": 100}],
+        )
+        for service in (
+            {},
+            {"status": {"latestReadyRevisionName": "guessed-latest"}},
+            {"status": {"traffic": []}},
+            {"status": {"traffic": [{"percent": 100}]}},
+            {"status": {"traffic": [{"revisionName": "serving-a", "percent": True}]}},
+            {"status": {"traffic": [{"revisionName": "serving-a", "percent": 40}, {"revisionName": "serving-a", "percent": 60}]}},
+            {"status": {"traffic": [{"revisionName": "serving-a", "percent": 40}, {"revisionName": "serving-b", "percent": 40}]}},
+        ):
+            with self.assertRaises(reconcile.ReconcileError):
+                reconcile.serving_traffic_rows(service)
+
+    def test_observe_ready_revision_uses_the_named_revision(self) -> None:
+        revision = {
+            "metadata": {"name": "named-revision", "labels": {"commit-sha": "a" * 40}},
+            "spec": {"containers": [{"image": "repo@sha256:" + "b" * 64}]},
+            "status": {
+                "latestReadyRevisionName": "some-other-revision",
+                "conditions": [{"type": "Ready", "status": "True"}],
+            },
+        }
+        self.assertEqual(
+            reconcile.observe_ready_revision(revision),
+            {"revision": "named-revision", "commit": "a" * 40, "image": "repo@sha256:" + "b" * 64},
+        )
+        not_ready = dict(revision)
+        not_ready["status"] = {"latestReadyRevisionName": "named-revision", "conditions": [{"type": "Ready", "status": "False"}]}
+        with self.assertRaisesRegex(reconcile.ReconcileError, "not Ready"):
+            reconcile.observe_ready_revision(not_ready)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -46,12 +46,38 @@ class LongBridgeRuntimeBootstrap:
         token = self.fetch_token_from_secret_fn(self.project_id, self.secret_name)
         return self.build_contexts_fn(app_key, app_secret, token)
 
+    def build_account_snapshot_contexts(
+        self,
+        *,
+        fetch_token_with_metadata_fn: Callable[[str | None, str], Any],
+    ) -> tuple[Any, Any, str | None]:
+        """Build snapshot contexts from one metadata response, without refresh or another read."""
+        app_key, app_secret = self._read_app_credentials()
+        metadata = fetch_token_with_metadata_fn(self.project_id, self.secret_name)
+        token, version_name = _account_snapshot_token_version(metadata)
+        quote_context, trade_context = self.build_contexts_fn(app_key, app_secret, token)
+        return quote_context, trade_context, version_name
+
     def __call__(self) -> tuple[Any, Any, Any]:
         quote_context, trade_context = self.build_contexts()
         indicators = self.calculate_strategy_indicators_fn(quote_context)
         if indicators is None:
             raise Exception("Quote data missing or API limited; cannot compute indicators")
         return quote_context, trade_context, indicators
+
+
+def _account_snapshot_token_version(metadata: Any) -> tuple[str, str | None]:
+    """Strip one response value the way token fetch does. Keep that response's version."""
+    if isinstance(metadata, str):
+        return metadata.strip(), None
+    value = getattr(metadata, "value", None)
+    version_name = getattr(metadata, "version_name", None)
+    if not isinstance(value, str):
+        raise RuntimeError("account snapshot token metadata is unavailable")
+    token = value.strip()
+    if isinstance(version_name, str) and version_name.strip():
+        return token, version_name
+    return token, None
 
 
 def build_runtime_bootstrap(

@@ -746,6 +746,13 @@ def map_strategy_decision_to_plan(
     strategy_profile: str,
     runtime_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # StrategyDecision's pinned contract is tuple[str, ...]. Validate before
+    # any iteration/conversion can turn a malformed reject into ordinary flags.
+    if type(decision.risk_flags) is not tuple or any(type(flag) is not str for flag in decision.risk_flags):
+        decision = replace(
+            decision, positions=(), budgets=(), risk_flags=("rejected:invalid_risk_flags",),
+            diagnostics={**dict(decision.diagnostics), "risk_gate": "REJECT", "reason": "invalid_risk_flags"},
+        )
     canonical_profile = _resolve_canonical_profile(strategy_profile)
     raw_policy = (runtime_metadata or {}).get("longbridge_execution_policy")
     cash_only_execution = True

@@ -1,5 +1,14 @@
 # LongBridgePlatform
 
+LongBridgePlatform 是 QuantStrategyLab 在美股/港股方向的 LongBridge 执行运行时。
+它接收 `UsEquityStrategies`、`HkEquityStrategies` 产出的策略 profile，通过
+LongBridge 兼容的券商连接执行，并在真实下单前经过区域化的 dry-run/live 控制。
+它只是执行层：策略研究逻辑留在策略仓库，snapshot/验证产物在 profile 需要时来自
+对应的 snapshot pipeline。
+
+[English README](README.md)
+
+> 投资有风险。本项目不构成投资建议，仅用于学习、研究和工程审阅。
 
 ## QSL 架构角色
 
@@ -8,16 +17,6 @@
 - **事实源/归属**：LongBridge 连接、区域 runtime 设置、dry-run/live 控制。
 - **消费对象**：UsEquityStrategies、HkEquityStrategies、snapshot artifacts、QuantPlatformKit、QuantRuntimeSettings。
 - **禁止事项**：承载策略研究逻辑或把凭据写入 Git。
-
-[English README](README.md)
-
-> 投资有风险。本项目不构成投资建议，仅用于学习、研究和工程审阅。
-
-## 这个仓库是什么
-
-LongBridgePlatform 是 QuantStrategyLab 的LongBridge 美股/港股执行平台。通过 LongBridge 运行服务和区域部署配置执行美股与港股 profile。
-
-它属于执行层，不是策略研究仓库。策略逻辑来自 `UsEquityStrategies / HkEquityStrategies`；如果 profile 依赖 snapshot，验证和产物来自 `UsEquitySnapshotPipelines / HkEquitySnapshotPipelines`。
 
 ## 运行边界
 

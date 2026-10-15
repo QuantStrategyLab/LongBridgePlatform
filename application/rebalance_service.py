@@ -7,7 +7,11 @@ import os
 import re
 from datetime import datetime
 
-from application.execution_service import ExecutionCycleResult, execute_rebalance_cycle
+from application.execution_service import (
+    ExecutionCycleResult,
+    _execution_is_blocked,
+    execute_rebalance_cycle,
+)
 from application.execution_state import build_execution_marker_key, claim_account_owner
 from application.durable_execution_commands import (
     enqueue_live_execution_command,
@@ -529,6 +533,64 @@ def _evaluate_execution_account_identity(
     )
 
 
+def _has_notification_attention(*, config, result: ExecutionCycleResult) -> bool:
+    """Read structured cycle facts without changing execution or gate dedup."""
+    if getattr(config, "notification_attention_reason_codes", ()) or getattr(
+        result, "notification_attention_reason_codes", ()
+    ):
+        return True
+    for scope in (result.execution, result.allocation):
+        if any(scope.get(key) for key in (
+            "error", "errors", "fail_reason", "blocked_reason", "execution_blocked_reason",
+            "plugin_error", "data_error", "persistence_error", "report_persistence_error",
+            "reconciliation_required", "pending_reconciliation",
+            "account_identity_blocked",
+        )):
+            return True
+        command = scope.get("durable_live_execution_command") or {}
+        command_status = str(command.get("status") or "").strip().upper()
+        if command_status and command_status not in {"QUEUED", "ALREADY_QUEUED"}:
+            return True
+        if scope.get("direct_live_routing_blocked") and not (
+            scope.get("heartbeat_execution_state") == "waiting_window"
+            and command_status in {"QUEUED", "ALREADY_QUEUED"}
+        ):
+            return True
+        for key in ("execution_status", "heartbeat_execution_state"):
+            status = str(scope.get(key) or "").strip().lower()
+            if status == "waiting_window":
+                if command_status not in {"QUEUED", "ALREADY_QUEUED"}:
+                    return True
+            elif status not in {
+                "", "no_op", "no_action", "completed", "executed", "dry_run",
+                "dry_run_completed", "already_recorded",
+            }:
+                return True
+        if str(scope.get("risk_gate") or "").strip().upper() in {
+            "REJECT", "REJECTED", "BLOCK", "BLOCKED", "DENY", "DENIED"
+        }:
+            return True
+        flags = scope.get("risk_flags") or ()
+        if isinstance(flags, str):
+            flags = (flags,)
+        if any(str(flag).startswith("rejected:") for flag in flags):
+            return True
+        if scope.get("no_execute") or "no_execute" in flags:
+            # This explicit research contract is a normal non-execution lane.
+            # A bare/unknown no_execute is not evidence of a healthy cycle.
+            if not (scope.get("no_order") is True and scope.get("execution_authorized") is False):
+                return True
+    return False
+
+
+def _should_publish_no_order_notification(*, config, result: ExecutionCycleResult) -> bool:
+    if _has_notification_attention(config=config, result=result):
+        return True
+    return not bool(getattr(config, "dry_run_only", False)) and bool(
+        getattr(config, "notify_no_trade_cycles", False)
+    )
+
+
 def _should_record_execution_marker(*, result: ExecutionCycleResult, config: LongBridgeRebalanceConfig) -> bool:
     if not getattr(config, "execution_dedup_enabled", False):
         return False
@@ -636,6 +698,7 @@ def run_strategy(
     live_command_claimed = False
     live_command_blocked = False
     live_command_waiting = False
+    live_command_risk_blocked = False
     live_command_observation = None
     live_command_enabled = bool(getattr(config, "durable_execution_command_live_enabled", False))
     matching_commands = ()
@@ -657,20 +720,37 @@ def run_strategy(
             except ValueError as exc:
                 if str(exc) not in _LIVE_COMMAND_BINDING_ERRORS:
                     raise
-                message = "Durable live execution command binding is invalid; broker orders blocked"
-                runtime.notify_issue("Durable live execution blocked", message)
+                message = config.translator("issue_durable_execution_binding_invalid")
+                runtime.notify_issue(
+                    config.translator("issue_durable_execution_blocked_title"), message
+                )
+                blocked_execution = {
+                    "execution_status": "blocked",
+                    "blocked_reason": "durable_live_execution_command_binding_invalid",
+                    "heartbeat_execution_state": "blocked",
+                    "durable_live_execution_command": {
+                        "command_id": command.command_id,
+                        "status": "BLOCKED_INVALID_BINDING",
+                        "effective_date": command.effective_date,
+                    },
+                }
+                notification_publisher.publish(
+                    notification_renderers.render_heartbeat_notification(
+                        execution=blocked_execution,
+                        skip_logs=(),
+                        note_logs=(),
+                        translator=config.translator,
+                        separator=config.separator,
+                        strategy_display_name=config.strategy_display_name,
+                        dry_run_only=config.dry_run_only,
+                        extra_notification_lines=config.extra_notification_lines,
+                        title_key=config.notification_title_key or "heartbeat_title",
+                    )
+                )
                 return ExecutionCycleResult(
                     plan={},
                     portfolio={},
-                    execution={
-                        "execution_status": "blocked",
-                        "blocked_reason": "durable_live_execution_command_binding_invalid",
-                        "durable_live_execution_command": {
-                            "command_id": command.command_id,
-                            "status": "BLOCKED_INVALID_BINDING",
-                            "effective_date": command.effective_date,
-                        },
-                    },
+                    execution=blocked_execution,
                     allocation={},
                     logs=(),
                     skip_logs=(),
@@ -727,23 +807,29 @@ def run_strategy(
                     strategy_profile=str(config.strategy_profile or ""),
                 ):
                     raise RuntimeError("production SOXL live signal requires a completed session proof")
-                produced = enqueue_live_execution_command(
-                    enabled=True, dry_run_only=config.dry_run_only,
-                    store=config.execution_command_store, platform="longbridge",
-                    account_scope=str(config.execution_state_account_scope or "unknown"),
-                    strategy_profile=str(config.strategy_profile or "unknown"),
-                    physical_account_id=_resolve_physical_account_id(config=config),
-                    runtime_identity_digest=config.durable_execution_runtime_identity_digest,
-                    execution=signal_execution, allocation=signal_allocation,
-                    strategy_release=getattr(config, "expected_strategy_release", None),
-                )
-                command, created = produced
-                matching_commands = (*matching_commands, command)
-                today_commands = (command,)
-                live_command_observation = {
-                    "command_id": command.command_id, "status": "QUEUED" if created else "ALREADY_QUEUED",
-                    "effective_date": command.effective_date,
-                }
+                if _execution_is_blocked(
+                    plan=selected_plan[0], execution=signal_execution, allocation=signal_allocation,
+                ):
+                    live_command_blocked = live_command_risk_blocked = True
+                    signal_execution["no_execute"] = True
+                else:
+                    produced = enqueue_live_execution_command(
+                        enabled=True, dry_run_only=config.dry_run_only,
+                        store=config.execution_command_store, platform="longbridge",
+                        account_scope=str(config.execution_state_account_scope or "unknown"),
+                        strategy_profile=str(config.strategy_profile or "unknown"),
+                        physical_account_id=_resolve_physical_account_id(config=config),
+                        runtime_identity_digest=config.durable_execution_runtime_identity_digest,
+                        execution=signal_execution, allocation=signal_allocation,
+                        strategy_release=getattr(config, "expected_strategy_release", None),
+                    )
+                    command, created = produced
+                    matching_commands = (*matching_commands, command)
+                    today_commands = (command,)
+                    live_command_observation = {
+                        "command_id": command.command_id, "status": "QUEUED" if created else "ALREADY_QUEUED",
+                        "effective_date": command.effective_date,
+                    }
             else:
                 live_command_observation = {
                     "command_id": today_commands[0].command_id, "status": "ALREADY_QUEUED",
@@ -759,23 +845,29 @@ def run_strategy(
                     raise RuntimeError("live signal session does not match fresh account session")
                 if not str(signal_execution.get("effective_date") or "") > session_date:
                     raise RuntimeError("durable live signal must target a future session")
-                produced = enqueue_live_execution_command(
-                    enabled=True, dry_run_only=config.dry_run_only,
-                    store=config.execution_command_store, platform="longbridge",
-                    account_scope=str(config.execution_state_account_scope or "unknown"),
-                    strategy_profile=str(config.strategy_profile or "unknown"),
-                    physical_account_id=_resolve_physical_account_id(config=config),
-                    runtime_identity_digest=config.durable_execution_runtime_identity_digest,
-                    execution=signal_execution, allocation=signal_allocation,
-                    strategy_release=getattr(config, "expected_strategy_release", None),
-                )
-                command, created = produced
-                matching_commands = (*matching_commands, command)
-                today_commands = (command,)
-                live_command_observation = {
-                    "command_id": command.command_id, "status": "QUEUED" if created else "ALREADY_QUEUED",
-                    "effective_date": command.effective_date,
-                }
+                if _execution_is_blocked(
+                    plan=selected_plan[0], execution=signal_execution, allocation=signal_allocation,
+                ):
+                    live_command_blocked = live_command_risk_blocked = True
+                    signal_execution["no_execute"] = True
+                else:
+                    produced = enqueue_live_execution_command(
+                        enabled=True, dry_run_only=config.dry_run_only,
+                        store=config.execution_command_store, platform="longbridge",
+                        account_scope=str(config.execution_state_account_scope or "unknown"),
+                        strategy_profile=str(config.strategy_profile or "unknown"),
+                        physical_account_id=_resolve_physical_account_id(config=config),
+                        runtime_identity_digest=config.durable_execution_runtime_identity_digest,
+                        execution=signal_execution, allocation=signal_allocation,
+                        strategy_release=getattr(config, "expected_strategy_release", None),
+                    )
+                    command, created = produced
+                    matching_commands = (*matching_commands, command)
+                    today_commands = (command,)
+                    live_command_observation = {
+                        "command_id": command.command_id, "status": "QUEUED" if created else "ALREADY_QUEUED",
+                        "effective_date": command.effective_date,
+                    }
             else:
                 live_command_observation = {
                     "command_id": today_commands[0].command_id, "status": "ALREADY_QUEUED",
@@ -788,7 +880,8 @@ def run_strategy(
             states[c.command_id] is not ExecutionCommandState.QUEUED or c.effective_date < session_date
         ))
         if live_command_blocked or prior_unresolved or len(due) > 1 or len(today_commands) > 1:
-            live_command = live_command or (prior_unresolved or due or today_commands)[0]
+            blocked_commands = prior_unresolved or due or today_commands
+            live_command = live_command or (blocked_commands[0] if blocked_commands else None)
             live_command_blocked = True
         elif due:
             live_command = due[0]
@@ -804,11 +897,17 @@ def run_strategy(
             frozen_plan = resolver(allocation=frozen_allocation, execution=frozen_execution, snapshot=initial_snapshot)
             selected_plan = (frozen_plan, _plan_portfolio(frozen_plan), _plan_execution(frozen_plan), _plan_allocation(frozen_plan))
             if not live_command_blocked:
-                claim = config.execution_command_store.claim_due(
-                    live_command, as_of_date=session_date, claimant=str(config.strategy_profile),
-                )
-                live_command_claimed = claim is not None
-                live_command_blocked = not live_command_claimed
+                if _execution_is_blocked(
+                    plan=frozen_plan, execution=selected_plan[2], allocation=selected_plan[3],
+                ):
+                    live_command_blocked = live_command_risk_blocked = True
+                    selected_plan[2]["no_execute"] = True
+                else:
+                    claim = config.execution_command_store.claim_due(
+                        live_command, as_of_date=session_date, claimant=str(config.strategy_profile),
+                    )
+                    live_command_claimed = claim is not None
+                    live_command_blocked = not live_command_claimed
     if selected_plan is None:
         selected_plan = load_plan(current_snapshot=initial_snapshot)
     plan, portfolio, execution, allocation = selected_plan
@@ -843,7 +942,8 @@ def run_strategy(
     if paper_strategy_risk_state_observation is not None:
         execution["strategy_risk_state"] = paper_strategy_risk_state_observation
     paper_command_observation = enqueue_paper_execution_command(
-        enabled=bool(getattr(config, "durable_execution_command_paper_enabled", False)),
+        enabled=bool(getattr(config, "durable_execution_command_paper_enabled", False))
+        and not _execution_is_blocked(plan=plan, execution=execution, allocation=allocation),
         dry_run_only=bool(getattr(config, "dry_run_only", False)),
         store=getattr(config, "execution_command_store", None),
         platform="longbridge",
@@ -870,6 +970,15 @@ def run_strategy(
     if direct_live_routing_blocked:
         execution["direct_live_routing_blocked"] = True
         execution["direct_live_routing_block_reason"] = "durable_execution_command_required"
+    if (
+        account_identity_blocked
+        or (direct_live_routing_blocked and not live_command_waiting)
+        or (live_command_blocked and not live_command_waiting)
+        or str(execution.get("execution_status") or "").strip().lower() == "blocked"
+    ):
+        execution["heartbeat_execution_state"] = "blocked"
+    elif live_command_waiting:
+        execution["heartbeat_execution_state"] = "waiting_window"
     execution_already_recorded = (
         direct_live_routing_blocked or account_identity_blocked or live_command_blocked
     )
@@ -933,9 +1042,14 @@ def run_strategy(
             runtime.notify_issue("Account identity gate blocked broker orders", message)
         elif live_command_waiting:
             message = "Durable live execution command queued; waiting for its effective trading session"
+        elif live_command_risk_blocked:
+            message = "Final risk approval unavailable; durable execution command unchanged"
+            runtime.notify_issue("Durable live execution risk blocked", message)
         elif live_command_blocked:
-            message = "Durable live execution command is unresolved; broker orders blocked"
-            runtime.notify_issue("Durable live execution blocked", message)
+            message = config.translator("issue_durable_execution_unresolved")
+            runtime.notify_issue(
+                config.translator("issue_durable_execution_blocked_title"), message
+            )
         elif direct_live_routing_blocked:
             message = _durable_command_required_message(execution=execution)
             runtime.notify_issue("Next-session execution blocked", message)
@@ -1107,6 +1221,11 @@ def run_strategy(
     execution.pop("heartbeat_account_snapshot", None)
     if isinstance(account_snapshot, dict):
         execution["heartbeat_account_snapshot"] = dict(account_snapshot)
+    position_currency_by_symbol = (getattr(initial_snapshot, "metadata", {}) or {}).get(
+        "position_currency_by_symbol"
+    )
+    if isinstance(position_currency_by_symbol, dict):
+        execution["position_currency_by_symbol"] = dict(position_currency_by_symbol)
 
     if pending_orders:
         try:
@@ -1126,7 +1245,7 @@ def run_strategy(
             )
         except Exception:
             print("pending_order_notification_failed", flush=True)
-    elif action_done:
+    elif action_done and not config.dry_run_only:
         notification_publisher.publish(
             notification_renderers.render_rebalance_notification(
                 execution=execution,
@@ -1141,7 +1260,7 @@ def run_strategy(
                 title_key=config.notification_title_key or "rebalance_title",
             )
         )
-    elif getattr(config, "notify_no_trade_cycles", True):
+    elif _should_publish_no_order_notification(config=config, result=execution_result):
         notification_publisher.publish(
             notification_renderers.render_heartbeat_notification(
                 execution=execution,
@@ -1156,6 +1275,6 @@ def run_strategy(
             )
         )
     else:
-        print(config.with_prefix("notification_suppressed reason=no_trade_or_error"), flush=True)
+        print(config.with_prefix("notification_suppressed reason=healthy_no_order_cycle"), flush=True)
     _record_platform_execution_telemetry(config, execution_result)
     return execution_result

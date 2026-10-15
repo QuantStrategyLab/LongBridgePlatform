@@ -92,6 +92,16 @@ def test_build_preview_messages_covers_required_categories_with_safe_markers():
             assert forbidden not in message
 
 
+def test_preview_copy_follows_selected_locale_without_mixed_safety_text():
+    zh_messages = preview.build_preview_messages(locale="zh")
+    en_messages = preview.build_preview_messages(locale="en")
+
+    assert all("No order will be placed" not in message for message in zh_messages)
+    assert all("不会下单" not in message for message in en_messages)
+    assert all("PAPER 通知预览" in message for message in zh_messages[:2])
+    assert all("PAPER Notification Preview" in message for message in en_messages[:2])
+
+
 def test_send_preview_calls_sender_once_per_message_without_order_apis(monkeypatch):
     monkeypatch.setenv("TELEGRAM_TOKEN", "token-preview")
     monkeypatch.setenv("GLOBAL_TELEGRAM_CHAT_ID", "chat-preview")

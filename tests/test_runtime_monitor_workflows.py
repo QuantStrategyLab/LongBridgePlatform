@@ -17,11 +17,29 @@ def test_execution_report_heartbeat_has_market_neutral_daily_schedule() -> None:
     assert "pandas-market-calendars" in (ROOT / "uv.lock").read_text()
 
 
+def test_heartbeat_dispatch_selects_one_manifest_target_and_schedule_uses_all() -> None:
+    workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+
+    assert 'cron: "20 22 * * *"' in workflow
+    dispatch = workflow[workflow.index("  workflow_dispatch:"):workflow.index("  schedule:")]
+    assert "target:" in dispatch
+    assert "type: choice" in dispatch
+    assert 'default: "all"' in dispatch
+    assert all(f'- "{target}"' in dispatch for target in ("all", "paper", "sg", "hk"))
+    assert "MATRIX_TARGET: ${{ inputs.target || 'all' }}" in workflow
+    assert 'scripts/render_runtime_target_matrix.py --profile heartbeat --target "$MATRIX_TARGET" --github-output' in workflow
+
+
 def test_runtime_monitor_workflows_retry_gcp_authentication() -> None:
     for name in ("execution-report-heartbeat.yml", "runtime-guard.yml"):
         workflow = (ROOT / ".github/workflows" / name).read_text()
-
-        assert workflow.count("google-github-actions/auth@v3") == 2
+        if name == "execution-report-heartbeat.yml":
+            heartbeat = workflow[workflow.index("  heartbeat:") : workflow.index("  inspect-account-snapshot:")]
+            inspection = workflow[workflow.index("  inspect-account-snapshot:") :]
+            assert heartbeat.count("google-github-actions/auth@v3") == 2
+            assert inspection.count("google-github-actions/auth@v3") == 1
+        else:
+            assert workflow.count("google-github-actions/auth@v3") == 2
         assert "id: gcp_auth_primary" in workflow
         assert "continue-on-error: true" in workflow
         assert "steps.gcp_auth_primary.outcome == 'failure'" in workflow
@@ -70,10 +88,18 @@ def test_runtime_monitor_workflows_use_frozen_runtime_environment() -> None:
         workflow = (ROOT / ".github/workflows" / name).read_text()
 
         assert "uses: actions/setup-python@" not in workflow
-        assert workflow.count("uses: astral-sh/setup-uv@") == 1
+        if name == "execution-report-heartbeat.yml":
+            heartbeat = workflow[workflow.index("  heartbeat:") : workflow.index("  inspect-account-snapshot:")]
+            inspection = workflow[workflow.index("  inspect-account-snapshot:") :]
+            assert heartbeat.count("uses: astral-sh/setup-uv@") == 1
+            assert inspection.count("uses: astral-sh/setup-uv@") == 1
+            assert heartbeat.count("uv sync --frozen --no-dev") == 1
+            assert inspection.count("uv sync --frozen --no-dev") == 1
+        else:
+            assert workflow.count("uses: astral-sh/setup-uv@") == 1
+            assert workflow.count("uv sync --frozen --no-dev") == 1
         assert setup_uv in workflow
         assert "pip install" not in workflow
-        assert workflow.count("uv sync --frozen --no-dev") == 1
         assert workflow.index(setup_uv) < workflow.index("uv sync --frozen --no-dev")
         for command in commands:
             assert command in workflow
@@ -87,10 +113,17 @@ def test_runtime_monitor_workflows_use_frozen_runtime_environment() -> None:
     assert "resolve-matrix:" in lifecycle
     assert "render_runtime_target_matrix.py --profile lifecycle --github-output" in lifecycle
     assert "matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}" in lifecycle
+    cycle_source = lifecycle.split("      - name: Publish admitted PAPER runtime cycle observations", 1)[1].split("      - name: Observe production drift", 1)[0]
+    assert "matrix.target.id == 'paper'" in cycle_source
+    assert "vars.RUNTIME_CYCLE_HEALTH_ENABLED == 'true'" in cycle_source
+    assert "secrets.RUNTIME_CYCLE_HEALTH_SOURCE_BINDING_ID" in cycle_source
+    assert "secrets.ACCOUNT_FACTS_SYNC_TOKEN" in cycle_source
+    assert "scripts/publish_runtime_cycle_health.py" in cycle_source
+    assert "continue-on-error" not in cycle_source
 
     heartbeat = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
     assert "resolve-matrix:" in heartbeat
-    assert "render_runtime_target_matrix.py --profile heartbeat --github-output" in heartbeat
+    assert 'render_runtime_target_matrix.py --profile heartbeat --target "$MATRIX_TARGET" --github-output' in heartbeat
     assert "matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}" in heartbeat
 
 
@@ -121,3 +154,30 @@ def test_heartbeat_script_does_not_import_project_runtime_dependencies() -> None
     script = (ROOT / "scripts/execution_report_heartbeat.py").read_text()
 
     assert "from runtime_config_support import" not in script
+
+
+def test_account_snapshot_sync_uses_matrix_identity_and_preserves_heartbeat_failure():
+    workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+    script = (ROOT / "scripts/record_daily_account_snapshot.py").read_text()
+    account_step = workflow.index("id: account_history")
+    gcloud_setup = workflow.index("- name: Set up gcloud")
+    heartbeat = workflow.index("- name: Check recent execution report")
+    final_failure = workflow.index("- name: Fail after completing heartbeat checks")
+
+    assert 'cron: "20 22 * * *"' in workflow
+    assert gcloud_setup < account_step < heartbeat < final_failure
+    assert "continue-on-error: true" in workflow[account_step:heartbeat]
+    assert "contains(fromJSON('[\"PAPER\",\"HK\",\"SG\"]'), matrix.target.label)" in workflow
+    assert "ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}" in workflow
+    assert "ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}" in workflow
+    assert (
+        "ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || "
+        "vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}"
+    ) in workflow
+    assert "matrix.target.service" not in workflow
+    assert "matrix.target.region" not in workflow
+    assert "steps.account_history.outcome == 'failure'" in workflow[final_failure:]
+    assert "https://cloudscheduler.googleapis.com/v1/" in script
+    assert "{config.service_url}/probe" in script
+    assert "config.scheduler_resource}:run" in script
+    assert 'ACCOUNT_HISTORY_SERVICE_URL' in workflow

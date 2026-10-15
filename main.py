@@ -3,6 +3,7 @@ LongPort Cloud Run strategy executor.
 Runs the configured shared UsEquityStrategies profile for the deployed LongBridge account.
 Runs on Cloud Run; token from Secret Manager, orders via LongPort OpenAPI, alerts via Telegram.
 """
+import dataclasses
 import json
 import importlib
 import os
@@ -14,6 +15,12 @@ from flask import Flask, request
 import google.auth
 import requests
 from application.monitor_dispatcher import dispatch_due_monitors, load_monitor_targets
+from application.startup_config import (
+    StartupConfigReceipt,
+    normalize_monitor_dispatch_targets,
+    normalize_plugin_mounts_strategy,
+    overlay_env,
+)
 from application.broker_reconciliation import (
     account_snapshot_enabled,
     collect_read_only_reconciliation_observations,
@@ -38,6 +45,11 @@ from application.runtime_strategy_adapters import build_runtime_strategy_adapter
 from application.longbridge_execution import submit_order
 from runtime_execution_policy import fractional_buy_execution_enabled, FRACTIONAL_BUY_QUANTITY_STEP
 from application.longbridge_portfolio import fetch_strategy_account_state
+from application.account_snapshot import (
+    begin_natural_cycle_history, cycle_history_observation, end_natural_cycle_history,
+    read_cycle_account_balance,
+)
+from scripts.record_daily_account_snapshot import record_projected_daily_account
 from entrypoints.cloud_run import is_market_open_now
 from runtime_execution_policy import dca_execution_unsupported_reason
 from runtime_config_support import load_platform_runtime_settings
@@ -97,56 +109,56 @@ STRATEGY_DISPLAY_NAME = RUNTIME_SETTINGS.strategy_display_name
 
 
 def _normalize_plugin_mounts_strategy(raw_mounts_json: str | None) -> str | None:
-    if not raw_mounts_json:
-        return raw_mounts_json
-    try:
-        mounts = json.loads(raw_mounts_json)
-    except json.JSONDecodeError:
-        return raw_mounts_json
-    if not isinstance(mounts, dict):
-        return raw_mounts_json
-    plugins = mounts.get("strategy_plugins")
-    if not isinstance(plugins, list):
-        return raw_mounts_json
-    changed = False
-    for entry in plugins:
-        if not isinstance(entry, dict):
-            continue
-        old = entry.get("strategy")
-        if old and old != STRATEGY_PROFILE:
-            entry["strategy"] = STRATEGY_PROFILE
-            changed = True
-            print(f"[config-sync] Plugin mount strategy corrected: {old} → {STRATEGY_PROFILE}", flush=True)
-    return json.dumps(mounts, ensure_ascii=False) if changed else raw_mounts_json
+    normalized, _corrections = normalize_plugin_mounts_strategy(
+        raw_mounts_json,
+        strategy_profile=STRATEGY_PROFILE,
+    )
+    return normalized
 
 
-if hasattr(RUNTIME_SETTINGS, "strategy_plugin_mounts_json"):
-    normalized = _normalize_plugin_mounts_strategy(RUNTIME_SETTINGS.strategy_plugin_mounts_json)
-    if normalized != RUNTIME_SETTINGS.strategy_plugin_mounts_json:
-        object.__setattr__(RUNTIME_SETTINGS, "strategy_plugin_mounts_json", normalized)
+def _adopt_startup_config(settings, env):
+    """Explicitly normalize startup config without mutating ``os.environ`` (B08).
 
-for _env_name in ("MONITOR_DISPATCH_TARGETS_JSON", "LONGBRIDGE_MONITOR_DISPATCH_TARGETS_JSON"):
-    _raw = os.environ.get(_env_name)
-    if _raw:
-        try:
-            _targets = json.loads(_raw)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(_targets, dict):
-            continue
-        _entries = _targets.get("targets")
-        if not isinstance(_entries, list):
-            continue
-        _changed = False
-        for _entry in _entries:
-            if isinstance(_entry, dict):
-                _old = _entry.get("strategy_profile")
-                if _old and _old != STRATEGY_PROFILE:
-                    _entry["strategy_profile"] = STRATEGY_PROFILE
-                    _changed = True
-                    print(f"[config-sync] {_env_name} strategy_profile corrected: {_old} → {STRATEGY_PROFILE}", flush=True)
-        if _changed:
-            os.environ[_env_name] = json.dumps(_targets, ensure_ascii=False)
+    Returns ``(settings, monitor_dispatch_env_overrides, receipt)``.
+    """
+    corrections = []
+    if hasattr(settings, "strategy_plugin_mounts_json"):
+        normalized, plugin_corrections = normalize_plugin_mounts_strategy(
+            settings.strategy_plugin_mounts_json,
+            strategy_profile=STRATEGY_PROFILE,
+        )
+        corrections.extend(plugin_corrections)
+        if normalized != settings.strategy_plugin_mounts_json:
+            if dataclasses.is_dataclass(settings) and not isinstance(settings, type):
+                settings = dataclasses.replace(settings, strategy_plugin_mounts_json=normalized)
+            else:  # non-dataclass settings objects (test doubles)
+                setattr(settings, "strategy_plugin_mounts_json", normalized)
+    overrides, monitor_corrections = normalize_monitor_dispatch_targets(
+        env,
+        strategy_profile=STRATEGY_PROFILE,
+    )
+    corrections.extend(monitor_corrections)
+    receipt = StartupConfigReceipt(
+        strategy_profile=STRATEGY_PROFILE,
+        corrections=tuple(corrections),
+        env_overrides=tuple(sorted(overrides)),
+    )
+    return settings, overrides, receipt
+
+
+RUNTIME_SETTINGS, MONITOR_DISPATCH_ENV_OVERRIDES, STARTUP_CONFIG_RECEIPT = _adopt_startup_config(
+    RUNTIME_SETTINGS,
+    os.environ,
+)
+
+
+def _load_monitor_dispatch_targets():
+    # No corrections: identical call to before. Corrections: read through an
+    # explicit overlay instead of the previously mutated ``os.environ``.
+    if not MONITOR_DISPATCH_ENV_OVERRIDES:
+        return load_monitor_targets()
+    return load_monitor_targets(overlay_env(os.environ, MONITOR_DISPATCH_ENV_OVERRIDES))
+
 
 ACCOUNT_REGION = RUNTIME_SETTINGS.account_region
 MARKET = RUNTIME_SETTINGS.market
@@ -587,6 +599,7 @@ def build_composer(*, dry_run_only_override: bool | None = None):
         estimate_max_purchase_quantity_fn=_profile_estimate_max_purchase_quantity,
         fetch_order_status_fn=fetch_order_status,
         fetch_token_from_secret_fn=fetch_token_from_secret,
+        fetch_token_with_metadata_fn=fetch_account_snapshot_token_with_metadata,
         refresh_token_if_needed_fn=refresh_token_if_needed,
         build_contexts_fn=build_contexts,
         run_id_builder=build_run_id,
@@ -977,13 +990,30 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 print(f"failed to persist execution report: {type(persist_exc).__name__}", flush=True)
 
 
+def _bounded_probe_error_code(exc: Exception) -> int | None:
+    try:
+        code = getattr(exc, "code", None)
+    except Exception:
+        return None
+    if type(code) is not int or not -(2**31) <= code <= 2**31 - 1:
+        return None
+    return code
+
+
 def run_probe(*, response_body: str = "Probe OK"):
     if _v7_application_candidate_bound():
         return response_body, 200
+    history_scope = str(ACCOUNT_REGION or "").strip()
+    record_account_history = (
+        history_scope in {"HK", "SG"}
+        and str(os.getenv("ACCOUNT_HISTORY_RECORDING_ENABLED") or "").strip() == "true"
+    )
+    history_capture = begin_natural_cycle_history() if record_account_history else None
     composer = None
     reporting_adapters = None
     log_context = None
     report = None
+    probe_step = "settings"
     try:
         composer = build_composer(dry_run_only_override=True)
         reporting_adapters = composer.build_reporting_adapters()
@@ -994,8 +1024,37 @@ def run_probe(*, response_body: str = "Probe OK"):
             message="Received health probe request",
             execution_window="probe",
         )
+        probe_step = "context"
         runtime = composer.build_rebalance_runtime(silent_cycle_notifications=True)
-        quote_context, trade_context, _indicators = runtime.bootstrap()
+        if record_account_history:
+            probe_step = "context"
+            quote_context, trade_context, source_binding = composer.build_account_snapshot_broker_contexts()
+            probe_step = "balance"
+            read_cycle_account_balance(lambda: trade_context.account_balance(currency="USD"))
+            observation = cycle_history_observation()
+            if observation is None:
+                raise RuntimeError("account history observation incomplete")
+            probe_step = "archive"
+            result = record_projected_daily_account(
+                os.environ,
+                account_scope=history_scope,
+                source_binding=source_binding,
+                balances=observation["projection"]["broker_reported_balances"],
+                cash=observation["projection"]["cash"],
+                started=observation["started"],
+                finished=observation["finished"],
+                open_store=_open_account_history_store,
+                financing=observation["projection"].get("financing"),
+            )
+            print(f"account_history status={result.status} category={result.category or '-'}", flush=True)
+            if result.status != "recorded":
+                raise RuntimeError("account history write was not confirmed")
+            probe_step = "indicators"
+            _indicators = composer.strategy_adapters.calculate_strategy_indicators(quote_context)
+        else:
+            probe_step = "bootstrap"
+            quote_context, trade_context, _indicators = runtime.bootstrap()
+        probe_step = "portfolio_snapshot"
         snapshot = runtime.portfolio_port_factory(
             quote_context,
             trade_context,
@@ -1023,12 +1082,20 @@ def run_probe(*, response_body: str = "Probe OK"):
         )
         return response_body, 200
     except Exception as exc:
+        error_code = _bounded_probe_error_code(exc)
+        error_diagnostics = {
+            "probe_step": probe_step,
+            "error_code_status": "known" if error_code is not None else "unknown",
+        }
+        if error_code is not None:
+            error_diagnostics["error_code"] = error_code
         if report is not None:
             append_runtime_report_error(
                 report,
                 stage="health_probe",
                 message="health_probe_failed",
                 error_type=type(exc).__name__,
+                **error_diagnostics,
             )
             finalize_runtime_report(report, status="error")
         if reporting_adapters is not None and log_context is not None:
@@ -1040,6 +1107,7 @@ def run_probe(*, response_body: str = "Probe OK"):
                 execution_window="probe",
                 error_type=type(exc).__name__,
                 error_message="health_probe_failed",
+                **error_diagnostics,
             )
         err = _compact_error_notification(
             exc, title=t("health_probe_title"), prefix=t("health_probe_error_prefix"), phase="health_probe",
@@ -1058,6 +1126,8 @@ def run_probe(*, response_body: str = "Probe OK"):
             print(err, flush=True)
         return "Error", 500
     finally:
+        if history_capture is not None:
+            end_natural_cycle_history(history_capture)
         try:
             if reporting_adapters is not None and report is not None:
                 report_path = reporting_adapters.persist_execution_report(report)
@@ -1187,13 +1257,35 @@ def run_broker_reconciliation():
     )
 
 
+def fetch_account_snapshot_token_with_metadata(project_id, secret_name):
+    """Read one configured secret-store response. A metadata failure is not reread."""
+    from types import SimpleNamespace
+
+    from quant_platform_kit.cloud import get_secret_store
+
+    store = get_secret_store()
+    read_metadata = getattr(store, "get_secret_with_metadata", None)
+    if callable(read_metadata):
+        return read_metadata(secret_name, project_id=project_id)
+    return SimpleNamespace(
+        value=store.get_secret(secret_name, project_id=project_id),
+        version_name=None,
+    )
+
+
+def _open_account_history_store(project_id):
+    from quant_platform_kit.cloud import get_object_store
+
+    return get_object_store(project_id=project_id)
+
+
 def run_account_snapshot():
     """Read bounded account facts through the order-port-free broker contexts."""
 
     return run_read_only_account_snapshot(
         enabled=account_snapshot_enabled(os.getenv),
         account_scope=getattr(RUNTIME_SETTINGS, "account_region", None),
-        build_read_only_contexts=lambda: build_composer().build_read_only_broker_contexts(),
+        build_read_only_contexts=lambda: build_composer().build_account_snapshot_broker_contexts(),
         collect_evidence=READ_ONLY_BROKER_RECONCILIATION_COLLECTOR,
     )
 
@@ -1330,7 +1422,7 @@ def handle_monitor_dispatch():
     if request_method() == "GET":
         return "Monitor Dispatch OK - use POST to dispatch due monitor checks", 200
     try:
-        result = dispatch_due_monitors(load_monitor_targets())
+        result = dispatch_due_monitors(_load_monitor_dispatch_targets())
     except Exception as exc:
         return _handle_route_runtime_error(exc, route_label="POST /monitor-dispatch")
     return json.dumps(result, ensure_ascii=False), 200, {"Content-Type": "application/json"}
