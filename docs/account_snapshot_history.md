@@ -41,7 +41,7 @@ producer 为每次观察写入 `{prefix}/{target_id}/{source_binding_id}/{observ
 - 同仓 main 的 `execution-report-heartbeat.yml`，`workflow_dispatch target=hk`
 - manifest 的 HK service/region，`ACCOUNT_HISTORY_EXPECTED_SCOPE=HK`、`ACCOUNT_HISTORY_TARGET_ID=hk`、`RUNTIME_TARGET_ENABLED=false`
 - 预先可信配置的 source binding ID，与 QRS 受保护绑定保持相同
-- 既有 WIF 认证明确使用 `longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com`，Cloud Run ID token 的 audience 为配置的准确 service 根 URL
+- 既有 WIF 认证明确使用 workflow 中 `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` 配置的部署服务账号，Cloud Run ID token 的 audience 为配置的准确 service 根 URL
 - 当前 Cloud Run service 只读 metadata 证明准确 service/project/region、URL与 token audience 相同、显式 ingress=all、Ready；正整数 `metadata.generation` 与 `status.observedGeneration` 完全一致，template revision、latest-created、latest-ready和唯一100%流量 revision 全部相同，才能把该模板的 `LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED=true` 视为实际接流量版本的开关。缺字段、未协调generation或新模板/旧流量组合均在GET前拒绝
 
 Workflow 在认证前执行纯配置校验：原始 service URL 必须已经是完全一致的 canonical HTTPS根URL，尾斜线、大小写或空白等会改变 audience 的输入被拒绝，不自动规范化后继续。只有成功输出的同一个URL才传给两个原有主/重试认证步骤作为 ID-token audience，并传给后续GET配置；失败时不生成该ID token，也不回退使用原始URL。该输出不含凭据、账户数据或service环境。在把token发给service之前，脚本还必须验证上述已协调的准确 serving metadata。未通过验证不发送 token 或调用账户端点。认证步骤的重试不会重试账户 GET。Cloud metadata 从 `gcloud run services describe` 直接经管道进入脚本，不保存到文件或公开日志；ID token 只通过本次 step 环境传递，不写入 artifact。该路线不根据默认 gcloud identity 推定权限，凭据来源仍是上述显式 WIF 配置。
