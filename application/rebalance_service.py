@@ -633,6 +633,16 @@ def _record_execution_marker(
 
 
 
+def _defer_cycle_notification(result, *, config):
+    from notifications.digest_snapshot.digest_routing import defer_routine_cycle_to_digest
+    evidence = {**dict(result.allocation or {}), **dict(result.execution or {})}
+    evidence.setdefault("execution_status", "completed" if result.action_done else "no_action")
+    evidence["orders_pending_count"] = len(tuple(getattr(result, "pending_orders", ()) or ()))
+    orders = tuple(getattr(result, "submitted_orders", ()) or ())
+    return not config.dry_run_only and defer_routine_cycle_to_digest(
+        evidence, submitted_order_count=len(orders), submitted_orders=orders)
+
+
 def run_strategy(
     *,
     runtime: LongBridgeRebalanceRuntime,
@@ -1227,7 +1237,10 @@ def run_strategy(
     if isinstance(position_currency_by_symbol, dict):
         execution["position_currency_by_symbol"] = dict(position_currency_by_symbol)
 
-    if pending_orders:
+    routine_to_digest = _defer_cycle_notification(execution_result, config=config)
+    if routine_to_digest:
+        print(config.with_prefix("notification_suppressed reason=daily_digest"), flush=True)
+    elif pending_orders:
         try:
             notification_publisher.publish(
                 notification_renderers.render_rebalance_notification(

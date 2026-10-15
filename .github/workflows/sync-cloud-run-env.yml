@@ -683,6 +683,8 @@ jobs:
       IBIT_ZSCORE_EXIT_ALLOW_OUTSIDE_EXECUTION_WINDOW: ${{ vars.IBIT_ZSCORE_EXIT_ALLOW_OUTSIDE_EXECUTION_WINDOW }}
       RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
+      QSL_ROUTINE_NOTIFICATION_MODE: ${{ vars.QSL_ROUTINE_NOTIFICATION_MODE }}
+      QSL_DIGEST_ROUTINE_ORDERS: ${{ vars.QSL_DIGEST_ROUTINE_ORDERS }}
       EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI }}
       LIFECYCLE_PERFORMANCE_BUCKET: ${{ vars.LIFECYCLE_PERFORMANCE_BUCKET }}
       LONGBRIDGE_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY }}
@@ -1241,6 +1243,15 @@ jobs:
           }
 
           env_pairs=("${target_env_pairs[@]}")
+          for notification_key in QSL_ROUTINE_NOTIFICATION_MODE QSL_DIGEST_ROUTINE_ORDERS; do
+            if [ -n "${!notification_key:-}" ]; then
+              case "${notification_key}:${!notification_key}" in
+                QSL_ROUTINE_NOTIFICATION_MODE:immediate|QSL_ROUTINE_NOTIFICATION_MODE:daily_digest|QSL_DIGEST_ROUTINE_ORDERS:true|QSL_DIGEST_ROUTINE_ORDERS:false) ;;
+                *) echo "Invalid notification routing configuration" >&2; exit 2 ;;
+              esac
+              env_pairs+=("${notification_key}=${!notification_key}")
+            fi
+          done
           secret_pairs=()
           remove_env_vars=("${target_remove_env_vars[@]}")
           remove_env_vars+=(
