@@ -15,7 +15,7 @@ binding is a caller assertion. It does not establish the client's approved GCP
 principal, native account identity, account class, or paper/live broker status.
 The caller must establish that authority separately before any real read.
 
-Only `qsl-runtime-logs-shared/longbridge/account_snapshots/hk/{expected binding}/`
+Only `<bucket>/longbridge/account_snapshots/hk/{expected binding}/`
 is read. No caller-provided bucket, target, path, URL, account selector, token,
 credential provider, redirect destination, or fallback endpoint is accepted.
 The exact historical window is at most five minutes, cannot be in the future,
