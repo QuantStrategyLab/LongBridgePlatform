@@ -267,6 +267,40 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
         self.assertTrue(settings.dry_run_only)
 
+    def test_dry_run_env_cannot_loosen_dry_run_target(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE, dry_run_only=True),
+                "LONGBRIDGE_DRY_RUN_ONLY": "false",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(EnvironmentError, "conflicts with RUNTIME_TARGET_JSON.dry_run_only"):
+                load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+
+    def test_dry_run_env_may_tighten_live_target(self):
+        # Stop/staging paths force dry-run on a target declared live; that must keep working.
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE, dry_run_only=False),
+                "LONGBRIDGE_DRY_RUN_ONLY": "true",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+        self.assertTrue(settings.dry_run_only)
+
+    def test_unset_dry_run_env_on_dry_run_target_stays_dry_run(self):
+        with patch.dict(
+            os.environ,
+            {"RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE, dry_run_only=True)},
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
+        self.assertTrue(settings.dry_run_only)
+
     def test_runtime_target_enabled_is_loaded_from_env(self):
         with patch.dict(
             os.environ,
