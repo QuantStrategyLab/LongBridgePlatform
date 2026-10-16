@@ -143,16 +143,16 @@ class NotificationTests(unittest.TestCase):
         en_translate = build_translator("en")
         zh_name = build_strategy_display_name(zh_translate)("soxl_soxx_trend_income")
         en_name = build_strategy_display_name(en_translate)("soxl_soxx_trend_income")
-        self.assertEqual(zh_name, "SOXL/SOXX 半导体趋势收益")
-        self.assertEqual(en_name, "SOXL/SOXX Semiconductor Trend Income")
+        self.assertEqual(zh_name, "半导体趋势收益")
+        self.assertEqual(en_name, "Semiconductor Trend Income")
 
     def test_supported_strategy_profiles_have_translated_names(self):
         zh_name = build_strategy_display_name(build_translator("zh"))
         en_name = build_strategy_display_name(build_translator("en"))
-        self.assertEqual(zh_name("global_etf_confidence_vol_gate"), "全球 ETF 置信波动门控")
-        self.assertEqual(en_name("global_etf_confidence_vol_gate"), "Global ETF Confidence Vol Gate")
-        self.assertEqual(zh_name("hk_global_etf_tactical_rotation"), "港股全球 ETF 战术轮动")
-        self.assertEqual(en_name("hk_global_etf_tactical_rotation"), "HK Global ETF Tactical Rotation")
+        self.assertEqual(zh_name("global_etf_confidence_vol_gate"), "全球ETF轮动")
+        self.assertEqual(en_name("global_etf_confidence_vol_gate"), "Global ETF Rotation")
+        self.assertEqual(zh_name("hk_global_etf_tactical_rotation"), "港股ETF战术轮动")
+        self.assertEqual(en_name("hk_global_etf_tactical_rotation"), "HK ETF Tactical Rotation")
 
         for profile in SUPPORTED_STRATEGY_PROFILES:
             self.assertNotEqual(zh_name(profile), profile)
@@ -178,7 +178,7 @@ class NotificationTests(unittest.TestCase):
             note_logs=(),
             translator=build_translator("zh"),
             separator="━━━━━━━━━━━━━━━━━━",
-            strategy_display_name="SOXL/SOXX 半导体趋势收益",
+            strategy_display_name="半导体趋势收益",
             dry_run_only=False,
         )
 
@@ -517,7 +517,7 @@ class NotificationTests(unittest.TestCase):
             note_logs=(),
             translator=build_translator("zh"),
             separator="━━━━━━━━━━━━━━━━━━",
-            strategy_display_name="罗素 Top50 领涨轮动",
+            strategy_display_name="罗素Top50领涨",
             dry_run_only=False,
         )
 

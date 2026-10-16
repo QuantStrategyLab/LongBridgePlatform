@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .display_names import display_name
+
 from quant_platform_kit.common.operational_notification_localization import resolve_operational_notification_locale
 
 import re
@@ -43,7 +45,7 @@ SIGNAL_ICONS = {
 
 I18N = {
     "zh": {
-        "runtime_failure_title": "⚠️ LongBridge 策略运行失败",
+        "runtime_failure_title": "⚠️ {platform} 策略运行失败",
         "runtime_failure_context": "运行目标：{context}",
         "runtime_failure_result": "本次运行未正常结束，请查看最新执行报告。",
         "runtime_failure_action": "下一步：检查账户授权、连接及最新执行报告。",
@@ -181,26 +183,6 @@ I18N = {
         "signal_reduce": "减仓信号",
         "signal_exit": "离场信号",
         "signal_idle": "等待信号",
-        "strategy_name_soxl_soxx_trend_income": "SOXL/SOXX 半导体趋势收益",
-        "strategy_name_tqqq_growth_income": "TQQQ 增长收益",
-        "strategy_name_global_etf_confidence_vol_gate": "全球 ETF 置信波动门控",
-        "strategy_name_global_etf_rotation": "全球 ETF 轮动",
-        "strategy_name_tech_communication_pullback_enhancement": "科技通信回调增强",
-        "strategy_name_qqq_tech_enhancement": "科技通信回调增强",
-        "strategy_name_russell_top50_leader_rotation": "罗素 Top50 领涨轮动",
-        "strategy_name_ibit_smart_dca": "IBIT 比特币 ETF 智能定投",
-        "strategy_name_nasdaq_sp500_smart_dca": "纳指100 / 标普500 智能定投",
-        "strategy_name_us_equity_combo": "美股核心组合",
-        "strategy_name_us_equity_combo_leveraged": "美股Alpha组合",
-        "strategy_name_hk_global_etf_tactical_rotation": "港股全球 ETF 战术轮动",
-        "strategy_name_hk_low_vol_dividend_quality_snapshot": "港股低波股息质量快照",
-        "strategy_name_cn_industry_etf_rotation": "A股行业ETF轮动",
-        "strategy_name_cn_industry_etf_rotation_aggressive": "A股行业ETF轮动(进取)",
-        "strategy_name_cn_stock_momentum_rotation": "A股股票动量轮动",
-        "strategy_name_cn_dividend_quality_snapshot": "A股股息质量快照",
-        "strategy_name_cn_csi500_multi_factor_snapshot": "A股中证500多因子",
-        "strategy_name_cn_index_etf_tactical_rotation": "A股指数ETF战术轮动",
-        "strategy_name_cn_equity_combo": "A股组合策略",
         "strategy_plugin_line": "🧩 插件：{plugin} | 启用：{enabled} | 状态：{route} | 提醒：{action}",
         "strategy_plugin_enabled_true": "是",
         "strategy_plugin_enabled_false": "否",
@@ -260,7 +242,7 @@ I18N = {
         "strategy_plugin_guidance_taco_rebound_shadow_taco_rebound_notify_manual_review": "TACO 仅提示可能的反弹窗口；可考虑小仓位、分批、预设止损/失效条件的人工博弈，不建议一次性满仓。",
     },
     "en": {
-        "runtime_failure_title": "⚠️ LongBridge strategy run failed",
+        "runtime_failure_title": "⚠️ {platform} strategy run failed",
         "runtime_failure_context": "Target: {context}",
         "runtime_failure_result": "The run did not finish successfully; check the latest execution report.",
         "runtime_failure_action": "Next: Check account authorization, connectivity and the latest execution report.",
@@ -398,26 +380,6 @@ I18N = {
         "signal_reduce": "Reduce Signal",
         "signal_exit": "Exit Signal",
         "signal_idle": "Idle",
-        "strategy_name_soxl_soxx_trend_income": "SOXL/SOXX Semiconductor Trend Income",
-        "strategy_name_tqqq_growth_income": "TQQQ Growth Income",
-        "strategy_name_global_etf_confidence_vol_gate": "Global ETF Confidence Vol Gate",
-        "strategy_name_global_etf_rotation": "Global ETF Rotation",
-        "strategy_name_tech_communication_pullback_enhancement": "Tech/Communication Pullback Enhancement",
-        "strategy_name_qqq_tech_enhancement": "Tech/Communication Pullback Enhancement",
-        "strategy_name_russell_top50_leader_rotation": "Russell Top50 Leader Rotation",
-        "strategy_name_ibit_smart_dca": "IBIT Smart DCA",
-        "strategy_name_nasdaq_sp500_smart_dca": "Nasdaq 100 / S&P 500 Smart DCA",
-        "strategy_name_us_equity_combo": "US Equity Combo",
-        "strategy_name_us_equity_combo_leveraged": "US Equity Combo Leveraged",
-        "strategy_name_hk_global_etf_tactical_rotation": "HK Global ETF Tactical Rotation",
-        "strategy_name_hk_low_vol_dividend_quality_snapshot": "HK Low-Vol Dividend Quality Snapshot",
-        "strategy_name_cn_industry_etf_rotation": "CN Industry ETF Rotation",
-        "strategy_name_cn_industry_etf_rotation_aggressive": "CN Industry ETF Rotation (Aggressive)",
-        "strategy_name_cn_stock_momentum_rotation": "CN Stock Momentum Rotation",
-        "strategy_name_cn_dividend_quality_snapshot": "CN Dividend Quality Snapshot",
-        "strategy_name_cn_csi500_multi_factor_snapshot": "CN CSI 500 Multi-Factor Snapshot",
-        "strategy_name_cn_index_etf_tactical_rotation": "CN Index ETF Tactical Rotation",
-        "strategy_name_cn_equity_combo": "CN Equity Combo",
         "strategy_plugin_line": "🧩 Plugin: {plugin} | enabled: {enabled} | status: {route} | notice: {action}",
         "strategy_plugin_enabled_true": "yes",
         "strategy_plugin_enabled_false": "no",
@@ -491,9 +453,14 @@ if _merge_strategy_plugin_i18n is not None:
 def build_translator(lang):
     active_lang = resolve_operational_notification_locale(lang)
     def translate(key, **kwargs):
+        if key.startswith("strategy_name_"):
+            profile = key.removeprefix("strategy_name_")
+            return display_name("strategies", profile, active_lang, fallback=key)
         template = I18N[active_lang].get(key, key)
+        template = template.replace("{platform}", display_name("platforms", "longbridge", active_lang))
         return template.format(**kwargs) if kwargs else template
 
+    translate.notification_locale = active_lang
     return translate
 
 
@@ -514,6 +481,9 @@ def build_strategy_display_name(translate_fn):
         metadata: Any = None,
         locale: str | None = None,
     ) -> str:
+        configured = display_name("strategies", profile, locale or getattr(translate_fn, "notification_locale", "en"))
+        if configured != profile:
+            return configured
         if metadata is not None and _resolve_strategy_display_name is not None:
             return _resolve_strategy_display_name(
                 locale or "en",
