@@ -524,9 +524,22 @@ def _archived_event(report, env):
                 or saved.get("source_run_id") != report.get("run_id")
                 or _stamp(saved.get("occurred_at")) != event.occurred_at):
             raise ValueError("notification_archived_event_mismatch")
+        # The run summary owns counts; a saved event cannot contradict it.
+        if any(saved.get(name) != getattr(event, name) for name in ("order_count", "fill_count")):
+            raise ValueError("notification_archived_event_mismatch")
         event = replace(event, event_kind=saved["event_kind"], incident_reason=saved.get("incident_reason"),
                         order_count=saved.get("order_count"), fill_count=saved.get("fill_count"))
-        if event.to_candidate() != saved:
+        canonical = event.to_candidate()
+        normalized = dict(saved)
+        # QPK 07e24c0 NotificationEvent declares these five payload fields
+        # nullable. The pinned runtime-report finalizer omits their nulls.
+        # Normalize only this event envelope, never identity/window fields or
+        # known counts, and preserve every present value and unexpected key.
+        for name in ("incident_reason", "order_execution_digest", "expected_block_evidence",
+                     "order_count", "fill_count"):
+            if name not in normalized and canonical[name] is None:
+                normalized[name] = None
+        if canonical != normalized:
             raise ValueError("notification_archived_event_mismatch")
     return event, facts
 
