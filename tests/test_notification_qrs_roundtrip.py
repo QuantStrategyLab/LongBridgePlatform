@@ -18,7 +18,7 @@ from test_notification_consolidation import MemoryStore, binding_env, fake_store
 
 
 VENDOR = Path(__file__).parent / "vendor" / "qrs_notification"
-QRS_SHA = "8f5eee7e72577682e6e897ceb5f02014e49a40a7"
+QRS_SHA = "fda2333316593fa6a1585695021ab33ed76a9bcc"
 
 
 @pytest.fixture
@@ -97,11 +97,12 @@ def receive(qrs, tmp_path, env, payload, *, duplicate=False):
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
-def test_two_healthy_archived_runs_roundtrip_are_known_zero(qrs, tmp_path, language):
+@pytest.mark.parametrize("run_ids", [("synthetic-a",), ("synthetic-a", "synthetic-b")])
+def test_healthy_archived_runs_roundtrip_are_known_zero(qrs, tmp_path, language, run_ids):
     env = binding_env("sg", "SG", False)
-    _, payload = export_reports(env, [archived_report(env, "synthetic-a"), archived_report(env, "synthetic-b")])
+    _, payload = export_reports(env, [archived_report(env, run_id) for run_id in run_ids])
     rows, summary, _ = receive(qrs, tmp_path, env, payload)
-    assert len(rows) == 2 and summary["event_count"] == 2
+    assert len(rows) == len(run_ids) and summary["event_count"] == len(run_ids)
     assert summary["immediate_events"] == 0 and not summary["counts_unknown"]
     assert all(row["order_count"] == row["fill_count"] == 0 and row["cycle_count"] == 1 for row in rows)
     entries = qrs.digest.filter_runs_for_digest(rows)
@@ -113,6 +114,9 @@ def test_two_healthy_archived_runs_roundtrip_are_known_zero(qrs, tmp_path, langu
     # Healthy zero-order runs render known zero, rather than unknown statistics.
     assert ("订单：0" if language == "zh" else "Orders: 0") in text
     assert ("未知" if language == "zh" else "unknown") not in text
+    zero = (("本轮 0 单" if len(run_ids) == 1 else "窗口内各轮均为 0 单") if language == "zh" else
+            ("0 orders this run" if len(run_ids) == 1 else "0 orders in every observed run"))
+    assert zero in text
 
 
 def test_zero_and_real_order_runs_roundtrip_with_duplicate_observations(qrs, tmp_path):

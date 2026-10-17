@@ -1,15 +1,15 @@
 {
   "repository": "QuantStrategyLab/QuantRuntimeSettings",
-  "commit": "8f5eee7e72577682e6e897ceb5f02014e49a40a7",
+  "commit": "fda2333316593fa6a1585695021ab33ed76a9bcc",
   "test_only": true,
   "files": {
     "merge_digest_candidates.py": {
       "source": "python/scripts/merge_digest_candidates.py",
-      "sha256": "e364af69ecbee8381230335669ccd2ad2668e63f9153f950c0a5f09e22e8d147"
+      "sha256": "8feb0fb58ee31d49f3e4e8b0bc602333ae62e9e0262f102aa9c7f7f839a2b812"
     },
     "notification_candidate_adapter.py": {
       "source": "python/scripts/notification_candidate_adapter.py",
-      "sha256": "95278e822046d4090cddf12fbe07f3917463620201e12aef4ffbe44b7defaf29"
+      "sha256": "8f0806165f7d99ffd9db7ef41879d9eb7d37e6551678fd0463d29dd7e7bbc19e"
     },
     "daily_digest_notify.py": {
       "source": "python/scripts/daily_digest_notify.py",
@@ -25,7 +25,7 @@
     },
     "unified_daily_digest.py": {
       "source": "python/scripts/unified_daily_digest.py",
-      "sha256": "788c6e6110c54b5da66e9932214ca6fa906bf558e8e153abc8eeb1e467a552f7"
+      "sha256": "71ba99a8ee21448822bf1d464060e84d6287e8ce7f2595f33b813ce852a45ca5"
     },
     "notification_mode.py": {
       "source": "python/scripts/notification_mode.py",
