@@ -1168,11 +1168,11 @@ def _localized_heartbeat_detail(detail: str) -> str:
     return f"{localized_activity}{separator}{suffix}" if separator else localized_activity
 
 
-def _notify_normal_heartbeat(name: str, detail: str, *, observed_at=None, checked_at=None) -> None:
+def _notify_normal_heartbeat(name: str, detail: str, *, observed_at=None, checked_at=None, observed_report=None) -> None:
     # Successful no-trade runs notify in run_strategy, using that cycle's broker
     # snapshot. Scheduled scans retain alerts but never duplicate cycle success.
     if unified_notifications.enabled() and observed_at is not None:
-        unified_notifications.heartbeat_observation(now=checked_at, recovery_at=observed_at)
+        unified_notifications.heartbeat_observation(now=checked_at, recovery_at=observed_at, report=observed_report)
     if _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
         print(f"Execution report success notification skipped for {name}: cycle notifications belong to the runtime; scanner is alerts-only")
 
@@ -1346,6 +1346,7 @@ def main(now: dt.datetime | None = None) -> int:
     accepted = []
     accepted_by_service: dict[str, tuple[str, dt.datetime, str, str]] = {}
     notification_recovery_proofs = {}
+    notification_recovery_reports = {}
     inspected = []
     for uri, updated in sorted_objects[:max_reports]:
         payload = _cat_gcs_json(uri, project=project)
@@ -1379,8 +1380,8 @@ def main(now: dt.datetime | None = None) -> int:
                     # Object upload time alone cannot prove a new execution.
                     proof = unified_notifications._stamp(payload.get("finished_at") or payload.get("started_at"))
                     if proof <= now:
-                        notification_recovery_proofs[service_name] = max(
-                            notification_recovery_proofs.get(service_name, proof), proof)
+                        notification_recovery_proofs[uri] = proof
+                        notification_recovery_reports[uri] = payload
                 except (ValueError, TypeError):
                     print("notification_receipt_recovery_proof_unknown", flush=True)
             activity = _report_activity_label(payload)
@@ -1403,10 +1404,13 @@ def main(now: dt.datetime | None = None) -> int:
             )
             print(f"Execution report heartbeat OK for {name}: {details}")
             if unified_notifications.enabled():
-                if any(key not in notification_recovery_proofs for key in required_keys):
+                uris = [accepted_by_service[key][0] for key in required_keys]
+                if any(uri not in notification_recovery_proofs for uri in uris):
                     raise ValueError("notification_receipt_binding_or_time_unknown")
-                _notify_normal_heartbeat(name, summary_details,
-                    observed_at=min(notification_recovery_proofs[key] for key in required_keys), checked_at=now)
+                proof = min(notification_recovery_proofs[uri] for uri in uris)
+                for uri in uris:
+                    _notify_normal_heartbeat(name, summary_details, observed_at=proof, checked_at=now,
+                        observed_report=notification_recovery_reports[uri])
             else:
                 _notify_normal_heartbeat(name, summary_details)
             return 0
@@ -1416,10 +1420,11 @@ def main(now: dt.datetime | None = None) -> int:
             f"Execution report heartbeat OK for {name}: {reason}, updated={updated.isoformat()}, uri={uri}"
         )
         if unified_notifications.enabled():
-            if not notification_recovery_proofs:
+            if uri not in notification_recovery_proofs:
                 raise ValueError("notification_receipt_binding_or_time_unknown")
             _notify_normal_heartbeat(name, f"{activity}@{updated.isoformat()}",
-                observed_at=max(notification_recovery_proofs.values()), checked_at=now)
+                observed_at=notification_recovery_proofs[uri], checked_at=now,
+                observed_report=notification_recovery_reports[uri])
         else:
             _notify_normal_heartbeat(name, f"{activity}@{updated.isoformat()}")
         return 0

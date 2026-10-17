@@ -130,7 +130,8 @@ def _export_projection(store, state_store, key, state):
         raise CandidatePersistenceError("notification_candidate_concurrent_update")
     allowed = {"platform_id", "strategy_profile", "opaque_account_uid", "target_id", "business_day", "actually_ran",
                "as_of", "status", "execution_status", "order_count", "fill_count", "cycle_count", "field_status",
-               "evidence_provenance", "reason_code", "execution_mode"}
+               "evidence_provenance", "reason_code", "execution_mode", "source_run_id", "notification_events",
+               "scheduled_idle"}
     rows = [{key: value for key, value in row.items() if key in allowed} for row in state["runs"]]
     for row in rows:
         row.update(evidence_persistence_status="persisted", evidence_delivery_status="pending_central")
@@ -172,9 +173,8 @@ def persist_candidate(event, *, env=None, actually_ran=True, dry_run=False, prev
     fact_key = event["dedupe_key"]
     conflicts = list(previous.get("notification_conflicts") or [])
     if fact_key in events and events[fact_key] != event:
-        conflict = {"source_run_id": event["source_run_id"], "previous": events[fact_key], "observed": event}
-        if conflict not in conflicts:
-            conflicts.append(conflict)
+        # Preserve different observations without interpreting event counters
+        # as whole-run counters. Archive run facts below own those counters.
         fact_key = f"{fact_key}-{_hash(event)}"
     events[fact_key] = event
     sources = dict(previous.get("notification_source_runs") or {})
@@ -183,35 +183,41 @@ def persist_candidate(event, *, env=None, actually_ran=True, dry_run=False, prev
                   "dry_run": dry_run, "preview_count": preview_count,
                   "as_of": event["occurred_at"], "event_kind": event["event_kind"]}
         run_id = event["source_run_id"]
-        if run_id in sources and sources[run_id] != source:
-            conflict = {"source_run_id": run_id, "previous": sources[run_id], "observed": source}
-            if conflict not in conflicts:
-                conflicts.append(conflict)
-        else:
-            sources[run_id] = source
-    rows = list(sources.values())
-    def total(name):
-        values = [row[name] for row in rows]
-        return sum(values) if not conflicts and values and all(type(value) is int for value in values) else None
-    urgent = bool(conflicts) or any(item["event_kind"] not in {"routine_cycle", "healthy_heartbeat", "order_submitted", "fill"}
-                 for item in events.values())
-    row = {**identity, "business_day": event["business_day"], "report_date": event["report_date"],
-           "window_id": event["window_id"], "actually_ran": bool(sources),
-           "as_of": max(item["occurred_at"] for item in events.values()),
-           "status": "alert" if urgent else "ok", "execution_status": "execution_alert" if urgent else "ok_no_order",
-           "order_count": total("order_count"), "fill_count": total("fill_count"), "cycle_count": len(sources),
-           "dry_run": dry_run, "execution_mode": "dry_run" if dry_run else "live", "preview_count": total("preview_count"),
-           "field_status": {name: "known" if total(name) is not None else "counts_unknown"
-                            for name in ("order_count", "fill_count")},
-           "evidence_provenance": "candidates", "persistence_status": "persisted", "delivery_status": "pending_central",
-           "source_run_ids": sorted(sources)}
-    if not urgent and row["order_count"] is None and not dry_run:
-        row["execution_status"] = "execution_unknown"
-    if urgent:
-        row["reason_code"] = "source_cycle_alert"
-    if not sources:
-        row.update(order_count=None, fill_count=None, cycle_count=0)
-    payload = {"schema_version": "qsl.digest_candidates.v1", "producer_status": "projected", "runs": [row],
+        old_source = sources.get(run_id, {})
+        for name in ("order_count", "fill_count", "preview_count"):
+            old, observed = old_source.get(name), source[name]
+            if old is not None and observed is not None and old != observed:
+                conflict = {"source_run_id": run_id, "field": name, "previous": old, "observed": observed}
+                if conflict not in conflicts:
+                    conflicts.append(conflict)
+            if old is not None:
+                source[name] = old
+        sources[run_id] = source
+    rows = []
+    for run_id, source in sorted(sources.items()):
+        run_events = [item for item in events.values() if item["source_run_id"] == run_id]
+        run_conflicts = [item for item in conflicts if item["source_run_id"] == run_id]
+        counts = {name: source[name] if not any(item.get("field", name) == name for item in run_conflicts) else None
+                  for name in ("order_count", "fill_count", "preview_count")}
+        urgent = bool(run_conflicts) or any(item["event_kind"] not in {
+            "routine_cycle", "healthy_heartbeat", "order_submitted", "fill"} for item in run_events)
+        row = {**identity, "source_run_id": run_id, "business_day": event["business_day"],
+               "actually_ran": True, "as_of": source["as_of"],
+               "status": "alert" if urgent else "ok", "execution_status": "execution_alert" if urgent else
+                   "executed" if counts["order_count"] else "ok_no_order",
+               **counts, "cycle_count": 1, "dry_run": dry_run,
+               "execution_mode": "dry_run" if dry_run else "live",
+               "field_status": {name: "known" if counts[name] is not None else "unknown"
+                                for name in ("order_count", "fill_count")},
+               "evidence_provenance": "candidates", "persistence_status": "persisted", "delivery_status": "pending_central",
+               "notification_events": run_events}
+        row["field_status"]["cycle_count"] = "known"
+        if not urgent and row["order_count"] is None and not dry_run:
+            row["execution_status"] = "execution_unknown"
+        if urgent:
+            row["reason_code"] = "source_cycle_alert"
+        rows.append(row)
+    payload = {"schema_version": "qsl.digest_candidates.v1", "producer_status": "projected", "runs": rows,
                "notification_scope_key": scope_key, "notification_events": events, "notification_source_runs": sources,
                "notification_conflicts": conflicts}
     if payload != previous and not state_store.compare_and_set(f"candidate_state/{key}", version, payload):
@@ -288,13 +294,18 @@ def send_incident(event, send, *, state=None, severity=1, env=None, store=None):
     if decision.action != "send":
         return False
     try:
-        acknowledged = send() is True
+        result = send()
     except Exception:
         tracker.record_delivery(decision)
         raise
-    # Existing senders return a positive transport ACK, not a Telegram message id.
-    tracker.record_delivery(decision, receipt_id=f"transport-ack:{decision.transition_key}" if acknowledged else None)
-    return acknowledged
+    # Existing boolean senders acknowledge transport only. A sender may supply
+    # its actual unique send-history receipt, but we never manufacture one.
+    receipt = result.get("receipt_id") if isinstance(result, Mapping) else None
+    if (not isinstance(receipt, str) or not receipt.strip() or receipt.startswith("transport-ack:")
+            or receipt in {decision.transition_key, event.to_candidate()["dedupe_key"]}):
+        receipt = None
+    tracker.record_delivery(decision, receipt_id=receipt)
+    return result is True or receipt is not None
 
 
 def _storage_failure(notify_issue):
@@ -426,6 +437,10 @@ def dispatch_immediate(send, *, kind, incident, report=None, occurred_at=None, r
         def immediate():
             with bind_report(report if report is not None else _REPORT.get()):
                 return _safe_send_incident(event, send, state=state, severity=severity)
+        if not actually_ran and report is None and _REPORT.get() is None:
+            # A missing receipt has no business run to export. The QRS
+            # contract has no independent non-counting monitor channel.
+            return immediate()
         route = route_notification_event(event, env=routing_env(), flag_key=FLAG,
             persist_candidate=lambda fact: persist_candidate(fact, actually_ran=actually_ran,
                 dry_run=bool((report or {}).get("dry_run"))), legacy=send,
@@ -491,14 +506,46 @@ def attach_cycle_event(summary, result, *, report, config):
         "preview_count": len(getattr(result, "dry_run_orders", ()) or ()) if config.dry_run_only else None}
 
 
-def heartbeat_observation(*, now, recovery_at=None, env=None):
+def _archived_event(report, env):
+    identity, target = target_binding(env, report=report)
+    if report.get("schema_version") != "runtime_report.v1" or report.get("status") not in {
+            "ok", "completed", "success", "error", "aborted", "failed", "skipped"}:
+        raise ValueError("candidate_source_incomplete")
+    facts = (report.get("summary") or {}).get("notification_digest") or {}
+    known = facts.get("schema_version") == "qsl.notification_cycle.v1" and facts.get("dry_run") is target["dry_run_only"]
+    failed = report.get("status") in {"error", "aborted", "failed"}
+    event = make_event("real_error" if failed else "routine_cycle", env=env, report=report,
+        incident="runtime_failure" if failed else None,
+        order_count=facts.get("order_count") if known else None,
+        fill_count=facts.get("fill_count") if known else None)
+    saved = facts.get("event")
+    if saved is not None:
+        if (not isinstance(saved, dict) or any(saved.get(key) != value for key, value in identity.items())
+                or saved.get("source_run_id") != report.get("run_id")
+                or _stamp(saved.get("occurred_at")) != event.occurred_at):
+            raise ValueError("notification_archived_event_mismatch")
+        event = replace(event, event_kind=saved["event_kind"], incident_reason=saved.get("incident_reason"),
+                        order_count=saved.get("order_count"), fill_count=saved.get("fill_count"))
+        if event.to_candidate() != saved:
+            raise ValueError("notification_archived_event_mismatch")
+    return event, facts
+
+
+def heartbeat_observation(*, now, report=None, recovery_at=None, env=None):
     env = os.environ if env is None else env
     if not enabled(env):
         return
     try:
-        run_id = env.get("GITHUB_RUN_ID")
-        event = make_event("healthy_heartbeat", env=env, occurred_at=now, run_id=run_id,
-                           incident="execution_receipt")
+        if not isinstance(report, Mapping):
+            raise ValueError("notification_receipt_business_run_unknown")
+        archived, facts = _archived_event(report, env)
+        if archived.occurred_at > _stamp(now):
+            raise ValueError("notification_receipt_time_invalid")
+        persist_candidate(archived.to_candidate(), env=env, preview_count=facts.get("preview_count"))
+        # The observed receipt owns both the run identity and its business
+        # window. A next-window monitor job is not another business run.
+        event = replace(archived, event_kind="healthy_heartbeat", incident_reason="execution_receipt",
+                        order_count=None, fill_count=None)
         persist_candidate(event.to_candidate(), env=env, actually_ran=False)
         if recovery_at is not None:
             observe_incident(replace(event, occurred_at=_stamp(recovery_at)), state="accepted",
@@ -592,27 +639,9 @@ def emit_archived(env, *, now=None, read=None, store=None):
         stamp = _stamp(report.get("started_at"))
         if not start <= stamp < end:
             continue
-        target_binding(env, report=report)
-        if report.get("schema_version") != "runtime_report.v1" or report.get("status") not in {"ok", "completed", "success", "error", "aborted", "failed", "skipped"}:
-            raise ValueError("candidate_source_incomplete")
-        facts = (report.get("summary") or {}).get("notification_digest") or {}
-        known = facts.get("schema_version") == "qsl.notification_cycle.v1" and facts.get("dry_run") is target["dry_run_only"]
-        failed = report.get("status") in {"error", "aborted", "failed"}
         # Run facts keep the cycle kind even when real-order notifications were
         # immediate. Absence of per-order evidence remains null, never zero.
-        event = make_event("real_error" if failed else "routine_cycle", env=env, report=report,
-            incident="runtime_failure" if failed else None,
-            order_count=facts.get("order_count") if known else None,
-            fill_count=facts.get("fill_count") if known else None)
-        saved = facts.get("event")
-        if saved is not None:
-            if (not isinstance(saved, dict) or any(saved.get(key) != value for key, value in identity.items())
-                    or saved.get("source_run_id") != report.get("run_id") or _stamp(saved.get("occurred_at")) != stamp):
-                raise ValueError("notification_archived_event_mismatch")
-            event = replace(event, event_kind=saved["event_kind"], incident_reason=saved.get("incident_reason"),
-                            order_count=saved.get("order_count"), fill_count=saved.get("fill_count"))
-            if event.to_candidate() != saved:
-                raise ValueError("notification_archived_event_mismatch")
+        event, facts = _archived_event(report, env)
         persist_candidate(event.to_candidate(), env=env, dry_run=target["dry_run_only"], store=store,
             preview_count=facts.get("preview_count") if target["dry_run_only"] else None)
         count += 1

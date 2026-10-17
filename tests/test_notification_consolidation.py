@@ -237,7 +237,7 @@ def test_on_entrypoint_writes_candidate_before_deferral_and_keeps_broker_calls(m
 
 
 @pytest.mark.parametrize("target_id,scope,dry_run", [("paper", "PAPER", True), ("hk", "HK", False), ("sg", "SG", False)])
-def test_candidate_aggregate_is_target_bound_and_never_invents_order_counts(monkeypatch, target_id, scope, dry_run):
+def test_candidate_rows_are_target_bound_and_never_invent_order_counts(monkeypatch, target_id, scope, dry_run):
     env = binding_env(target_id, scope, dry_run)
     store = MemoryStore()
     report = source_report(env)
@@ -248,9 +248,11 @@ def test_candidate_aggregate_is_target_bound_and_never_invents_order_counts(monk
     second_report = source_report(env, "synthetic-run-2")
     second = unified.make_event("routine_cycle", env=env, report=second_report, order_count=0, fill_count=0).to_candidate()
     unified.persist_candidate(second, env=env, store=store, dry_run=dry_run)
-    row = next(iter(store.backing.values()))[1]["runs"][0]
-    assert row["cycle_count"] == 2 and row["order_count"] is None and row["fill_count"] is None
-    assert row["dry_run"] is dry_run
+    rows = next(iter(store.backing.values()))[1]["runs"]
+    assert [row["source_run_id"] for row in rows] == ["synthetic-run", "synthetic-run-2"]
+    assert all(row["cycle_count"] == 1 and row["dry_run"] is dry_run for row in rows)
+    assert rows[0]["order_count"] is None and rows[0]["fill_count"] is None
+    assert rows[1]["order_count"] == 0 and rows[1]["fill_count"] == 0
     foreign = {**fact, "target_id": "different-target"}
     with pytest.raises(Exception, match="identity_unknown"):
         unified.persist_candidate(foreign, env=env, store=store)
@@ -361,7 +363,7 @@ def test_incident_scope_separates_account_target_strategy_and_reason():
 
 def test_partial_candidate_conflict_keeps_earlier_alert_and_unknown_counts():
     env = binding_env("sg", "SG", False)
-    event = unified.make_event("blocked_run", env=env, report=source_report(env), incident="cycle_attention")
+    event = unified.make_event("blocked_run", env=env, report=source_report(env), incident="cycle_attention", order_count=1, fill_count=0)
     store = MemoryStore()
     unified.persist_candidate(event.to_candidate(), env=env, store=store)
     changed = unified.replace(event, order_count=0, fill_count=0)
@@ -376,7 +378,7 @@ def test_snapshot_matches_the_pinned_qpk_contract():
     from notifications.digest_snapshot import UNIFIED_CONTRACT_SHA256, UNIFIED_CONTRACT_QPK_SHA
     path = Path(__file__).parents[1] / "notifications" / "digest_snapshot" / "unified_contract.py"
     assert hashlib.sha256(path.read_bytes()).hexdigest() == UNIFIED_CONTRACT_SHA256
-    assert UNIFIED_CONTRACT_QPK_SHA == "60a30ff9a5abc8654787095c9d5a003485afb325"
+    assert UNIFIED_CONTRACT_QPK_SHA == "07e24c0c804a9b47316b6ec3c75bb63820d8f421"
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])
@@ -556,7 +558,7 @@ def test_gcs_adapter_uses_atomic_generations_and_does_not_retry_uncertain_writes
         store.read("synthetic")
 
 
-def test_central_payload_retains_v1_shape_and_private_facts_stay_in_notification_store():
+def test_central_payload_exports_per_run_events_and_keeps_ledger_private():
     env = binding_env("sg", "SG", False)
     candidate, ledger = MemoryStore(), MemoryStore()
     fact = unified.make_event("routine_cycle", env=env, report=source_report(env), order_count=0, fill_count=0).to_candidate()
@@ -566,7 +568,9 @@ def test_central_payload_retains_v1_shape_and_private_facts_stay_in_notification
     row = payload["runs"][0]
     assert row["execution_status"] == "ok_no_order"
     assert row["evidence_persistence_status"] == "persisted" and row["evidence_delivery_status"] == "pending_central"
-    assert not ({"source_run_ids", "notification_events", "dry_run", "preview_count", "window_id"} & set(row))
+    assert not ({"source_run_ids", "dry_run", "preview_count", "window_id"} & set(row))
+    assert row["source_run_id"] == fact["source_run_id"]
+    assert row["notification_events"] == [fact]
     assert next(iter(ledger.backing.values()))[1]["notification_events"]
 
 
@@ -653,3 +657,74 @@ def test_runtime_issue_callback_dedupes_categories_and_recovers_after_a_clean_ru
         with unified.bind_report(source_report(env, "run-c", "2026-10-16T20:02:00Z")):
             adapters.notify_issue("Synthetic failure", "synthetic detail")
     assert len(sent) == 3 and len(adapters.delivery_events) == 3
+
+
+def test_boolean_ack_is_uncertain_without_receipt_and_not_resent():
+    env = binding_env("sg", "SG", False)
+    store, calls = MemoryStore(), []
+    event = unified.make_event("real_error", env=env, report=source_report(env), incident="failure")
+    assert unified.send_incident(event, lambda: calls.append(1) or True, env=env, store=store)
+    marker = next(iter(store.backing.values()))[1]
+    assert marker["delivery_status"] == "uncertain"
+    assert marker["receipt_id"] is None
+    assert not unified.send_incident(event, lambda: calls.append(1) or True, env=env, store=store)
+    assert calls == [1]
+
+
+def test_only_sender_supplied_receipt_marks_delivered():
+    env = binding_env("sg", "SG", False)
+    store = MemoryStore()
+    event = unified.make_event("real_error", env=env, report=source_report(env), incident="failure")
+    receipt = "synthetic-send-history-receipt-1"
+    assert unified.send_incident(event, lambda: {"receipt_id": receipt}, env=env, store=store)
+    marker = next(iter(store.backing.values()))[1]
+    assert marker["delivery_status"] == "delivered"
+    assert marker["receipt_id"] == receipt
+
+
+def test_export_keeps_one_row_and_inline_events_for_each_business_run():
+    env = binding_env("sg", "SG", False)
+    candidate, ledger = MemoryStore(), MemoryStore()
+    for run_id, count in (("synthetic-a", 0), ("synthetic-b", 2), ("synthetic-b", 2)):
+        event = unified.make_event("routine_cycle", env=env, report=source_report(env, run_id),
+                                   order_count=count, fill_count=count)
+        unified.persist_candidate(event.to_candidate(), env=env, store=candidate, state_store=ledger)
+    payload = next(iter(candidate.backing.values()))[1]
+    assert len(payload["runs"]) == 2
+    rows = {row["source_run_id"]: row for row in payload["runs"]}
+    for run_id, count in (("synthetic-a", 0), ("synthetic-b", 2)):
+        row = rows[run_id]
+        assert row["order_count"] == count
+        assert row["cycle_count"] == 1
+        assert len(row["notification_events"]) == 1
+        assert row["notification_events"][0]["source_run_id"] == run_id
+
+
+def test_conflicting_run_counts_do_not_taint_another_run():
+    env = binding_env("sg", "SG", False)
+    candidate, ledger = MemoryStore(), MemoryStore()
+    for run_id, count in (("synthetic-a", 1), ("synthetic-b", 0), ("synthetic-a", 2), ("synthetic-a", 1)):
+        event = unified.make_event("routine_cycle", env=env, report=source_report(env, run_id),
+                                   order_count=count, fill_count=0)
+        unified.persist_candidate(event.to_candidate(), env=env, store=candidate, state_store=ledger)
+    rows = {row["source_run_id"]: row for row in next(iter(candidate.backing.values()))[1]["runs"]}
+    assert rows["synthetic-a"]["order_count"] is None
+    assert rows["synthetic-a"]["field_status"]["order_count"] == "unknown"
+    assert rows["synthetic-a"]["fill_count"] == 0
+    assert rows["synthetic-b"]["order_count"] == rows["synthetic-b"]["fill_count"] == 0
+    assert rows["synthetic-b"]["status"] == "ok"
+
+
+@pytest.mark.parametrize("receipt_kind", ["transport_ack", "transition", "event"])
+def test_local_identity_is_not_a_delivery_receipt(receipt_kind):
+    env = binding_env("sg", "SG", False)
+    store = MemoryStore()
+    event = unified.make_event("real_error", env=env, report=source_report(env), incident="failure")
+    def send():
+        marker = next(iter(store.backing.values()))[1]
+        receipt = {"transport_ack": f"transport-ack:{marker['transition_key']}",
+                   "transition": marker["transition_key"], "event": event.to_candidate()["dedupe_key"]}[receipt_kind]
+        return {"receipt_id": receipt}
+    assert not unified.send_incident(event, send, env=env, store=store)
+    marker = next(iter(store.backing.values()))[1]
+    assert marker["receipt_id"] is None and marker["delivery_status"] == "uncertain"
