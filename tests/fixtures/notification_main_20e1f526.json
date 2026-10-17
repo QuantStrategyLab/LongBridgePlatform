@@ -1,0 +1,990 @@
+{
+  "zh": {
+    "cycle": {
+      "healthy": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ],
+          [
+            "send",
+            "💓 【策略运行心跳】\n✅ 无交易，无需调仓"
+          ]
+        ],
+        "execution": {
+          "execution_status": "no_action",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": false,
+        "pending": []
+      },
+      "order": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ],
+          [
+            "send",
+            "🔔 【调仓指令】"
+          ]
+        ],
+        "execution": {
+          "execution_status": "completed",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": true,
+        "pending": []
+      },
+      "pending": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ],
+          [
+            "send",
+            "⏳ 【订单待券商最终确认】"
+          ]
+        ],
+        "execution": {
+          "execution_status": "completed",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": true,
+        "pending": [
+          {
+            "status": "pending_reconciliation"
+          }
+        ]
+      },
+      "blocked": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ],
+          [
+            "send",
+            "💓 【策略运行心跳】\n⚠️ 执行受阻，本轮未提交新订单"
+          ]
+        ],
+        "execution": {
+          "execution_status": "blocked",
+          "blocked_reason": "synthetic_rejection",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": false,
+        "pending": []
+      },
+      "preview": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": true,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ]
+        ],
+        "execution": {
+          "execution_status": "no_action",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": false,
+        "pending": []
+      }
+    },
+    "heartbeat": {
+      "healthy": {
+        "calls": [
+          [
+            "list",
+            [
+              "gs://synthetic-reports/archive/longbridge/**/2026-10/*.json"
+            ],
+            {
+              "project": "synthetic"
+            }
+          ],
+          [
+            "cat",
+            [
+              "gs://synthetic-reports/archive/longbridge/core/2026-10/test.json"
+            ],
+            {
+              "project": "synthetic"
+            }
+          ]
+        ],
+        "exit_code": 0
+      },
+      "missing": {
+        "calls": [
+          [
+            "list",
+            [
+              "gs://synthetic-reports/archive/longbridge/**/2026-10/*.json"
+            ],
+            {
+              "project": "synthetic"
+            }
+          ],
+          [
+            "send",
+            "[执行回执心跳] synthetic\n检查范围：过去 36 小时\n问题：\n- 过去 36 小时内没有新的执行回执"
+          ]
+        ],
+        "exit_code": 1
+      },
+      "rejected": {
+        "calls": [
+          [
+            "list",
+            [
+              "gs://synthetic-reports/archive/longbridge/**/2026-10/*.json"
+            ],
+            {
+              "project": "synthetic"
+            }
+          ],
+          [
+            "cat",
+            [
+              "gs://synthetic-reports/archive/longbridge/core/2026-10/test.json"
+            ],
+            {
+              "project": "synthetic"
+            }
+          ],
+          [
+            "send",
+            "[执行回执心跳] synthetic\n检查范围：过去 36 小时\n问题：\n- 缺少可接受的执行回执：synthetic-service\n最近检查的回执（原文）：\n- 2026-10-16T22:40:00+00:00 gs://synthetic-reports/archive/longbridge/core/2026-10/test.json rejected execution_status=blocked"
+          ]
+        ],
+        "exit_code": 1
+      },
+      "disabled": {
+        "calls": [],
+        "exit_code": 0
+      }
+    },
+    "cycle_legacy_digest": {
+      "healthy": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ]
+        ],
+        "execution": {
+          "execution_status": "no_action",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": false,
+        "pending": []
+      },
+      "order": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ]
+        ],
+        "execution": {
+          "execution_status": "completed",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": true,
+        "pending": []
+      },
+      "pending": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ],
+          [
+            "send",
+            "⏳ 【订单待券商最终确认】"
+          ]
+        ],
+        "execution": {
+          "execution_status": "completed",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": true,
+        "pending": [
+          {
+            "status": "pending_reconciliation"
+          }
+        ]
+      },
+      "blocked": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ],
+          [
+            "send",
+            "💓 【策略运行心跳】\n⚠️ 执行受阻，本轮未提交新订单"
+          ]
+        ],
+        "execution": {
+          "execution_status": "blocked",
+          "blocked_reason": "synthetic_rejection",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": false,
+        "pending": []
+      },
+      "preview": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": true,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ]
+        ],
+        "execution": {
+          "execution_status": "no_action",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": false,
+        "pending": []
+      }
+    }
+  },
+  "en": {
+    "cycle": {
+      "healthy": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ],
+          [
+            "send",
+            "💓 【Strategy cycle heartbeat】\n✅ No trade; no rebalance needed"
+          ]
+        ],
+        "execution": {
+          "execution_status": "no_action",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": false,
+        "pending": []
+      },
+      "order": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ],
+          [
+            "send",
+            "🔔 【Trade Execution Report】"
+          ]
+        ],
+        "execution": {
+          "execution_status": "completed",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": true,
+        "pending": []
+      },
+      "pending": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ],
+          [
+            "send",
+            "⏳ 【Broker Order Pending Confirmation】"
+          ]
+        ],
+        "execution": {
+          "execution_status": "completed",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": true,
+        "pending": [
+          {
+            "status": "pending_reconciliation"
+          }
+        ]
+      },
+      "blocked": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ],
+          [
+            "send",
+            "💓 【Strategy cycle heartbeat】\n⚠️ Execution blocked; no new orders submitted this cycle"
+          ]
+        ],
+        "execution": {
+          "execution_status": "blocked",
+          "blocked_reason": "synthetic_rejection",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": false,
+        "pending": []
+      },
+      "preview": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": true,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ]
+        ],
+        "execution": {
+          "execution_status": "no_action",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": false,
+        "pending": []
+      }
+    },
+    "heartbeat": {
+      "healthy": {
+        "calls": [
+          [
+            "list",
+            [
+              "gs://synthetic-reports/archive/longbridge/**/2026-10/*.json"
+            ],
+            {
+              "project": "synthetic"
+            }
+          ],
+          [
+            "cat",
+            [
+              "gs://synthetic-reports/archive/longbridge/core/2026-10/test.json"
+            ],
+            {
+              "project": "synthetic"
+            }
+          ]
+        ],
+        "exit_code": 0
+      },
+      "missing": {
+        "calls": [
+          [
+            "list",
+            [
+              "gs://synthetic-reports/archive/longbridge/**/2026-10/*.json"
+            ],
+            {
+              "project": "synthetic"
+            }
+          ],
+          [
+            "send",
+            "[Execution Report Heartbeat] synthetic\nLookback: 36 hours\nIssues:\n- No new execution report in the last 36 hours"
+          ]
+        ],
+        "exit_code": 1
+      },
+      "rejected": {
+        "calls": [
+          [
+            "list",
+            [
+              "gs://synthetic-reports/archive/longbridge/**/2026-10/*.json"
+            ],
+            {
+              "project": "synthetic"
+            }
+          ],
+          [
+            "cat",
+            [
+              "gs://synthetic-reports/archive/longbridge/core/2026-10/test.json"
+            ],
+            {
+              "project": "synthetic"
+            }
+          ],
+          [
+            "send",
+            "[Execution Report Heartbeat] synthetic\nLookback: 36 hours\nIssues:\n- Missing acceptable execution report: synthetic-service\nRecent reports (original):\n- 2026-10-16T22:40:00+00:00 gs://synthetic-reports/archive/longbridge/core/2026-10/test.json rejected execution_status=blocked"
+          ]
+        ],
+        "exit_code": 1
+      },
+      "disabled": {
+        "calls": [],
+        "exit_code": 0
+      }
+    },
+    "cycle_legacy_digest": {
+      "healthy": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ]
+        ],
+        "execution": {
+          "execution_status": "no_action",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": false,
+        "pending": []
+      },
+      "order": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ]
+        ],
+        "execution": {
+          "execution_status": "completed",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": true,
+        "pending": []
+      },
+      "pending": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ],
+          [
+            "send",
+            "⏳ 【Broker Order Pending Confirmation】"
+          ]
+        ],
+        "execution": {
+          "execution_status": "completed",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": true,
+        "pending": [
+          {
+            "status": "pending_reconciliation"
+          }
+        ]
+      },
+      "blocked": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": false,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ],
+          [
+            "send",
+            "💓 【Strategy cycle heartbeat】\n⚠️ Execution blocked; no new orders submitted this cycle"
+          ]
+        ],
+        "execution": {
+          "execution_status": "blocked",
+          "blocked_reason": "synthetic_rejection",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": false,
+        "pending": []
+      },
+      "preview": {
+        "calls": [
+          [
+            "bootstrap",
+            null
+          ],
+          [
+            "snapshot",
+            null
+          ],
+          [
+            "plan",
+            [
+              "indicators",
+              "snapshot"
+            ]
+          ],
+          [
+            "execute",
+            {
+              "dry_run_only": true,
+              "symbol_suffix": ".US",
+              "limit_sell_discount": 1.0,
+              "limit_buy_premium": 1.0,
+              "cash_only_execution": true,
+              "fractional_buy_execution": false,
+              "buy_quantity_step": 1.0
+            }
+          ]
+        ],
+        "execution": {
+          "execution_status": "no_action",
+          "cash_only_execution": true,
+          "signal_snapshot": {}
+        },
+        "action_done": false,
+        "pending": []
+      }
+    }
+  }
+}

@@ -12,6 +12,7 @@ from notifications.order_alerts import (
     OrderLifecycleEvent,
     monitor_submitted_order_status,
     publish_order_lifecycle_event,
+    is_filled_status, is_partial_filled_status, is_terminal_error_status,
 )
 from notifications.telegram import build_issue_notifier
 from quant_platform_kit.common.quantity import format_quantity
@@ -89,23 +90,59 @@ def build_runtime_notification_adapters(
         log_message=log_message or (lambda message: print(with_prefix(message), flush=True)),
         send_message=send_recorded_message,
     )
-    notify_issue = build_issue_notifier(
+    legacy_notify_issue = build_issue_notifier(
         with_prefix_fn=with_prefix,
         send_tg_message_fn=send_recorded_message,
     )
+
+    def issue_with_ack(title, detail):
+        before = len(recorded_delivery_events)
+        legacy_notify_issue(title, detail)
+        events = recorded_delivery_events[before:]
+        return bool(events) and all(event.get("transport_acknowledged") is True for event in events)
+
+    def notify_issue(title, detail):
+        from notifications import unified
+        if not unified.enabled():
+            return legacy_notify_issue(title, detail)
+        # Existing callers provide fixed issue titles. Hash the category, never
+        # provider detail text, run ids or credentials into a marker identity.
+        reason = hashlib.sha256(str(title).encode()).hexdigest()
+        return unified.dispatch_immediate(lambda: issue_with_ack(title, detail),
+            kind="real_error", incident=f"runtime_issue:{reason}")
     order_event_publisher = NotificationPublisher(
         log_message=lambda _message: None,
         send_message=send_recorded_message,
     )
 
     def publish_order_event(event: OrderLifecycleEvent) -> None:
-        publish_order_lifecycle_event(
-            event,
-            translator=translator,
-            publisher=order_event_publisher,
-        )
+        from notifications import unified
+        def publish():
+            before = len(recorded_delivery_events)
+            outcome = publish_order_lifecycle_event(event, translator=translator, publisher=order_event_publisher)
+            if not unified.enabled():
+                return outcome
+            events = recorded_delivery_events[before:]
+            return bool(events) and all(item.get("transport_acknowledged") is True for item in events)
+        if unified.enabled() and not (is_filled_status(event.status) or is_partial_filled_status(event.status)):
+            from notifications.digest_snapshot.unified_contract import order_identity_digest
+            unified.dispatch_immediate(publish, kind="order_status_unknown",
+                incident=f"order_status:{order_identity_digest(event.order_id)}", state=event.status,
+                severity=2 if is_terminal_error_status(event.status) else 1)
+        else:
+            if unified.enabled() and is_filled_status(event.status):
+                unified.record_order_resolution(event)
+            publish()
 
     def post_submit_order(trade_context, order_intent, report) -> None:
+        from notifications import unified
+        issue_notifier = legacy_notify_issue
+        if unified.enabled():
+            from notifications.digest_snapshot.unified_contract import order_identity_digest
+            if report.broker_order_id:
+                incident = f"order_status_poll:{order_identity_digest(report.broker_order_id)}"
+                def issue_notifier(title, detail):
+                    return unified.dispatch_immediate(lambda: issue_with_ack(title, detail), kind="real_error", incident=incident)
         monitor_submitted_order_status(
             trade_context,
             str(order_intent.symbol),
@@ -116,7 +153,7 @@ def build_runtime_notification_adapters(
             order_poll_interval_sec=order_poll_interval_sec,
             order_poll_max_attempts=order_poll_max_attempts,
             publish_order_event=publish_order_event,
-            notify_issue=notify_issue,
+            notify_issue=issue_notifier,
             sleeper=sleeper,
         )
 
