@@ -1,0 +1,47 @@
+{
+  "repository": "QuantStrategyLab/QuantRuntimeSettings",
+  "commit": "fda2333316593fa6a1585695021ab33ed76a9bcc",
+  "test_only": true,
+  "files": {
+    "merge_digest_candidates.py": {
+      "source": "python/scripts/merge_digest_candidates.py",
+      "sha256": "8feb0fb58ee31d49f3e4e8b0bc602333ae62e9e0262f102aa9c7f7f839a2b812"
+    },
+    "notification_candidate_adapter.py": {
+      "source": "python/scripts/notification_candidate_adapter.py",
+      "sha256": "8f0806165f7d99ffd9db7ef41879d9eb7d37e6551678fd0463d29dd7e7bbc19e"
+    },
+    "daily_digest_notify.py": {
+      "source": "python/scripts/daily_digest_notify.py",
+      "sha256": "189c3c5d86bf9a153141779ddaba9a28be2615fe80b6646368e407fb91a300cc"
+    },
+    "display_names.py": {
+      "source": "python/scripts/display_names.py",
+      "sha256": "20e26298cf48c77431257a4d73d2c9ef5ce0eda2a88323a23852d0119bdacf8f"
+    },
+    "display_names.json": {
+      "source": "python/scripts/display_names.json",
+      "sha256": "b453f762fff0186342c4eb2b60e95a24cce56bf988d6cfaeea47afe8b8077b54"
+    },
+    "unified_daily_digest.py": {
+      "source": "python/scripts/unified_daily_digest.py",
+      "sha256": "71ba99a8ee21448822bf1d464060e84d6287e8ce7f2595f33b813ce852a45ca5"
+    },
+    "notification_mode.py": {
+      "source": "python/scripts/notification_mode.py",
+      "sha256": "4f3a77af9b677095589c69f976ea0ecf633322b2b41c8eb18457afdaec87d2df"
+    },
+    "notification_snapshot/__init__.py": {
+      "source": "python/scripts/notification_snapshot/__init__.py",
+      "sha256": "67dfde39f061966cdde08f51663d0e7e413a88abab8a82a9b29825cb6f7dfa10"
+    },
+    "notification_snapshot/unified_contract.py": {
+      "source": "python/scripts/notification_snapshot/unified_contract.py",
+      "sha256": "7ba48d1d7c74e66be8cd3ff983c2117002776e82cda6675a084cfe0dc51aecc0"
+    },
+    "notification_snapshot/digest_routing.py": {
+      "source": "python/scripts/notification_snapshot/digest_routing.py",
+      "sha256": "60c3f258c4d1a03bc49c7d03b392c02c316541726dfacb0b1d4fae6dbd2e5017"
+    }
+  }
+}

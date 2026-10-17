@@ -386,8 +386,8 @@ def maybe_publish_attention_for_admission(
 ) -> Mapping[str, int]:
     """Publish ACTION/HALT attention when NEW_RISK / ops axes require a page.
 
-    Dedupes on transition keys within the process. Never grants live, raises RRL,
-    or invents daily-loss facts.
+    Legacy uses process-local transition keys; the opted-in notification adapter
+    uses durable claims. Never grants live, raises RRL, or invents daily-loss facts.
     """
 
     try:
@@ -417,6 +417,12 @@ def maybe_publish_attention_for_admission(
             mandate_dd_budget=resolve_mandate_dd_budget(profile),
         )
     )
+    from notifications.unified import enabled as unified_enabled, publish_attention
+    if unified_enabled():
+        return publish_attention(decision, telegram_sender=telegram_sender,
+            recover=(not prohibited and not operational_uncertain and snapshot is not None
+                     and str(snapshot.observation_status) == "COMPLETE"
+                     and str(snapshot.reconciliation_status) == "VERIFIED"))
     return publish_attention_telegram_transition(
         decision=decision,
         platform=_ATTENTION_PLATFORM,

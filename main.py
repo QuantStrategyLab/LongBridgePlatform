@@ -8,7 +8,7 @@ import json
 import importlib
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import Flask, request
 
@@ -54,6 +54,7 @@ from entrypoints.cloud_run import is_market_open_now
 from runtime_execution_policy import dca_execution_unsupported_reason
 from runtime_config_support import load_platform_runtime_settings
 from notifications.telegram import build_signal_text, build_strategy_display_name, build_translator
+from notifications import unified as unified_notifications
 from quant_platform_kit.common.runtime_reports import (
     append_runtime_report_error,
     build_runtime_report_base,
@@ -427,7 +428,9 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
     if isinstance(account_identity, dict):
         summary["account_identity"] = dict(account_identity)
     from notifications.digest_snapshot.digest_routing import daily_digest_enabled
-    if daily_digest_enabled():
+    if unified_notifications.enabled():
+        _, summary["notification_digest"] = unified_notifications.cycle_facts(cycle_result, dry_run=dry_run)
+    elif daily_digest_enabled():
         from notifications.digest_snapshot.digest_candidates import cycle_evidence
         evidence = {**dict(getattr(cycle_result, "allocation", {}) or {}), **execution}
         evidence.setdefault("execution_status", "completed" if broker_submission_done else "no_action")
@@ -659,7 +662,7 @@ def _runtime_error_notification_message(exc: Exception, *, route_label: str) -> 
     ))
 
 
-def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
+def _send_runtime_error(exc: Exception, *, route_label: str) -> bool:
     targets = _runtime_error_notification_targets()
     if not targets:
         print(t("runtime_notification_missing_target"), flush=True)
@@ -689,6 +692,14 @@ def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
     return bool(outcomes) and all(outcomes)
 
 
+def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
+    return unified_notifications.dispatch_immediate(
+        lambda: _send_runtime_error(exc, route_label=route_label), kind="real_error",
+        incident=f"runtime_route:{route_label}:{_runtime_failure_reason(exc)}",
+        occurred_at=datetime.now(timezone.utc), run_id=build_run_id(),
+    ) if unified_notifications.enabled() else _send_runtime_error(exc, route_label=route_label)
+
+
 def _handle_route_runtime_error(exc: Exception, *, route_label: str):
     print(t("runtime_failure_log"), flush=True)
     _notify_runtime_error(exc, route_label=route_label)
@@ -697,7 +708,11 @@ def _handle_route_runtime_error(exc: Exception, *, route_label: str):
 
 def _route_with_runtime_error_fallback(handler, *, success_body: str, route_label: str, **kwargs):
     try:
-        result = handler(**kwargs)
+        if unified_notifications.enabled():
+            with unified_notifications.bind_route(route_label):
+                result = handler(**kwargs)
+        else:
+            result = handler(**kwargs)
     except Exception as exc:
         return _handle_route_runtime_error(exc, route_label=route_label)
     if result is False:
@@ -876,7 +891,11 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             live_execution_session_authorized=bool(market_open and not validation_only),
         )
         failure_phase = "strategy_cycle"
-        cycle_result = run_rebalance_cycle(runtime=rebalance_runtime, config=rebalance_config)
+        if unified_notifications.enabled():
+            with unified_notifications.bind_report(report):
+                cycle_result = run_rebalance_cycle(runtime=rebalance_runtime, config=rebalance_config)
+        else:
+            cycle_result = run_rebalance_cycle(runtime=rebalance_runtime, config=rebalance_config)
         failure_phase = "reporting"
         signal_snapshot = {}
         if cycle_result is not None:
@@ -886,6 +905,12 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             cycle_result,
             dry_run=bool(report.get("dry_run")),
         )
+        if unified_notifications.enabled():
+            try:
+                unified_notifications.attach_cycle_event(execution_summary, cycle_result, report=report, config=rebalance_config)
+            except Exception:
+                print("notification_event_attachment_unconfirmed", flush=True)
+                unified_notifications.record_failure("notification_event_attachment_unconfirmed", report=report)
         notification_delivery_log = _build_notification_delivery_log_for_report(
             platform="longbridge",
             strategy_profile=STRATEGY_PROFILE,
@@ -896,6 +921,11 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         )
         if notification_delivery_log:
             execution_summary["notification_delivery_log"] = notification_delivery_log
+        if unified_notifications.enabled():
+            notification_delivery_events.extend(
+                {"sink": "notification_store", "delivery_status": "failed", "transport_acknowledged": False,
+                 "error_type": code} for code in report.get("notification_unified_errors", ())
+            )
         notification_delivery_summary = _build_notification_delivery_summary(
             notification_delivery_events
         )
@@ -948,10 +978,13 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         )
         if not (validation_only and _v7_application_candidate_bound()):
             try:
-                notification_adapters.publish_cycle_notification(
-                    detailed_text=_compact_error_notification(exc, phase=failure_phase),
-                    compact_text=_compact_error_notification(exc, phase=failure_phase),
-                )
+                def publish_failure():
+                    return notification_adapters.publish_cycle_notification(
+                        detailed_text=_compact_error_notification(exc, phase=failure_phase),
+                        compact_text=_compact_error_notification(exc, phase=failure_phase),
+                    )
+                unified_notifications.dispatch_immediate(publish_failure, kind="real_error",
+                    incident=f"runtime_failure:{failure_phase}:{failure_reason}", report=report, actually_ran=True)
             except Exception as notification_exc:
                 notification_delivery_events.append(
                     {
@@ -995,6 +1028,8 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             try:
                 report_path = reporting_adapters.persist_execution_report(report)
                 print(f"execution_report {report_path}", flush=True)
+                if unified_notifications.enabled():
+                    unified_notifications.recover_runtime(report=report)
             except Exception as persist_exc:
                 print(f"failed to persist execution report: {type(persist_exc).__name__}", flush=True)
 
@@ -1122,15 +1157,15 @@ def run_probe(*, response_body: str = "Probe OK"):
             exc, title=t("health_probe_title"), prefix=t("health_probe_error_prefix"), phase="health_probe",
         )
         if composer is not None:
-            composer.build_notification_adapters().publish_cycle_notification(
-                detailed_text=err,
-                compact_text=_compact_error_notification(
-                    exc,
-                    title=t("health_probe_title"),
-                    prefix=t("health_probe_error_prefix"),
-                    phase="health_probe",
-                ),
-            )
+            def publish_probe_failure():
+                return composer.build_notification_adapters().publish_cycle_notification(
+                    detailed_text=err,
+                    compact_text=_compact_error_notification(
+                        exc, title=t("health_probe_title"), prefix=t("health_probe_error_prefix"), phase="health_probe",
+                    ),
+                )
+            unified_notifications.dispatch_immediate(publish_probe_failure, kind="real_error",
+                incident="runtime_failure:health_probe", report=report)
         else:
             print(err, flush=True)
         return "Error", 500
@@ -1141,6 +1176,8 @@ def run_probe(*, response_body: str = "Probe OK"):
             if reporting_adapters is not None and report is not None:
                 report_path = reporting_adapters.persist_execution_report(report)
                 print(f"execution_report {report_path}", flush=True)
+                if unified_notifications.enabled():
+                    unified_notifications.recover_runtime(report=report, probe=True)
         except Exception as persist_exc:
             print(f"failed to persist execution report: {type(persist_exc).__name__}", flush=True)
 

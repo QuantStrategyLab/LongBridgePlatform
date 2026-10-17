@@ -14,6 +14,8 @@ import urllib.request
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from notifications import unified as unified_notifications
+
 from quant_platform_kit.common.operational_notification_localization import (
     format_operational_alert,
     localize_operational_activity,
@@ -1166,11 +1168,28 @@ def _localized_heartbeat_detail(detail: str) -> str:
     return f"{localized_activity}{separator}{suffix}" if separator else localized_activity
 
 
-def _notify_normal_heartbeat(name: str, detail: str) -> None:
+def _notify_normal_heartbeat(name: str, detail: str, *, observed_at=None, checked_at=None, observed_report=None) -> None:
     # Successful no-trade runs notify in run_strategy, using that cycle's broker
     # snapshot. Scheduled scans retain alerts but never duplicate cycle success.
+    if unified_notifications.enabled() and observed_at is not None:
+        unified_notifications.heartbeat_observation(now=checked_at, recovery_at=observed_at, report=observed_report)
     if _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
         print(f"Execution report success notification skipped for {name}: cycle notifications belong to the runtime; scanner is alerts-only")
+
+
+def _notify_heartbeat_alert(message, *, now, kind, inspected_count=0):
+    if not unified_notifications.enabled():
+        return _send_telegram(message)
+    locale = _notification_locale()
+    issue = (_notice("heartbeat_no_recent_report", lookback_hours=os.environ.get("RUNTIME_HEARTBEAT_LOOKBACK_HOURS") or "36")
+             if kind == "receipt_missing" else _notice("heartbeat_no_acceptable_report", count=inspected_count))
+    # Keep raw diagnostics in the existing logs; use the shared localized
+    # template without private target names, archive URIs or mixed raw reasons.
+    compact = format_operational_alert(locale=locale, alert_type="execution_report_heartbeat",
+        name="Execution receipts" if locale == "en" else "执行回执", context={}, issues=[issue])
+    return unified_notifications.dispatch_immediate(lambda: _send_telegram(compact[:3900]),
+        kind=kind, incident="execution_receipt", occurred_at=now,
+        run_id=os.environ.get("GITHUB_RUN_ID"), actually_ran=False)
 
 
 def main(now: dt.datetime | None = None) -> int:
@@ -1224,7 +1243,7 @@ def main(now: dt.datetime | None = None) -> int:
             technical_details=[str(exc)],
         )
         print(message)
-        _send_telegram(message)
+        _notify_heartbeat_alert(message, now=now, kind="receipt_unacceptable")
         return 1 if fail_workflow else 0
     publication_grace_minutes = float(
         os.environ.get("RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES") or "30"
@@ -1326,6 +1345,8 @@ def main(now: dt.datetime | None = None) -> int:
     sorted_objects = sorted(objects.values(), key=lambda item: item[1], reverse=True)
     accepted = []
     accepted_by_service: dict[str, tuple[str, dt.datetime, str, str]] = {}
+    notification_recovery_proofs = {}
+    notification_recovery_reports = {}
     inspected = []
     for uri, updated in sorted_objects[:max_reports]:
         payload = _cat_gcs_json(uri, project=project)
@@ -1353,6 +1374,16 @@ def main(now: dt.datetime | None = None) -> int:
         ok, reason = _is_accepted_report(payload)
         inspected.append(f"- {updated.isoformat()} {uri} {reason}")
         if ok:
+            if unified_notifications.enabled():
+                try:
+                    unified_notifications.target_binding(report=payload)
+                    # Object upload time alone cannot prove a new execution.
+                    proof = unified_notifications._stamp(payload.get("finished_at") or payload.get("started_at"))
+                    if proof <= now:
+                        notification_recovery_proofs[uri] = proof
+                        notification_recovery_reports[uri] = payload
+                except (ValueError, TypeError):
+                    print("notification_receipt_recovery_proof_unknown", flush=True)
             activity = _report_activity_label(payload)
             if required_keys:
                 accepted_by_service[service_name] = (uri, updated, reason, activity)
@@ -1372,14 +1403,30 @@ def main(now: dt.datetime | None = None) -> int:
                 for key in required_keys
             )
             print(f"Execution report heartbeat OK for {name}: {details}")
-            _notify_normal_heartbeat(name, summary_details)
+            if unified_notifications.enabled():
+                uris = [accepted_by_service[key][0] for key in required_keys]
+                if any(uri not in notification_recovery_proofs for uri in uris):
+                    raise ValueError("notification_receipt_binding_or_time_unknown")
+                proof = min(notification_recovery_proofs[uri] for uri in uris)
+                for uri in uris:
+                    _notify_normal_heartbeat(name, summary_details, observed_at=proof, checked_at=now,
+                        observed_report=notification_recovery_reports[uri])
+            else:
+                _notify_normal_heartbeat(name, summary_details)
             return 0
     if accepted:
         uri, updated, reason, activity = accepted[0]
         print(
             f"Execution report heartbeat OK for {name}: {reason}, updated={updated.isoformat()}, uri={uri}"
         )
-        _notify_normal_heartbeat(name, f"{activity}@{updated.isoformat()}")
+        if unified_notifications.enabled():
+            if uri not in notification_recovery_proofs:
+                raise ValueError("notification_receipt_binding_or_time_unknown")
+            _notify_normal_heartbeat(name, f"{activity}@{updated.isoformat()}",
+                observed_at=notification_recovery_proofs[uri], checked_at=now,
+                observed_report=notification_recovery_reports[uri])
+        else:
+            _notify_normal_heartbeat(name, f"{activity}@{updated.isoformat()}")
         return 0
 
     issues = []
@@ -1422,7 +1469,9 @@ def main(now: dt.datetime | None = None) -> int:
         workflow_url=run_url,
     )
     print(message)
-    _send_telegram(message[:3900])
+    _notify_heartbeat_alert(message[:3900], now=now,
+        kind="receipt_missing" if not sorted_objects else "receipt_unacceptable",
+        inspected_count=min(len(sorted_objects), max_reports))
     return 1 if fail_workflow else 0
 
 
