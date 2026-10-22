@@ -369,7 +369,7 @@ class _PermissionSession:
         self.closed = True
 
 
-def _record(env=None, spies=None, *, times=None, monotonic=None, sleep=None):
+def _record(env=None, spies=None, *, times=None, monotonic=None, sleep=None, diagnostics=None):
     spies = spies or _Spies()
     now_reader = _Clock(times or [T0, T0 + timedelta(seconds=5)])
     clock = {"now": 0.0}
@@ -391,6 +391,7 @@ def _record(env=None, spies=None, *, times=None, monotonic=None, sleep=None):
         now_reader=now_reader,
         monotonic=monotonic_fn,
         sleep=sleep_fn,
+        diagnostics=diagnostics,
     )
     return result, spies
 
@@ -1084,9 +1085,178 @@ def test_qrs_unknown_is_reported_once_and_secrets_are_redacted(capsys):
     )
     output = capsys.readouterr().out
     assert code == 1
-    assert output.strip() == "record=recorded account_facts_publish=unknown"
+    lines = output.splitlines()
+    assert lines[0] == "record=recorded account_facts_publish=unknown"
+    assert json.loads(lines[1].removeprefix("snapshot_diagnostics="))["phase"] == "publish"
     assert SECRET not in output and QRS_TOKEN not in output
     assert len(spies.posts) == 1
+
+
+@pytest.mark.parametrize(
+    ("case", "counter", "expected_status", "expected_category"),
+    [
+        ("empty", "listed", "error", "observation_timeout"),
+        ("valid", "validated", "recorded", ""),
+        ("metadata", "metadata_rejected", "error", "observation_timeout"),
+        ("invalid_json", "object_invalid", "error", "observation_timeout"),
+        ("invalid_contract", "validation_rejected", "error", "observation_timeout"),
+        ("read_failure", "read_failed", "error", "observation_timeout"),
+        ("generation", "generation_changed", "error", "generation_changed"),
+        ("unknown_category", "other_rejected", "error", "observation_timeout"),
+    ],
+)
+def test_snapshot_diagnostics_distinguish_synthetic_observation_outcomes(
+    monkeypatch, case, counter, expected_status, expected_category,
+):
+    obj = _object(_history())
+    if case == "metadata":
+        obj.generation = True
+    elif case == "invalid_json":
+        obj = _object(_history(), raw=("{" + SECRET).encode())
+    elif case == "invalid_contract":
+        payload = _history()
+        payload["source_binding"]["id"] = OTHER_BINDING
+        obj = _object(_history(), raw=json.dumps(payload).encode())
+    elif case == "read_failure":
+        obj.error = RuntimeError(SECRET)
+    elif case == "generation":
+        obj.error = RuntimeError("generation changed " + SECRET)
+    elif case == "unknown_category":
+        def reject(*args, **kwargs):
+            raise snapshots._Rejected(SECRET)
+        monkeypatch.setattr(snapshots, "_read_candidate", reject)
+    spies = _Spies(objects=[] if case == "empty" else [obj])
+    diagnostics = {SECRET: SECRET}
+    result, spies = _record(
+        _env(ACCOUNT_FACTS_SYNC_ENABLED="true", ACCOUNT_FACTS_SYNC_URL=QRS_URL, ACCOUNT_FACTS_SYNC_TOKEN=QRS_TOKEN),
+        spies, diagnostics=diagnostics,
+    )
+    assert (result.status, result.category) == (expected_status, expected_category)
+    assert len(spies.posts) == (1 if case == "valid" else 0)
+    assert diagnostics["polls"] > 0
+    if case == "empty":
+        assert diagnostics["listed"] == diagnostics["reads"] == 0
+    else:
+        assert diagnostics[counter] > 0
+    if case == "read_failure":
+        assert diagnostics["read_rejected"] > 0 and diagnostics["validation_rejected"] == 0
+    if case == "invalid_contract":
+        assert diagnostics["object_invalid"] > 0 and diagnostics["read_rejected"] == 0
+    serialized = json.dumps(diagnostics)
+    for private in (SECRET, QRS_TOKEN, BINDING, OTHER_BINDING, PREFIX, SERVICE_URL, T0.isoformat(), "10.25"):
+        assert private not in serialized
+    assert set(diagnostics) == {"phase", *snapshots._SNAPSHOT_DIAGNOSTIC_COUNTERS}
+    assert all(type(value) is int and 0 <= value <= 9999 for key, value in diagnostics.items() if key != "phase")
+
+
+@pytest.mark.parametrize("expired_at", ["resume", "run"])
+def test_snapshot_diagnostics_paused_deadline_phase_preserves_restore_and_run_count(expired_at):
+    ticks = {"now": 0.0}
+    spies = _Spies(job=_job("sg", state="PAUSED"))
+    original_post = spies.session.post
+
+    def post(url, **kwargs):
+        response = original_post(url, **kwargs)
+        if url.endswith(":" + expired_at):
+            ticks["now"] = snapshots.WAIT_SECONDS
+        return response
+
+    spies.session.post = post
+    diagnostics = {}
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED="false"), spies,
+        monotonic=lambda: ticks["now"], diagnostics=diagnostics,
+    )
+    assert result.category == "observation_timeout"
+    assert diagnostics["phase"] == ("before_run" if expired_at == "resume" else "after_run")
+    actions = [call[1].rsplit(":", 1)[-1] for call in spies.session.calls if call[0] == "post"]
+    assert actions == (["resume", "pause"] if expired_at == "resume" else ["resume", "run", "pause"])
+    assert spies.session.job["state"] == "PAUSED"
+    assert spies.events[-1] == "scheduler_get"
+    assert spies.open_calls == spies.posts == []
+
+
+@pytest.mark.parametrize("expired_at", ["open", "list", "read"])
+def test_snapshot_diagnostics_storage_deadline_phase_keeps_original_budget(expired_at):
+    ticks = {"now": 0.0}
+    obj = _object(_history(target_id="sg"))
+    spies = _Spies(objects=[obj], job=_job("sg", state="PAUSED"))
+    if expired_at == "open":
+        original_open = spies.open_store
+
+        def slow_open(project):
+            storage = original_open(project)
+            ticks["now"] = snapshots.WAIT_SECONDS
+            return storage
+
+        spies.open_store = slow_open
+    elif expired_at == "list":
+        original_list = spies.storage.list_blobs
+
+        def slow_list(*args, **kwargs):
+            page = original_list(*args, **kwargs)
+            page.before_page = lambda: ticks.update(now=snapshots.WAIT_SECONDS)
+            return page
+
+        spies.storage.list_blobs = slow_list
+    else:
+        original_read = obj.download_as_bytes
+
+        def slow_read(**kwargs):
+            ticks["now"] = snapshots.WAIT_SECONDS
+            return original_read(**kwargs)
+
+        obj.download_as_bytes = slow_read
+    diagnostics = {}
+    result, spies = _record(
+        _env("sg", RUNTIME_TARGET_ENABLED="false"), spies,
+        monotonic=lambda: ticks["now"], diagnostics=diagnostics,
+    )
+    assert snapshots.WAIT_SECONDS == 180.0
+    assert result.category == "observation_timeout" and spies.posts == []
+    assert diagnostics["phase"] == {"open": "store_open", "list": "list", "read": "read"}[expired_at]
+    assert spies.session.job["state"] == "PAUSED"
+    if expired_at == "read":
+        assert diagnostics["candidate_timeout"] == 1
+    else:
+        assert obj.reads == []
+
+
+@pytest.mark.parametrize("case", ["disabled", "empty", "valid", "generation"])
+def test_snapshot_diagnostics_cli_keeps_status_line_exit_and_private_output_boundary(monkeypatch, capsys, case):
+    spies = _Spies(objects=[] if case in {"disabled", "empty"} else [_object(_history())])
+    if case == "generation":
+        spies.storage.objects[0].error = RuntimeError("generation " + SECRET)
+    ticks = {"now": 0.0}
+    original_record = snapshots.record_daily_account_snapshot
+
+    def deterministic_record(*args, **kwargs):
+        return original_record(
+            *args, **kwargs, monotonic=lambda: ticks["now"],
+            sleep=lambda seconds: ticks.update(now=ticks["now"] + seconds),
+        )
+
+    monkeypatch.setattr(snapshots, "record_daily_account_snapshot", deterministic_record)
+    code = snapshots.main(
+        [], environ=_env(ACCOUNT_HISTORY_RECORDING_ENABLED="false" if case == "disabled" else "true"),
+        open_store=spies.open_store, session_factory=spies.session_factory, http_post=spies.http_post,
+        now_reader=_Clock([T0, T0 + timedelta(seconds=5)]),
+    )
+    output = capsys.readouterr().out
+    lines = output.splitlines()
+    expected_status = {"disabled": "disabled", "empty": "error:observation_timeout", "valid": "recorded", "generation": "error:generation_changed"}
+    assert lines[0] == f"record={expected_status[case]} account_facts_publish=disabled"
+    assert code == int(case in {"empty", "generation"})
+    if case == "disabled":
+        assert len(lines) == 1 and spies.session.calls == spies.open_calls == []
+    else:
+        assert len(lines) == 2 and lines[1].startswith("snapshot_diagnostics=")
+        diagnostics = json.loads(lines[1].split("=", 1)[1])
+        assert diagnostics["phase"] in snapshots._SNAPSHOT_DIAGNOSTIC_PHASES
+        assert len(lines[1]) < 600
+    for private in (SECRET, QRS_TOKEN, BINDING, PREFIX, SERVICE_URL, T0.isoformat(), "10.25"):
+        assert private not in output
+    assert spies.posts == []
 
 
 def test_authorized_session_disables_transport_retries(monkeypatch):

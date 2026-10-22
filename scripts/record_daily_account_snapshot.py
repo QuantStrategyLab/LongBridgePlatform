@@ -81,6 +81,32 @@ _SCHEDULER_OUTPUT_FIELDS = frozenset({
 })
 _PRODUCER_WRITE_TIMEOUT_SECONDS = 20.0
 _PRODUCER_DECIMAL = re.compile(r"^-?(?:0|[1-9]\d*)(?:\.\d+)?$")
+_SNAPSHOT_DIAGNOSTIC_PHASES = frozenset({
+    "config", "scheduler_read", "scheduler_validate", "resume", "resume_readback",
+    "before_run", "scheduler_run", "after_run", "before_store_open", "store_open",
+    "wait", "list", "read", "validate", "selected", "after_observation", "publish_check", "publish",
+})
+_SNAPSHOT_DIAGNOSTIC_COUNTERS = (
+    "polls", "list_calls", "listed", "metadata_rejected", "candidates", "reads",
+    "read_rejected", "read_failed", "object_invalid", "object_truncated",
+    "candidate_timeout", "generation_changed", "other_rejected", "validation_rejected", "validated",
+)
+_SNAPSHOT_REJECTION_COUNTERS = {
+    "gcs_read_failed": "read_failed", "gcs_object_invalid": "object_invalid",
+    "gcs_object_truncated": "object_truncated", "observation_timeout": "candidate_timeout",
+    "generation_changed": "generation_changed",
+}
+
+
+def _snapshot_diagnostic(diagnostics, *, phase=None, counter=None, amount=1):
+    # Fixed enums and capped aggregate observations only; never retain provider input.
+    if diagnostics is None:
+        return
+    if phase is not None:
+        diagnostics["phase"] = phase if phase in _SNAPSHOT_DIAGNOSTIC_PHASES else "other"
+    if counter is not None:
+        key = counter if counter in _SNAPSHOT_DIAGNOSTIC_COUNTERS else "other_rejected"
+        diagnostics[key] = min(9999, diagnostics.get(key, 0) + amount)
 
 
 @dataclass(frozen=True)
@@ -500,6 +526,7 @@ def record_daily_account_snapshot(
     now_reader: Callable[[], datetime],
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    diagnostics: dict[str, Any] | None = None,
 ) -> DailyAccountRecordResult:
     """Validate, trigger once, select a fresh same-source object, and POST once."""
 
@@ -508,6 +535,9 @@ def record_daily_account_snapshot(
     mode = env.get("ACCOUNT_HISTORY_OBSERVATION_MODE") or "scheduler_archive"
     if mode != "scheduler_archive":
         return DailyAccountRecordResult("error", "independent_entrypoint_required" if mode == "independent_get" else "observation_mode_invalid")
+    if diagnostics is not None:
+        diagnostics.clear()
+        diagnostics.update(dict.fromkeys(_SNAPSHOT_DIAGNOSTIC_COUNTERS, 0), phase="config")
     try:
         config = _config(env)
         sync_config = _account_facts_sync_config(env)
@@ -515,6 +545,7 @@ def record_daily_account_snapshot(
         return DailyAccountRecordResult("error", rejected.category, "rejected", rejected.category)
 
     session = None
+    _snapshot_diagnostic(diagnostics, phase="scheduler_read")
     try:
         session = session_factory()
         job = _scheduler_get(session, config)
@@ -528,6 +559,7 @@ def record_daily_account_snapshot(
     paused_resumable = (
         config.target_id in _PAUSED_PROBE_CONTRACTS and job.get("state") == "PAUSED"
     )
+    _snapshot_diagnostic(diagnostics, phase="scheduler_validate")
     try:
         if paused_resumable:
             if env.get("RUNTIME_TARGET_ENABLED") != "false":
@@ -540,6 +572,7 @@ def record_daily_account_snapshot(
                 job,
                 now_reader,
                 monotonic=monotonic,
+                diagnostics=diagnostics,
                 observe=lambda started_at, deadline: _observe_archived_snapshot(
                     open_store,
                     config,
@@ -548,11 +581,13 @@ def record_daily_account_snapshot(
                     now_reader=now_reader,
                     monotonic=monotonic,
                     sleep=sleep,
+                    diagnostics=diagnostics,
                 ),
             )
         else:
             _validate_scheduler_job(job, config)
             started_at = _utc_now(now_reader)
+            _snapshot_diagnostic(diagnostics, phase="scheduler_run")
             _scheduler_run(session, config)
     except _Rejected as rejected:
         return DailyAccountRecordResult("error", rejected.category)
@@ -572,6 +607,7 @@ def record_daily_account_snapshot(
                 now_reader=now_reader,
                 monotonic=monotonic,
                 sleep=sleep,
+                diagnostics=diagnostics,
             )
         except _Rejected as rejected:
             return DailyAccountRecordResult("error", rejected.category)
@@ -583,8 +619,10 @@ def record_daily_account_snapshot(
     body, record = selected
     if sync_config is None:
         return DailyAccountRecordResult("recorded", publish_status="disabled")
+    _snapshot_diagnostic(diagnostics, phase="publish_check")
     if not _is_fresh(record, _utc_now(now_reader)):
         return DailyAccountRecordResult("recorded", publish_status="rejected", publish_category="observation_stale")
+    _snapshot_diagnostic(diagnostics, phase="publish")
     publish_status, publish_category = _publish_account_facts(
         sync_config, body, record, http_post=http_post
     )
@@ -927,10 +965,12 @@ def _run_paused_probe(
     *,
     monotonic: Callable[[], float],
     observe: Callable[[datetime, float], tuple[bytes, dict[str, Any]] | None],
+    diagnostics: dict[str, Any] | None = None,
 ) -> tuple[bytes, dict[str, Any]] | None:
     original = deepcopy(dict(original_job))
     original_last_attempt = original.get("lastAttemptTime")
     deadline = monotonic() + WAIT_SECONDS
+    _snapshot_diagnostic(diagnostics, phase="resume")
     try:
         _scheduler_action(session, config, "resume")
     except _Rejected as rejected:
@@ -946,6 +986,7 @@ def _run_paused_probe(
             raise _Rejected("scheduler_resume_state_unknown")
         raise rejected
 
+    _snapshot_diagnostic(diagnostics, phase="resume_readback")
     try:
         resumed = _read_scheduler_job(session, config)
     except Exception:
@@ -965,15 +1006,18 @@ def _run_paused_probe(
         raise _Rejected("scheduler_resume_readback_mismatch")
 
     try:
+        _snapshot_diagnostic(diagnostics, phase="before_run")
         if monotonic() >= deadline:
             raise _Rejected("observation_timeout")
         started_at = _utc_now(now_reader)
         try:
+            _snapshot_diagnostic(diagnostics, phase="scheduler_run")
             _scheduler_run(session, config)
         except _Rejected:
             raise
         except Exception:
             raise _Rejected("scheduler_run_unknown") from None
+        _snapshot_diagnostic(diagnostics, phase="after_run")
         if monotonic() >= deadline:
             raise _Rejected("observation_timeout")
         return observe(started_at, deadline)
@@ -1019,11 +1063,14 @@ def _observe_archived_snapshot(
     now_reader: Callable[[], datetime],
     monotonic: Callable[[], float],
     sleep: Callable[[float], None],
+    diagnostics: dict[str, Any] | None = None,
 ) -> tuple[bytes, dict[str, Any]] | None:
+    _snapshot_diagnostic(diagnostics, phase="before_store_open")
     if deadline is not None and monotonic() >= deadline:
         return None
     try:
         store = open_store(config.project_id)
+        _snapshot_diagnostic(diagnostics, phase="store_open")
         if deadline is None:
             deadline = monotonic() + WAIT_SECONDS
         if monotonic() >= deadline:
@@ -1037,8 +1084,10 @@ def _observe_archived_snapshot(
             now_reader=now_reader,
             monotonic=monotonic,
             sleep=sleep,
+            diagnostics=diagnostics,
         )
         if monotonic() >= deadline:
+            _snapshot_diagnostic(diagnostics, phase="after_observation" if selected is not None else None)
             return None
         return selected
     except _Rejected:
@@ -1063,38 +1112,54 @@ def _wait_for_observation(
     now_reader: Callable[[], datetime],
     monotonic: Callable[[], float],
     sleep: Callable[[float], None],
+    diagnostics: dict[str, Any] | None = None,
 ) -> tuple[bytes, dict[str, Any]] | None:
     while True:
+        _snapshot_diagnostic(diagnostics, phase="wait")
         if monotonic() >= deadline:
             return None
         now = _utc_now(now_reader)
+        _snapshot_diagnostic(diagnostics, counter="polls")
         dates = {started_at.date(), now.date()}
         candidates = _list_candidates(
-            client, config, dates, deadline=deadline, monotonic=monotonic
+            client, config, dates, deadline=deadline, monotonic=monotonic, diagnostics=diagnostics
         )
         if monotonic() >= deadline:
             return None
         valid: list[tuple[datetime, bytes, dict[str, Any]]] = []
         for candidate in candidates:
+            candidate_phase = "read"
+            _snapshot_diagnostic(diagnostics, phase="read", counter="reads")
             try:
                 payload, raw = _read_candidate(
                     client, config, candidate, deadline=deadline, monotonic=monotonic
                 )
+                candidate_phase = "validate"
+                _snapshot_diagnostic(diagnostics, phase="validate")
                 record = _validate_history_object(payload, config, candidate, started_at, now)
             except _Rejected as rejected:
+                _snapshot_diagnostic(
+                    diagnostics, counter="validation_rejected" if candidate_phase == "validate" else "read_rejected",
+                )
+                _snapshot_diagnostic(
+                    diagnostics, counter=_SNAPSHOT_REJECTION_COUNTERS.get(rejected.category, "other_rejected"),
+                )
                 if rejected.category == "generation_changed":
                     raise
                 continue
+            _snapshot_diagnostic(diagnostics, counter="validated")
             if monotonic() >= deadline:
                 return None
             valid.append((datetime.fromisoformat(record["observed_finished_at"]), raw, record))
         if valid:
             _finished, raw, record = max(valid, key=lambda entry: entry[0])
             if monotonic() < deadline and _is_fresh(record, _utc_now(now_reader)):
+                _snapshot_diagnostic(diagnostics, phase="selected")
                 return raw, record
         remaining = deadline - monotonic()
         if remaining <= 0:
             return None
+        _snapshot_diagnostic(diagnostics, phase="wait")
         sleep(min(POLL_SECONDS, remaining))
 
 
@@ -1105,13 +1170,16 @@ def _list_candidates(
     *,
     deadline: float,
     monotonic: Callable[[], float],
+    diagnostics: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    _snapshot_diagnostic(diagnostics, phase="list")
     candidates: list[dict[str, Any]] = []
     for day in sorted(dates):
         remaining = deadline - monotonic()
         if remaining <= 0:
             raise _Rejected("observation_timeout")
         prefix = f"{config.prefix_path}/{config.target_id}/{config.source_binding_id}/{day.isoformat()}/"
+        _snapshot_diagnostic(diagnostics, counter="list_calls")
         try:
             blobs = client.list_blobs(
                 config.bucket,
@@ -1134,6 +1202,7 @@ def _list_candidates(
             raise _Rejected("gcs_list_failed") from None
         if monotonic() >= deadline:
             raise _Rejected("observation_timeout")
+        _snapshot_diagnostic(diagnostics, counter="listed", amount=len(page))
         if has_next_page or len(page) > MAX_OBJECTS_PER_DAY:
             raise _Rejected("gcs_listing_truncated")
         for blob in page:
@@ -1150,10 +1219,12 @@ def _list_candidates(
                 or not isinstance(size, int)
                 or size < 0
             ):
+                _snapshot_diagnostic(diagnostics, counter="metadata_rejected")
                 continue
             if size > MAX_OBJECT_BYTES:
                 raise _Rejected("gcs_object_too_large")
             candidates.append({"name": name, "generation": int(generation), "size": size})
+            _snapshot_diagnostic(diagnostics, counter="candidates")
     if len(candidates) > MAX_OBJECTS_PER_DAY * 2:
         raise _Rejected("gcs_listing_truncated")
     return candidates
@@ -1821,16 +1892,20 @@ def main(
     if args:
         print("error: config_invalid")
         return 1
+    diagnostics: dict[str, Any] = {}
     result = record_daily_account_snapshot(
         os.environ if environ is None else environ,
         open_store=open_store or _open_store,
         session_factory=session_factory or _authorized_session,
         http_post=http_post or _default_http_post,
         now_reader=now_reader or (lambda: datetime.now(timezone.utc)),
+        diagnostics=diagnostics,
     )
     record_part = f"record=error:{result.category}" if result.status == "error" else f"record={result.status}"
     publish_part = f"account_facts_publish={result.publish_status}"
     print(f"{record_part} {publish_part}")
+    if diagnostics:
+        print("snapshot_diagnostics=" + json.dumps(diagnostics, separators=(",", ":"), sort_keys=True))
     if result.status == "error" or result.publish_status in {"rejected", "unknown"}:
         return 1
     return 0
