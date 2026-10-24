@@ -44,6 +44,7 @@ _PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 _TARGET_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _BINDING_ID = re.compile(r"^[0-9a-f]{64}$")
 _CURRENCY = re.compile(r"^[A-Z]{3}$")
+_POSITION_SYMBOL = re.compile(r"^[A-Z0-9][A-Z0-9./ -]{0,31}$")
 _DECIMAL_TEXT = re.compile(r"^-?(?:0|[1-9]\d*)(?:\.\d+)?$")
 _FILENAME = re.compile(r"^\d{12}Z\.json$")
 _FORBIDDEN_PREFIX_PARTS = ("execution-report", "execution_report", "runtime-report")
@@ -409,10 +410,44 @@ def _independent_money_rows(value: object, fields: tuple[str, ...]) -> list[dict
     return rows
 
 
+def _independent_position_rows(value: object) -> list[dict[str, Any]]:
+    """Project only the three public stock-inventory facts; never prices or extras."""
+    if not isinstance(value, list) or len(value) > 64:
+        raise _Rejected("snapshot_invalid")
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise _Rejected("snapshot_invalid")
+        symbol, currency, quantity = (
+            item.get("symbol"), item.get("currency"), item.get("quantity"),
+        )
+        if (
+            not isinstance(symbol, str)
+            or _POSITION_SYMBOL.fullmatch(symbol) is None
+            or not isinstance(currency, str)
+            or _CURRENCY.fullmatch(currency) is None
+            or isinstance(quantity, bool)
+            or not isinstance(quantity, str)
+            or _DECIMAL_TEXT.fullmatch(quantity) is None
+        ):
+            raise _Rejected("snapshot_invalid")
+        whole, _, fraction = quantity.lstrip("-").partition(".")
+        if len(whole) > 15 or len(fraction) > 8 or not Decimal(quantity).is_finite():
+            raise _Rejected("snapshot_invalid")
+        if symbol in seen:
+            raise _Rejected("snapshot_invalid")
+        seen.add(symbol)
+        rows.append({
+            "symbol": symbol, "quantity": quantity, "currency": currency, "market_value": None,
+        })
+    return sorted(rows, key=lambda row: (row["currency"], row["symbol"]))
+
+
 def _project_independent_history(
     payload: object, config: _IndependentConfig, started_at: datetime, now: datetime,
 ) -> dict[str, Any]:
-    """Discard private positions/orders; retain only the existing history contract."""
+    """Project public stock inventory only; discard prices, private fields and orders."""
     if not isinstance(payload, Mapping):
         raise _Rejected("snapshot_invalid")
     binding = payload.get("source_binding")
@@ -439,6 +474,7 @@ def _project_independent_history(
             raise _Rejected("snapshot_invalid")
         balances = _independent_money_rows(payload.get("broker_reported_balances"), _BALANCE_FIELDS)
         cash = _independent_money_rows(payload.get("cash"), _CASH_FIELDS)
+        positions = _independent_position_rows(payload.get("positions"))
         record = {
             "schema_version": HISTORY_SCHEMA, "snapshot_schema_version": SNAPSHOT_SCHEMA,
             "account_scope": config.account_scope, "target_id": config.target_id,
@@ -447,6 +483,9 @@ def _project_independent_history(
             "observed_finished_at": payload["observed_finished_at"],
             "snapshot_atomic": False, "observation_date": started.date().isoformat(),
             "broker_reported_balances": balances, "cash": cash,
+            "broker_reported_positions": positions,
+            "broker_reported_positions_scope": "stocks_only",
+            "broker_reported_positions_complete": True,
         }
         if "financing" in payload:
             record["financing"] = _producer_financing_rows(
