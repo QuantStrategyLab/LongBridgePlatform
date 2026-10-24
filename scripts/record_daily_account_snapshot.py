@@ -7,6 +7,7 @@ import json
 import inspect
 import os
 import re
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping
@@ -297,19 +298,22 @@ class _IndependentConfig:
     service: str
     service_url: str
     source_binding_id: str
+    target_id: str
+    account_scope: str
 
 
-def _independent_hk_config(env: Mapping[str, str], *, require_id_token: bool = True) -> _IndependentConfig:
-    """This first opt-in is manual HK observation with the existing identity only."""
+def _independent_config(env: Mapping[str, str], *, require_id_token: bool = True) -> _IndependentConfig:
+    """Read one configured target without depending on its trading activation."""
+    target_id = env.get("ACCOUNT_HISTORY_TARGET_ID")
+    expected = _EXPECTED_TARGETS.get(target_id)
     if (
         env.get("ACCOUNT_HISTORY_OBSERVATION_MODE") != "independent_get"
         or env.get("ACCOUNT_HISTORY_RECORDING_ENABLED") != "true"
-        or env.get("ACCOUNT_HISTORY_TARGET_ID") != "hk"
-        or env.get("ACCOUNT_HISTORY_EXPECTED_SCOPE") != "HK"
+        or expected is None
+        or env.get("ACCOUNT_HISTORY_EXPECTED_SCOPE") != expected[0]
         or env.get("GOOGLE_CLOUD_PROJECT") != "longbridgequant"
-        or env.get("RUNTIME_TARGET_ENABLED") != "false"
-        or env.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
-        or env.get("ACCOUNT_HISTORY_REQUESTED_TARGET") != "hk"
+        or env.get("GITHUB_EVENT_NAME") not in {"workflow_dispatch", "schedule"}
+        or env.get("ACCOUNT_HISTORY_REQUESTED_TARGET") not in {target_id, "all"}
         or env.get("GITHUB_REF") != "refs/heads/main"
         or env.get("GITHUB_WORKFLOW_REF") != (
             "QuantStrategyLab/LongBridgePlatform/.github/workflows/"
@@ -325,8 +329,8 @@ def _independent_hk_config(env: Mapping[str, str], *, require_id_token: bool = T
         raise _Rejected("independent_config_invalid")
     from application.runtime_target_manifest import load_runtime_target_manifest
 
-    targets = [target for target in load_runtime_target_manifest().targets if target.id == "hk"]
-    if len(targets) != 1 or targets[0].mode != "live" or targets[0].account_scope != "HK":
+    targets = [target for target in load_runtime_target_manifest().targets if target.id == target_id]
+    if len(targets) != 1 or targets[0].mode != expected[1] or targets[0].account_scope != expected[0]:
         raise _Rejected("independent_config_invalid")
     target = targets[0]
     if env.get("SNAPSHOT_SERVICE") != target.service or env.get("SNAPSHOT_REGION") != target.region:
@@ -338,7 +342,7 @@ def _independent_hk_config(env: Mapping[str, str], *, require_id_token: bool = T
         raise _Rejected("independent_config_invalid")
     return _IndependentConfig(
         "longbridgequant", target.region, target.service,
-        service_url, binding,
+        service_url, binding, target_id, expected[0],
     )
 
 
@@ -349,13 +353,11 @@ def _validate_independent_service(value: object, config: _IndependentConfig) -> 
             raise TypeError
         metadata, status = value["metadata"], value["status"]
         annotations = metadata["annotations"]
-        template = value["spec"]["template"]
-        containers = template["spec"]["containers"]
-        generation = metadata["generation"]
-        observed_generation = status["observedGeneration"]
-        ready = [row for row in status["conditions"] if row.get("type") == "Ready"]
-        traffic = status["traffic"]
-        revision = status["latestReadyRevisionName"]
+        revision = value["serving_revision"]
+        containers = revision["spec"]["containers"]
+        ready = [row for row in revision["status"]["conditions"] if row.get("type") == "Ready"]
+        traffic = [row for row in status["traffic"] if (row.get("percent") or 0) > 0]
+        revision_name = revision["metadata"]["name"]
         if (
             metadata["name"] != config.service
             or str(metadata["namespace"]) not in {config.project_id, "252919773759"}
@@ -364,14 +366,11 @@ def _validate_independent_service(value: object, config: _IndependentConfig) -> 
             or annotations.get("run.googleapis.com/ingress-status", "all") != "all"
             or status["url"] != config.service_url
             or len(ready) != 1 or ready[0].get("status") != "True"
-            or not isinstance(revision, str) or not revision.startswith(config.service + "-")
-            or type(generation) is not int or generation < 1
-            or type(observed_generation) is not int or observed_generation != generation
-            or status["latestCreatedRevisionName"] != revision
-            or template["metadata"]["name"] != revision
+            or not isinstance(revision_name, str) or not revision_name.startswith(config.service + "-")
+            or str(revision["metadata"]["namespace"]) != str(metadata["namespace"])
             or not isinstance(traffic, list) or len(traffic) != 1
             or type(traffic[0].get("percent")) is not int or traffic[0]["percent"] != 100
-            or traffic[0].get("revisionName") != revision or traffic[0].get("tag")
+            or traffic[0].get("revisionName") != revision_name or traffic[0].get("tag")
             or not isinstance(containers, list) or len(containers) != 1
         ):
             raise ValueError
@@ -412,7 +411,7 @@ def _project_independent_history(
     if (
         payload.get("schema_version") != SNAPSHOT_SCHEMA
         or payload.get("status") != "partial"
-        or payload.get("account_scope") != "HK"
+        or payload.get("account_scope") != config.account_scope
         or payload.get("no_order") is not True
         or payload.get("live_authority_granted") is not False
         or payload.get("snapshot_atomic") is not False
@@ -434,7 +433,7 @@ def _project_independent_history(
         cash = _independent_money_rows(payload.get("cash"), _CASH_FIELDS)
         record = {
             "schema_version": HISTORY_SCHEMA, "snapshot_schema_version": SNAPSHOT_SCHEMA,
-            "account_scope": "HK", "target_id": "hk",
+            "account_scope": config.account_scope, "target_id": config.target_id,
             "source_binding": {"kind": SOURCE_KIND, "status": "bound", "id": config.source_binding_id},
             "observed_started_at": payload["observed_started_at"],
             "observed_finished_at": payload["observed_finished_at"],
@@ -450,7 +449,7 @@ def _project_independent_history(
         raise _Rejected("snapshot_invalid") from None
 
 
-def observe_independent_hk_account_snapshot(
+def observe_independent_account_snapshot(
     env: Mapping[str, str], *, service_metadata: object, http_get: Callable[..., Any],
     http_post: Callable[..., Any], now_reader: Callable[[], datetime],
 ) -> DailyAccountRecordResult:
@@ -458,7 +457,7 @@ def observe_independent_hk_account_snapshot(
     if str(env.get("ACCOUNT_HISTORY_RECORDING_ENABLED") or "").strip() != "true":
         return DailyAccountRecordResult("disabled")
     try:
-        config = _independent_hk_config(env)
+        config = _independent_config(env)
         sync_config = _account_facts_sync_config(env)
         _validate_independent_service(service_metadata, config)
         started_at = _utc_now(now_reader)
@@ -506,14 +505,33 @@ def _default_http_get(url: str, **kwargs: Any):
     return _OwnedResponse(response, session)
 
 
-def _read_independent_service_metadata() -> object:
+def _read_independent_service_metadata(config: _IndependentConfig) -> object:
     # gcloud stdout is piped directly here; never save or print its private env.
     body = sys.stdin.buffer.read(256 * 1024 + 1)
     if len(body) > 256 * 1024:
         raise _Rejected("independent_service_unqualified")
     try:
-        return json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        service = json.loads(body)
+        # The active revision can be older than a failed or zero-traffic deploy.
+        # Read its actual flags instead of treating the newest template as live.
+        if service["metadata"]["name"] != config.service:
+            raise ValueError
+        traffic = [row for row in service["status"]["traffic"] if (row.get("percent") or 0) > 0]
+        if len(traffic) != 1 or type(traffic[0].get("percent")) is not int or traffic[0]["percent"] != 100:
+            raise ValueError
+        revision_name = traffic[0]["revisionName"]
+        if not isinstance(revision_name, str) or not re.fullmatch(re.escape(config.service) + r"-[a-z0-9-]+", revision_name):
+            raise ValueError
+        result = subprocess.run(
+            ["gcloud", "run", "revisions", "describe", revision_name, "--project", config.project_id,
+             "--region", config.region, "--format=json", "--quiet"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=HTTP_TIMEOUT_SECONDS, check=False,
+        )
+        if result.returncode or len(result.stdout) > 256 * 1024:
+            raise ValueError
+        service["serving_revision"] = json.loads(result.stdout)
+        return service
+    except (KeyError, TypeError, AttributeError, ValueError, subprocess.SubprocessError):
         raise _Rejected("independent_service_unqualified") from None
 
 
@@ -1828,25 +1846,25 @@ def main(
     service_metadata: object = None,
 ) -> int:
     args = sys.argv[1:] if argv is None else argv
-    if args == ["--validate-independent-hk-audience"]:
+    if args == ["--validate-independent-audience"]:
         try:
-            config = _independent_hk_config(os.environ if environ is None else environ, require_id_token=False)
+            config = _independent_config(os.environ if environ is None else environ, require_id_token=False)
         except Exception:  # noqa: BLE001 - never disclose invalid operational input
             print("independent_audience=error:independent_config_invalid")
             return 1
         # The workflow redirects this one verified origin to GITHUB_OUTPUT.
         print(f"service_url={config.service_url}")
         return 0
-    if args in (["--validate-independent-hk-account-snapshot"], ["--independent-hk-account-snapshot"]):
+    if args in (["--validate-independent-account-snapshot"], ["--independent-account-snapshot"]):
         env = os.environ if environ is None else environ
         try:
-            _independent_hk_config(env)
+            config = _independent_config(env)
             _account_facts_sync_config(env)
-            if args == ["--validate-independent-hk-account-snapshot"]:
+            if args == ["--validate-independent-account-snapshot"]:
                 print("independent_config=ok")
                 return 0
-            metadata = _read_independent_service_metadata() if service_metadata is None else service_metadata
-            result = observe_independent_hk_account_snapshot(
+            metadata = _read_independent_service_metadata(config) if service_metadata is None else service_metadata
+            result = observe_independent_account_snapshot(
                 env, service_metadata=metadata, http_get=http_get or _default_http_get,
                 http_post=http_post or _default_http_post,
                 now_reader=now_reader or (lambda: datetime.now(UTC)),
