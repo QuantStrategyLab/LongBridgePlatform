@@ -3,6 +3,11 @@ name: Execution Report Heartbeat
 on:
   workflow_dispatch:
     inputs:
+      snapshot_only:
+        description: "Only collect and sync the existing read-only account snapshot; skip heartbeat, notification and runtime projections."
+        required: false
+        type: boolean
+        default: false
       target:
         description: "Target account to check; scheduled runs always use all targets."
         required: false
@@ -169,7 +174,7 @@ jobs:
           set -euo pipefail
           uv sync --frozen --no-dev
 
-      - name: Validate independent HK audience before authentication
+      - name: Validate independent account audience before authentication
         id: independent_audience
         if: ${{ env.ACCOUNT_HISTORY_OBSERVATION_MODE == 'independent_get' && vars.ACCOUNT_HISTORY_RECORDING_ENABLED == 'true' }}
         continue-on-error: true
@@ -182,7 +187,7 @@ jobs:
           GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
           SNAPSHOT_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
           SNAPSHOT_REGION: ${{ vars.CLOUD_RUN_REGION }}
-        run: uv run --no-sync python scripts/record_daily_account_snapshot.py --validate-independent-hk-audience >> "$GITHUB_OUTPUT"
+        run: uv run --no-sync python scripts/record_daily_account_snapshot.py --validate-independent-audience >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to Google Cloud
         id: gcp_auth_primary
@@ -249,12 +254,12 @@ jobs:
           fi
           case "$ACCOUNT_HISTORY_OBSERVATION_MODE" in
             independent_get)
-              uv run --no-sync python scripts/record_daily_account_snapshot.py --validate-independent-hk-account-snapshot
+              uv run --no-sync python scripts/record_daily_account_snapshot.py --validate-independent-account-snapshot
               # Private metadata stays in the pipe. No file, log, or artifact.
               gcloud run services describe "${SNAPSHOT_SERVICE}" \
                 --project "${GOOGLE_CLOUD_PROJECT}" --region "${SNAPSHOT_REGION}" \
                 --format=json 2>/dev/null \
-                | uv run --no-sync python scripts/record_daily_account_snapshot.py --independent-hk-account-snapshot
+                | uv run --no-sync python scripts/record_daily_account_snapshot.py --independent-account-snapshot
               ;;
             *)
               # The script rejects unknown modes before any Scheduler/GCS call.
@@ -263,11 +268,11 @@ jobs:
           esac
 
       - name: Check recent execution report
-        if: ${{ env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}
+        if: ${{ !inputs.snapshot_only && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}
         run: uv run --no-sync python scripts/execution_report_heartbeat.py
 
       - name: Publish read-only runtime execution evidence
-        if: ${{ matrix.target.label == 'PAPER' && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}
+        if: ${{ !inputs.snapshot_only && matrix.target.label == 'PAPER' && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}
         uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@2eef9296e1ca5c214213ec71a74059cf1d5014d9
         with:
           source-id: runtime-reports-longbridge
@@ -278,7 +283,7 @@ jobs:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
 
       - name: Publish daily runtime projection
-        if: ${{ !cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && matrix.target.label == 'PAPER' && vars.RUNTIME_DAILY_PROJECTION_ENABLED == 'true' && vars.RUNTIME_DAILY_SYNC_ENABLED == 'true' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
+        if: ${{ !inputs.snapshot_only && !cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && matrix.target.label == 'PAPER' && vars.RUNTIME_DAILY_PROJECTION_ENABLED == 'true' && vars.RUNTIME_DAILY_SYNC_ENABLED == 'true' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
         env:
           RUNTIME_DAILY_PROJECTION_ENABLED: ${{ vars.RUNTIME_DAILY_PROJECTION_ENABLED }}
           RUNTIME_DAILY_PROJECTION_GCS_PREFIX: ${{ secrets.RUNTIME_DAILY_PROJECTION_GCS_PREFIX }}
@@ -296,7 +301,7 @@ jobs:
 
 
       - name: Publish existing reports as unified digest candidates
-        if: ${{ (success() && vars.QSL_ROUTINE_NOTIFICATION_MODE == 'daily_digest' && vars.LONGBRIDGE_UNIFIED_NOTIFICATION_ENABLED != 'true') || (!cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && vars.LONGBRIDGE_UNIFIED_NOTIFICATION_ENABLED == 'true') }}
+        if: ${{ !inputs.snapshot_only && ((success() && vars.QSL_ROUTINE_NOTIFICATION_MODE == 'daily_digest' && vars.LONGBRIDGE_UNIFIED_NOTIFICATION_ENABLED != 'true') || (!cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && vars.LONGBRIDGE_UNIFIED_NOTIFICATION_ENABLED == 'true')) }}
         env:
           QSL_ROUTINE_NOTIFICATION_MODE: ${{ vars.QSL_ROUTINE_NOTIFICATION_MODE || 'immediate' }}
           RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}

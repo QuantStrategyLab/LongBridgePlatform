@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import io
 import json
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1639,7 +1641,7 @@ def _independent_env(**overrides):
 
 
 def _service_metadata():
-    return {
+    value = {
         "metadata": {
             "name": "longbridge-quant-hk-service",
             "namespace": "252919773759",
@@ -1659,6 +1661,13 @@ def _service_metadata():
             "traffic": [{"revisionName": "longbridge-quant-hk-service-00001", "percent": 100}],
         },
     }
+
+    value["serving_revision"] = {
+        "metadata": {"name": value["status"]["traffic"][0]["revisionName"], "namespace": value["metadata"]["namespace"]},
+        "spec": json.loads(json.dumps(value["spec"]["template"]["spec"])),
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+    return value
 
 
 def _independent_snapshot(**overrides):
@@ -1727,7 +1736,7 @@ def _observe_independent(env=None, metadata=None, snapshot=None, *, get_error=No
             "observed_finished_at": payload["observed_finished_at"],
         })
 
-    result = snapshots.observe_independent_hk_account_snapshot(
+    result = snapshots.observe_independent_account_snapshot(
         _independent_env() if env is None else env,
         service_metadata=_service_metadata() if metadata is None else metadata,
         http_get=get, http_post=post,
@@ -1767,9 +1776,6 @@ def test_independent_hk_preserves_native_currency_and_only_publishes_existing_hi
     {"ACCOUNT_HISTORY_EXPECTED_SCOPE": "SG"},
     {"ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID": ""},
     {"GOOGLE_CLOUD_PROJECT": "other-project"},
-    {"RUNTIME_TARGET_ENABLED": "true"},
-    {"GITHUB_EVENT_NAME": "schedule"},
-    {"ACCOUNT_HISTORY_REQUESTED_TARGET": "all"},
     {"GITHUB_REF": "refs/heads/candidate"},
     {"GITHUB_WORKFLOW_REF": "other/workflow@refs/heads/main"},
     {"ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN": ""},
@@ -1792,9 +1798,9 @@ def test_independent_invalid_config_has_no_get_or_publish(overrides):
     lambda v: v["status"].update(url="https://different.run.app"),
     lambda v: v["status"].update(traffic=[{"revisionName": "old-revision", "percent": 100}]),
     lambda v: v["status"].update(traffic=[{"revisionName": "longbridge-quant-hk-service-00001", "percent": 50}]),
-    lambda v: v["status"].update(conditions=[{"type": "Ready", "status": "False"}]),
-    lambda v: v["spec"]["template"]["spec"]["containers"][0].update(env=[]),
-    lambda v: v["spec"]["template"]["spec"]["containers"][0]["env"][0].update(value="false"),
+    lambda v: v["serving_revision"]["status"].update(conditions=[{"type": "Ready", "status": "False"}]),
+    lambda v: v["serving_revision"]["spec"]["containers"][0].update(env=[]),
+    lambda v: v["serving_revision"]["spec"]["containers"][0]["env"][0].update(value="false"),
 ])
 def test_independent_service_gate_rejects_before_sending_id_token(mutate):
     metadata = _service_metadata()
@@ -1885,12 +1891,12 @@ def test_independent_hk_workflow_reuses_explicit_identity_and_exact_audience():
     assert "ACCOUNT_HISTORY_OBSERVATION_MODE:" in workflow
     assert "ACCOUNT_HISTORY_REQUESTED_TARGET: \u0024{{ inputs.target || 'all' }}" in workflow
     assert "ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN:" in workflow
-    assert "--independent-hk-account-snapshot" in workflow
+    assert "--independent-account-snapshot" in workflow
     assert "token_format:" in workflow and "id_token_audience:" in workflow
     assert 'gcloud run services describe "\u0024{SNAPSHOT_SERVICE}"' in workflow
     assert '--project "\u0024{GOOGLE_CLOUD_PROJECT}"' in workflow
     assert '--region "\u0024{SNAPSHOT_REGION}"' in workflow
-    assert "| uv run --no-sync python scripts/record_daily_account_snapshot.py --independent-hk-account-snapshot" in workflow
+    assert "| uv run --no-sync python scripts/record_daily_account_snapshot.py --independent-account-snapshot" in workflow
     assert "uv run --no-sync python scripts/record_daily_account_snapshot.py\n" in workflow
 
 
@@ -1938,7 +1944,7 @@ def test_independent_invalid_financing_cannot_expand_wire_contract(financing):
 
 
 def test_independent_observation_date_is_utc_and_original_instants_are_not_rewritten():
-    config = snapshots._independent_hk_config(_independent_env())
+    config = snapshots._independent_config(_independent_env())
     started = "2026-09-29T00:00:01+08:00"
     finished = "2026-09-29T00:00:02+08:00"
     request_started = datetime.fromisoformat(started) - timedelta(seconds=1)
@@ -1952,7 +1958,7 @@ def test_independent_observation_date_is_utc_and_original_instants_are_not_rewri
 
 def test_independent_rechecks_existing_freshness_window_before_publish():
     calls = []
-    result = snapshots.observe_independent_hk_account_snapshot(
+    result = snapshots.observe_independent_account_snapshot(
         _independent_env(), service_metadata=_service_metadata(),
         http_get=lambda *_args, **_kwargs: _IndependentResponse(_independent_snapshot()),
         http_post=lambda *_args, **_kwargs: calls.append("post"),
@@ -1967,7 +1973,7 @@ def test_independent_cli_reports_only_bounded_status(capsys):
         raise TimeoutError(f"{SECRET} {QRS_TOKEN} synthetic-private-position")
 
     code = snapshots.main(
-        ["--independent-hk-account-snapshot"],
+        ["--independent-account-snapshot"],
         environ=_independent_env(), service_metadata=_service_metadata(),
         http_get=fail_get, http_post=lambda *_a, **_k: pytest.fail("must not publish"),
         now_reader=lambda: T0,
@@ -1978,7 +1984,7 @@ def test_independent_cli_reports_only_bounded_status(capsys):
 
 def test_independent_configuration_check_never_reads_stdin_or_provider(monkeypatch, capsys):
     monkeypatch.setattr(snapshots, "_read_independent_service_metadata", lambda: pytest.fail("must not read metadata"))
-    code = snapshots.main(["--validate-independent-hk-account-snapshot"], environ=_independent_env())
+    code = snapshots.main(["--validate-independent-account-snapshot"], environ=_independent_env())
     assert code == 0 and capsys.readouterr().out.strip() == "independent_config=ok"
 
 
@@ -2026,40 +2032,22 @@ def test_independent_workflow_keeps_cloud_resources_secret_and_no_new_auth_ident
     assert "id_token_audience: \u0024{{ steps.independent_audience.outputs.service_url || '' }}" in workflow
     assert "service_account: \u0024{{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in workflow
     independent = workflow[workflow.index('            independent_get)'):workflow.index('            *)', workflow.index('            independent_get)'))]
-    assert "--validate-independent-hk-account-snapshot" in independent
+    assert "--validate-independent-account-snapshot" in independent
     assert independent.index("--validate-independent") < independent.index("gcloud run services describe")
     assert "/probe" not in independent and "/run" not in independent
     assert "scheduler" not in independent and "tee" not in independent and "upload-artifact" not in independent
 
 
 @pytest.mark.parametrize("mutate", [
-    lambda v: v["metadata"].pop("generation"),
-    lambda v: v["metadata"].update(generation=0),
-    lambda v: v["metadata"].update(generation=True),
-    lambda v: v["metadata"].update(generation="7"),
-    lambda v: v["status"].pop("observedGeneration"),
-    lambda v: v["status"].update(observedGeneration=6),
-    lambda v: v["status"].update(observedGeneration=8),
-    lambda v: v["status"].update(observedGeneration="7"),
-    lambda v: v["status"].pop("latestCreatedRevisionName"),
-    lambda v: v["status"].update(latestCreatedRevisionName="longbridge-quant-hk-service-00002"),
-    lambda v: v["spec"]["template"].pop("metadata"),
-    lambda v: v["spec"]["template"]["metadata"].update(name="longbridge-quant-hk-service-00002"),
+    lambda v: v.pop("serving_revision"),
+    lambda v: v["serving_revision"]["metadata"].update(name="other-service-00001"),
+    lambda v: v["serving_revision"]["metadata"].update(namespace="other-project"),
+    lambda v: v["serving_revision"]["status"].update(conditions=[{"type": "Ready", "status": "False"}]),
+    lambda v: v["serving_revision"]["spec"].update(containers=[]),
 ])
-def test_independent_revision_and_generation_must_prove_serving_template(mutate):
+def test_independent_actual_serving_revision_must_match_target_and_be_ready(mutate):
     metadata = _service_metadata()
     mutate(metadata)
-    result, calls, _ = _observe_independent(metadata=metadata)
-    assert result.status == "error"
-    assert calls == {"gets": [], "posts": []}
-
-
-def test_independent_unreconciled_new_template_cannot_qualify_old_serving_revision():
-    metadata = _service_metadata()
-    metadata["metadata"]["generation"] = 2
-    metadata["status"]["observedGeneration"] = 1
-    metadata["status"]["latestCreatedRevisionName"] = "longbridge-quant-hk-service-00002"
-    metadata["spec"]["template"]["metadata"]["name"] = "longbridge-quant-hk-service-00002"
     result, calls, _ = _observe_independent(metadata=metadata)
     assert result.status == "error"
     assert calls == {"gets": [], "posts": []}
@@ -2081,7 +2069,7 @@ def test_independent_noncanonical_raw_audience_rejected_before_get(raw_url):
 def test_independent_pre_auth_audience_output_is_canonical_without_token_or_metadata(monkeypatch, capsys):
     env = _independent_env(ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN="")
     monkeypatch.setattr(snapshots, "_read_independent_service_metadata", lambda: pytest.fail("no service read before auth"))
-    assert snapshots.main(["--validate-independent-hk-audience"], environ=env) == 0
+    assert snapshots.main(["--validate-independent-audience"], environ=env) == 0
     assert capsys.readouterr().out.strip() == "service_url=" + env["ACCOUNT_HISTORY_SERVICE_URL"]
 
 
@@ -2089,7 +2077,7 @@ def test_independent_pre_auth_audience_output_is_canonical_without_token_or_meta
 def test_independent_pre_auth_rejects_noncanonical_audience_without_printing_it(suffix, capsys):
     env = _independent_env(ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN="")
     env["ACCOUNT_HISTORY_SERVICE_URL"] += suffix
-    assert snapshots.main(["--validate-independent-hk-audience"], environ=env) == 1
+    assert snapshots.main(["--validate-independent-audience"], environ=env) == 1
     output = capsys.readouterr().out
     assert output.strip() == "independent_audience=error:independent_config_invalid"
     assert env["ACCOUNT_HISTORY_SERVICE_URL"] not in output
@@ -2099,9 +2087,104 @@ def test_independent_workflow_validates_one_audience_before_auth_and_reuses_it()
     workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
     validation = workflow.index("id: independent_audience")
     assert validation < workflow.index("id: gcp_auth_primary")
-    assert '--validate-independent-hk-audience >> "$GITHUB_OUTPUT"' in workflow
+    assert '--validate-independent-audience >> "$GITHUB_OUTPUT"' in workflow
     audience = "id_token_audience: \u0024{{ steps.independent_audience.outputs.service_url || '' }}"
     assert workflow.count(audience) == 2
     assert "token_format: \u0024{{ steps.independent_audience.outcome == 'success' && 'id_token' || '' }}" in workflow
     record_step = workflow[workflow.index("      - name: Record and sync daily account snapshot"):workflow.index("      - name: Check recent execution report")]
     assert "ACCOUNT_HISTORY_SERVICE_URL: \u0024{{ env.ACCOUNT_HISTORY_OBSERVATION_MODE != 'independent_get' && vars.ACCOUNT_HISTORY_SERVICE_URL || steps.independent_audience.outputs.service_url }}" in record_step
+
+
+def test_scheduled_read_only_snapshot_does_not_depend_on_strategy_activation():
+    env = _independent_env(GITHUB_EVENT_NAME="schedule", ACCOUNT_HISTORY_REQUESTED_TARGET="all")
+    result, calls, _ = _observe_independent(env)
+    assert result.status == "observed"
+    assert len(calls["gets"]) == len(calls["posts"]) == 1
+    assert env["RUNTIME_TARGET_ENABLED"] == "false"
+
+
+def test_failed_candidate_does_not_block_healthy_serving_snapshot():
+    metadata = _service_metadata()
+    metadata["serving_revision"] = {
+        "metadata": {"name": metadata["status"]["traffic"][0]["revisionName"], "namespace": metadata["metadata"]["namespace"]},
+        "spec": metadata["spec"]["template"]["spec"],
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+    metadata["status"]["latestCreatedRevisionName"] = "longbridge-quant-hk-service-failed-candidate"
+    metadata["status"]["conditions"] = [{"type": "Ready", "status": "False"}]
+    metadata["spec"]["template"] = {"metadata": {"name": "longbridge-quant-hk-service-failed-candidate"}, "spec": {"containers": []}}
+    result, calls, _ = _observe_independent(metadata=metadata)
+    assert result.status == "observed"
+    assert len(calls["gets"]) == 1
+
+
+@pytest.mark.parametrize("target_id", ["paper", "hk", "sg"])
+@pytest.mark.parametrize("event", ["workflow_dispatch", "schedule"])
+@pytest.mark.parametrize("trading_enabled", ["true", "false"])
+def test_independent_snapshot_targets_keep_scope_and_ignore_trading_activation(target_id, event, trading_enabled):
+    from application.runtime_target_manifest import load_runtime_target_manifest
+    target = next(t for t in load_runtime_target_manifest().targets if t.id == target_id)
+    env = _independent_env(**{**_env(target_id), "SNAPSHOT_SERVICE": target.service, "SNAPSHOT_REGION": target.region,
+                             "ACCOUNT_HISTORY_REQUESTED_TARGET": target_id if event == "workflow_dispatch" else "all",
+                             "GITHUB_EVENT_NAME": event, "RUNTIME_TARGET_ENABLED": trading_enabled})
+    metadata = _service_metadata()
+    metadata["metadata"]["name"] = target.service
+    metadata["metadata"]["labels"]["cloud.googleapis.com/location"] = target.region
+    metadata["status"]["url"] = env["ACCOUNT_HISTORY_SERVICE_URL"]
+    revision = target.service + "-00001"
+    metadata["status"]["traffic"] = [{"revisionName": revision, "percent": 100}]
+    metadata["serving_revision"]["metadata"]["name"] = revision
+    result, calls, _ = _observe_independent(env, metadata=metadata, snapshot=_independent_snapshot(account_scope=target.account_scope))
+    assert result.status == "observed" and result.publish_status == "published"
+    assert len(calls["gets"]) == len(calls["posts"]) == 1
+    history = json.loads(calls["posts"][0][1]["data"])
+    assert history["target_id"] == target_id and history["account_scope"] == target.account_scope
+    assert env["RUNTIME_TARGET_ENABLED"] == trading_enabled
+
+
+def test_independent_cli_reads_only_the_actual_serving_revision(monkeypatch, capsys):
+    metadata = _service_metadata()
+    serving = metadata.pop("serving_revision")
+    metadata["status"]["latestCreatedRevisionName"] = "longbridge-quant-hk-service-failed-candidate"
+    calls = []
+    monkeypatch.setattr(snapshots.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(metadata).encode())))
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(serving).encode())
+    monkeypatch.setattr(snapshots.subprocess, "run", run)
+    config = snapshots._independent_config(_independent_env())
+    observed = snapshots._read_independent_service_metadata(config)
+    snapshots._validate_independent_service(observed, config)
+    assert len(calls) == 1
+    command, kwargs = calls[0]
+    assert command[:5] == ["gcloud", "run", "revisions", "describe", serving["metadata"]["name"]]
+    assert command[command.index("--project") + 1] == "longbridgequant"
+    assert command[command.index("--region") + 1] == "asia-east2"
+    assert kwargs["stderr"] == snapshots.subprocess.DEVNULL
+    assert kwargs["timeout"] == snapshots.HTTP_TIMEOUT_SECONDS
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("failure", ["permission", "timeout", "oversize"])
+def test_independent_revision_read_failure_is_bounded_and_never_retried(monkeypatch, failure):
+    metadata = _service_metadata()
+    monkeypatch.setattr(snapshots.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(metadata).encode())))
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        if failure == "timeout":
+            raise snapshots.subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return SimpleNamespace(returncode=1 if failure == "permission" else 0, stdout=b"x" * (256 * 1024 + 1))
+    monkeypatch.setattr(snapshots.subprocess, "run", run)
+    with pytest.raises(snapshots._Rejected, match="independent_service_unqualified"):
+        snapshots._read_independent_service_metadata(snapshots._independent_config(_independent_env()))
+    assert len(calls) == 1
+
+
+def test_manual_snapshot_only_skips_heartbeat_notifications_and_runtime_publishers():
+    workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+    assert "snapshot_only:" in workflow
+    for step in ["Check recent execution report", "Publish read-only runtime execution evidence",
+                 "Publish daily runtime projection", "Publish existing reports as unified digest candidates"]:
+        block = workflow[workflow.index("      - name: " + step):].split("\n      - name:", 1)[0]
+        assert "!inputs.snapshot_only" in block.split("\n", 2)[1]

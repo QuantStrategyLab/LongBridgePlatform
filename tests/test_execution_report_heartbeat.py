@@ -44,7 +44,7 @@ def test_sg_permission_inspection_is_opt_in_target_limited_and_skips_pipeline():
     )
     assert "python scripts/record_daily_account_snapshot.py --inspect-sg-probe-permissions" in workflow
     assert "env.INSPECT_SG_PROBE_PERMISSIONS != 'true'" in workflow
-    assert "name: Check recent execution report\n        if: ${{ env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}" in workflow
+    assert "name: Check recent execution report\n        if: ${{ !inputs.snapshot_only && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}" in workflow
 
 
 def test_archive_inspection_is_manual_target_limited_and_skips_heartbeat_job():
