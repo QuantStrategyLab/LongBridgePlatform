@@ -1622,14 +1622,18 @@ def test_history_validator_accepts_optional_financing_and_rejects_malformed():
 def _independent_env(**overrides):
     value = _env(
         "hk",
+        GOOGLE_CLOUD_PROJECT="example-project",
+        GOOGLE_CLOUD_PROJECT_NUMBER="111222333444",
+        GITHUB_REPOSITORY="example-owner/example-platform",
+        ACCOUNT_HISTORY_SERVICE_URL="https://example-hk-reader-abc123-uc.a.run.app",
         RUNTIME_TARGET_ENABLED="false",
         ACCOUNT_HISTORY_OBSERVATION_MODE="independent_get",
-        SNAPSHOT_SERVICE="longbridge-quant-hk-service",
+        SNAPSHOT_SERVICE="example-hk-reader",
         SNAPSHOT_REGION="asia-east2",
         ACCOUNT_HISTORY_REQUESTED_TARGET="hk",
         GITHUB_EVENT_NAME="workflow_dispatch",
         GITHUB_REF="refs/heads/main",
-        GITHUB_WORKFLOW_REF="QuantStrategyLab/LongBridgePlatform/.github/workflows/execution-report-heartbeat.yml@refs/heads/main",
+        GITHUB_WORKFLOW_REF="example-owner/example-platform/.github/workflows/execution-report-heartbeat.yml@refs/heads/main",
         ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN="synthetic-cloud-run-id-token",
         ACCOUNT_FACTS_SYNC_ENABLED="true",
         ACCOUNT_FACTS_SYNC_URL=QRS_URL,
@@ -1643,22 +1647,22 @@ def _independent_env(**overrides):
 def _service_metadata():
     value = {
         "metadata": {
-            "name": "longbridge-quant-hk-service",
-            "namespace": "252919773759",
+            "name": "example-hk-reader",
+            "namespace": "111222333444",
             "generation": 7,
             "labels": {"cloud.googleapis.com/location": "asia-east2"},
             "annotations": {"run.googleapis.com/ingress": "all"},
         },
-        "spec": {"template": {"metadata": {"name": "longbridge-quant-hk-service-00001"}, "spec": {"containers": [{
+        "spec": {"template": {"metadata": {"name": "example-hk-reader-00001"}, "spec": {"containers": [{
             "env": [{"name": "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED", "value": "true"}],
         }]}}},
         "status": {
             "url": _independent_env()["ACCOUNT_HISTORY_SERVICE_URL"],
-            "latestReadyRevisionName": "longbridge-quant-hk-service-00001",
-            "latestCreatedRevisionName": "longbridge-quant-hk-service-00001",
+            "latestReadyRevisionName": "example-hk-reader-00001",
+            "latestCreatedRevisionName": "example-hk-reader-00001",
             "observedGeneration": 7,
             "conditions": [{"type": "Ready", "status": "True"}],
-            "traffic": [{"revisionName": "longbridge-quant-hk-service-00001", "percent": 100}],
+            "traffic": [{"revisionName": "example-hk-reader-00001", "percent": 100}],
         },
     }
 
@@ -1772,10 +1776,10 @@ def test_independent_hk_preserves_native_currency_and_only_publishes_existing_hi
     {"ACCOUNT_HISTORY_OBSERVATION_MODE": ""},
     {"ACCOUNT_HISTORY_OBSERVATION_MODE": "scheduler_archive"},
     {"ACCOUNT_HISTORY_OBSERVATION_MODE": "invalid"},
-    {"ACCOUNT_HISTORY_TARGET_ID": "sg"},
-    {"ACCOUNT_HISTORY_EXPECTED_SCOPE": "SG"},
+    {"ACCOUNT_HISTORY_TARGET_ID": ""},
+    {"ACCOUNT_HISTORY_EXPECTED_SCOPE": "invalid"},
     {"ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID": ""},
-    {"GOOGLE_CLOUD_PROJECT": "other-project"},
+    {"GOOGLE_CLOUD_PROJECT": ""},
     {"GITHUB_REF": "refs/heads/candidate"},
     {"GITHUB_WORKFLOW_REF": "other/workflow@refs/heads/main"},
     {"ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN": ""},
@@ -1797,7 +1801,7 @@ def test_independent_invalid_config_has_no_get_or_publish(overrides):
     lambda v: v["metadata"]["annotations"].update({"run.googleapis.com/ingress-status": "internal"}),
     lambda v: v["status"].update(url="https://different.run.app"),
     lambda v: v["status"].update(traffic=[{"revisionName": "old-revision", "percent": 100}]),
-    lambda v: v["status"].update(traffic=[{"revisionName": "longbridge-quant-hk-service-00001", "percent": 50}]),
+    lambda v: v["status"].update(traffic=[{"revisionName": "example-hk-reader-00001", "percent": 50}]),
     lambda v: v["serving_revision"]["status"].update(conditions=[{"type": "Ready", "status": "False"}]),
     lambda v: v["serving_revision"]["spec"]["containers"][0].update(env=[]),
     lambda v: v["serving_revision"]["spec"]["containers"][0]["env"][0].update(value="false"),
@@ -2092,7 +2096,7 @@ def test_independent_workflow_validates_one_audience_before_auth_and_reuses_it()
     assert workflow.count(audience) == 2
     assert "token_format: \u0024{{ steps.independent_audience.outcome == 'success' && 'id_token' || '' }}" in workflow
     record_step = workflow[workflow.index("      - name: Record and sync daily account snapshot"):workflow.index("      - name: Check recent execution report")]
-    assert "ACCOUNT_HISTORY_SERVICE_URL: \u0024{{ env.ACCOUNT_HISTORY_OBSERVATION_MODE != 'independent_get' && vars.ACCOUNT_HISTORY_SERVICE_URL || steps.independent_audience.outputs.service_url }}" in record_step
+    assert "ACCOUNT_HISTORY_SERVICE_URL: \u0024{{ env.ACCOUNT_HISTORY_OBSERVATION_MODE != 'independent_get' && secrets.ACCOUNT_HISTORY_SERVICE_URL || steps.independent_audience.outputs.service_url }}" in record_step
 
 
 def test_scheduled_read_only_snapshot_does_not_depend_on_strategy_activation():
@@ -2110,9 +2114,9 @@ def test_failed_candidate_does_not_block_healthy_serving_snapshot():
         "spec": metadata["spec"]["template"]["spec"],
         "status": {"conditions": [{"type": "Ready", "status": "True"}]},
     }
-    metadata["status"]["latestCreatedRevisionName"] = "longbridge-quant-hk-service-failed-candidate"
+    metadata["status"]["latestCreatedRevisionName"] = "example-hk-reader-failed-candidate"
     metadata["status"]["conditions"] = [{"type": "Ready", "status": "False"}]
-    metadata["spec"]["template"] = {"metadata": {"name": "longbridge-quant-hk-service-failed-candidate"}, "spec": {"containers": []}}
+    metadata["spec"]["template"] = {"metadata": {"name": "example-hk-reader-failed-candidate"}, "spec": {"containers": []}}
     result, calls, _ = _observe_independent(metadata=metadata)
     assert result.status == "observed"
     assert len(calls["gets"]) == 1
@@ -2122,11 +2126,12 @@ def test_failed_candidate_does_not_block_healthy_serving_snapshot():
 @pytest.mark.parametrize("event", ["workflow_dispatch", "schedule"])
 @pytest.mark.parametrize("trading_enabled", ["true", "false"])
 def test_independent_snapshot_targets_keep_scope_and_ignore_trading_activation(target_id, event, trading_enabled):
-    from application.runtime_target_manifest import load_runtime_target_manifest
-    target = next(t for t in load_runtime_target_manifest().targets if t.id == target_id)
-    env = _independent_env(**{**_env(target_id), "SNAPSHOT_SERVICE": target.service, "SNAPSHOT_REGION": target.region,
-                             "ACCOUNT_HISTORY_REQUESTED_TARGET": target_id if event == "workflow_dispatch" else "all",
-                             "GITHUB_EVENT_NAME": event, "RUNTIME_TARGET_ENABLED": trading_enabled})
+    scope = {"paper": "PAPER", "hk": "HK", "sg": "SG"}[target_id]
+    target = SimpleNamespace(service=f"example-{target_id}-reader", region="us-central1", account_scope=scope)
+    env = _independent_env(SNAPSHOT_SERVICE=target.service, SNAPSHOT_REGION=target.region,
+                           ACCOUNT_HISTORY_TARGET_ID=target_id, ACCOUNT_HISTORY_EXPECTED_SCOPE=scope,
+                           ACCOUNT_HISTORY_REQUESTED_TARGET=target_id if event == "workflow_dispatch" else "all",
+                           GITHUB_EVENT_NAME=event, RUNTIME_TARGET_ENABLED=trading_enabled)
     metadata = _service_metadata()
     metadata["metadata"]["name"] = target.service
     metadata["metadata"]["labels"]["cloud.googleapis.com/location"] = target.region
@@ -2145,7 +2150,7 @@ def test_independent_snapshot_targets_keep_scope_and_ignore_trading_activation(t
 def test_independent_cli_reads_only_the_actual_serving_revision(monkeypatch, capsys):
     metadata = _service_metadata()
     serving = metadata.pop("serving_revision")
-    metadata["status"]["latestCreatedRevisionName"] = "longbridge-quant-hk-service-failed-candidate"
+    metadata["status"]["latestCreatedRevisionName"] = "example-hk-reader-failed-candidate"
     calls = []
     monkeypatch.setattr(snapshots.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(metadata).encode())))
     def run(command, **kwargs):
@@ -2158,7 +2163,7 @@ def test_independent_cli_reads_only_the_actual_serving_revision(monkeypatch, cap
     assert len(calls) == 1
     command, kwargs = calls[0]
     assert command[:5] == ["gcloud", "run", "revisions", "describe", serving["metadata"]["name"]]
-    assert command[command.index("--project") + 1] == "longbridgequant"
+    assert command[command.index("--project") + 1] == "example-project"
     assert command[command.index("--region") + 1] == "asia-east2"
     assert kwargs["stderr"] == snapshots.subprocess.DEVNULL
     assert kwargs["timeout"] == snapshots.HTTP_TIMEOUT_SECONDS
@@ -2188,3 +2193,65 @@ def test_manual_snapshot_only_skips_heartbeat_notifications_and_runtime_publishe
                  "Publish daily runtime projection", "Publish existing reports as unified digest candidates"]:
         block = workflow[workflow.index("      - name: " + step):].split("\n      - name:", 1)[0]
         assert "!inputs.snapshot_only" in block.split("\n", 2)[1]
+
+
+@pytest.mark.parametrize("namespace_kind", ["project_id", "project_number"])
+def test_independent_observer_can_use_another_private_deployment_without_manifest(monkeypatch, namespace_kind):
+    from application import runtime_target_manifest
+
+    monkeypatch.setattr(runtime_target_manifest, "load_runtime_target_manifest", lambda: pytest.fail("private deployment must not use public mappings"))
+    env = _independent_env(
+        GOOGLE_CLOUD_PROJECT="another-example-project",
+        GOOGLE_CLOUD_PROJECT_NUMBER="999888777666",
+        SNAPSHOT_SERVICE="custom-readonly-service",
+        SNAPSHOT_REGION="europe-west1",
+        ACCOUNT_HISTORY_SERVICE_URL="https://custom-readonly-service-example-ew.a.run.app",
+        ACCOUNT_HISTORY_TARGET_ID="custom-account-slot",
+        ACCOUNT_HISTORY_REQUESTED_TARGET="custom-account-slot",
+        ACCOUNT_HISTORY_EXPECTED_SCOPE="SG",
+        ACCOUNT_HISTORY_ALLOWED_REF="refs/heads/release",
+        GITHUB_REF="refs/heads/release",
+        GITHUB_REPOSITORY="another-owner/another-platform",
+        GITHUB_WORKFLOW_REF="another-owner/another-platform/.github/workflows/execution-report-heartbeat.yml@refs/heads/release",
+    )
+    metadata = _service_metadata()
+    namespace = env["GOOGLE_CLOUD_PROJECT" if namespace_kind == "project_id" else "GOOGLE_CLOUD_PROJECT_NUMBER"]
+    revision = env["SNAPSHOT_SERVICE"] + "-00001"
+    metadata["metadata"].update(name=env["SNAPSHOT_SERVICE"], namespace=namespace)
+    metadata["metadata"]["labels"]["cloud.googleapis.com/location"] = env["SNAPSHOT_REGION"]
+    metadata["status"].update(url=env["ACCOUNT_HISTORY_SERVICE_URL"], traffic=[{"revisionName": revision, "percent": 100}])
+    metadata["serving_revision"]["metadata"].update(name=revision, namespace=namespace)
+    result, calls, _ = _observe_independent(env, metadata=metadata, snapshot=_independent_snapshot(account_scope="SG"))
+    assert result.status == "observed" and result.publish_status == "published"
+    assert calls["gets"][0][0] == env["ACCOUNT_HISTORY_SERVICE_URL"] + "/account-snapshot"
+    published = json.loads(calls["posts"][0][1]["data"])
+    assert published["target_id"] == "custom-account-slot" and published["account_scope"] == "SG"
+    assert published["source_binding"]["id"] == BINDING
+    assert published["observed_finished_at"] == _independent_snapshot()["observed_finished_at"]
+
+
+@pytest.mark.parametrize("ingress", ["internal", "internal-and-cloud-load-balancing"])
+def test_private_ingress_requires_internal_observer_without_broker_request(ingress):
+    metadata = _service_metadata()
+    metadata["metadata"]["annotations"].update({"run.googleapis.com/ingress": ingress, "run.googleapis.com/ingress-status": ingress})
+    result, calls, _ = _observe_independent(metadata=metadata)
+    assert result.category == "internal_observer_required"
+    assert calls == {"gets": [], "posts": []}
+
+
+@pytest.mark.parametrize("overrides", [
+    {"SNAPSHOT_SERVICE": ""}, {"SNAPSHOT_REGION": ""},
+    {"GOOGLE_CLOUD_PROJECT_NUMBER": "not-a-number"}, {"GITHUB_REPOSITORY": ""},
+    {"GITHUB_REPOSITORY": "another-owner/another-platform"},
+])
+def test_missing_or_cross_repository_private_settings_do_not_send_tokens(overrides):
+    result, calls, _ = _observe_independent(_independent_env(**overrides))
+    assert result.status == "error"
+    assert calls == {"gets": [], "posts": []}
+
+
+def test_heartbeat_cloud_identity_comes_from_protected_configuration():
+    workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+    for setting in ["GCP_PROJECT_ID", "GCP_WORKLOAD_IDENTITY_PROVIDER", "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"]:
+        assert workflow.count(f"{setting}: ${{{{ secrets.{setting} }}}}") == 2
+    assert "GOOGLE_CLOUD_PROJECT_NUMBER: ${{ secrets.GCP_PROJECT_NUMBER }}" in workflow

@@ -300,24 +300,35 @@ class _IndependentConfig:
     source_binding_id: str
     target_id: str
     account_scope: str
+    project_number: str = ""
 
 
 def _independent_config(env: Mapping[str, str], *, require_id_token: bool = True) -> _IndependentConfig:
     """Read one configured target without depending on its trading activation."""
-    target_id = env.get("ACCOUNT_HISTORY_TARGET_ID")
-    expected = _EXPECTED_TARGETS.get(target_id)
+    target_id = str(env.get("ACCOUNT_HISTORY_TARGET_ID") or "")
+    scope = str(env.get("ACCOUNT_HISTORY_EXPECTED_SCOPE") or "")
+    project = str(env.get("GOOGLE_CLOUD_PROJECT") or "")
+    project_number = str(env.get("GOOGLE_CLOUD_PROJECT_NUMBER") or "")
+    service = str(env.get("SNAPSHOT_SERVICE") or "")
+    region = str(env.get("SNAPSHOT_REGION") or "")
+    repository = str(env.get("GITHUB_REPOSITORY") or "")
+    allowed_ref = str(env.get("ACCOUNT_HISTORY_ALLOWED_REF") or "refs/heads/main")
     if (
         env.get("ACCOUNT_HISTORY_OBSERVATION_MODE") != "independent_get"
         or env.get("ACCOUNT_HISTORY_RECORDING_ENABLED") != "true"
-        or expected is None
-        or env.get("ACCOUNT_HISTORY_EXPECTED_SCOPE") != expected[0]
-        or env.get("GOOGLE_CLOUD_PROJECT") != "longbridgequant"
+        or not _TARGET_ID.fullmatch(target_id)
+        or scope not in {"PAPER", "HK", "SG"}
+        or not _PROJECT_ID.fullmatch(project)
+        or (project_number and not re.fullmatch(r"[1-9]\d{5,19}", project_number))
+        or not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", service)
+        or not re.fullmatch(r"[a-z]+-[a-z]+\d+", region)
+        or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
+        or not allowed_ref.startswith("refs/heads/") or any(c.isspace() for c in allowed_ref)
         or env.get("GITHUB_EVENT_NAME") not in {"workflow_dispatch", "schedule"}
         or env.get("ACCOUNT_HISTORY_REQUESTED_TARGET") not in {target_id, "all"}
-        or env.get("GITHUB_REF") != "refs/heads/main"
+        or env.get("GITHUB_REF") != allowed_ref
         or env.get("GITHUB_WORKFLOW_REF") != (
-            "QuantStrategyLab/LongBridgePlatform/.github/workflows/"
-            "execution-report-heartbeat.yml@refs/heads/main"
+            f"{repository}/.github/workflows/execution-report-heartbeat.yml@{allowed_ref}"
         )
     ):
         raise _Rejected("independent_config_invalid")
@@ -327,22 +338,13 @@ def _independent_config(env: Mapping[str, str], *, require_id_token: bool = True
         require_id_token and (not token or len(token) > 16384 or any(c.isspace() for c in token))
     ):
         raise _Rejected("independent_config_invalid")
-    from application.runtime_target_manifest import load_runtime_target_manifest
-
-    targets = [target for target in load_runtime_target_manifest().targets if target.id == target_id]
-    if len(targets) != 1 or targets[0].mode != expected[1] or targets[0].account_scope != expected[0]:
-        raise _Rejected("independent_config_invalid")
-    target = targets[0]
-    if env.get("SNAPSHOT_SERVICE") != target.service or env.get("SNAPSHOT_REGION") != target.region:
-        raise _Rejected("independent_config_invalid")
     raw_url = env.get("ACCOUNT_HISTORY_SERVICE_URL")
-    service_url = _service_url(str(raw_url or ""), service=target.service, region=target.region)
+    service_url = _service_url(str(raw_url or ""), service=service, region=region)
     # Unlike the legacy Scheduler route, this exact string is also the token audience.
     if raw_url != service_url:
         raise _Rejected("independent_config_invalid")
     return _IndependentConfig(
-        "longbridgequant", target.region, target.service,
-        service_url, binding, target_id, expected[0],
+        project, region, service, service_url, binding, target_id, scope, project_number,
     )
 
 
@@ -360,10 +362,8 @@ def _validate_independent_service(value: object, config: _IndependentConfig) -> 
         revision_name = revision["metadata"]["name"]
         if (
             metadata["name"] != config.service
-            or str(metadata["namespace"]) not in {config.project_id, "252919773759"}
+            or str(metadata["namespace"]) not in {v for v in (config.project_id, config.project_number) if v}
             or metadata["labels"]["cloud.googleapis.com/location"] != config.region
-            or annotations.get("run.googleapis.com/ingress") != "all"
-            or annotations.get("run.googleapis.com/ingress-status", "all") != "all"
             or status["url"] != config.service_url
             or len(ready) != 1 or ready[0].get("status") != "True"
             or not isinstance(revision_name, str) or not revision_name.startswith(config.service + "-")
@@ -379,6 +379,14 @@ def _validate_independent_service(value: object, config: _IndependentConfig) -> 
             if row.get("name") == "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED"
         ]
         if len(snapshot_flags) != 1 or snapshot_flags[0].get("value") != "true" or "valueFrom" in snapshot_flags[0]:
+            raise ValueError
+        ingress = annotations.get("run.googleapis.com/ingress")
+        ingress_status = annotations.get("run.googleapis.com/ingress-status", ingress)
+        if ingress in {"internal", "internal-and-cloud-load-balancing"} or ingress_status in {
+            "internal", "internal-and-cloud-load-balancing",
+        }:
+            raise _Rejected("internal_observer_required")
+        if ingress != "all" or ingress_status != "all":
             raise ValueError
     except (KeyError, TypeError, AttributeError, ValueError):
         raise _Rejected("independent_service_unqualified") from None
