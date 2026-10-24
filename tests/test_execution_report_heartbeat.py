@@ -17,9 +17,11 @@ WORKFLOW = ROOT / ".github/workflows/execution-report-heartbeat.yml"
 from scripts import execution_report_heartbeat as heartbeat  # noqa: E402
 
 
-def test_account_history_workflow_prefers_and_masks_protected_source_binding():
+def test_account_history_workflow_only_reads_and_masks_protected_source_binding():
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert "${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}" in workflow
+    assert "vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID" not in workflow
+    assert "vars.ACCOUNT_HISTORY_SERVICE_URL" not in workflow
+    assert "${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}" in workflow
     assert "printf '::add-mask::%s\\n' \"$ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID\"" in workflow
     record_step = workflow[workflow.index("name: Record and sync daily account snapshot") :]
     assert record_step.index("printf '::add-mask::%s\\n'") < record_step.index(
@@ -65,7 +67,7 @@ def test_archive_inspection_is_manual_target_limited_and_skips_heartbeat_job():
     assert "environment: ${{ matrix.target.environment }}" in job
     assert "ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}" in job
     assert "ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}" in job
-    assert "ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}" in job
+    assert "ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}" in job
     assert "--inspect-archived-account-snapshot --target \"$ACCOUNT_HISTORY_TARGET_ID\" --triggered-at \"$ACCOUNT_HISTORY_INSPECTION_TRIGGERED_AT\"" in job
     assert "--completed-at \"$ACCOUNT_HISTORY_INSPECTION_COMPLETED_AT\"" in job
     assert "cloudscheduler" not in job.lower()

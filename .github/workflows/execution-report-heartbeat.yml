@@ -60,9 +60,9 @@ on:
     - cron: "20 22 * * *"
 
 env:
-  GCP_PROJECT_ID: longbridgequant
-  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
-  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -151,6 +151,7 @@ jobs:
       RUNTIME_HEARTBEAT_EXPECTED_TIMEZONE: ${{ vars.RUNTIME_HEARTBEAT_EXPECTED_TIMEZONE }}
       RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
       ACCOUNT_HISTORY_OBSERVATION_MODE: ${{ vars.ACCOUNT_HISTORY_OBSERVATION_MODE || 'scheduler_archive' }}
+      ACCOUNT_HISTORY_ALLOWED_REF: ${{ format('refs/heads/{0}', github.event.repository.default_branch) }}
       ACCOUNT_HISTORY_REQUESTED_TARGET: ${{ inputs.target || 'all' }}
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG || 'zh' }}
       RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
@@ -180,11 +181,12 @@ jobs:
         continue-on-error: true
         env:
           ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ vars.ACCOUNT_HISTORY_RECORDING_ENABLED }}
-          ACCOUNT_HISTORY_SERVICE_URL: ${{ vars.ACCOUNT_HISTORY_SERVICE_URL }}
+          ACCOUNT_HISTORY_SERVICE_URL: ${{ secrets.ACCOUNT_HISTORY_SERVICE_URL }}
           ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
           ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
-          ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
+          ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
           GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
+          GOOGLE_CLOUD_PROJECT_NUMBER: ${{ secrets.GCP_PROJECT_NUMBER }}
           SNAPSHOT_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
           SNAPSHOT_REGION: ${{ vars.CLOUD_RUN_REGION }}
         run: uv run --no-sync python scripts/record_daily_account_snapshot.py --validate-independent-audience >> "$GITHUB_OUTPUT"
@@ -235,16 +237,17 @@ jobs:
         continue-on-error: true
         env:
           ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ vars.ACCOUNT_HISTORY_RECORDING_ENABLED }}
-          ACCOUNT_HISTORY_SERVICE_URL: ${{ env.ACCOUNT_HISTORY_OBSERVATION_MODE != 'independent_get' && vars.ACCOUNT_HISTORY_SERVICE_URL || steps.independent_audience.outputs.service_url }}
+          ACCOUNT_HISTORY_SERVICE_URL: ${{ env.ACCOUNT_HISTORY_OBSERVATION_MODE != 'independent_get' && secrets.ACCOUNT_HISTORY_SERVICE_URL || steps.independent_audience.outputs.service_url }}
           ACCOUNT_HISTORY_GCS_PREFIX: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX }}
           ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
           ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
-          ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
+          ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
           GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
           ACCOUNT_FACTS_SYNC_ENABLED: ${{ vars.ACCOUNT_FACTS_SYNC_ENABLED }}
           ACCOUNT_FACTS_SYNC_URL: ${{ vars.ACCOUNT_FACTS_SYNC_URL }}
           ACCOUNT_FACTS_SYNC_TOKEN: ${{ vars.ACCOUNT_FACTS_SYNC_ENABLED == 'true' && secrets.ACCOUNT_FACTS_SYNC_TOKEN || '' }}
           ACCOUNT_HISTORY_INDEPENDENT_ID_TOKEN: ${{ steps.gcp_auth_primary.outputs.id_token || steps.gcp_auth_retry.outputs.id_token }}
+          GOOGLE_CLOUD_PROJECT_NUMBER: ${{ secrets.GCP_PROJECT_NUMBER }}
           SNAPSHOT_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
           SNAPSHOT_REGION: ${{ vars.CLOUD_RUN_REGION }}
         run: |
@@ -329,14 +332,14 @@ jobs:
       id-token: write
     environment: ${{ matrix.target.environment }}
     env:
-      GCP_PROJECT_ID: longbridgequant
-      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
-      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
       ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
       ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
-      ACCOUNT_HISTORY_SERVICE_URL: ${{ vars.ACCOUNT_HISTORY_SERVICE_URL }}
+      ACCOUNT_HISTORY_SERVICE_URL: ${{ secrets.ACCOUNT_HISTORY_SERVICE_URL }}
       ACCOUNT_HISTORY_GCS_PREFIX: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX }}
-      ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID || vars.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
+      ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
       ACCOUNT_HISTORY_INSPECTION_TRIGGERED_AT: ${{ inputs.snapshot_triggered_at }}
       ACCOUNT_HISTORY_INSPECTION_COMPLETED_AT: ${{ inputs.snapshot_inspection_completed_at }}
     steps:
