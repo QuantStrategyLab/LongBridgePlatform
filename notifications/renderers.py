@@ -73,19 +73,11 @@ _SOURCE_INPUT_STATUS_LABELS = {
 
 
 def _localize_notification_text(text, *, translator):
-    try:
-        return _base_localize_notification_text(
-            text,
-            translator=translator,
-            extra_replacements=_LONG_BRIDGE_ZH_NOTIFICATION_REPLACEMENTS,
-        )
-    except TypeError:  # pragma: no cover - compatibility with older shared wheels
-        localized = _base_localize_notification_text(text, translator=translator)
-        if not _translator_uses_zh(translator):
-            return localized
-        for source, target in _LONG_BRIDGE_ZH_NOTIFICATION_REPLACEMENTS:
-            localized = localized.replace(source, target)
-        return localized
+    return _base_localize_notification_text(
+        text,
+        translator=translator,
+        extra_replacements=_LONG_BRIDGE_ZH_NOTIFICATION_REPLACEMENTS,
+    )
 
 
 def _localize_source_input_status(status, *, translator) -> str:

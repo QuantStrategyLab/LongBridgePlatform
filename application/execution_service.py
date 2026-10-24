@@ -16,244 +16,20 @@ from application.account_new_risk_gate_support import (
     new_risk_buy_prohibited,
     set_cycle_snapshot,
 )
+from quant_platform_kit.common.cash_sweep import (
+    estimate_cash_sweep_sale_quantity_to_fund_buy,
+    should_sell_cash_sweep_to_fund_whole_share_buy,
+)
 from quant_platform_kit.common.small_account_compatibility import (
     DEFAULT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS as QPK_DEFAULT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS,
     DEFAULT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL as QPK_DEFAULT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL,
     DEFAULT_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL as QPK_DEFAULT_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL,
     SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD as QPK_SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD,
+    apply_small_account_cash_compatibility,
+    build_small_account_allocation_drift_notes,
+    format_small_account_allocation_drift_notes,
+    format_small_account_cash_substitution_notes,
 )
-
-try:
-    from quant_platform_kit.common.cash_sweep import (
-        estimate_cash_sweep_sale_quantity_to_fund_buy,
-        should_sell_cash_sweep_to_fund_whole_share_buy,
-    )
-except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
-    import math
-
-    def estimate_cash_sweep_sale_quantity_to_fund_buy(
-        max_quantity,
-        cash_sweep_price,
-        base_buying_power,
-        funding_needs,
-    ):
-        if max_quantity <= 0:
-            return 0
-        sweep_price = float(cash_sweep_price or 0.0)
-        if sweep_price <= 0.0:
-            return 0
-        current_buying_power = max(0.0, float(base_buying_power or 0.0))
-
-        for underweight_value, ask_price in funding_needs:
-            needed_value = float(underweight_value or 0.0)
-            quote_price = float(ask_price or 0.0)
-            if needed_value <= 0.0 or quote_price <= 0.0:
-                continue
-            max_buy_quantity = max(1, int(needed_value // quote_price))
-            required_buying_power = max_buy_quantity * quote_price
-            if current_buying_power >= required_buying_power:
-                return 0
-            return min(
-                int(max_quantity),
-                max(1, math.ceil((required_buying_power - current_buying_power) / sweep_price)),
-        )
-        return 0
-
-    def should_sell_cash_sweep_to_fund_whole_share_buy(
-        max_quantity,
-        cash_sweep_price,
-        base_buying_power,
-        funding_needs,
-    ):
-        if max_quantity <= 0:
-            return False
-        sweep_price = float(cash_sweep_price or 0.0)
-        if sweep_price <= 0.0:
-            return False
-        current_buying_power = max(0.0, float(base_buying_power or 0.0))
-        sweep_capacity = float(max_quantity) * sweep_price
-        if sweep_capacity <= 0.0:
-            return False
-
-        for underweight_value, ask_price in funding_needs:
-            _ = underweight_value
-            quote_price = float(ask_price or 0.0)
-            if quote_price <= 0.0:
-                continue
-            if current_buying_power >= quote_price:
-                return False
-            if current_buying_power + sweep_capacity >= quote_price:
-                return True
-        return False
-try:
-    from quant_platform_kit.common.small_account_compatibility import (
-        apply_small_account_cash_compatibility,
-        build_small_account_allocation_drift_notes,
-        format_small_account_allocation_drift_notes,
-        format_small_account_cash_substitution_notes,
-    )
-except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
-    @dataclass(frozen=True)
-    class _SmallAccountCashCompatibilityResult:
-        targets: dict
-        whole_share_substituted_symbols: tuple[str, ...]
-        safe_haven_cash_substituted_symbols: tuple[str, ...]
-        cash_substitution_notes: tuple[dict, ...]
-
-    def _project_unbuyable_value_targets_to_cash(
-        target_values,
-        prices,
-        *,
-        candidate_symbols=None,
-        quantity_step=1.0,
-    ):
-        adjusted = {
-            str(symbol or "").strip().upper(): float(value or 0.0)
-            for symbol, value in dict(target_values or {}).items()
-        }
-        step = max(0.0, float(quantity_step or 0.0))
-        if step <= 0.0:
-            return adjusted, ()
-        normalized_candidates = (
-            tuple(adjusted)
-            if candidate_symbols is None
-            else tuple(dict.fromkeys(str(symbol or "").strip().upper() for symbol in candidate_symbols))
-        )
-        normalized_prices = {
-            str(symbol or "").strip().upper(): float(price or 0.0)
-            for symbol, price in dict(prices or {}).items()
-        }
-        substituted = []
-        for symbol in normalized_candidates:
-            target_value = max(0.0, float(adjusted.get(symbol, 0.0) or 0.0))
-            price = max(0.0, float(normalized_prices.get(symbol, 0.0) or 0.0))
-            if price > 0.0 and 0.0 < target_value < (price * step):
-                adjusted[symbol] = 0.0
-                substituted.append(symbol)
-        return adjusted, tuple(dict.fromkeys(substituted))
-
-    def apply_small_account_cash_compatibility(
-        target_values,
-        prices,
-        *,
-        candidate_symbols=None,
-        safe_haven_cash_symbols=(),
-        quantity_step=1.0,
-        cash_substitute_limit_usd=2000.0,
-    ):
-        adjusted_targets, substituted = _project_unbuyable_value_targets_to_cash(
-            target_values,
-            prices,
-            candidate_symbols=candidate_symbols,
-            quantity_step=quantity_step,
-        )
-        normalized_candidates = (
-            tuple(adjusted_targets)
-            if candidate_symbols is None
-            else tuple(dict.fromkeys(str(symbol or "").strip().upper() for symbol in candidate_symbols))
-        )
-        remaining_non_safe_targets = [
-            symbol
-            for symbol in normalized_candidates
-            if float(adjusted_targets.get(str(symbol or "").strip().upper(), 0.0) or 0.0) > 0.0
-        ]
-        safe_haven_symbols = tuple(
-            dict.fromkeys(
-                str(symbol or "").strip().upper()
-                for symbol in safe_haven_cash_symbols
-                if str(symbol or "").strip()
-            )
-        )
-        safe_haven_substituted = []
-        if (
-            substituted
-            and not remaining_non_safe_targets
-            and _positive_target_total(adjusted_targets) <= max(0.0, float(cash_substitute_limit_usd or 0.0))
-        ):
-            for symbol in safe_haven_symbols:
-                if float(adjusted_targets.get(symbol, 0.0) or 0.0) > 0.0:
-                    adjusted_targets[symbol] = 0.0
-                    safe_haven_substituted.append(symbol)
-        normalized_targets = {
-            str(symbol or "").strip().upper(): float(value or 0.0)
-            for symbol, value in dict(target_values or {}).items()
-        }
-        normalized_prices = {
-            str(symbol or "").strip().upper(): float(price or 0.0)
-            for symbol, price in dict(prices or {}).items()
-        }
-        notes = []
-        if substituted:
-            for symbol in substituted:
-                target_value = max(0.0, float(normalized_targets.get(symbol, 0.0) or 0.0))
-                price = max(0.0, float(normalized_prices.get(symbol, 0.0) or 0.0))
-                if target_value <= 0.0 or price <= 0.0:
-                    continue
-                notes.append(
-                    {
-                        "symbol": symbol,
-                        "target_value": target_value,
-                        "price": price,
-                        "cash_symbols": tuple(safe_haven_substituted),
-                    }
-                )
-        return _SmallAccountCashCompatibilityResult(
-            targets=adjusted_targets,
-            whole_share_substituted_symbols=substituted,
-            safe_haven_cash_substituted_symbols=tuple(safe_haven_substituted),
-            cash_substitution_notes=tuple(notes),
-        )
-
-    def format_small_account_cash_substitution_notes(
-        notes,
-        *,
-        translator,
-        wrapper_key="buy_deferred",
-        detail_key="buy_deferred_small_account_cash_substitution",
-        cash_label_key="cash_label",
-        symbol_suffix=".US",
-    ):
-        messages = []
-        seen_keys = set()
-        for note in tuple(notes or ()):
-            if not isinstance(note, Mapping):
-                continue
-            symbol = str(note.get("symbol") or "").strip().upper()
-            if not symbol:
-                continue
-            target_value = max(0.0, float(note.get("target_value") or 0.0))
-            price = max(0.0, float(note.get("price") or 0.0))
-            if target_value <= 0.0 or price <= 0.0:
-                continue
-            cash_symbols = tuple(
-                dict.fromkeys(
-                    str(cash_symbol or "").strip().upper()
-                    for cash_symbol in tuple(note.get("cash_symbols") or ())
-                    if str(cash_symbol or "").strip()
-                )
-            )
-            cash_symbols_text = ", ".join(f"{cash_symbol}{symbol_suffix}" for cash_symbol in cash_symbols)
-            if not cash_symbols_text:
-                cash_symbols_text = translator(cash_label_key)
-            note_key = (symbol, f"{target_value:.2f}", cash_symbols_text)
-            if note_key in seen_keys:
-                continue
-            seen_keys.add(note_key)
-            detail = translator(
-                detail_key,
-                symbol=f"{symbol}{symbol_suffix}",
-                diff=f"{target_value:.2f}",
-                price=f"{price:.2f}",
-                cash_symbols=cash_symbols_text,
-            )
-            messages.append(translator(wrapper_key, detail=detail))
-        return tuple(messages)
-
-    def build_small_account_allocation_drift_notes(**_kwargs):
-        return ()
-
-    def format_small_account_allocation_drift_notes(_notes, *, translator, **_kwargs):
-        return ()
 from quant_platform_kit.common.quantity import (
     floor_to_quantity_step,
     format_quantity,
@@ -1280,9 +1056,16 @@ def execute_rebalance_cycle(
                 f"Symbol: {symbol} Side: {side_text} Qty: {quantity} Type: {order_type} Price: {submitted_price if submitted_price is not None else 'MO'}",
             )
             return False
+        submit_exception: Exception | None = None
         try:
             report = execution_port.submit_order(order_intent)
-        except Exception:
+        except Exception as exc:
+            submit_exception = exc
+            print(
+                f"order_submit_exception Symbol: {symbol} Side: {side_text} "
+                f"Qty: {order_intent.quantity} Type: {order_type}\n{traceback.format_exc()}",
+                flush=True,
+            )
             report = None
         status = str(getattr(report, "status", "") or "").strip().lower()
         if status == "rejected":
@@ -1314,7 +1097,12 @@ def execute_rebalance_cycle(
         # Preserve the broker fact before notifications or other fallible post-submit work.
         pending_orders.append(order_payload)
         if not known_submission:
-            notify_submission_issue("Order submit failed", "broker_outcome_unknown_reconciliation_required")
+            detail = "broker_outcome_unknown_reconciliation_required"
+            if submit_exception is not None:
+                # Notification channels only carry the exception type; full details
+                # stay in the local execution log to avoid leaking broker internals.
+                detail = f"{detail}\nsubmit_exception: {type(submit_exception).__name__}"
+            notify_submission_issue("Order submit failed", detail)
             return False
         submitted_orders.append(order_payload)
         if str(side or "").strip().lower() == "sell":
@@ -1328,6 +1116,10 @@ def execute_rebalance_cycle(
                 post_submit_order(trade_context, order_intent, report)
         except Exception:
             submission_halted = True
+            print(
+                f"order_post_submit_hook_exception Symbol: {symbol} Side: {side_text}\n{traceback.format_exc()}",
+                flush=True,
+            )
             notify_submission_issue("Order post-submit hook failed", "post_submit_processing_failed_reconciliation_required")
         return True
 
