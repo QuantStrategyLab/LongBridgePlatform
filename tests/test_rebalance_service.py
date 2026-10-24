@@ -4064,6 +4064,22 @@ class RequiredExecutionClaimTests(unittest.TestCase):
         self.assertEqual(len(self.orders), 1)
         self.assertEqual(result.pending_orders[0]["status"], "unknown")
 
+    def test_unknown_submission_notification_preserves_exception_cause(self):
+        def submit(intent):
+            self.orders.append(intent)
+            raise TimeoutError("synthetic uncertain submission")
+
+        self.runtime = replace(
+            self.runtime, execution_port_factory=lambda _context: CallableExecutionPort(submit),
+        )
+        result = self._run(execution_dedup_enabled=True, execution_state_store=self.store)
+        self.assertEqual(len(self.orders), 1)
+        self.assertEqual(result.pending_orders[0]["status"], "unknown")
+        detail = self.issues[-1][1]
+        self.assertIn("broker_outcome_unknown_reconciliation_required", detail)
+        self.assertIn("submit_exception: TimeoutError", detail)
+        self.assertNotIn("synthetic uncertain submission", detail)
+
     def test_missing_claim_prerequisites_never_submit(self):
         cases = (
             {},
