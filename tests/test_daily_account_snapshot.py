@@ -1684,7 +1684,10 @@ def _independent_snapshot(**overrides):
         "snapshot_atomic": False,
         "broker_reported_balances": [{"currency": "USD", "net_assets": "10.25", "total_cash": "-2.5"}],
         "cash": [{"currency": "HKD", "available_cash": "0", "frozen_cash": "0", "settling_cash": "0"}],
-        "positions": [{"symbol": "synthetic-private-symbol", "currency": "HKD", "quantity": "3"}],
+        "positions": [{
+            "symbol": "SYNTH.HK", "currency": "HKD", "quantity": "3",
+            "synthetic_private_cost": "synthetic-private-cost",
+        }],
         "known_non_terminal_orders_7d": [{"synthetic": "private-order"}],
         "known_recent_executions_7d_count": 1,
         "positions_complete": True,
@@ -1761,7 +1764,15 @@ def test_independent_hk_preserves_native_currency_and_only_publishes_existing_hi
     assert 0 < request["timeout"] <= snapshots.HTTP_TIMEOUT_SECONDS
     outgoing = calls["posts"][0][1]["data"]
     history = json.loads(outgoing)
-    assert set(history) == set(_history(target_id="hk"))
+    assert set(history) == set(_history(target_id="hk")) | {
+        "broker_reported_positions", "broker_reported_positions_scope",
+        "broker_reported_positions_complete",
+    }
+    assert history["broker_reported_positions"] == [{
+        "symbol": "SYNTH.HK", "quantity": "3", "currency": "HKD", "market_value": None,
+    }]
+    assert history["broker_reported_positions_scope"] == "stocks_only"
+    assert history["broker_reported_positions_complete"] is True
     assert history["broker_reported_balances"] == _independent_snapshot()["broker_reported_balances"]
     assert history["cash"] == _independent_snapshot()["cash"]
     assert history["target_id"] == "hk" and history["account_scope"] == "HK"

@@ -6,7 +6,7 @@ import math
 from typing import Any
 
 from quant_platform_kit.common.broker_reconciliation import calculate_broker_observation_sha256
-from application.account_snapshot import read_cycle_account_balance
+from application.account_snapshot import read_cycle_account_balance, read_cycle_stock_positions
 
 
 def _broker_capital(account_balance, currency: str, observed_at: datetime) -> dict | None:
@@ -148,7 +148,7 @@ def fetch_strategy_account_state(
     position_rows: list[tuple[str, str, Any, Any]] = []
     position_currency_by_symbol: dict[str, str | None] = {}
     try:
-        positions_response = t_ctx.stock_positions()
+        positions_response = read_cycle_stock_positions(t_ctx.stock_positions)
     except Exception as exc:
         warn(
             "[longbridge_stock_positions_failed] "
