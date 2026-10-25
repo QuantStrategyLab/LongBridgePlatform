@@ -43,6 +43,8 @@ APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE = "318bf0419ec91002fd0f0dfd1bc80a0664a85
 APPROVED_PAPER_PROBE_FINANCING_CANDIDATE = "82788aa7c73690d2b87f63540a9102943e9372eb"
 # Reviewed read-only SG/HK account-snapshot producer. It is not a PAPER candidate.
 APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE = "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f"
+# Reviewed read-only SG/HK stock-inventory image. It carries no history or snapshot update.
+APPROVED_SGHK_STOCK_INVENTORY_CANDIDATE = "b9dbd2f697c84182a8959fcbbd360a5211f502c6"
 # Fixed 922-based HK candidate carrying only bounded /probe failure diagnostics.
 APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE = "779d8e1c39d161144bc34ae8503ce34d87971b16"
 # One already-staged PAPER revision that may hold history env while serving still runs an older image.
@@ -725,7 +727,7 @@ def prepare_image_only_staging(
     image_commit: str,
     run: Callable[[Sequence[str]], str],
 ) -> dict[str, Any]:
-    """Admit a fixed PAPER candidate or the signed main image for image-only staging."""
+    """Admit a fixed PAPER candidate, a fixed SG/HK candidate, or the signed main image."""
 
     history, snapshot_value = _validate_image_only_source(
         image_commit=image_commit, env=env, project=project
@@ -734,6 +736,7 @@ def prepare_image_only_staging(
     if image_commit in {
         APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE,
         APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE,
+        APPROVED_SGHK_STOCK_INVENTORY_CANDIDATE,
     }:
         _require_sghk_candidate_identity(
             target_label=str(env.get("WORKFLOW_TARGET") or ""),
@@ -874,6 +877,14 @@ def _validate_image_only_source(
     elif image_commit == APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE:
         if (
             str(env.get("WORKFLOW_TARGET") or "") != "HK"
+            or history is not None
+            or snapshot_value is not None
+        ):
+            raise AdmissionError("image source is not approved")
+    elif image_commit == APPROVED_SGHK_STOCK_INVENTORY_CANDIDATE:
+        # Read-only SG/HK inventory image: no PAPER target and no environment update.
+        if (
+            str(env.get("WORKFLOW_TARGET") or "") not in {"HK", "SG"}
             or history is not None
             or snapshot_value is not None
         ):

@@ -88,6 +88,7 @@ PROBE_FINANCING_CANDIDATE = admission.APPROVED_PAPER_PROBE_FINANCING_CANDIDATE
 PROBE_CANDIDATES = (PROBE_SNAPSHOT_CANDIDATE, PROBE_FINANCING_CANDIDATE)
 SGHK_SNAPSHOT_CANDIDATE = admission.APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE
 HK_PROBE_DIAGNOSTICS_CANDIDATE = admission.APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE
+STOCK_INVENTORY_CANDIDATE = admission.APPROVED_SGHK_STOCK_INVENTORY_CANDIDATE
 SGHK_PREFIX = "gs://qsl-runtime-logs-shared/longbridge/account_snapshots"
 STAGED_SOURCE_REVISION = "longbridge-quant-paper-service-r36423178119"
 STAGED_SOURCE_IMAGE = (
@@ -1206,3 +1207,233 @@ def test_probe_candidate_rejects_serving_ues_mismatch(probe_candidate):
             run=run,
         )
     assert not any(command[:3] == ["gcloud", "run", "services"] and "update" in command for command in calls)
+
+
+def _stock_inventory_service(target_label: str, *, target_overrides=None, extra_env=None):
+    target = _sghk_target(target_label)
+    target.update(target_overrides or {})
+    env = [
+        {"name": "RUNTIME_TARGET_JSON", "value": json.dumps(target)},
+        {"name": "STRATEGY_PROFILE", "value": target["strategy_profile"]},
+        {"name": "LONGBRIDGE_DRY_RUN_ONLY", "value": "false"},
+        {"name": "RUNTIME_TARGET_ENABLED", "value": "true"},
+    ] + list(extra_env or [])
+    service = {
+        "metadata": {"annotations": {"run.googleapis.com/ingress": "internal"}},
+        "spec": {
+            "template": {
+                "spec": {
+                    "serviceAccountName": "runtime@example.invalid",
+                    "containers": [{"env": env}],
+                }
+            }
+        },
+        "status": {"traffic": [{"revisionName": "serving-rev", "percent": 100}]},
+    }
+    return service, env
+
+
+def _prepare_stock_inventory(
+    target_label: str = "HK",
+    *,
+    target_overrides=None,
+    env_overrides=None,
+    project: str = "longbridgequant",
+    region: str | None = None,
+    serving_extra_env=None,
+    serving_pin: str = UES,
+    calls: list | None = None,
+):
+    service, env = _stock_inventory_service(target_label, target_overrides=target_overrides)
+    target = json.loads(env[0]["value"])
+    if region is None:
+        region = {"HK": "asia-east2", "SG": "asia-southeast1"}[target_label]
+    candidate_env = {
+        "WORKFLOW_TARGET": target_label,
+        "SOURCE_COMMIT": STOCK_INVENTORY_CANDIDATE,
+    }
+    candidate_env.update(env_overrides or {})
+
+    def run(command):
+        if calls is not None:
+            calls.append(list(command))
+        if command[:3] == ["gcloud", "run", "revisions"]:
+            return json.dumps({
+                "metadata": {"name": "serving-rev", "labels": {"commit-sha": SERVING}},
+                "spec": {
+                    "serviceAccountName": "runtime@example.invalid",
+                    "containers": [
+                        {"env": env + list(serving_extra_env or []), "image": "serving-image"}
+                    ],
+                },
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            })
+        pin = serving_pin if command[2].startswith(SERVING + ":") else UES
+        return _declaration(command[2].split(":", 1)[1], pin)
+
+    return admission.prepare_image_only_staging(
+        service=target["service_name"],
+        project=project,
+        region=region,
+        service_json=service,
+        env=candidate_env,
+        image_commit=STOCK_INVENTORY_CANDIDATE,
+        run=run,
+    )
+
+
+@pytest.mark.parametrize("target_label", ["HK", "SG"])
+def test_stock_inventory_candidate_admits_exact_sghk_identity_without_updates(target_label):
+    calls = []
+    plan = _prepare_stock_inventory(target_label, calls=calls)
+
+    assert plan["image_commit"] == STOCK_INVENTORY_CANDIDATE
+    assert plan["history_arg"] == ""
+    assert plan["snapshot_arg"] == ""
+    assert plan["history_values"] == {}
+    assert plan["retained_history_values"] == {}
+    assert plan["snapshot_value"] is None
+    assert plan["serving_traffic"] == [{"revisionName": "serving-rev", "percent": 100}]
+    assert admission._validate_image_only_source(
+        image_commit=STOCK_INVENTORY_CANDIDATE,
+        env={"WORKFLOW_TARGET": target_label},
+        project="longbridgequant",
+    ) == (None, None)
+    assert not any(
+        command[:3] == ["gcloud", "run", "services"] and "update" in command for command in calls
+    )
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"WORKFLOW_TARGET": "PAPER"},
+        {"WORKFLOW_TARGET": "configured"},
+        _sghk_history("HK"),
+        _sghk_history("SG"),
+        {"WORKFLOW_TARGET": "HK", "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true"},
+        {"WORKFLOW_TARGET": "HK", "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false"},
+        {"WORKFLOW_TARGET": "SG", "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true"},
+    ],
+)
+def test_stock_inventory_source_rejects_paper_history_or_snapshot(env):
+    with pytest.raises(admission.AdmissionError):
+        admission._validate_image_only_source(
+            image_commit=STOCK_INVENTORY_CANDIDATE,
+            env=env,
+            project="longbridgequant",
+        )
+
+
+def test_stock_inventory_candidate_does_not_admit_arbitrary_sha():
+    with pytest.raises(admission.AdmissionError, match="not approved"):
+        admission._validate_image_only_source(
+            image_commit="b" * 40,
+            env={"WORKFLOW_TARGET": "HK"},
+            project="longbridgequant",
+        )
+
+
+@pytest.mark.parametrize(
+    ("target_label", "env_overrides", "commit"),
+    [
+        ("PAPER", {}, STOCK_INVENTORY_CANDIDATE),
+        ("HK", _sghk_history("HK"), STOCK_INVENTORY_CANDIDATE),
+        ("HK", {"ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true"}, STOCK_INVENTORY_CANDIDATE),
+        ("HK", {}, "b" * 40),
+    ],
+)
+def test_stock_inventory_rejects_unapproved_dispatch_before_cloud_reads(
+    target_label, env_overrides, commit
+):
+    calls = []
+    env = {"WORKFLOW_TARGET": target_label, "SOURCE_COMMIT": commit, **env_overrides}
+    with pytest.raises(admission.AdmissionError):
+        admission.prepare_image_only_staging(
+            service="longbridge-quant-hk-service",
+            project="longbridgequant",
+            region="asia-east2",
+            service_json={},
+            env=env,
+            image_commit=commit,
+            run=lambda command: calls.append(command) or "",
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("target_label", "target_overrides", "project", "region"),
+    [
+        ("HK", {"account_scope": "SG"}, "longbridgequant", "asia-east2"),
+        ("HK", {"account_selector": "hk"}, "longbridgequant", "asia-east2"),
+        ("SG", {"deployment_selector": "sg"}, "longbridgequant", "asia-southeast1"),
+        ("SG", None, "other-project", "asia-southeast1"),
+        ("HK", None, "longbridgequant", "asia-east1"),
+    ],
+)
+def test_stock_inventory_candidate_rejects_identity_mismatch(
+    target_label, target_overrides, project, region
+):
+    with pytest.raises(admission.AdmissionError, match="approved account"):
+        _prepare_stock_inventory(
+            target_label,
+            target_overrides=target_overrides,
+            project=project,
+            region=region,
+        )
+
+
+def test_stock_inventory_candidate_rejects_template_drift():
+    with pytest.raises(admission.AdmissionError, match="template does not match"):
+        _prepare_stock_inventory(
+            "HK", serving_extra_env=[{"name": "UNEXPECTED", "value": "1"}]
+        )
+
+
+def test_stock_inventory_candidate_rejects_serving_ues_mismatch():
+    calls = []
+    with pytest.raises(admission.AdmissionError, match="differs from serving"):
+        _prepare_stock_inventory("SG", serving_pin=OTHER_UES, calls=calls)
+    assert not any(
+        command[:3] == ["gcloud", "run", "services"] and "update" in command for command in calls
+    )
+
+
+def test_stock_inventory_readback_requires_unchanged_configuration():
+    service, env = _stock_inventory_service("HK")
+    plan = _prepare_stock_inventory("HK")
+    image = "repo@sha256:" + "b" * 64
+    revision = {
+        "metadata": {
+            "name": "longbridge-quant-hk-service-r123",
+            "labels": {"commit-sha": STOCK_INVENTORY_CANDIDATE},
+        },
+        "spec": {
+            "serviceAccountName": "runtime@example.invalid",
+            "containers": [{"env": env, "image": image}],
+        },
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+
+    def confirm(service_payload, revision_payload):
+        def run(command):
+            if command[:3] == ["gcloud", "run", "services"]:
+                return json.dumps(service_payload)
+            return json.dumps(revision_payload)
+
+        admission.confirm_image_only_readback(
+            service="longbridge-quant-hk-service",
+            project="longbridgequant",
+            region="asia-east2",
+            plan=plan,
+            expected_image=image,
+            expected_commit=STOCK_INVENTORY_CANDIDATE,
+            expected_revision="longbridge-quant-hk-service-r123",
+            run=run,
+        )
+
+    confirm(service, revision)
+    drifted = json.loads(json.dumps(revision))
+    drifted["spec"]["containers"][0]["env"].append({"name": "UNEXPECTED", "value": "1"})
+    with pytest.raises(admission.AdmissionError, match="configuration"):
+        confirm(service, drifted)
