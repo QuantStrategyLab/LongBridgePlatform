@@ -1172,6 +1172,7 @@ class RequestHandlingTests(unittest.TestCase):
 
         module = load_module()
         events, orders, balance_calls, uploads, parsed_objects, context_tokens = [], [], [], [], [], []
+        stock_calls = []
         response = [types.SimpleNamespace(
             currency="USD", net_assets="100.25", total_cash="80",
             cash_infos=[
@@ -1186,6 +1187,7 @@ class RequestHandlingTests(unittest.TestCase):
                 return response
 
             def stock_positions(self):
+                stock_calls.append(1)
                 return types.SimpleNamespace(channels=[])
 
         trade_context = TradeContext()
@@ -1266,12 +1268,15 @@ class RequestHandlingTests(unittest.TestCase):
 
         self.assertEqual(result, ("Probe OK", 200))
         self.assertEqual(balance_calls, [{"currency": "USD"}])
+        self.assertEqual(stock_calls, [1])
         self.assertEqual(context_tokens, ["opaque-token"])
         self.assertEqual(len(uploads), 1)
         payload, content_type, generation, timeout, retry = uploads[0]
         self.assertEqual(payload["source_binding"], expected_binding)
         self.assertEqual(payload["broker_reported_balances"], [{"currency": "USD", "net_assets": "100.25", "total_cash": "80"}])
         self.assertEqual({row["currency"] for row in payload["cash"]}, {"USD", "HKD"})
+        self.assertEqual(payload["broker_reported_positions"], [])
+        self.assertIs(payload["broker_reported_positions_complete"], True)
         started = datetime.fromisoformat(payload["observed_started_at"])
         finished = datetime.fromisoformat(payload["observed_finished_at"])
         self.assertIsNotNone(started.utcoffset())

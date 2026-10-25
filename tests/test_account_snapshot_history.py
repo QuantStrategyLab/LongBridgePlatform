@@ -2,12 +2,15 @@ import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
+import pytest
 
 from application.account_snapshot import (
     begin_natural_cycle_history,
     cycle_history_observation,
     end_natural_cycle_history,
     read_cycle_account_balance,
+    read_cycle_stock_positions,
+    project_cycle_stock_positions,
 )
 from scripts import record_daily_account_snapshot as history
 
@@ -104,6 +107,95 @@ def test_capture_failure_is_not_retried_and_context_is_reset():
         end_natural_cycle_history(token)
     assert read_cycle_account_balance(lambda: calls.append(3) or []) == []
     assert calls == [1, 3]
+
+
+def test_stock_capture_keeps_full_inventory_once_and_discards_private_fields():
+    from application.longbridge_portfolio import fetch_strategy_account_state
+    response = SimpleNamespace(channels=[SimpleNamespace(account_channel="private-channel", positions=[
+        SimpleNamespace(symbol="EXAMPLE.US", currency="USD", quantity=Decimal("3.250"), cost_price="123", account_id="private"),
+        SimpleNamespace(symbol="OTHER.HK", currency="HKD", quantity=Decimal("7")),
+    ])])
+    calls = []
+    token = begin_natural_cycle_history()
+    try:
+        read_cycle_account_balance(lambda: [_balance("USD", "100", [("USD", "2")])])
+        assert read_cycle_stock_positions(lambda: calls.append(1) or response) is response
+        assert read_cycle_stock_positions(lambda: calls.append(2)) is response
+        def unexpected_read(*_args, **_kwargs):
+            raise AssertionError("cached reads and filtered-out stocks need no further broker request")
+        strategy = fetch_strategy_account_state(
+            SimpleNamespace(quote=unexpected_read),
+            SimpleNamespace(account_balance=unexpected_read, stock_positions=unexpected_read),
+            ["DIFFERENT"],
+        )
+        assert strategy["quantities"] == {"DIFFERENT": 0.0}
+        rows = cycle_history_observation()["projection"]["broker_reported_positions"]
+        assert rows == [
+            {"symbol": "OTHER.HK", "currency": "HKD", "quantity": "7", "market_value": None},
+            {"symbol": "EXAMPLE.US", "currency": "USD", "quantity": "3.25", "market_value": None},
+        ]
+        assert calls == [1]
+        assert "private" not in json.dumps(rows) and "cost_price" not in json.dumps(rows)
+    finally:
+        end_natural_cycle_history(token)
+
+
+def test_stock_read_failure_is_reused_without_losing_balance_or_claiming_empty():
+    token = begin_natural_cycle_history()
+    calls = []
+    try:
+        read_cycle_account_balance(lambda: [_balance("USD", "100", [("USD", "2")])])
+        def fail():
+            calls.append(1)
+            raise ValueError("synthetic unavailable")
+        for _ in range(2):
+            with pytest.raises(ValueError):
+                read_cycle_stock_positions(fail)
+        observed = cycle_history_observation()
+        assert "broker_reported_positions" not in observed["projection"]
+        assert observed["projection"]["broker_reported_balances"]
+        assert calls == [1]
+    finally:
+        end_natural_cycle_history(token)
+
+
+@pytest.mark.parametrize("response", [None, SimpleNamespace(channels=None), SimpleNamespace(channels=[SimpleNamespace()]),
+    SimpleNamespace(channels=[SimpleNamespace(positions=[SimpleNamespace(symbol="BAD", currency="USD", quantity="NaN")])]),
+    SimpleNamespace(channels=[SimpleNamespace(positions=[SimpleNamespace(symbol="BAD", currency="USD", quantity="1")]*2)]),
+])
+def test_malformed_stock_inventory_is_unknown(response):
+    assert project_cycle_stock_positions(response) is None
+
+
+def test_native_empty_stock_inventory_is_proven_empty():
+    assert project_cycle_stock_positions(SimpleNamespace(channels=[])) == []
+    assert project_cycle_stock_positions(SimpleNamespace(channels=[SimpleNamespace(positions=[])])) == []
+
+
+@pytest.mark.parametrize("positions", [[], [{"symbol": "EXAMPLE.US", "currency": "USD", "quantity": "2", "private": "discard"}]])
+def test_archive_positions_round_trip_and_rejects_partial_markers(positions):
+    now = datetime.now(timezone.utc)
+    config = history._ProducerConfig("gs://generic-history-bucket/longbridge/account_snapshots", "hk", "HK", "generic-project")
+    body, uri = history._producer_history_object(config, {"kind": history.SOURCE_KIND, "status": "bound", "id": "a"*64},
+        [{"currency": "USD", "net_assets": "100", "total_cash": "2"}],
+        [{"currency": "USD", "available_cash": "2", "frozen_cash": "0", "settling_cash": "0"}], now, now, positions=positions)
+    payload = json.loads(body)
+    consumer = history._Config("generic-project", "region", "service", "https://service.run.app", config.prefix,
+        "generic-history-bucket", "longbridge/account_snapshots", "hk", "HK", "a"*64, "job", "resource")
+    candidate = {"name": uri.removeprefix("gs://generic-history-bucket/")}
+    history._validate_history_object(payload, consumer, candidate, now, now)
+    assert payload["broker_reported_positions_complete"] is True
+    assert payload["broker_reported_positions_scope"] == "stocks_only"
+    assert "private" not in body
+    for key in history._HISTORY_POSITION_FIELDS:
+        malformed = dict(payload)
+        del malformed[key]
+        with pytest.raises(history._Rejected):
+            history._validate_history_object(malformed, consumer, candidate, now, now)
+    if positions:
+        payload["broker_reported_positions"][0]["market_value"] = "100"
+        with pytest.raises(history._Rejected):
+            history._validate_history_object(payload, consumer, candidate, now, now)
 
 
 def test_create_only_upload_has_finite_timeout_and_no_retry():

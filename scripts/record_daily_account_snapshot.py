@@ -153,6 +153,7 @@ def record_projected_daily_account(
     balances: Any, cash: Any, started: datetime, finished: datetime,
     open_store: Callable[[str], Any],
     financing: Any = None,
+    positions: Any = None,
 ) -> DailyAccountRecordResult:
     """Create one bounded history object from an already-read broker response."""
     if str(env.get("ACCOUNT_HISTORY_RECORDING_ENABLED") or "").strip() != "true":
@@ -164,7 +165,7 @@ def record_projected_daily_account(
         if account_scope != config.account_scope:
             raise _Rejected("scope")
         body, uri = _producer_history_object(
-            config, source_binding, balances, cash, started, finished, financing=financing,
+            config, source_binding, balances, cash, started, finished, financing=financing, positions=positions,
         )
     except _Rejected as rejected:
         return DailyAccountRecordResult("skipped", rejected.category)
@@ -204,7 +205,7 @@ def _producer_gcs_prefix(value: str) -> str:
     return f"gs://{parsed.netloc}/{'/'.join(segments)}"
 
 
-def _producer_history_object(config, source_binding, balances, cash, started, finished, financing=None):
+def _producer_history_object(config, source_binding, balances, cash, started, finished, financing=None, positions=None):
     if (not isinstance(source_binding, Mapping) or source_binding.get("kind") != SOURCE_KIND
             or source_binding.get("status") != "bound" or not isinstance(source_binding.get("id"), str)
             or not _BINDING_ID.fullmatch(source_binding["id"])):
@@ -228,6 +229,12 @@ def _producer_history_object(config, source_binding, balances, cash, started, fi
     if financing is not None:
         record["financing"] = _producer_financing_rows(
             financing, {row["currency"] for row in balance_rows},
+        )
+    if positions is not None:
+        record.update(
+            broker_reported_positions=_independent_position_rows(positions),
+            broker_reported_positions_scope="stocks_only",
+            broker_reported_positions_complete=True,
         )
     body = json.dumps(record, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     uri = f"{config.prefix}/{config.target_id}/{source_binding['id']}/{record['observation_date']}/{finished.strftime('%H%M%S%fZ.json')}"
@@ -442,6 +449,25 @@ def _independent_position_rows(value: object) -> list[dict[str, Any]]:
             "symbol": symbol, "quantity": quantity, "currency": currency, "market_value": None,
         })
     return sorted(rows, key=lambda row: (row["currency"], row["symbol"]))
+
+
+_HISTORY_POSITION_FIELDS = frozenset({
+    "broker_reported_positions", "broker_reported_positions_scope", "broker_reported_positions_complete",
+})
+
+
+def _history_positions_valid(payload: Mapping[str, Any]) -> bool:
+    present = set(payload) & _HISTORY_POSITION_FIELDS
+    if not present:
+        return True
+    if (present != _HISTORY_POSITION_FIELDS
+            or payload.get("broker_reported_positions_scope") != "stocks_only"
+            or payload.get("broker_reported_positions_complete") is not True):
+        return False
+    try:
+        return payload["broker_reported_positions"] == _independent_position_rows(payload["broker_reported_positions"])
+    except _Rejected:
+        return False
 
 
 def _project_independent_history(
@@ -1488,11 +1514,12 @@ def inspect_archived_account_snapshot(
         scope_matches = payload.get("account_scope") == config.expected_scope
         payload_fields = set(payload)
         schema_matches = (
-            required_fields <= payload_fields <= required_fields | {"financing"}
+            required_fields <= payload_fields <= required_fields | {"financing"} | _HISTORY_POSITION_FIELDS
             and payload.get("schema_version") == HISTORY_SCHEMA
             and payload.get("snapshot_schema_version") == SNAPSHOT_SCHEMA
             and payload.get("snapshot_atomic") is False
             and ("financing" not in payload or financing_shape_ok(payload.get("financing")))
+            and _history_positions_valid(payload)
         )
         trigger_time_matches = (
             started is not None and finished is not None
@@ -1620,7 +1647,8 @@ def _validate_history_object(
     binding = payload.get("source_binding")
     payload_fields = set(payload)
     if (
-        not expected_fields <= payload_fields <= expected_fields | {"financing"}
+        not expected_fields <= payload_fields <= expected_fields | {"financing"} | _HISTORY_POSITION_FIELDS
+        or not _history_positions_valid(payload)
         or payload.get("schema_version") != HISTORY_SCHEMA
         or payload.get("snapshot_schema_version") != SNAPSHOT_SCHEMA
         or payload.get("account_scope") != config.expected_scope
