@@ -33,6 +33,7 @@ from application.account_snapshot import (
     cycle_history_observation,
     end_natural_cycle_history,
     read_cycle_account_balance,
+    read_cycle_stock_positions,
 )
 from scripts.record_daily_account_snapshot import record_projected_daily_account
 from application.durable_execution_commands import (
@@ -1010,6 +1011,15 @@ def run_probe(*, response_body: str = "Probe OK"):
                 composer.build_account_snapshot_broker_contexts()
             )
             read_cycle_account_balance(lambda: trade_context.account_balance(currency="USD"))
+            # Read the native stock inventory once before any strategy filtering so
+            # the archive keeps the complete book and the portfolio reuses it.
+            # A failed read leaves balances/cash known and inventory unknown.
+            stock_reader = getattr(trade_context, "stock_positions", None)
+            if callable(stock_reader):
+                try:
+                    read_cycle_stock_positions(stock_reader)
+                except Exception:
+                    pass
             observation = cycle_history_observation()
             if observation is None:
                 raise RuntimeError("account history observation incomplete")
@@ -1028,6 +1038,7 @@ def run_probe(*, response_body: str = "Probe OK"):
                 finished=observation["finished"],
                 open_store=_open_account_history_store,
                 financing=observation["projection"].get("financing"),
+                positions=observation["projection"].get("broker_reported_positions"),
             )
             print(
                 f"account_history status={result.status} category={result.category or '-'}",

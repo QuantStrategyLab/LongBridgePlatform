@@ -326,7 +326,8 @@ def _run_paper_history_probe(
                 raise AssertionError("history probe must use metadata contexts, not refresh bootstrap")
             return quote, trade, {}
 
-        portfolio_port_factory = lambda self, *_args: FakePort()
+        def portfolio_port_factory(self, *_args):
+            return FakePort()
 
     def calculate_indicators(_context):
         observed["indicators"] += 1
