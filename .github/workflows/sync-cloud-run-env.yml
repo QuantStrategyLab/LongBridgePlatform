@@ -208,6 +208,7 @@ jobs:
           approved_probe_financing_candidate=82788aa7c73690d2b87f63540a9102943e9372eb
           approved_sghk_snapshot_candidate=df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f
           approved_hk_probe_diagnostics_candidate=779d8e1c39d161144bc34ae8503ce34d87971b16
+          approved_sghk_stock_inventory_candidate=b9dbd2f697c84182a8959fcbbd360a5211f502c6
           history_count=0
           for history_value in \
             "${ACCOUNT_HISTORY_RECORDING_ENABLED:-}" \
@@ -295,6 +296,10 @@ jobs:
             && [ -z "${snapshot_setting}" ] \
             && [ "${SOURCE_COMMIT}" = "${approved_hk_probe_diagnostics_candidate}" ]; then
             image_mode=hk-probe-diagnostics
+          elif { [ "${WORKFLOW_TARGET}" = "HK" ] || [ "${WORKFLOW_TARGET}" = "SG" ]; } \
+            && [ "${history_count}" -eq 0 ] && [ -z "${snapshot_setting}" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_sghk_stock_inventory_candidate}" ]; then
+            image_mode=stock-inventory
           else
             echo "Image source is not approved." >&2
             exit 1
@@ -352,6 +357,7 @@ jobs:
           approved_probe_financing_candidate=82788aa7c73690d2b87f63540a9102943e9372eb
           approved_sghk_snapshot_candidate=df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f
           approved_hk_probe_diagnostics_candidate=779d8e1c39d161144bc34ae8503ce34d87971b16
+          approved_sghk_stock_inventory_candidate=b9dbd2f697c84182a8959fcbbd360a5211f502c6
           case "${WORKFLOW_TARGET}" in
             HK) expected_sghk_target=hk ;;
             SG) expected_sghk_target=sg ;;
@@ -401,6 +407,10 @@ jobs:
             && [ -z "${snapshot_setting}" ] \
             && [ "${SOURCE_COMMIT}" = "${approved_hk_probe_diagnostics_candidate}" ]; then
             image_mode=hk-probe-diagnostics
+          elif { [ "${WORKFLOW_TARGET}" = "HK" ] || [ "${WORKFLOW_TARGET}" = "SG" ]; } \
+            && [ "${history_count}" -eq 0 ] && [ -z "${snapshot_setting}" ] \
+            && [ "${SOURCE_COMMIT}" = "${approved_sghk_stock_inventory_candidate}" ]; then
+            image_mode=stock-inventory
           else
             echo "Image source is not approved." >&2
             exit 1
@@ -423,6 +433,9 @@ jobs:
           elif [ "${image_mode}" = "hk-probe-diagnostics" ]; then
             archive_ref="${approved_hk_probe_diagnostics_candidate}"
             image_tag="${approved_hk_probe_diagnostics_candidate}"
+          elif [ "${image_mode}" = "stock-inventory" ]; then
+            archive_ref="${approved_sghk_stock_inventory_candidate}"
+            image_tag="${approved_sghk_stock_inventory_candidate}"
           else
             archive_ref="${approved_candidate}"
             image_tag="${approved_candidate}"
@@ -447,7 +460,8 @@ jobs:
           fi
           if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ] \
             || [ "${image_mode}" = "hk-account-snapshot" ] \
-            || [ "${image_mode}" = "hk-probe-diagnostics" ]; then
+            || [ "${image_mode}" = "hk-probe-diagnostics" ] \
+            || [ "${image_mode}" = "stock-inventory" ]; then
             plan="$(mktemp)"
             uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_deployed_runtime_target_admission.py" \
               --project="${GCP_PROJECT_ID}" \
@@ -488,7 +502,8 @@ jobs:
           fi
           if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ] \
             || [ "${image_mode}" = "hk-account-snapshot" ] \
-            || [ "${image_mode}" = "hk-probe-diagnostics" ]; then
+            || [ "${image_mode}" = "hk-probe-diagnostics" ] \
+            || [ "${image_mode}" = "stock-inventory" ]; then
             revision_suffix="r${GITHUB_RUN_ID}"
             revision_name="${CLOUD_RUN_SERVICE}-${revision_suffix}"
             if [[ ! "${GITHUB_RUN_ID}" =~ ^[0-9]+$ ]] \
@@ -501,7 +516,8 @@ jobs:
           "${update_command[@]}"
           if [ "${WORKFLOW_TARGET}" = "PAPER" ] || [ "${image_mode}" = "account-history" ] \
             || [ "${image_mode}" = "hk-account-snapshot" ] \
-            || [ "${image_mode}" = "hk-probe-diagnostics" ]; then
+            || [ "${image_mode}" = "hk-probe-diagnostics" ] \
+            || [ "${image_mode}" = "stock-inventory" ]; then
             uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_deployed_runtime_target_admission.py" \
               --project="${GCP_PROJECT_ID}" \
               --region="${CLOUD_RUN_REGION}" \
