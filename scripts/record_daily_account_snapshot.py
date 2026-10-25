@@ -23,6 +23,7 @@ _TARGET_ID = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 _BINDING_ID = re.compile(r"^[0-9a-f]{64}$")
 _CURRENCY = re.compile(r"^[A-Z]{3}$")
+_POSITION_SYMBOL = re.compile(r"^[A-Z0-9][A-Z0-9./ -]{0,31}$")
 _DECIMAL = re.compile(r"^-?(?:0|[1-9]\d*)(?:\.\d+)?$")
 _FORBIDDEN_PREFIX_PARTS = ("execution-report", "execution_report", "runtime-report")
 _BALANCE_FIELDS = ("currency", "net_assets", "total_cash")
@@ -58,6 +59,7 @@ def record_projected_daily_account(
     started: datetime,
     finished: datetime,
     open_store: Callable[[str], Any],
+    positions: Any = None,
 ) -> DailyAccountRecordResult:
     """Validate one HK/SG observation and confirm its create-only write."""
 
@@ -76,6 +78,7 @@ def record_projected_daily_account(
             cash=cash,
             started=started,
             finished=finished,
+            positions=positions,
         )
     except _Rejected as rejected:
         return DailyAccountRecordResult("skipped", rejected.category)
@@ -148,6 +151,7 @@ def _history_object(
     cash: Any,
     started: datetime,
     finished: datetime,
+    positions: Any = None,
 ) -> tuple[str, str]:
     binding_id = _binding_id(source_binding)
     if not isinstance(started, datetime) or started.tzinfo is None or started.utcoffset() is None:
@@ -180,6 +184,12 @@ def _history_object(
         "broker_reported_balances": _money_rows(balances, _BALANCE_FIELDS),
         "cash": _money_rows(cash, _CASH_FIELDS),
     }
+    if positions is not None:
+        record.update(
+            broker_reported_positions=_position_rows(positions),
+            broker_reported_positions_scope="stocks_only",
+            broker_reported_positions_complete=True,
+        )
     body = json.dumps(record, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
     filename = finished_utc.strftime("%H%M%S%fZ.json")
     uri = (
@@ -228,6 +238,47 @@ def _money_rows(value: object, fields: tuple[str, ...]) -> list[dict[str, str]]:
             row[field] = cell
         rows.append(row)
     return rows
+
+
+def _position_rows(value: object) -> list[dict[str, Any]]:
+    """Project only the three public stock-inventory facts; never prices or extras."""
+    if not isinstance(value, list) or len(value) > 64:
+        raise _Rejected("projection_invalid")
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise _Rejected("projection_invalid")
+        symbol, currency, quantity = (
+            item.get("symbol"),
+            item.get("currency"),
+            item.get("quantity"),
+        )
+        if (
+            not isinstance(symbol, str)
+            or _POSITION_SYMBOL.fullmatch(symbol) is None
+            or not isinstance(currency, str)
+            or _CURRENCY.fullmatch(currency) is None
+            or isinstance(quantity, bool)
+            or not isinstance(quantity, str)
+            or _DECIMAL.fullmatch(quantity) is None
+        ):
+            raise _Rejected("projection_invalid")
+        whole, _, fraction = quantity.lstrip("-").partition(".")
+        if len(whole) > 15 or len(fraction) > 8 or not Decimal(quantity).is_finite():
+            raise _Rejected("projection_invalid")
+        if symbol in seen:
+            raise _Rejected("projection_invalid")
+        seen.add(symbol)
+        rows.append(
+            {
+                "symbol": symbol,
+                "quantity": quantity,
+                "currency": currency,
+                "market_value": None,
+            }
+        )
+    return sorted(rows, key=lambda row: (row["currency"], row["symbol"]))
 
 
 def _create_bounded(store: Any, uri: str, body: str) -> bool:
