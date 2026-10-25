@@ -453,6 +453,7 @@ assert "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f" in job
 assert "779d8e1c39d161144bc34ae8503ce34d87971b16" in job
 assert "b9dbd2f697c84182a8959fcbbd360a5211f502c6" in job
 assert "approved_probe_financing_candidate=82788aa7c73690d2b87f63540a9102943e9372eb" in job
+assert "approved_paper_stock_inventory_candidate=a5d8e9a13b60be58de3c3afd8c4c78245a67d898" in job
 assert 'image_mode=probe-financing' in job
 assert '[ "${GITHUB_REPOSITORY:-}" != "QuantStrategyLab/LongBridgePlatform" ]' in job
 assert '[ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] || [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]' not in job
@@ -472,6 +473,19 @@ blocks = [run_block(name) for name in (
     "Validate image-only dispatch", "Verify exact image-only source", "Build and stage image without traffic",
 )]
 
+# Both shell gates admit the reviewed PAPER stock-inventory candidate only in
+# the existing probe-financing path, and the archive stays a fixed candidate.
+for gate_block in (blocks[0], blocks[2]):
+    assert "approved_paper_stock_inventory_candidate=a5d8e9a13b60be58de3c3afd8c4c78245a67d898" in gate_block
+    assert '"${SOURCE_COMMIT}" = "${approved_probe_financing_candidate}"' in gate_block
+    assert '"${SOURCE_COMMIT}" = "${approved_paper_stock_inventory_candidate}"' in gate_block
+    assert "image_mode=probe-financing" in gate_block
+assert 'archive_ref="${approved_probe_financing_candidate}"' in blocks[2]
+assert 'archive_ref="${approved_paper_stock_inventory_candidate}"' in blocks[2]
+assert 'image_tag="${archive_ref}"' in blocks[2]
+assert 'image_tag="${approved_probe_financing_candidate}"' not in blocks[2]
+assert "probe-financing" not in blocks[1]
+
 with tempfile.TemporaryDirectory(prefix="lb-no-traffic-test-") as directory:
     root = Path(directory)
     log = root / "calls.jsonl"
@@ -486,7 +500,8 @@ approved = "0b939723c1db3ef59175535998b470cbcd4b8824"
 http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
 probe_snapshot_candidate = "318bf0419ec91002fd0f0dfd1bc80a0664a85e79"
 probe_financing_candidate = "82788aa7c73690d2b87f63540a9102943e9372eb"
-probe_candidates = (probe_snapshot_candidate, probe_financing_candidate)
+paper_stock_inventory_candidate = "a5d8e9a13b60be58de3c3afd8c4c78245a67d898"
+probe_candidates = (probe_snapshot_candidate, probe_financing_candidate, paper_stock_inventory_candidate)
 sghk_snapshot_candidate = "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f"
 hk_probe_diagnostics_candidate = "779d8e1c39d161144bc34ae8503ce34d87971b16"
 sghk_stock_inventory_candidate = "b9dbd2f697c84182a8959fcbbd360a5211f502c6"
@@ -651,11 +666,11 @@ def staged_revision():
 
 if command == "git" and args == ["rev-parse", "HEAD"]:
     print(os.environ["CHECKOUT_SHA"])
-elif command == "git" and args[:4] == ["fetch", "--depth", "1", "origin"] and args[4] in (approved, http_snapshot_candidate, probe_snapshot_candidate, probe_financing_candidate, sghk_snapshot_candidate, hk_probe_diagnostics_candidate, sghk_stock_inventory_candidate):
+elif command == "git" and args[:4] == ["fetch", "--depth", "1", "origin"] and args[4] in (approved, http_snapshot_candidate, probe_snapshot_candidate, probe_financing_candidate, paper_stock_inventory_candidate, sghk_snapshot_candidate, hk_probe_diagnostics_candidate, sghk_stock_inventory_candidate):
     pass
-elif command == "git" and args[:2] == ["cat-file", "-t"] and args[2] in (approved, http_snapshot_candidate, probe_snapshot_candidate, probe_financing_candidate, sghk_snapshot_candidate, hk_probe_diagnostics_candidate, sghk_stock_inventory_candidate):
+elif command == "git" and args[:2] == ["cat-file", "-t"] and args[2] in (approved, http_snapshot_candidate, probe_snapshot_candidate, probe_financing_candidate, paper_stock_inventory_candidate, sghk_snapshot_candidate, hk_probe_diagnostics_candidate, sghk_stock_inventory_candidate):
     print("commit")
-elif command == "git" and args[:1] == ["rev-parse"] and len(args) == 2 and args[1] in (approved + "^{commit}", http_snapshot_candidate + "^{commit}", probe_snapshot_candidate + "^{commit}", probe_financing_candidate + "^{commit}", sghk_snapshot_candidate + "^{commit}", hk_probe_diagnostics_candidate + "^{commit}", sghk_stock_inventory_candidate + "^{commit}"):
+elif command == "git" and args[:1] == ["rev-parse"] and len(args) == 2 and args[1] in (approved + "^{commit}", http_snapshot_candidate + "^{commit}", probe_snapshot_candidate + "^{commit}", probe_financing_candidate + "^{commit}", paper_stock_inventory_candidate + "^{commit}", sghk_snapshot_candidate + "^{commit}", hk_probe_diagnostics_candidate + "^{commit}", sghk_stock_inventory_candidate + "^{commit}"):
     print(args[1].split("^", 1)[0])
 elif command == "git" and args == ["archive", "HEAD"]:
     print("synthetic tracked source archive")
@@ -667,6 +682,8 @@ elif command == "git" and args == ["archive", probe_snapshot_candidate]:
     print("synthetic internal probe snapshot candidate archive")
 elif command == "git" and args == ["archive", probe_financing_candidate]:
     print("synthetic internal probe financing candidate archive")
+elif command == "git" and args == ["archive", paper_stock_inventory_candidate]:
+    print("synthetic PAPER stock inventory candidate archive")
 elif command == "git" and args == ["archive", sghk_snapshot_candidate]:
     print("synthetic SG/HK account snapshot candidate archive")
 elif command == "git" and args == ["archive", hk_probe_diagnostics_candidate]:
@@ -677,7 +694,7 @@ elif command == "git" and args[:1] == ["show"] and len(args) == 2 and ":" in arg
     sha, name = args[1].split(":", 1)
     if name not in ("uv.lock", "pyproject.toml", "qsl.toml"):
         raise SystemExit("unexpected git show")
-    if sha not in ("a" * 40, serving_sha, approved, http_snapshot_candidate, probe_snapshot_candidate, probe_financing_candidate, sghk_snapshot_candidate, hk_probe_diagnostics_candidate, sghk_stock_inventory_candidate):
+    if sha not in ("a" * 40, serving_sha, approved, http_snapshot_candidate, probe_snapshot_candidate, probe_financing_candidate, paper_stock_inventory_candidate, sghk_snapshot_candidate, hk_probe_diagnostics_candidate, sghk_stock_inventory_candidate):
         raise SystemExit("admission read an unapproved source lock")
     pin = ("f" * 40) if sha == serving_sha and os.environ.get("BAD_SERVING_LOCK") == "1" else ues
     print(declaration(name, pin), end="")
@@ -771,7 +788,8 @@ else:
     http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
     probe_snapshot_candidate = "318bf0419ec91002fd0f0dfd1bc80a0664a85e79"
     probe_financing_candidate = "82788aa7c73690d2b87f63540a9102943e9372eb"
-    probe_candidates = (probe_snapshot_candidate, probe_financing_candidate)
+    paper_stock_inventory_candidate = "a5d8e9a13b60be58de3c3afd8c4c78245a67d898"
+    probe_candidates = (probe_snapshot_candidate, probe_financing_candidate, paper_stock_inventory_candidate)
     sghk_snapshot_candidate = "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f"
     hk_probe_diagnostics_candidate = "779d8e1c39d161144bc34ae8503ce34d87971b16"
     sghk_stock_inventory_candidate = "b9dbd2f697c84182a8959fcbbd360a5211f502c6"

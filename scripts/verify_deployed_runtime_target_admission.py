@@ -41,6 +41,8 @@ APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE = "d8314a61df697cae1dd03a78ddc5c2fc4179ec
 APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE = "318bf0419ec91002fd0f0dfd1bc80a0664a85e79"
 # Reviewed PAPER internal-probe financing producer. Same empty-settings gate as the probe snapshot.
 APPROVED_PAPER_PROBE_FINANCING_CANDIDATE = "82788aa7c73690d2b87f63540a9102943e9372eb"
+# Reviewed PAPER stock-inventory/financing repair baseline. Same empty-settings gate as the probe producers.
+APPROVED_PAPER_STOCK_INVENTORY_CANDIDATE = "a5d8e9a13b60be58de3c3afd8c4c78245a67d898"
 # Reviewed read-only SG/HK account-snapshot producer. It is not a PAPER candidate.
 APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE = "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f"
 # Reviewed read-only SG/HK stock-inventory image. It carries no history or snapshot update.
@@ -855,6 +857,7 @@ def _validate_image_only_source(
     elif image_commit in {
         APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE,
         APPROVED_PAPER_PROBE_FINANCING_CANDIDATE,
+        APPROVED_PAPER_STOCK_INVENTORY_CANDIDATE,
     }:
         if (
             str(env.get("WORKFLOW_TARGET") or "") != "PAPER"

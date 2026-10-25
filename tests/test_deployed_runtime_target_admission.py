@@ -85,7 +85,12 @@ MAIN_SHA = "a" * 40
 HTTP_SNAPSHOT_CANDIDATE = admission.APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE
 PROBE_SNAPSHOT_CANDIDATE = admission.APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE
 PROBE_FINANCING_CANDIDATE = admission.APPROVED_PAPER_PROBE_FINANCING_CANDIDATE
-PROBE_CANDIDATES = (PROBE_SNAPSHOT_CANDIDATE, PROBE_FINANCING_CANDIDATE)
+PAPER_STOCK_INVENTORY_CANDIDATE = admission.APPROVED_PAPER_STOCK_INVENTORY_CANDIDATE
+PROBE_CANDIDATES = (
+    PROBE_SNAPSHOT_CANDIDATE,
+    PROBE_FINANCING_CANDIDATE,
+    PAPER_STOCK_INVENTORY_CANDIDATE,
+)
 SGHK_SNAPSHOT_CANDIDATE = admission.APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE
 HK_PROBE_DIAGNOSTICS_CANDIDATE = admission.APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE
 STOCK_INVENTORY_CANDIDATE = admission.APPROVED_SGHK_STOCK_INVENTORY_CANDIDATE
@@ -1207,6 +1212,81 @@ def test_probe_candidate_rejects_serving_ues_mismatch(probe_candidate):
             run=run,
         )
     assert not any(command[:3] == ["gcloud", "run", "services"] and "update" in command for command in calls)
+
+
+def test_paper_stock_inventory_candidate_is_fixed_and_distinct():
+    assert PAPER_STOCK_INVENTORY_CANDIDATE == "a5d8e9a13b60be58de3c3afd8c4c78245a67d898"
+    assert PAPER_STOCK_INVENTORY_CANDIDATE not in {
+        CANDIDATE,
+        HTTP_SNAPSHOT_CANDIDATE,
+        PROBE_SNAPSHOT_CANDIDATE,
+        PROBE_FINANCING_CANDIDATE,
+        SGHK_SNAPSHOT_CANDIDATE,
+        HK_PROBE_DIAGNOSTICS_CANDIDATE,
+        STOCK_INVENTORY_CANDIDATE,
+    }
+
+
+def test_paper_stock_inventory_source_admits_only_paper_with_empty_settings():
+    assert admission._validate_image_only_source(
+        image_commit=PAPER_STOCK_INVENTORY_CANDIDATE,
+        env={"WORKFLOW_TARGET": "PAPER"},
+        project="synthetic-project",
+    ) == (None, None)
+    for env in (
+        {"WORKFLOW_TARGET": "HK"},
+        {"WORKFLOW_TARGET": "SG"},
+        {"WORKFLOW_TARGET": "PAPER", "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true"},
+        {"WORKFLOW_TARGET": "PAPER", "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false"},
+        {**HISTORY, "WORKFLOW_TARGET": "PAPER"},
+    ):
+        with pytest.raises(admission.AdmissionError, match="not approved"):
+            admission._validate_image_only_source(
+                image_commit=PAPER_STOCK_INVENTORY_CANDIDATE,
+                env=env,
+                project="synthetic-project",
+            )
+
+
+def test_paper_stock_inventory_candidate_does_not_admit_arbitrary_sha():
+    for commit in (
+        "c" * 40,
+        PAPER_STOCK_INVENTORY_CANDIDATE[:-1],
+        PAPER_STOCK_INVENTORY_CANDIDATE + "0",
+    ):
+        with pytest.raises(admission.AdmissionError, match="not approved"):
+            admission._validate_image_only_source(
+                image_commit=commit,
+                env={"WORKFLOW_TARGET": "PAPER"},
+                project="synthetic-project",
+            )
+
+
+@pytest.mark.parametrize(
+    "target_overrides",
+    [
+        {"account_scope": "HK"},
+        {"account_selector": ["HK"]},
+        {"service_name": "other-service"},
+        {"deployment_selector": "HK"},
+    ],
+)
+def test_paper_stock_inventory_candidate_rejects_paper_identity_drift(target_overrides):
+    service, _ = _service_with({**_paper_target(), **target_overrides})
+
+    def run(command):
+        raise AssertionError(command)
+
+    with pytest.raises(admission.AdmissionError, match="does not match"):
+        admission.prepare_image_only_staging(
+            service="paper-service",
+            project="synthetic-project",
+            region="synthetic-region",
+            service_json=service,
+            env={**_main_env(), "SOURCE_COMMIT": PAPER_STOCK_INVENTORY_CANDIDATE},
+            image_commit=PAPER_STOCK_INVENTORY_CANDIDATE,
+            run=run,
+        )
 
 
 def _stock_inventory_service(target_label: str, *, target_overrides=None, extra_env=None):
