@@ -23,6 +23,14 @@ RECEIVER_CODES = frozenset({
     "account_facts_caller_identity_forbidden", "account_facts_sync_token_invalid",
     "account_facts_sync_token_not_configured", "account_facts_bindings_missing",
     "account_facts_disabled", "account_facts_store_unavailable",
+    "account_facts_sync_token_platform_mismatch", "account_facts_binding_mismatch",
+    "account_facts_target_mismatch", "account_facts_future_observation",
+    "invalid_account_facts_history", "invalid_account_facts_date", "invalid_account_facts_time",
+    "invalid_account_facts_scope", "invalid_account_facts_source_binding",
+    "invalid_account_facts_target", "invalid_account_facts_money_magnitude",
+    "invalid_account_facts_money_scale", "invalid_account_facts_positions",
+    "invalid_account_facts_financing", "invalid_account_facts_account_type",
+    "invalid_account_facts_bindings", "invalid_account_facts_stored",
 })
 
 

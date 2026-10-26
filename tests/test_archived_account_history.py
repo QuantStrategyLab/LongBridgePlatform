@@ -139,6 +139,7 @@ def test_ack_must_prove_history_only_contract(patch):
 
 
 @pytest.mark.parametrize('code,expected', [('account_facts_daily_conflict', 'account_facts_daily_conflict'),
+                                         ('invalid_account_facts_money_scale', 'invalid_account_facts_money_scale'),
                                          ('PRIVATE-CREDENTIAL-SENTINEL', 'unclassified')])
 def test_rejection_exposes_only_status_and_allowlisted_code(code, expected):
     cfg = archive.configuration(ENV, NOW)
