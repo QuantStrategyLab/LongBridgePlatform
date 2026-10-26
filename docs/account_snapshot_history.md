@@ -1,5 +1,34 @@
 # 日频账户资产记录
 
+## Append existing archived observations
+
+`publish-archived-account-history.yml` is manual only. It reads the existing
+manifest and the selected target's protected Environment. Supply one target,
+past UTC date range (at most the retained 366 days), and the SHA256 of an
+independently verified source binding. This hash selects a source; it does not
+authorize it. The receiver must already trust that source for the same account
+through its protected current binding or qualified historical source list.
+
+The workflow uses the existing GCS reader identity, archive prefix, sync token
+and sync destination. It makes no broker, Scheduler, trading, token-renewal or
+latest-observation calls. The dedicated receiver
+`POST /api/account-facts/history/sync` must be deployed before publishing.
+
+`scripts/publish_archived_account_history.py` bounds listing and object size,
+reads exact generations without retries, validates original scope/source/date
+and timestamps, and sends the original bytes. For multiple observations on a
+day, it chooses the latest actual finish instant, including midnight crossings.
+The receiver only inserts missing historical days: identical repeats are
+unchanged, and conflicting existing days are rejected. Latest balances,
+positions, freshness and the ordinary sync observation window remain unchanged.
+
+Raw financial bodies stay in runner memory and are never logged or uploaded.
+Output contains dates and inserted/unchanged counts only. A conflict, rejected
+acknowledgment, changed generation or uncertain POST stops the batch. Earlier
+successful dates remain recorded; inspect that outcome before any new dispatch
+instead of rerunning the workflow blindly. Archived balances alone do not prove
+cash-flow-adjusted returns or historical position completeness.
+
 这是关闭默认的工程记录，不是已启用的资产曲线。每日 `execution-report-heartbeat` 在现有 Google Cloud 认证后单独运行账户快照步骤，随后继续原 heartbeat 检查。采样失败会保留失败状态但不跳过原检查，最后再使整个 workflow 失败。不新增 Cloud Scheduler，也不改 `/run`、`/probe`、`/dry-run`。
 
 ## 旧 Scheduler/GCS 模式：何时会写

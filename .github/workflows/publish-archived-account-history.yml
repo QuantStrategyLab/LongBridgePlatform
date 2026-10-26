@@ -1,0 +1,77 @@
+name: Publish archived account history
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: One existing runtime manifest target ID; never all
+        type: string
+        required: true
+      source_sha256:
+        description: SHA256 of the independently verified archive source binding
+        type: string
+        required: true
+      from_date:
+        description: First past UTC observation date, YYYY-MM-DD
+        type: string
+        required: true
+      to_date:
+        description: Last past UTC observation date, YYYY-MM-DD
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: archived-account-history
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    if: github.ref == 'refs/heads/main' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.target.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: target
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          test -n "$TARGET" && test "$TARGET" != all
+          python3 scripts/render_runtime_target_matrix.py --profile heartbeat --target "$TARGET" --github-output
+
+  publish:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    environment: ${{ matrix.target.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+      - run: uv sync --frozen --no-dev
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+      - name: Append verified archived observations without broker calls
+        env:
+          ACCOUNT_HISTORY_TARGET_ID: ${{ matrix.target.id }}
+          ACCOUNT_HISTORY_EXPECTED_SCOPE: ${{ matrix.target.label }}
+          ACCOUNT_HISTORY_GCS_PREFIX: ${{ vars.ACCOUNT_HISTORY_GCS_PREFIX }}
+          ACCOUNT_FACTS_SYNC_URL: ${{ vars.ACCOUNT_FACTS_SYNC_URL }}
+          ACCOUNT_FACTS_SYNC_TOKEN: ${{ secrets.ACCOUNT_FACTS_SYNC_TOKEN }}
+          ARCHIVE_SOURCE_SHA256: ${{ inputs.source_sha256 }}
+          ARCHIVE_FROM: ${{ inputs.from_date }}
+          ARCHIVE_TO: ${{ inputs.to_date }}
+        run: uv run --no-sync python -m scripts.publish_archived_account_history
