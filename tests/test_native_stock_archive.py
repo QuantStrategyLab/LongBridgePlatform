@@ -366,3 +366,42 @@ def test_producer_rejects_invalid_or_unbounded_inventory(positions):
     assert result.status == "skipped"
     assert result.category == "projection_invalid"
     assert opened == []
+
+
+@pytest.mark.parametrize("cost", ["-12.34000000000000000001", "0.00000000", "123.4500"])
+def test_native_cost_survives_capture_and_create_only_archive(cost):
+    from decimal import Decimal
+    rows = account_snapshot.project_cycle_stock_positions(
+        _response(_position("SYNTH.US", "USD", "2", cost_price=Decimal(cost), account_id="private"))
+    )
+    assert rows[0]["broker_cost_price"] == cost
+    assert rows[0]["broker_cost_method"] == "broker_configured"
+    store = _Store()
+    result = record_projected_daily_account(**_producer_inputs(positions=rows), open_store=lambda _: store)
+    assert result.status == "recorded"
+    body = store.calls[0][0]
+    archived = json.loads(body)["broker_reported_positions"][0]
+    assert archived == rows[0]
+    assert archived["market_value"] is None
+    assert "avg_cost" not in archived and "private" not in body
+
+
+@pytest.mark.parametrize("cost", [None, True, 1.25, "NaN", "Infinity", "1e3", "1\n", "1" * 31, "0." + "1" * 29])
+def test_bad_optional_cost_does_not_hide_known_inventory(cost):
+    rows = account_snapshot.project_cycle_stock_positions(
+        _response(_position("SYNTH.US", "USD", "2", cost_price=cost))
+    )
+    assert rows == [{"symbol": "SYNTH.US", "currency": "USD", "quantity": "2", "market_value": None}]
+
+
+@pytest.mark.parametrize("extension", [
+    {"broker_cost_price": "1"}, {"broker_cost_method": "broker_configured"},
+    {"broker_cost_price": "NaN", "broker_cost_method": "broker_configured"},
+    {"broker_cost_price": "1", "broker_cost_method": "average"},
+])
+def test_malformed_extended_archive_is_not_written(extension):
+    rows = [{"symbol": "SYNTH.US", "currency": "USD", "quantity": "2", **extension}]
+    store = _Store()
+    result = record_projected_daily_account(**_producer_inputs(positions=rows), open_store=lambda _: store)
+    assert result.status == "skipped" and result.category == "projection_invalid"
+    assert not store.calls
