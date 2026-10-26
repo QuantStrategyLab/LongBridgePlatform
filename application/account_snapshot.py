@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from contextvars import ContextVar, Token
 from datetime import datetime, timezone
+from decimal import Decimal
 import re
 from typing import Any
 
@@ -19,6 +20,20 @@ from application.broker_reconciliation import (
 _CAPTURE: ContextVar[dict[str, Any] | None] = ContextVar(
     "longbridge_natural_cycle_history", default=None
 )
+
+
+def project_broker_cost_price(value: Any) -> str | None:
+    """Keep the native setting-dependent cost, without inferring average or P/L.
+
+    Invalid optional costs do not discard a successfully read inventory.
+    """
+    if isinstance(value, Decimal):
+        if not value.is_finite() or value.adjusted() > 29 or value.as_tuple().exponent < -28:
+            return None
+        value = format(value, "f")
+    if not isinstance(value, str) or re.fullmatch(r"-?(?:0|[1-9]\d{0,29})(?:\.\d{1,28})?", value) is None:
+        return None
+    return value
 
 
 def begin_natural_cycle_history() -> Token[dict[str, Any] | None]:
@@ -137,6 +152,9 @@ def project_cycle_stock_positions(response: Any) -> list[dict[str, Any]] | None:
                         "market_value": None,
                     }
                 )
+                cost = project_broker_cost_price(getattr(position, "cost_price", None))
+                if cost is not None:
+                    rows[-1].update(broker_cost_price=cost, broker_cost_method="broker_configured")
     except Exception:
         return None
     return sorted(rows, key=lambda row: (row["currency"], row["symbol"]))

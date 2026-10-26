@@ -390,3 +390,28 @@ def test_duplicate_symbol_in_one_cycle_stays_unknown_without_fabricated_rows():
     result, record = _record(observation)
     assert result.status == "recorded"
     assert "broker_reported_positions" not in record
+
+
+@pytest.mark.parametrize("cost", ["-12.34000000000000000001", "0.00000000", "123.4500"])
+def test_native_cost_is_retained_in_paper_archive_without_average_inference(cost):
+    token = begin_natural_cycle_history()
+    try:
+        read_cycle_account_balance(lambda: [_balance()])
+        read_cycle_stock_positions(lambda: _response(
+            _position("SYNTH.US", "USD", Decimal("2"), cost_price=Decimal(cost), account_id="private")
+        ))
+        result, archived = _record(cycle_history_observation())
+    finally:
+        end_natural_cycle_history(token)
+    assert result.status == "recorded"
+    row = archived["broker_reported_positions"][0]
+    assert row["broker_cost_price"] == cost
+    assert row["broker_cost_method"] == "broker_configured"
+    assert row["market_value"] is None and "avg_cost" not in row
+    assert "private" not in json.dumps(archived)
+
+
+@pytest.mark.parametrize("cost", [None, True, 1.25, "NaN", "Infinity", "1e3", "1\n", "1" * 31, "0." + "1" * 29])
+def test_invalid_optional_cost_keeps_paper_stock_inventory(cost):
+    row = project_cycle_stock_positions(_response(_position("SYNTH.US", "USD", "2", cost_price=cost)))[0]
+    assert row == {"symbol": "SYNTH.US", "currency": "USD", "quantity": "2", "market_value": None}
