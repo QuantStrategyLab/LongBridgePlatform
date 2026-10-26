@@ -132,10 +132,11 @@ def test_stock_capture_keeps_full_inventory_once_and_discards_private_fields():
         rows = cycle_history_observation()["projection"]["broker_reported_positions"]
         assert rows == [
             {"symbol": "OTHER.HK", "currency": "HKD", "quantity": "7", "market_value": None},
-            {"symbol": "EXAMPLE.US", "currency": "USD", "quantity": "3.25", "market_value": None},
+            {"symbol": "EXAMPLE.US", "currency": "USD", "quantity": "3.25", "market_value": None,
+             "broker_cost_price": "123", "broker_cost_method": "broker_configured"},
         ]
         assert calls == [1]
-        assert "private" not in json.dumps(rows) and "cost_price" not in json.dumps(rows)
+        assert "private" not in json.dumps(rows) and "avg_cost" not in json.dumps(rows)
     finally:
         end_natural_cycle_history(token)
 
@@ -212,3 +213,19 @@ def test_create_only_upload_has_finite_timeout_and_no_retry():
     store = SimpleNamespace(client=Client(), _parse_uri=lambda _uri: ("bucket-name", "path/object"))
     assert history._producer_create_bounded(store, "gs://bucket-name/path/object", "{}") is True
     assert received == {"body": "{}", "content_type": "application/json", "generation": 0, "timeout": 20.0, "retry": None}
+
+
+@pytest.mark.parametrize("price", ["-12.34000000000000000001", "0.00000000", "123.4500"])
+def test_cost_round_trip_through_archive_validation_and_publisher(price):
+    row = {"symbol": "SYNTH.US", "currency": "USD", "quantity": "2", "market_value": None,
+           "broker_cost_price": price, "broker_cost_method": "broker_configured"}
+    assert history._independent_position_rows([row]) == [row]
+    payload = {"broker_reported_positions": [row], "broker_reported_positions_scope": "stocks_only",
+               "broker_reported_positions_complete": True}
+    assert history._history_positions_valid(payload)
+    for extension in [{"broker_cost_price": "NaN"}, {"broker_cost_method": "average"}]:
+        invalid = {**payload, "broker_reported_positions": [{**row, **extension}]}
+        assert not history._history_positions_valid(invalid)
+    for key in ["broker_cost_price", "broker_cost_method"]:
+        invalid_row = {k: v for k, v in row.items() if k != key}
+        assert not history._history_positions_valid({**payload, "broker_reported_positions": [invalid_row]})

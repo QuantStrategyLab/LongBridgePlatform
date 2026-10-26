@@ -1215,7 +1215,7 @@ def test_probe_candidate_rejects_serving_ues_mismatch(probe_candidate):
 
 
 def test_paper_stock_inventory_candidate_is_fixed_and_distinct():
-    assert PAPER_STOCK_INVENTORY_CANDIDATE == "a5d8e9a13b60be58de3c3afd8c4c78245a67d898"
+    assert PAPER_STOCK_INVENTORY_CANDIDATE == "822037aae994c26a38586a46397f941de5b91a60"
     assert PAPER_STOCK_INVENTORY_CANDIDATE not in {
         CANDIDATE,
         HTTP_SNAPSHOT_CANDIDATE,

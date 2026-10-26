@@ -70,3 +70,15 @@ source binding 是 deployment/scope/token-version 来源摘要，含 revision；
 ## 尚未启用
 
 本轮没有打开 GitHub variable，没有新增 secret 或 IAM，也没有真实采样。本次代码不配置生产 QRS URL/token，也不改变该关闭状态。以后若要启用，需要先确认 paper 服务上的部署版本、来源读取权限、bucket 保留策略和上述变量，并读回第一份对象。在那之前，仓库里的步骤保持关闭。
+
+## 原生持仓成本
+
+完整股票库存可以逐行附带 `broker_cost_price` 与
+`broker_cost_method=broker_configured`。成本直接来自同一次原生
+`stock_positions` 的 `cost_price`，跟随券商账户的平均买入或摊薄成本设置；
+保留负数、零和十进制精度（最多30位整数、28位小数）。可选成本缺失或非法时
+不丢弃已知持仓，不推算成本、报价或盈亏。归档、发布及网站持仓接口保留这对字段，
+旧记录仍可读取；先发布兼容接收端，再发布采集端。已持久化扩展记录后不能直接
+降级到拒绝扩展字段的旧接收端。
+
+券商字段说明：https://open.longbridge.com/docs/trade/asset/stock 。

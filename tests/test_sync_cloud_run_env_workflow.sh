@@ -451,9 +451,9 @@ assert "318bf0419ec91002fd0f0dfd1bc80a0664a85e79" in job
 assert "82788aa7c73690d2b87f63540a9102943e9372eb" in job
 assert "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f" in job
 assert "779d8e1c39d161144bc34ae8503ce34d87971b16" in job
-assert "b9dbd2f697c84182a8959fcbbd360a5211f502c6" in job
+assert "2bace9b851495dc25f2b4772bcf602b09eb9e61e" in job
 assert "approved_probe_financing_candidate=82788aa7c73690d2b87f63540a9102943e9372eb" in job
-assert "approved_paper_stock_inventory_candidate=a5d8e9a13b60be58de3c3afd8c4c78245a67d898" in job
+assert "approved_paper_stock_inventory_candidate=822037aae994c26a38586a46397f941de5b91a60" in job
 assert 'image_mode=probe-financing' in job
 assert '[ "${GITHUB_REPOSITORY:-}" != "QuantStrategyLab/LongBridgePlatform" ]' in job
 assert '[ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] || [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]' not in job
@@ -476,7 +476,7 @@ blocks = [run_block(name) for name in (
 # Both shell gates admit the reviewed PAPER stock-inventory candidate only in
 # the existing probe-financing path, and the archive stays a fixed candidate.
 for gate_block in (blocks[0], blocks[2]):
-    assert "approved_paper_stock_inventory_candidate=a5d8e9a13b60be58de3c3afd8c4c78245a67d898" in gate_block
+    assert "approved_paper_stock_inventory_candidate=822037aae994c26a38586a46397f941de5b91a60" in gate_block
     assert '"${SOURCE_COMMIT}" = "${approved_probe_financing_candidate}"' in gate_block
     assert '"${SOURCE_COMMIT}" = "${approved_paper_stock_inventory_candidate}"' in gate_block
     assert "image_mode=probe-financing" in gate_block
@@ -500,11 +500,11 @@ approved = "0b939723c1db3ef59175535998b470cbcd4b8824"
 http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
 probe_snapshot_candidate = "318bf0419ec91002fd0f0dfd1bc80a0664a85e79"
 probe_financing_candidate = "82788aa7c73690d2b87f63540a9102943e9372eb"
-paper_stock_inventory_candidate = "a5d8e9a13b60be58de3c3afd8c4c78245a67d898"
+paper_stock_inventory_candidate = "822037aae994c26a38586a46397f941de5b91a60"
 probe_candidates = (probe_snapshot_candidate, probe_financing_candidate, paper_stock_inventory_candidate)
 sghk_snapshot_candidate = "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f"
 hk_probe_diagnostics_candidate = "779d8e1c39d161144bc34ae8503ce34d87971b16"
-sghk_stock_inventory_candidate = "b9dbd2f697c84182a8959fcbbd360a5211f502c6"
+sghk_stock_inventory_candidate = "2bace9b851495dc25f2b4772bcf602b09eb9e61e"
 staged_source_revision = "longbridge-quant-paper-service-r36423178119"
 staged_source_image = (
     "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/synthetic-paper"
@@ -788,11 +788,11 @@ else:
     http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"
     probe_snapshot_candidate = "318bf0419ec91002fd0f0dfd1bc80a0664a85e79"
     probe_financing_candidate = "82788aa7c73690d2b87f63540a9102943e9372eb"
-    paper_stock_inventory_candidate = "a5d8e9a13b60be58de3c3afd8c4c78245a67d898"
+    paper_stock_inventory_candidate = "822037aae994c26a38586a46397f941de5b91a60"
     probe_candidates = (probe_snapshot_candidate, probe_financing_candidate, paper_stock_inventory_candidate)
     sghk_snapshot_candidate = "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f"
     hk_probe_diagnostics_candidate = "779d8e1c39d161144bc34ae8503ce34d87971b16"
-    sghk_stock_inventory_candidate = "b9dbd2f697c84182a8959fcbbd360a5211f502c6"
+    sghk_stock_inventory_candidate = "2bace9b851495dc25f2b4772bcf602b09eb9e61e"
     staged_source_revision = "longbridge-quant-paper-service-r36423178119"
     staged_source_image = (
         "asia-east1-docker.pkg.dev/synthetic-project/images/longbridgeplatform/"

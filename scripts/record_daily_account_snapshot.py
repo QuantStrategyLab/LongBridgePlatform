@@ -17,6 +17,8 @@ from datetime import UTC, datetime, time as datetime_time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlsplit
+
+from application.account_snapshot import project_broker_cost_price
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
@@ -418,7 +420,7 @@ def _independent_money_rows(value: object, fields: tuple[str, ...]) -> list[dict
 
 
 def _independent_position_rows(value: object) -> list[dict[str, Any]]:
-    """Project only the three public stock-inventory facts; never prices or extras."""
+    """Retain optional native configured cost separately from accounting average cost."""
     if not isinstance(value, list) or len(value) > 64:
         raise _Rejected("snapshot_invalid")
     rows: list[dict[str, Any]] = []
@@ -448,6 +450,12 @@ def _independent_position_rows(value: object) -> list[dict[str, Any]]:
         rows.append({
             "symbol": symbol, "quantity": quantity, "currency": currency, "market_value": None,
         })
+        if "broker_cost_price" in item or "broker_cost_method" in item:
+            cost = item.get("broker_cost_price")
+            if (not isinstance(cost, str) or project_broker_cost_price(cost) is None
+                    or item.get("broker_cost_method") != "broker_configured"):
+                raise _Rejected("snapshot_invalid")
+            rows[-1].update(broker_cost_price=cost, broker_cost_method="broker_configured")
     return sorted(rows, key=lambda row: (row["currency"], row["symbol"]))
 
 
