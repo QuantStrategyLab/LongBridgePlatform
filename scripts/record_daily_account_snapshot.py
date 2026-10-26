@@ -12,6 +12,8 @@ from decimal import Decimal
 from typing import Any
 from urllib.parse import urlsplit
 
+from application.account_snapshot import project_broker_cost_price
+
 
 HISTORY_SCHEMA = "longbridge_account_snapshot_history.v1"
 SNAPSHOT_SCHEMA = "longbridge_account_snapshot.v1"
@@ -241,7 +243,7 @@ def _money_rows(value: object, fields: tuple[str, ...]) -> list[dict[str, str]]:
 
 
 def _position_rows(value: object) -> list[dict[str, Any]]:
-    """Project only the three public stock-inventory facts; never prices or extras."""
+    """Keep inventory and optional broker cost, without private extras or P/L."""
     if not isinstance(value, list) or len(value) > 64:
         raise _Rejected("projection_invalid")
     rows: list[dict[str, Any]] = []
@@ -278,6 +280,12 @@ def _position_rows(value: object) -> list[dict[str, Any]]:
                 "market_value": None,
             }
         )
+        if "broker_cost_price" in item or "broker_cost_method" in item:
+            cost = item.get("broker_cost_price")
+            if (not isinstance(cost, str) or project_broker_cost_price(cost) is None
+                    or item.get("broker_cost_method") != "broker_configured"):
+                raise _Rejected("projection_invalid")
+            rows[-1].update(broker_cost_price=cost, broker_cost_method="broker_configured")
     return sorted(rows, key=lambda row: (row["currency"], row["symbol"]))
 
 
