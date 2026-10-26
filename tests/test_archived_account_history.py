@@ -80,6 +80,7 @@ def test_publish_exact_bytes_single_attempt_and_ack():
         def __exit__(self, *_): pass
         def iter_content(self, _):
             yield json.dumps({'ok': True, 'stored': True, 'unchanged': False, 'platform': 'longbridge',
+                              'historical': True, 'latest_unchanged': True,
                               'target_id': 'sample', 'observation_date': payload['observation_date'],
                               'observed_finished_at': payload['observed_finished_at']}).encode()
     class Session:
@@ -118,6 +119,23 @@ def test_rejected_response_is_not_followed_or_retried():
     with pytest.raises(archive.ArchiveError, match='archive_publish_rejected'):
         archive.publish(raw, payload, cfg, session)
     assert session.calls == 1
+
+
+@pytest.mark.parametrize('patch', [{'historical': False}, {'latest_unchanged': False}])
+def test_ack_must_prove_history_only_contract(patch):
+    cfg = archive.configuration(ENV, NOW)
+    payload, raw, _ = fixture()
+    class Response:
+        status_code = 200
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def iter_content(self, _):
+            yield json.dumps({'ok': True, 'stored': True, 'unchanged': False, 'platform': 'longbridge',
+                              'historical': True, 'latest_unchanged': True, **patch,
+                              'target_id': 'sample', 'observation_date': payload['observation_date'],
+                              'observed_finished_at': payload['observed_finished_at']}).encode()
+    with pytest.raises(archive.ArchiveError, match='archive_ack_invalid'):
+        archive.publish(raw, payload, cfg, SimpleNamespace(post=lambda *_args, **_kwargs: Response()))
 
 
 def test_replay_uses_fixed_generations_and_handles_midnight(monkeypatch):

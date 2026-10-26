@@ -125,6 +125,7 @@ def publish(raw, payload, cfg, session):
                     raise ArchiveError("archive_ack_invalid")
             ack = json.loads(body)
         if (ack.get("ok") is not True or ack.get("stored") is not True
+                or ack.get("historical") is not True or ack.get("latest_unchanged") is not True
                 or ack.get("platform") != "longbridge" or ack.get("target_id") != cfg["target"]
                 or ack.get("observation_date") != payload["observation_date"]
                 or ack.get("observed_finished_at") != payload["observed_finished_at"]
