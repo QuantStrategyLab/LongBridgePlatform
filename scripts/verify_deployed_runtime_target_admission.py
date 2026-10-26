@@ -41,12 +41,12 @@ APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE = "d8314a61df697cae1dd03a78ddc5c2fc4179ec
 APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE = "318bf0419ec91002fd0f0dfd1bc80a0664a85e79"
 # Reviewed PAPER internal-probe financing producer. Same empty-settings gate as the probe snapshot.
 APPROVED_PAPER_PROBE_FINANCING_CANDIDATE = "82788aa7c73690d2b87f63540a9102943e9372eb"
-# Reviewed PAPER stock-inventory/financing repair baseline. Same empty-settings gate as the probe producers.
-APPROVED_PAPER_STOCK_INVENTORY_CANDIDATE = "a5d8e9a13b60be58de3c3afd8c4c78245a67d898"
+# Reviewed PAPER inventory/financing baseline including native configured costs.
+APPROVED_PAPER_STOCK_INVENTORY_CANDIDATE = "822037aae994c26a38586a46397f941de5b91a60"
 # Reviewed read-only SG/HK account-snapshot producer. It is not a PAPER candidate.
 APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE = "df3d29d13daeffc7b4af9fec5db0e9ec1f07b60f"
-# Reviewed read-only SG/HK stock-inventory image. It carries no history or snapshot update.
-APPROVED_SGHK_STOCK_INVENTORY_CANDIDATE = "b9dbd2f697c84182a8959fcbbd360a5211f502c6"
+# Reviewed SG/HK inventory image including native costs; no environment update.
+APPROVED_SGHK_STOCK_INVENTORY_CANDIDATE = "2bace9b851495dc25f2b4772bcf602b09eb9e61e"
 # Fixed 922-based HK candidate carrying only bounded /probe failure diagnostics.
 APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE = "779d8e1c39d161144bc34ae8503ce34d87971b16"
 # One already-staged PAPER revision that may hold history env while serving still runs an older image.
