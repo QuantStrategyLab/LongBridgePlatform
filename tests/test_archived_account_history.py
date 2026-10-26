@@ -138,6 +138,26 @@ def test_ack_must_prove_history_only_contract(patch):
         archive.publish(raw, payload, cfg, SimpleNamespace(post=lambda *_args, **_kwargs: Response()))
 
 
+@pytest.mark.parametrize('code,expected', [('account_facts_daily_conflict', 'account_facts_daily_conflict'),
+                                         ('PRIVATE-CREDENTIAL-SENTINEL', 'unclassified')])
+def test_rejection_exposes_only_status_and_allowlisted_code(code, expected):
+    cfg = archive.configuration(ENV, NOW)
+    payload, raw, _ = fixture()
+    class Response:
+        status_code = 409
+        headers = {'content-type': 'application/json; charset=utf-8'}
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def iter_content(self, _):
+            yield json.dumps({'error': code, 'private_body': 'PRIVATE-CREDENTIAL-SENTINEL'}).encode()
+    with pytest.raises(archive.ArchiveError) as caught:
+        archive.publish(raw, payload, cfg, SimpleNamespace(post=lambda *_args, **_kwargs: Response()))
+    assert caught.value.http_status == 409
+    assert caught.value.receiver_code == expected
+    assert caught.value.receiver_response_json is True
+    assert 'PRIVATE-CREDENTIAL-SENTINEL' not in str(caught.value.__dict__)
+
+
 def test_replay_uses_fixed_generations_and_handles_midnight(monkeypatch):
     cfg = archive.configuration(ENV, NOW)
     _, _, first = fixture()

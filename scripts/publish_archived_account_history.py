@@ -16,6 +16,14 @@ MAX_BYTES = 65536
 MAX_OBJECTS = 4096
 HASH = re.compile(r"^[a-f0-9]{64}$")
 TARGET = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+RECEIVER_CODES = frozenset({
+    "account_facts_daily_conflict", "account_facts_binding_unmatched",
+    "duplicate_account_facts_binding", "account_facts_identity_mismatch",
+    "account_facts_account_unattributed", "account_facts_history_out_of_range",
+    "account_facts_caller_identity_forbidden", "account_facts_sync_token_invalid",
+    "account_facts_sync_token_not_configured", "account_facts_bindings_missing",
+    "account_facts_disabled", "account_facts_store_unavailable",
+})
 
 
 class ArchiveError(ValueError):
@@ -117,7 +125,24 @@ def publish(raw, payload, cfg, session):
                           "Content-Type": "application/json"}, timeout=(10, 20),
                           allow_redirects=False, stream=True) as response:
             if response.status_code != 200:
-                raise ArchiveError("archive_publish_rejected")
+                error = ArchiveError("archive_publish_rejected")
+                error.http_status = response.status_code
+                error.receiver_code = "unclassified"
+                error.receiver_response_json = getattr(response, "headers", {}).get("content-type", "").lower().startswith("application/json")
+                if error.receiver_response_json:
+                    limited = bytearray()
+                    for block in response.iter_content(8192):
+                        limited.extend(block)
+                        if len(limited) > MAX_BYTES:
+                            break
+                    if len(limited) <= MAX_BYTES:
+                        try:
+                            code = json.loads(limited).get("error")
+                            if isinstance(code, str) and code in RECEIVER_CODES:
+                                error.receiver_code = code
+                        except (ValueError, AttributeError):
+                            pass
+                raise error
             body = bytearray()
             for block in response.iter_content(8192):
                 body.extend(block)
@@ -175,7 +200,11 @@ def main():
         print(json.dumps({"status": "completed", **result, "latest_updated": False}))
         return 0
     except ArchiveError as error:
-        print(json.dumps({"status": "stopped", "reason": str(error)}))
+        safe = {"status": "stopped", "reason": str(error)}
+        if hasattr(error, "http_status"):
+            safe.update(http_status=error.http_status, receiver_code=error.receiver_code,
+                        receiver_response_json=error.receiver_response_json)
+        print(json.dumps(safe))
     except Exception:
         print(json.dumps({"status": "stopped", "reason": "archive_read_failed"}))
     return 1
