@@ -25,3 +25,9 @@ research/backtests/
 .DS_Store
 .ruff_cache/
 .pytest_cache/
+
+# Section 6 of the organization style guide: notes that must stay out of Git.
+.local/
+ops-notes/
+*.local.md
+*.internal.md

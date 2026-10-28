@@ -40,6 +40,8 @@ PYTHONPATH=. uv run --no-sync python -m pytest -q tests
 CI also checks the locked shared refs, the QPK pin and the bounded deployment
 workflow contract.
 
+Organization documentation rules are checked by `python scripts/check_style.py`, which also runs in CI as the `Documentation check` job.
+
 ## Naming and documentation
 
 - Developer documentation is English by default; Chinese siblings use
