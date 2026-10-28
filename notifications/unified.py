@@ -143,7 +143,7 @@ def _export_projection(store, state_store, key, state):
     return True
 
 
-def persist_candidate(event, *, env=None, actually_ran=True, dry_run=False, preview_count=None, store=None, state_store=None):
+def persist_candidate(event, *, env=None, actually_ran=True, dry_run=False, preview_count=None, store=None, state_store=None, not_run=False, skip_reason=None):
     """Bridge private event facts into the existing per-target candidate object.
 
     Merge by source run, never by evidence-source count. Runtime and archive
@@ -178,12 +178,22 @@ def persist_candidate(event, *, env=None, actually_ran=True, dry_run=False, prev
         fact_key = f"{fact_key}-{_hash(event)}"
     events[fact_key] = event
     sources = dict(previous.get("notification_source_runs") or {})
+    if not_run:
+        if actually_ran or event["order_count"] is not None or event["fill_count"] is not None:
+            raise ValueError("candidate_non_execution_conflict")
+        source = {"not_run": True, "as_of": event["occurred_at"], "skip_reason": skip_reason}
+        old_source = sources.get(event["source_run_id"])
+        if old_source is not None and old_source != source:
+            raise ValueError("candidate_non_execution_conflict")
+        sources[event["source_run_id"]] = source
     if actually_ran:
         source = {"order_count": event["order_count"], "fill_count": event["fill_count"],
                   "dry_run": dry_run, "preview_count": preview_count,
                   "as_of": event["occurred_at"], "event_kind": event["event_kind"]}
         run_id = event["source_run_id"]
         old_source = sources.get(run_id, {})
+        if old_source.get("not_run"):
+            raise ValueError("candidate_non_execution_conflict")
         for name in ("order_count", "fill_count", "preview_count"):
             old, observed = old_source.get(name), source[name]
             if old is not None and observed is not None and old != observed:
@@ -196,6 +206,15 @@ def persist_candidate(event, *, env=None, actually_ran=True, dry_run=False, prev
     rows = []
     for run_id, source in sorted(sources.items()):
         run_events = [item for item in events.values() if item["source_run_id"] == run_id]
+        if source.get("not_run"):
+            rows.append({**identity, "source_run_id": run_id, "business_day": event["business_day"],
+                         "actually_ran": False, "as_of": source["as_of"],
+                         "status": "ok" if source["skip_reason"] == "market_closed" else "alert",
+                         "execution_status": "not_run", "reason_code": source["skip_reason"],
+                         "order_count": None, "fill_count": None, "cycle_count": 0,
+                         "field_status": {"order_count": "unknown", "fill_count": "unknown", "cycle_count": "known"},
+                         "notification_events": run_events})
+            continue
         run_conflicts = [item for item in conflicts if item["source_run_id"] == run_id]
         counts = {name: source[name] if not any(item.get("field", name) == name for item in run_conflicts) else None
                   for name in ("order_count", "fill_count", "preview_count")}
@@ -512,6 +531,10 @@ def _archived_event(report, env):
             "ok", "completed", "success", "error", "aborted", "failed", "skipped"}:
         raise ValueError("candidate_source_incomplete")
     facts = (report.get("summary") or {}).get("notification_digest") or {}
+    if report.get("status") == "skipped":
+        if ((report.get("diagnostics") or {}).get("skip_reason") not in
+                {"market_closed", "fractional_share_execution_unsupported"} or facts):
+            raise ValueError("candidate_non_execution_conflict")
     known = facts.get("schema_version") == "qsl.notification_cycle.v1" and facts.get("dry_run") is target["dry_run_only"]
     failed = report.get("status") in {"error", "aborted", "failed"}
     event = make_event("real_error" if failed else "routine_cycle", env=env, report=report,
@@ -544,6 +567,16 @@ def _archived_event(report, env):
     return event, facts
 
 
+def persist_archived_report(report, *, env, store=None, state_store=None, heartbeat=False):
+    event, facts = _archived_event(report, env)
+    skipped = report.get("status") == "skipped"
+    _, target = target_binding(env, report=report)
+    return persist_candidate(event.to_candidate(), env=env, store=store, state_store=state_store,
+                             actually_ran=not skipped, not_run=skipped, dry_run=target["dry_run_only"],
+                             skip_reason=(report.get("diagnostics") or {}).get("skip_reason") if skipped else None,
+                             preview_count=facts.get("preview_count") if heartbeat or target["dry_run_only"] else None)
+
+
 def heartbeat_observation(*, now, report=None, recovery_at=None, env=None):
     env = os.environ if env is None else env
     if not enabled(env):
@@ -554,7 +587,9 @@ def heartbeat_observation(*, now, report=None, recovery_at=None, env=None):
         archived, facts = _archived_event(report, env)
         if archived.occurred_at > _stamp(now):
             raise ValueError("notification_receipt_time_invalid")
-        persist_candidate(archived.to_candidate(), env=env, preview_count=facts.get("preview_count"))
+        persist_archived_report(report, env=env, heartbeat=True)
+        if report.get("status") == "skipped":
+            return
         # The observed receipt owns both the run identity and its business
         # window. A next-window monitor job is not another business run.
         event = replace(archived, event_kind="healthy_heartbeat", incident_reason="execution_receipt",
@@ -655,8 +690,7 @@ def emit_archived(env, *, now=None, read=None, store=None):
         # Run facts keep the cycle kind even when real-order notifications were
         # immediate. Absence of per-order evidence remains null, never zero.
         event, facts = _archived_event(report, env)
-        persist_candidate(event.to_candidate(), env=env, dry_run=target["dry_run_only"], store=store,
-            preview_count=facts.get("preview_count") if target["dry_run_only"] else None)
+        persist_archived_report(report, env=env, store=store)
         count += 1
     if not count:
         # Absence is not proof of a healthy no-run window. Preserve the existing

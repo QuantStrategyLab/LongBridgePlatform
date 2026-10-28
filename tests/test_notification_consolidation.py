@@ -728,3 +728,72 @@ def test_local_identity_is_not_a_delivery_receipt(receipt_kind):
     assert not unified.send_incident(event, send, env=env, store=store)
     marker = next(iter(store.backing.values()))[1]
     assert marker["receipt_id"] is None and marker["delivery_status"] == "uncertain"
+
+
+def test_archived_skipped_report_is_a_not_run_with_unknown_counts():
+    env = binding_env('paper', 'PAPER', False)
+    env['EXECUTION_REPORT_GCS_URI'] = 'gs://synthetic-reports/archive'
+    report = source_report(env)
+    report.update(status='skipped', diagnostics={'skip_reason': 'market_closed'})
+    store = MemoryStore()
+    def read(args):
+        if args[0] == 'ls':
+            return [{'url': 'gs://synthetic-reports/archive/longbridge/core/2026-10/test.json',
+                     'metadata': {'updated': '2026-10-16T20:01:00Z'}}]
+        return report
+    unified.emit_archived(env, now=dt.datetime(2026, 10, 17, 0, tzinfo=dt.timezone.utc), read=read, store=store)
+    row = next(iter(store.backing.values()))[1]['runs'][0]
+    assert (row['actually_ran'], row['execution_status'], row['cycle_count']) == (False, 'not_run', 0)
+    assert row['order_count'] is None and row['fill_count'] is None
+    assert row['field_status'] == {'order_count': 'unknown', 'fill_count': 'unknown', 'cycle_count': 'known'}
+
+
+@pytest.mark.parametrize('reason', ['market_closed', 'fractional_share_execution_unsupported'])
+def test_skipped_archive_is_idempotent_and_preserves_run_conflicts(reason):
+    env = binding_env('paper', 'PAPER', False)
+    report = source_report(env)
+    report.update(status='skipped', diagnostics={'skip_reason': reason})
+    store = MemoryStore()
+    assert unified.persist_archived_report(report, env=env, store=store)
+    before = copy.deepcopy(store.backing)
+    assert unified.persist_archived_report(report, env=env, store=store)
+    assert store.backing == before
+    report['status'] = 'ok'
+    with pytest.raises(ValueError, match='candidate_non_execution_conflict'):
+        unified.persist_archived_report(report, env=env, store=store)
+
+
+def test_skipped_archive_rejects_unproven_or_contradictory_skip():
+    env = binding_env('paper', 'PAPER', False)
+    report = source_report(env)
+    report.update(status='skipped', diagnostics={'skip_reason': 'unknown'})
+    with pytest.raises(ValueError, match='candidate_non_execution_conflict'):
+        unified.persist_archived_report(report, env=env, store=MemoryStore())
+    report.update(diagnostics={'skip_reason': 'market_closed'}, summary={'notification_digest': {'order_count': 1}})
+    with pytest.raises(ValueError, match='candidate_non_execution_conflict'):
+        unified.persist_archived_report(report, env=env, store=MemoryStore())
+
+
+def test_archived_dry_run_preserves_preview_and_live_does_not():
+    for dry_run in (True, False):
+        env = binding_env('paper', 'PAPER', dry_run)
+        report = source_report(env)
+        report['summary'] = {'notification_digest': {'schema_version': 'qsl.notification_cycle.v1',
+                             'dry_run': dry_run, 'preview_count': 3}}
+        store = MemoryStore()
+        unified.persist_archived_report(report, env=env, store=store)
+        state = next(value for key, (_, value) in store.backing.items() if key.startswith('candidate_state/'))
+        source = state['notification_source_runs']['synthetic-run']
+        assert source['dry_run'] is dry_run
+        assert source['preview_count'] == (3 if dry_run else None)
+        assert state['runs'][0]['actually_ran'] is True
+
+
+def test_market_closed_not_run_is_not_alert():
+    env = binding_env('paper', 'PAPER', False)
+    report = source_report(env)
+    report.update(status='skipped', diagnostics={'skip_reason': 'market_closed'})
+    store = MemoryStore()
+    unified.persist_archived_report(report, env=env, store=store)
+    row = next(iter(store.backing.values()))[1]['runs'][0]
+    assert row['status'] == 'ok' and row['reason_code'] == 'market_closed'
