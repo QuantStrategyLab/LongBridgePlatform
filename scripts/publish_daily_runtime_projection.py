@@ -1343,8 +1343,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     except _KnownFailure as exc:
         print(f"daily runtime projection failed; category={exc.code}")
         return 1
-    except _Rejected:
-        print("daily runtime projection rejected")
+    except _Rejected as exc:
+        safe_reasons = {"one_shot_config_invalid", "one_shot_output_prefix_unavailable",
+                        "one_shot_report_prefix_unavailable",
+                        "one_shot_report_prefix_conflict", "one_shot_serving_unavailable",
+                        "one_shot_target_invalid", "target_not_unique", "deployed_target_rejected",
+                        "config_invalid", "no_attributable_runs"}
+        reason = str(exc) if str(exc) in safe_reasons else "rejected"
+        print(json.dumps({"status": "rejected", "reason": reason}))
         return 2
     except Exception:
         print("daily runtime projection failed")
