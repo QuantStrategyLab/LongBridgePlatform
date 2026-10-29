@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_CONFIG_FILES = (
     REPOSITORY_ROOT / ".env.example",
-    REPOSITORY_ROOT / "docs" / "hk_equity_runtime.md",
+    REPOSITORY_ROOT / "docs" / "hk-equity-runtime.md",
 )
 
 
@@ -32,7 +32,7 @@ def test_public_gcs_examples_use_portable_bucket_placeholders():
 
 def test_snapshot_publish_prerequisites_cover_writer_and_runtime_reader():
     runtime_doc = (
-        REPOSITORY_ROOT / "docs" / "hk_equity_runtime.md"
+        REPOSITORY_ROOT / "docs" / "hk-equity-runtime.md"
     ).read_text(encoding="utf-8")
 
     assert "publisher/deploy service account 对自定义目标 bucket 具备所需对象写权限" in runtime_doc

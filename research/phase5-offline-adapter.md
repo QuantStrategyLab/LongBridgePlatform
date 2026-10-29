@@ -12,7 +12,7 @@ The exact write whitelist is:
 
 - `research/phase5_offline_adapter.py`: a pure, unregistered research adapter;
 - `tests/test_phase5_offline_adapter.py`: synthetic and approved-local-input checks;
-- `research/PHASE5_OFFLINE_ADAPTER.md`: this scope and observed evidence.
+- `research/phase5-offline-adapter.md`: this scope and observed evidence.
 
 The branch starts at LongBridgePlatform `origin/main`
 `aa8432bd6d3c8dd8ed3a441241a146dd0ff1ca30`. Its locked shared package
