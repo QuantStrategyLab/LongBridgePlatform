@@ -583,7 +583,7 @@ def test_main_hides_errors_and_keeps_heartbeat_uninvoked(monkeypatch, capsys) ->
     monkeypatch.setenv("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE", "SG")
     monkeypatch.setenv("RUNTIME_DAILY_PROJECTION_GCS_PREFIX", "gs://paper-bucket/runtime_daily")
     assert publisher.main([]) == 2
-    assert capsys.readouterr().out.strip() == "daily runtime projection rejected"
+    assert json.loads(capsys.readouterr().out) == {"status": "rejected", "reason": "config_invalid"}
 
 
 @pytest.mark.parametrize("status", ["recorded", "already_recorded"])
@@ -2440,3 +2440,22 @@ def test_live_preflight_exact_auth_response_and_one_request(status, payload, exp
     assert publisher._verify_receiver_token(_sync_env(), http_post=post) is expected
     assert len(calls) == 1 and calls[0]["data"] == b"{"
     assert calls[0]["allow_redirects"] is False
+
+
+@pytest.mark.parametrize("reason,visible", [
+    ("one_shot_serving_unavailable", "one_shot_serving_unavailable"),
+    ("one_shot_output_prefix_unavailable", "one_shot_output_prefix_unavailable"),
+    ("one_shot_report_prefix_conflict", "one_shot_report_prefix_conflict"),
+    ("deployed_target_rejected", "deployed_target_rejected"),
+    ("one_shot_target_invalid", "one_shot_target_invalid"),
+    ("no_attributable_runs", "no_attributable_runs"),
+    ("PRIVATE-account-or-object", "rejected"),
+])
+def test_cli_rejection_reports_only_fixed_category(monkeypatch, capsys, reason, visible):
+    def reject(*_a, **_kw):
+        raise publisher._Rejected(reason)
+    monkeypatch.setattr(publisher, "publish", reject)
+    assert publisher.main(["--one-shot-live"]) == 2
+    output = capsys.readouterr()
+    assert json.loads(output.out) == {"status": "rejected", "reason": visible}
+    assert "PRIVATE" not in output.out + output.err
