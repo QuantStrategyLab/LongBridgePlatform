@@ -298,8 +298,8 @@ jobs:
           GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
         run: uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-paper
 
-      - name: Publish HK daily runtime projection
-        if: ${{ github.event_name == 'schedule' && github.run_attempt == 1 && !cancelled() && matrix.target.label == 'HK' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
+      - name: Publish live daily runtime projection
+        if: ${{ github.event_name == 'schedule' && github.run_attempt == 1 && !cancelled() && contains(fromJSON('["HK","SG"]'), matrix.target.label) && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
         continue-on-error: true
         env:
           ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
