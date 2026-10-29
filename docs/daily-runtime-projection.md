@@ -103,3 +103,5 @@ workflow接收原运行标记的规范值 `true` 或 `false`，保持现有服�
 这条入口不调用 heartbeat、Scheduler、`/run`、券商或通知发送。它只读取现有报告并按 create-only 写入当日投影，然后用本批 JSON 同步现有 QRS 日记录。即使运行标记为 active，它也只保存 schedule 未核实的 incomplete 观察，不执行服务或开关变更。没有完成受保护环境和服务读回前，代码候选不能代表生产日报已接通。
 
 The existing one-shot workflow also supports `mode=preflight` for the live SG and HK targets. Supply a 64-character lowercase hexadecimal comparison nonce. This mode computes a nonce-bound digest from the selected runtime target and existing account-history source binding, then checks authentication using the receiver's fixed invalid-JSON response. It reads no broker data and does not publish a daily record. The digest is comparison evidence only; a matched receiver binding and a subsequent receipt are separate checks.
+
+HK 的已绑定目标复用现有 22:20 UTC heartbeat 发布日报：只读取既有报告，通过原账户来源绑定和接收回执确认归属。没有可归属的当日运行记录时不发送；调度或覆盖未确认时仍显示 incomplete。该步骤的失败不改变原 heartbeat 结果，发布成功须以接收回执或网站读回为准。SG 在来源匹配前不使用此自然发布接线。

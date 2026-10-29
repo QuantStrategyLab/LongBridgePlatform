@@ -2459,3 +2459,18 @@ def test_cli_rejection_reports_only_fixed_category(monkeypatch, capsys, reason, 
     output = capsys.readouterr()
     assert json.loads(output.out) == {"status": "rejected", "reason": visible}
     assert "PRIVATE" not in output.out + output.err
+
+
+def test_scheduled_hk_daily_uses_existing_heartbeat_without_sg_or_new_schedule():
+    workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+    step = workflow.split("      - name: Publish HK daily runtime projection\n", 1)[1].split("      - name:", 1)[0]
+    assert "github.event_name == 'schedule'" in step
+    assert "github.run_attempt == 1" in step
+    assert "matrix.target.label == 'HK'" in step
+    assert "steps.gcp_auth_primary.outcome == 'success'" in step
+    assert "steps.gcp_auth_retry.outcome == 'success'" in step
+    assert "secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID" in step
+    assert "secrets.EXECUTION_EVIDENCE_SYNC_TOKEN" in step
+    assert "--one-shot-live" in step and "continue-on-error: true" in step
+    assert "matrix.target.label == 'SG'" not in step
+    assert workflow.count('cron:') == 1

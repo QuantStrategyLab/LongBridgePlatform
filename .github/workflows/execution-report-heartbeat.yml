@@ -298,6 +298,15 @@ jobs:
           GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
         run: uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-paper
 
+      - name: Publish HK daily runtime projection
+        if: ${{ github.event_name == 'schedule' && github.run_attempt == 1 && !cancelled() && matrix.target.label == 'HK' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
+        continue-on-error: true
+        env:
+          ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
+          EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+          GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
+        run: uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-live
+
       - name: Fail after completing heartbeat checks if account snapshot sync failed
         if: ${{ !cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && steps.account_history.outcome == 'failure' }}
         run: exit 1
