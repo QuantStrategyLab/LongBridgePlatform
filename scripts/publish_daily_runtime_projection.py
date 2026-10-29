@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import hashlib
 import io
 import json
 import os
@@ -783,6 +784,57 @@ def _bounded_sync_json(response: Any) -> Any:
         raise _Rejected("qrs_sync_response_invalid") from None
 
 
+def _live_binding_digest(env: Mapping[str, str], nonce: str) -> str:
+    if re.fullmatch(r"[0-9a-f]{64}", nonce or "") is None:
+        raise _Rejected("preflight_invalid")
+    scope = env.get("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE")
+    if scope not in {"SG", "HK"} or env.get("DAILY_TARGET") != scope.lower():
+        raise _Rejected("preflight_invalid")
+    target = _select_target(env, live=True)
+    raw = json.loads(env.get("RUNTIME_TARGET_JSON") or "")
+    if not isinstance(raw, dict):
+        raise _Rejected("preflight_invalid")
+    selector = raw.get("account_selector")
+    if isinstance(selector, list):
+        if len(selector) != 1:
+            raise _Rejected("preflight_invalid")
+        selector = selector[0]
+    binding = {
+        "platform": "longbridge", "service_name": target.get("service"),
+        "strategy_profile": target.get("strategy_profile"),
+        "account_scope": "sg" if scope == "SG" else "HK",
+        "account_selector": selector, "deployment_selector": raw.get("deployment_selector"),
+        "source_binding_id": env.get("ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID"),
+        "target_id": env.get("DAILY_TARGET"),
+    }
+    if (target.get("service") != env.get("CLOUD_RUN_SERVICE")
+            or raw.get("strategy_profile") != target.get("strategy_profile")
+            or any(not isinstance(v, str) or not v or v != v.strip() for v in binding.values())
+            or re.fullmatch(r"[0-9a-f]{64}", binding["source_binding_id"]) is None):
+        raise _Rejected("preflight_invalid")
+    body = {"binding": binding, "domain": "qsl.longbridge-daily-binding.v1", "nonce": nonce}
+    canonical = json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
+def _verify_receiver_token(env: Mapping[str, str], http_post: Callable[..., Any] | None = None) -> bool:
+    token = env.get("EXECUTION_EVIDENCE_SYNC_TOKEN") or ""
+    if not token or token != token.strip():
+        return False
+    try:
+        if http_post is None:
+            import requests
+            http_post = requests.post
+        response = http_post(_ONE_SHOT_SYNC_URL, headers={"Authorization": f"Bearer {token}",
+                             "Content-Type": "application/json"}, data=b"{",
+                             timeout=_RUNTIME_DAILY_SYNC_TIMEOUT_SECONDS,
+                             allow_redirects=False, stream=True)
+        return (response.status_code == 400 and _bounded_sync_json(response)
+                == {"ok": False, "error": "request body must be valid JSON"})
+    except Exception:
+        return False
+
+
 def _sync_runtime_daily(
     env: Mapping[str, str],
     body: str,
@@ -1242,6 +1294,17 @@ def _sync_exit_code(env: Mapping[str, str], sync_status: str) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments == ["--live-preflight"]:
+        try:
+            digest = _live_binding_digest(os.environ, os.environ.get("DAILY_BINDING_NONCE", ""))
+            if not _verify_receiver_token(os.environ):
+                print(json.dumps({"status": "preflight_unavailable"}))
+                return 2
+            print(json.dumps({"status": "preflight_verified", "binding_digest": digest}, sort_keys=True))
+            return 0
+        except Exception:
+            print(json.dumps({"status": "preflight_unavailable"}))
+            return 2
     one_shot_only = False
     live_one_shot = False
     private_result_path = None
