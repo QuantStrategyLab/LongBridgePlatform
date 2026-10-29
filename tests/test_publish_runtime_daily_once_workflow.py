@@ -6,10 +6,12 @@ import pytest
 PATH = Path(__file__).resolve().parents[1] / ".github/workflows/publish-runtime-daily-once.yml"
 
 
-def test_one_shot_workflow_has_only_original_paper_identity_and_publisher():
+def test_one_shot_workflow_uses_selected_existing_environment_and_publisher():
     text = PATH.read_text()
     assert "workflow_dispatch:" in text and "schedule:" not in text and "matrix:" not in text
-    assert "environment: longbridge-paper" in text
+    assert "environment: ${{ format('longbridge-{0}', inputs.target) }}" in text
+    assert "options: [paper, sg, hk]" in text
+    assert "python -m scripts.publish_daily_runtime_projection --one-shot-live" in text
     assert "RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}" in text
     assert "RUNTIME_HEARTBEAT_ACCOUNT_SCOPE: ${{ vars.ACCOUNT_REGION }}" in text
     assert "RUNTIME_DAILY_PROJECTION_GCS_PREFIX: ${{ secrets.RUNTIME_DAILY_PROJECTION_GCS_PREFIX }}" in text
@@ -28,9 +30,9 @@ def test_one_shot_workflow_has_only_original_paper_identity_and_publisher():
 ])
 def test_daily_selection_rejects_before_cloud_identity(field, value):
     text = PATH.read_text()
-    block = text.split("      - name: Validate PAPER selection\n", 1)[1].split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    block = text.split("      - name: Validate target selection\n", 1)[1].split("        run: |\n", 1)[1].split("      - name:", 1)[0]
     script = "\n".join(line[10:] for line in block.splitlines())
-    env = {"RUNTIME_TARGET_ENABLED": "false", "RUNTIME_HEARTBEAT_ACCOUNT_SCOPE": "PAPER", "CLOUD_RUN_SERVICE": "synthetic-paper", "CLOUD_RUN_REGION": "synthetic-region", "RUNTIME_HEARTBEAT_GCS_URIS": "gs://synthetic-existing/reports", "RUNTIME_DAILY_PROJECTION_GCS_PREFIX": "gs://synthetic-existing/runtime_daily"}
+    env = {"DAILY_TARGET": "paper", "ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID": "", "RUNTIME_TARGET_ENABLED": "false", "RUNTIME_HEARTBEAT_ACCOUNT_SCOPE": "PAPER", "CLOUD_RUN_SERVICE": "synthetic-paper", "CLOUD_RUN_REGION": "synthetic-region", "RUNTIME_HEARTBEAT_GCS_URIS": "gs://synthetic-existing/reports", "RUNTIME_DAILY_PROJECTION_GCS_PREFIX": "gs://synthetic-existing/runtime_daily"}
     env[field] = value
     result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
     assert result.returncode == 2 and result.stderr == ""
@@ -39,7 +41,7 @@ def test_daily_selection_rejects_before_cloud_identity(field, value):
 
 def test_daily_selection_defers_report_root_until_serving_revision_readback():
     text = PATH.read_text()
-    block = text.split("      - name: Validate PAPER selection\n", 1)[1].split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    block = text.split("      - name: Validate target selection\n", 1)[1].split("        run: |\n", 1)[1].split("      - name:", 1)[0]
     assert "RUNTIME_HEARTBEAT_GCS_URIS" not in block
     assert "EXECUTION_REPORT_GCS_URI" not in block
 
@@ -47,9 +49,11 @@ def test_daily_selection_defers_report_root_until_serving_revision_readback():
 @pytest.mark.parametrize("runtime_enabled", ["true", "false"])
 def test_daily_selection_accepts_both_canonical_runtime_states(runtime_enabled):
     text = PATH.read_text()
-    block = text.split("      - name: Validate PAPER selection\n", 1)[1].split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    block = text.split("      - name: Validate target selection\n", 1)[1].split("        run: |\n", 1)[1].split("      - name:", 1)[0]
     script = "\n".join(line[10:] for line in block.splitlines())
     env = {
+        "DAILY_TARGET": "paper",
+        "ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID": "",
         "RUNTIME_TARGET_ENABLED": runtime_enabled,
         "RUNTIME_HEARTBEAT_ACCOUNT_SCOPE": "PAPER",
         "CLOUD_RUN_SERVICE": "synthetic-paper",
@@ -58,3 +62,17 @@ def test_daily_selection_accepts_both_canonical_runtime_states(runtime_enabled):
     }
     result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
     assert result.returncode == 0 and result.stdout == "" and result.stderr == ""
+
+
+@pytest.mark.parametrize("scope", ["SG", "HK"])
+def test_live_selection_requires_matching_scope_and_existing_binding(scope):
+    text = PATH.read_text()
+    block = text.split("      - name: Validate target selection\n", 1)[1].split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    script = "\n".join(line[10:] for line in block.splitlines())
+    env = {"DAILY_TARGET": scope.lower(), "RUNTIME_TARGET_ENABLED": "true",
+           "RUNTIME_HEARTBEAT_ACCOUNT_SCOPE": scope, "CLOUD_RUN_SERVICE": "synthetic",
+           "CLOUD_RUN_REGION": "synthetic", "RUNTIME_DAILY_PROJECTION_GCS_PREFIX": "",
+           "ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID": "synthetic"}
+    assert subprocess.run(["bash", "-c", script], env=env, capture_output=True).returncode == 0
+    env["ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID"] = ""
+    assert subprocess.run(["bash", "-c", script], env=env, capture_output=True).returncode == 2

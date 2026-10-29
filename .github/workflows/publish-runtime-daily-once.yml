@@ -1,17 +1,24 @@
-name: Publish PAPER Daily Runtime Once
+name: Publish Daily Runtime Once
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: Existing account target
+        type: choice
+        required: true
+        default: paper
+        options: [paper, sg, hk]
 
 concurrency:
-  group: paper-runtime-daily-once
+  group: runtime-daily-once-${{ inputs.target }}
   cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: longbridge-paper
+    environment: ${{ format('longbridge-{0}', inputs.target) }}
     permissions:
       contents: read
       id-token: write
@@ -20,6 +27,7 @@ jobs:
       GOOGLE_CLOUD_PROJECT: longbridgequant
       GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
       GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+      DAILY_TARGET: ${{ inputs.target }}
       RUNTIME_HEARTBEAT_ACCOUNT_SCOPE: ${{ vars.ACCOUNT_REGION }}
       RUNTIME_HEARTBEAT_REPORT_PLATFORM: longbridge
       RUNTIME_HEARTBEAT_GCS_URIS: ${{ vars.RUNTIME_HEARTBEAT_GCS_URIS || vars.EXECUTION_REPORT_GCS_URI }}
@@ -34,6 +42,7 @@ jobs:
       RUNTIME_DAILY_PROJECTION_GCS_PREFIX: ${{ secrets.RUNTIME_DAILY_PROJECTION_GCS_PREFIX }}
       CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
     steps:
       - name: Check out publisher
         uses: actions/checkout@v6
@@ -46,16 +55,23 @@ jobs:
             echo '{"status":"dependency_setup_unavailable","qrs_ack_valid":false}'
             exit 2
           fi
-      - name: Validate PAPER selection
+      - name: Validate target selection
         run: |
           set -euo pipefail
           case "${RUNTIME_TARGET_ENABLED}" in
             true|false) ;;
             *) echo '{"status":"selection_unavailable","qrs_ack_valid":false}'; exit 2 ;;
           esac
-          if [ "${RUNTIME_HEARTBEAT_ACCOUNT_SCOPE}" != "PAPER" ] || \
+          case "${DAILY_TARGET}" in
+            paper) expected_scope=PAPER ;;
+            sg) expected_scope=SG ;;
+            hk) expected_scope=HK ;;
+            *) echo '{"status":"selection_unavailable","qrs_ack_valid":false}'; exit 2 ;;
+          esac
+          if [ "${RUNTIME_HEARTBEAT_ACCOUNT_SCOPE}" != "${expected_scope}" ] || \
              [ -z "${CLOUD_RUN_SERVICE}" ] || [ -z "${CLOUD_RUN_REGION}" ] || \
-             [ -z "${RUNTIME_DAILY_PROJECTION_GCS_PREFIX}" ]; then
+             { [ "${DAILY_TARGET}" = "paper" ] && [ -z "${RUNTIME_DAILY_PROJECTION_GCS_PREFIX}" ]; } || \
+             { [ "${DAILY_TARGET}" != "paper" ] && [ -z "${ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID}" ]; }; then
             echo '{"status":"selection_unavailable","qrs_ack_valid":false}'
             exit 2
           fi
@@ -71,4 +87,9 @@ jobs:
       - name: Create one truthful daily projection and verify QRS ACK
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
-        run: uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-paper
+        run: |
+          if [ "${DAILY_TARGET}" = "paper" ]; then
+            uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-paper
+          else
+            uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-live
+          fi
