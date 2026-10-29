@@ -204,12 +204,12 @@ def _one_shot_output_prefix(value: str, *, report_root_uri: str | None = None) -
 
 
 def _one_shot_environment(
-    env: Mapping[str, str], *, report_root_uri: str | None = None, defer_report_root: bool = False,
+    env: Mapping[str, str], *, report_root_uri: str | None = None, defer_report_root: bool = False, live: bool = False,
 ) -> dict[str, str]:
     """Enable only this projection process without changing runtime control."""
     if (
         env.get("RUNTIME_TARGET_ENABLED") not in {"true", "false"}
-        or env.get("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE") != "PAPER"
+        or env.get("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE") not in ({"SG", "HK"} if live else {"PAPER"})
         or not env.get("CLOUD_RUN_REGION")
         or not env.get("GOOGLE_APPLICATION_CREDENTIALS")
         or not env.get("CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE")
@@ -228,16 +228,16 @@ def _one_shot_environment(
             configured = str(env.get(name) or "").strip()
             if configured and _one_shot_report_root(configured) != base:
                 raise _Rejected("one_shot_report_prefix_conflict")
-    prefix = _one_shot_output_prefix(
+    prefix = "" if live else _one_shot_output_prefix(
         env.get("RUNTIME_DAILY_PROJECTION_GCS_PREFIX") or "",
         report_root_uri=base,
     )
     scoped = {
-        **env, "RUNTIME_DAILY_PROJECTION_ENABLED": "true", "RUNTIME_DAILY_PROJECTION_TARGET_ID": "paper",
+        **env, "RUNTIME_DAILY_PROJECTION_ENABLED": "true", "RUNTIME_DAILY_PROJECTION_TARGET_ID": env.get("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE", "").lower() if live else "paper",
         "RUNTIME_DAILY_PROJECTION_GCS_PREFIX": prefix, "RUNTIME_DAILY_SYNC_ENABLED": "true",
         "RUNTIME_DAILY_SYNC_URL": _ONE_SHOT_SYNC_URL,
     }
-    target = _select_target(scoped)
+    target = _select_target(scoped, live=live)
     if not env.get("CLOUD_RUN_SERVICE") or target.get("service") != env["CLOUD_RUN_SERVICE"]:
         raise _Rejected("one_shot_config_invalid")
     return scoped
@@ -357,7 +357,7 @@ def _profiles_from_same_readback(
         heartbeat._describe_cloud_run_service = original
 
 
-def _select_target(env: Mapping[str, str]) -> dict[str, Any]:
+def _select_target(env: Mapping[str, str], *, live: bool = False) -> dict[str, Any]:
     try:
         targets = load_runtime_targets(env, include_disabled=True)
     except ValueError as exc:
@@ -365,7 +365,7 @@ def _select_target(env: Mapping[str, str]) -> dict[str, Any]:
     matched = [
         target
         for target in targets
-        if str(target.get("account_scope") or "").strip() == "PAPER"
+        if str(target.get("account_scope") or "").strip() == (env.get("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE") if live else "PAPER")
     ]
     if len(matched) != 1:
         raise _Rejected("target_not_unique")
@@ -790,10 +790,15 @@ def _sync_runtime_daily(
     business_date: str,
     target_key: str,
     http_post: Callable[..., Any] | None = None,
+    live_target_key: str | None = None,
+    observed_at: str | None = None,
 ) -> str:
     if env.get("RUNTIME_DAILY_SYNC_ENABLED") != "true":
         return "disabled"
-    if target_key != _RUNTIME_DAILY_SYNC_TARGET_KEY:
+    if target_key != (live_target_key or _RUNTIME_DAILY_SYNC_TARGET_KEY):
+        return "rejected"
+    binding_id = str(env.get("ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID") or "") if live_target_key else ""
+    if live_target_key and re.fullmatch(r"[0-9a-f]{64}", binding_id) is None:
         return "rejected"
     try:
         url = _runtime_daily_sync_url(str(env.get("RUNTIME_DAILY_SYNC_URL") or ""))
@@ -816,6 +821,7 @@ def _sync_runtime_daily(
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/json",
                 "Content-Type": "application/json",
+                **({"X-QSL-Source-Binding-ID": binding_id} if live_target_key else {}),
             },
             data=encoded,
             timeout=_RUNTIME_DAILY_SYNC_TIMEOUT_SECONDS,
@@ -845,6 +851,7 @@ def _sync_runtime_daily(
         or payload.get("stored") is not True
         or payload.get("business_date") != business_date
         or payload.get("target_key") != target_key
+        or (live_target_key is not None and payload.get("observed_at") != observed_at)
         or not isinstance(payload.get("account_key"), str)
         or not payload["account_key"]
     ):
@@ -864,12 +871,13 @@ def publish(
     report_globs: Callable[[dt.datetime, dt.datetime], list[str]] | None = None,
     http_post: Callable[..., Any] | None = None,
     one_shot_only: bool = False,
+    live_one_shot: bool = False,
     private_result_path: str | os.PathLike[str] | None = None,
 ) -> tuple[str, str, str]:
     """Return record status, date, and independently confirmed QRS sync status."""
 
     if one_shot_only:
-        env = _one_shot_environment(env, defer_report_root=True)
+        env = _one_shot_environment(env, defer_report_root=True, live=live_one_shot)
     private_result_destination = (
         _validate_private_result_path(private_result_path) if private_result_path is not None else None
     )
@@ -889,7 +897,7 @@ def publish(
         raise _Rejected("config_invalid") from exc
     if lookback <= 0 or grace < 0:
         raise _Rejected("config_invalid")
-    target = _select_target(env)
+    target = _select_target(env, live=live_one_shot)
     project = (
         env.get("RUNTIME_HEARTBEAT_GCP_PROJECT_ID")
         or env.get("GCP_PROJECT_ID")
@@ -903,27 +911,31 @@ def publish(
         if one_shot_only:
             payload = _one_shot_serving_deployment(payload, service=service, project=project, region=env["CLOUD_RUN_REGION"])
             env = _one_shot_environment(
-                env, report_root_uri=payload.get("one_shot_report_root_uri")
+                env, report_root_uri=payload.get("one_shot_report_root_uri"), live=live_one_shot
             )
-            prefix = _require_config(env)
+            prefix = None if live_one_shot else _require_config(env)
         deployed = heartbeat._deployed_runtime_target(payload)
         hydrated = _profiles_from_same_readback(target, payload, project=project)
         if not one_shot_only:
             hydrated = heartbeat._hydrate_runtime_target_schedules(hydrated, project=project)
     except RuntimeError as exc:
         raise _KnownFailure("schedule_unavailable") from None
-    if not _deployment_matches_paper(target, deployed) or (not one_shot_only and not _deployment_enabled(payload, deployed)):
+    deployment_matches = (_field(deployed, ("account_scope", "account_group", "account_region")) == target.get("account_scope")
+                          and _field(deployed, ("service_name", "service", "cloud_run_service")) == target.get("service")) if live_one_shot else _deployment_matches_paper(target, deployed)
+    if not deployment_matches or (not one_shot_only and not _deployment_enabled(payload, deployed)):
         raise _Rejected("deployed_target_rejected")
     if len(hydrated) != 1:
         raise _Rejected("target_not_unique")
     if one_shot_only:
         timezone_name = str(deployed.get("market_timezone") or _container_env_value(payload, "LONGBRIDGE_MARKET_TIMEZONE") or "")
         if (
-            timezone_name != "America/New_York" or hydrated[0].get("market_timezone") != timezone_name
-            or f"{service}|{hydrated[0].get('strategy_profile')}|paper" != _RUNTIME_DAILY_SYNC_TARGET_KEY
+            not timezone_name or hydrated[0].get("market_timezone") != timezone_name
+            or (not live_one_shot and (timezone_name != "America/New_York"
+                or f"{service}|{hydrated[0].get('strategy_profile')}|paper" != _RUNTIME_DAILY_SYNC_TARGET_KEY))
         ):
             raise _Rejected("one_shot_target_invalid")
-        hydrated[0] = {**hydrated[0], "scheduler": {}}
+        hydrated[0] = {**hydrated[0], "scheduler": {},
+                       **({"market_timezone": "America/New_York"} if live_one_shot else {})}
         scheduler_error = _one_shot_disabled_reason(
             payload, deployed, declared_runtime_enabled=env["RUNTIME_TARGET_ENABLED"]
         )
@@ -977,7 +989,7 @@ def publish(
     if session_dates_loader is not None:
         kwargs["session_dates_loader"] = session_dates_loader
     if one_shot_only:
-        kwargs["business_date"] = observed.astimezone(ZoneInfo(timezone_name)).date()
+        kwargs["business_date"] = observed.astimezone(ZoneInfo("America/New_York" if live_one_shot else timezone_name)).date()
     projected = project_listed_reports(
         targets=hydrated,
         objects=objects,
@@ -999,7 +1011,9 @@ def publish(
     # QRS stores the fixed PAPER target with its canonical lower-case scope.
     # Keep the actual scope check above case-insensitive and serialize this
     # normalized representation once so GCS and the optional POST share bytes.
-    if records[0].get("target_key") == _RUNTIME_DAILY_SYNC_TARGET_KEY:
+    if live_one_shot:
+        records[0]["target"]["account_scope"] = str(target["account_scope"]).lower()
+    elif records[0].get("target_key") == _RUNTIME_DAILY_SYNC_TARGET_KEY:
         records[0]["target"]["account_scope"] = "paper"
     body = json.dumps(projected, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     target_keys = [record.get("target_key") for record in records]
@@ -1008,6 +1022,15 @@ def publish(
         or len(set(target_keys)) != len(target_keys)
     ):
         raise _Rejected("private_result_target_invalid")
+    if live_one_shot:
+        if not records[0].get("runs"):
+            raise _Rejected("no_attributable_runs")
+        expected_key = f"{service}|{hydrated[0].get('strategy_profile')}|{str(target.get('account_scope')).lower()}"
+        sync_status = _sync_runtime_daily(
+            env, body, business_date=business_date, target_key=str(records[0].get("target_key") or ""),
+            http_post=http_post, live_target_key=expected_key, observed_at=projected.get("observed_at"),
+        )
+        return "recorded" if sync_status == "recorded" else "failed", business_date, sync_status
     if prefix is None:
         raise _Rejected("one_shot_report_prefix_unavailable")
     uploaded = _upload(store, prefix, business_date, observed, body)
@@ -1220,12 +1243,14 @@ def _sync_exit_code(env: Mapping[str, str], sync_status: str) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     one_shot_only = False
+    live_one_shot = False
     private_result_path = None
     index = 0
     while index < len(arguments):
         argument = arguments[index]
-        if argument == "--one-shot-paper" and not one_shot_only:
+        if argument in {"--one-shot-paper", "--one-shot-live"} and not one_shot_only:
             one_shot_only = True
+            live_one_shot = argument == "--one-shot-live"
             index += 1
         elif argument == "--private-result-file" and private_result_path is None and index + 1 < len(arguments):
             private_result_path = arguments[index + 1]
@@ -1239,6 +1264,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if one_shot_only:
             kwargs = {"one_shot_only": True}
+            if live_one_shot:
+                kwargs["live_one_shot"] = True
             if private_result_path is not None:
                 kwargs["private_result_path"] = private_result_path
             status, business_date, sync_status = publish(os.environ, now=dt.datetime.now(dt.timezone.utc), **kwargs)

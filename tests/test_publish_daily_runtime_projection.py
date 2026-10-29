@@ -2309,3 +2309,96 @@ def test_one_shot_rejects_explicit_workflow_root_conflicting_with_serving_root()
             _one_shot_env(RUNTIME_HEARTBEAT_GCS_URIS="gs://synthetic-other/reports"),
             report_root_uri="gs://synthetic-existing/reports",
         )
+
+@pytest.mark.parametrize("scope", ["SG", "HK"])
+def test_live_one_shot_posts_only_matching_scope_and_source_without_storage_write(monkeypatch, scope):
+    service = "synthetic-live-service"
+    target = _target(service=service, scope=scope)
+    env = _one_shot_env(
+        RUNTIME_HEARTBEAT_ACCOUNT_SCOPE=scope,
+        RUNTIME_TARGET_JSON=json.dumps(target),
+        CLOUD_RUN_SERVICE=service,
+        RUNTIME_DAILY_PROJECTION_GCS_PREFIX="",
+        ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID="a" * 64,
+    )
+    deployed = {"service_name": service, "account_scope": scope,
+                "strategy_profile": "paper-profile", "market_timezone": "Asia/Hong_Kong",
+                "runtime_target_enabled": False}
+    payload = _cloud_run(deployed)
+    payload["one_shot_report_root_uri"] = "gs://synthetic-existing/reports"
+    monkeypatch.setattr(heartbeat, "_describe_cloud_run_service", lambda *_a, **_k: payload)
+    monkeypatch.setattr(publisher, "_one_shot_serving_deployment", lambda *_a, **_k: payload)
+    monkeypatch.setattr(publisher, "_profiles_from_same_readback", lambda *_a, **_k: [target])
+    blob = _Blob()
+    client = _Client(blob)
+    seen = []
+    def post(_url, **kwargs):
+        body = json.loads(kwargs["data"])
+        seen.append(body)
+        assert kwargs["headers"]["X-QSL-Source-Binding-ID"] == "a" * 64
+        record = body["records"][0]
+        assert record["target"]["account_scope"] == scope.lower()
+        assert record["timezone"] == "America/New_York"
+        return _SyncResponse(payload={"ok": True, "stored": True, "business_date": record["business_date"],
+                                      "target_key": record["target_key"], "account_key": "synthetic",
+                                      "observed_at": body["observed_at"]})
+    report = _report(service_name=service, account_scope=scope,
+                     runtime_target={"execution_mode": "live", "service_name": service})
+    objects = [{"url": "gs://synthetic-existing/reports/run.json", "metadata": {"updated": OBSERVED.isoformat()}}]
+    result = publisher.publish(env, now=OBSERVED, one_shot_only=True, live_one_shot=True,
+                               client=client, list_objects=lambda *_a, **_k: objects,
+                               read_payload=lambda _: report, report_globs=lambda *_: ["gs://synthetic-existing/reports/*.json"],
+                               http_post=post)
+    assert result[2] == "recorded" and len(seen) == 1
+    assert seen[0]["completeness"] == "incomplete"
+    assert not client.buckets and not blob.uploads
+    with pytest.raises(publisher._Rejected, match="no_attributable_runs"):
+        publisher.publish(env, now=OBSERVED, one_shot_only=True, live_one_shot=True,
+                          client=client, list_objects=lambda *_a, **_k: [],
+                          read_payload=lambda _: None, report_globs=lambda *_: ["gs://synthetic-existing/reports/*.json"],
+                          http_post=post)
+    assert len(seen) == 1
+
+
+def test_live_sync_rejects_missing_binding_and_wrong_ack_without_retry():
+    env = _sync_env(ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID="")
+    calls = []
+    def post(_url, **_kwargs):
+        calls.append(1)
+        return _SyncResponse(payload={"ok": True, "stored": True, "business_date": "2026-09-28",
+                                      "target_key": "target", "account_key": "synthetic",
+                                      "observed_at": "wrong"})
+    kw = dict(body="{}", business_date="2026-09-28", target_key="target", live_target_key="target",
+              observed_at="2026-09-28T08:40:00Z", http_post=post)
+    assert publisher._sync_runtime_daily(env, **kw) == "rejected" and not calls
+    env["ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID"] = "a" * 64
+    assert publisher._sync_runtime_daily(env, **kw) == "unknown" and len(calls) == 1
+
+
+def test_live_target_and_binding_mismatch_never_post(monkeypatch):
+    env = _one_shot_env(RUNTIME_HEARTBEAT_ACCOUNT_SCOPE="SG",
+                        RUNTIME_TARGET_JSON=json.dumps(_target(service="sg-service", scope="HK")),
+                        CLOUD_RUN_SERVICE="sg-service", RUNTIME_DAILY_PROJECTION_GCS_PREFIX="",
+                        ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID="a" * 64)
+    with pytest.raises(publisher._Rejected, match="target_not_unique"):
+        publisher._one_shot_environment(env, defer_report_root=True, live=True)
+    posts = []
+    assert publisher._sync_runtime_daily(
+        env, "{}", business_date="2026-09-28", target_key="other|profile|hk",
+        live_target_key="sg|profile|sg", observed_at="2026-09-28T08:40:00Z",
+        http_post=lambda *_a, **_k: posts.append(1),
+    ) == "rejected"
+    assert not posts
+
+
+def test_live_sync_binding_rejected_by_receiver_does_not_retry():
+    env = _sync_env(ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID="b" * 64)
+    calls = []
+    def post(_url, **kwargs):
+        calls.append(kwargs["headers"]["X-QSL-Source-Binding-ID"])
+        return _SyncResponse(status_code=409, payload={"ok": False})
+    result = publisher._sync_runtime_daily(
+        env, "{}", business_date="2026-09-28", target_key="target",
+        live_target_key="target", observed_at="2026-09-28T08:40:00Z", http_post=post,
+    )
+    assert result == "rejected" and calls == ["b" * 64]
