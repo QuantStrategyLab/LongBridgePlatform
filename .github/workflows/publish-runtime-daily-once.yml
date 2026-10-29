@@ -3,6 +3,16 @@ name: Publish Daily Runtime Once
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: Publish or run a read-only source and authentication preflight
+        type: choice
+        required: true
+        default: publish
+        options: [publish, preflight]
+      nonce:
+        description: Public 64-character lowercase hexadecimal comparison nonce for preflight
+        type: string
+        required: false
       target:
         description: Existing account target
         type: choice
@@ -28,6 +38,8 @@ jobs:
       GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
       GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
       DAILY_TARGET: ${{ inputs.target }}
+      DAILY_MODE: ${{ inputs.mode }}
+      DAILY_BINDING_NONCE: ${{ inputs.nonce }}
       RUNTIME_HEARTBEAT_ACCOUNT_SCOPE: ${{ vars.ACCOUNT_REGION }}
       RUNTIME_HEARTBEAT_REPORT_PLATFORM: longbridge
       RUNTIME_HEARTBEAT_GCS_URIS: ${{ vars.RUNTIME_HEARTBEAT_GCS_URIS || vars.EXECUTION_REPORT_GCS_URI }}
@@ -88,7 +100,9 @@ jobs:
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
         run: |
-          if [ "${DAILY_TARGET}" = "paper" ]; then
+          if [ "${DAILY_MODE}" = "preflight" ]; then
+            uv run --no-sync python -m scripts.publish_daily_runtime_projection --live-preflight
+          elif [ "${DAILY_TARGET}" = "paper" ]; then
             uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-paper
           else
             uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-live

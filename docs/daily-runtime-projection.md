@@ -101,3 +101,5 @@ heartbeat 的告警、返回码和交易链不变。这个步骤不调用 heartb
 workflow接收原运行标记的规范值 `true` 或 `false`，保持现有服务和调度不变。它对照 GitHub 声明与 serving revision 的 `RUNTIME_TARGET_JSON` / `RUNTIME_TARGET_ENABLED`：两边不一致记为 `runtime_target_enablement_conflict`；两边均为 `true` 时只标记 `runtime_target_enabled_schedule_unverified`；只有服务侧证据和声明都确认 `false` 才报告 `runtime_target_disabled`。缺少服务侧证据记为 unknown。每种情况都保留 `incomplete`，不宣称健康或完整日报。
 
 这条入口不调用 heartbeat、Scheduler、`/run`、券商或通知发送。它只读取现有报告并按 create-only 写入当日投影，然后用本批 JSON 同步现有 QRS 日记录。即使运行标记为 active，它也只保存 schedule 未核实的 incomplete 观察，不执行服务或开关变更。没有完成受保护环境和服务读回前，代码候选不能代表生产日报已接通。
+
+The existing one-shot workflow also supports `mode=preflight` for the live SG and HK targets. Supply a 64-character lowercase hexadecimal comparison nonce. This mode computes a nonce-bound digest from the selected runtime target and existing account-history source binding, then checks authentication using the receiver's fixed invalid-JSON response. It reads no broker data and does not publish a daily record. The digest is comparison evidence only; a matched receiver binding and a subsequent receipt are separate checks.

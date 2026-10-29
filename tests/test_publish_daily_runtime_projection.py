@@ -2402,3 +2402,41 @@ def test_live_sync_binding_rejected_by_receiver_does_not_retry():
         live_target_key="target", observed_at="2026-09-28T08:40:00Z", http_post=post,
     )
     assert result == "rejected" and calls == ["b" * 64]
+
+
+@pytest.mark.parametrize("scope,canonical_scope", [("SG", "sg"), ("HK", "HK")])
+def test_live_preflight_nonce_binding_uses_runtime_identity(scope, canonical_scope):
+    import hashlib
+    target = _target(service="synthetic-service", scope=scope)
+    target.update(account_selector=["synthetic-account"], deployment_selector="synthetic-deployment")
+    env = _one_shot_env(DAILY_TARGET=scope.lower(), RUNTIME_HEARTBEAT_ACCOUNT_SCOPE=scope,
+                        RUNTIME_TARGET_JSON=json.dumps(target), CLOUD_RUN_SERVICE="synthetic-service",
+                        ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID="a" * 64)
+    expected = {"platform": "longbridge", "service_name": "synthetic-service",
+                "strategy_profile": "paper-profile", "account_scope": canonical_scope,
+                "account_selector": "synthetic-account", "deployment_selector": "synthetic-deployment",
+                "source_binding_id": "a" * 64, "target_id": scope.lower()}
+    body = {"binding": expected, "domain": "qsl.longbridge-daily-binding.v1", "nonce": "b" * 64}
+    assert publisher._live_binding_digest(env, "b" * 64) == hashlib.sha256(
+        json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
+    ).hexdigest()
+    target["account_selector"] = ["first", "second"]
+    env["RUNTIME_TARGET_JSON"] = json.dumps(target)
+    with pytest.raises(publisher._Rejected):
+        publisher._live_binding_digest(env, "b" * 64)
+
+
+@pytest.mark.parametrize("status,payload,expected", [
+    (400, {"ok": False, "error": "request body must be valid JSON"}, True),
+    (400, {"ok": False, "error": "other"}, False),
+    (401, {"ok": False, "error": "request body must be valid JSON"}, False),
+    (403, {"ok": False, "error": "request body must be valid JSON"}, False),
+])
+def test_live_preflight_exact_auth_response_and_one_request(status, payload, expected):
+    calls = []
+    def post(_url, **kwargs):
+        calls.append(kwargs)
+        return _SyncResponse(status_code=status, payload=payload)
+    assert publisher._verify_receiver_token(_sync_env(), http_post=post) is expected
+    assert len(calls) == 1 and calls[0]["data"] == b"{"
+    assert calls[0]["allow_redirects"] is False
