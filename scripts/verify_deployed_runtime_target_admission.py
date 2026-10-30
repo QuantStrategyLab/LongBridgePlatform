@@ -72,6 +72,18 @@ def _report_staging_failure(exc: BaseException, *, phase: str) -> None:
             receipt["template_difference_categories"] = {
                 key: categories[key] if valid else None for key in keys
             }
+        fields = getattr(exc, "template_other_env_difference_fields", None)
+        if reason == "template_mismatch" and isinstance(fields, dict):
+            valid = all(isinstance(fields.get(key), bool) for key in _PAPER_OTHER_ENV_FIELDS)
+            receipt["template_other_env_difference_fields"] = {
+                key: fields[key] if valid else None for key in _PAPER_OTHER_ENV_FIELDS
+            }
+        overlay = getattr(exc, "overlay_pod_difference_categories", None)
+        if reason == "template_mismatch" and isinstance(overlay, dict):
+            valid = all(isinstance(overlay.get(key), bool) for key in _OVERLAY_POD_FIELDS)
+            receipt["overlay_pod_difference_categories"] = {
+                key: overlay[key] if valid else None for key in _OVERLAY_POD_FIELDS
+            }
         print(json.dumps(receipt, sort_keys=True), file=sys.stderr)
     except Exception:
         # Optional diagnostics cannot change the original rejection or exit code.
@@ -109,6 +121,15 @@ _HISTORY_KEYS = (
 )
 _ACCOUNT_SNAPSHOT_INPUT = "ACCOUNT_SNAPSHOT_ENABLED_INPUT"
 _ACCOUNT_SNAPSHOT_ENV = "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED"
+_PAPER_OTHER_ENV_FIELDS = {
+    "runtime_target_json_diff": "RUNTIME_TARGET_JSON",
+    "qsl_runtime_target_json_diff": "QSL_RUNTIME_TARGET_JSON",
+    "runtime_target_enabled_diff": "RUNTIME_TARGET_ENABLED",
+    "strategy_profile_diff": "STRATEGY_PROFILE",
+    "dry_run_only_diff": "LONGBRIDGE_DRY_RUN_ONLY",
+    "unclassified_env_diff": None,
+}
+_OVERLAY_POD_FIELDS = ("env_diff", "service_account_diff", "other_pod_diff")
 _UNSAFE_HISTORY = re.compile(r"[,=\s'\"`$\\|&<>]|^\-")
 _INGRESS = "run.googleapis.com/ingress"
 _SOURCE_DECLARATIONS = ("uv.lock", "pyproject.toml", "qsl.toml")
@@ -605,6 +626,54 @@ def _paper_template_difference_categories(
         return unavailable
 
 
+def _paper_other_env_difference_fields(
+    service_json: Mapping[str, Any], serving_revisions: Sequence[Mapping[str, Any]]
+) -> dict[str, bool | None]:
+    unavailable: dict[str, bool | None] = dict.fromkeys(_PAPER_OTHER_ENV_FIELDS)
+    try:
+        template = service_json.get("spec", {}).get("template")
+        if not isinstance(template, Mapping) or not serving_revisions:
+            return unavailable
+        expected = _configuration(service_json, template=template)["env"]
+        observed = [_configuration(revision)["env"] for revision in serving_revisions]
+        excluded = (set(_PAPER_OTHER_ENV_FIELDS.values()) - {None}) | set(_HISTORY_KEYS) | {_ACCOUNT_SNAPSHOT_ENV}
+        def select(entries: list[dict[str, str]], name: str | None) -> list[dict[str, str]]:
+            return [entry for entry in entries if (entry["name"] == name if name else entry["name"] not in excluded)]
+        return {field: any(select(entries, name) != select(expected, name) for entries in observed)
+                for field, name in _PAPER_OTHER_ENV_FIELDS.items()}
+    except Exception:
+        return unavailable
+
+
+def _overlay_pod_difference_categories(
+    service_json: Mapping[str, Any], serving_revisions: Sequence[Mapping[str, Any]]
+) -> dict[str, bool | None]:
+    unavailable: dict[str, bool | None] = dict.fromkeys(_OVERLAY_POD_FIELDS)
+    try:
+        template = service_json.get("spec", {}).get("template")
+        if not isinstance(template, Mapping) or not serving_revisions:
+            return unavailable
+        def parts(payload: Mapping[str, Any]) -> tuple[Any, Any, Any]:
+            spec = copy.deepcopy(_pod_spec(payload))
+            spec.pop("servingState", None)
+            containers = spec.get("containers")
+            if not isinstance(containers, list) or len(containers) != 1 or not isinstance(containers[0], Mapping):
+                raise ValueError("invalid pod")
+            container = containers[0]
+            container.pop("name", None)
+            container.pop("image", None)
+            env = container.pop("env", [])
+            env = sorted(env, key=lambda row: row["name"])
+            account = ("serviceAccountName" in spec, spec.pop("serviceAccountName", None))
+            return env, account, spec
+        expected = parts(template)
+        observed = [parts(revision) for revision in serving_revisions]
+        return {key: any(item[index] != expected[index] for item in observed)
+                for index, key in enumerate(_OVERLAY_POD_FIELDS)}
+    except Exception:
+        return unavailable
+
+
 def verify_template_matches_serving(
     *, service: str, service_json: Mapping[str, Any], serving_revisions: Sequence[Mapping[str, Any]]
 ) -> dict[str, Any]:
@@ -868,12 +937,22 @@ def prepare_image_only_staging(
     if overlay and any(not str(revision.get("status", {}).get("imageDigest", "")).endswith("@" + env["OVERLAY_BASE_DIGEST"]) for revision in revisions):
         raise AdmissionError("notification overlay baseline image differs", reason="image_source_not_admitted")
     if overlay:
-        template = service_json.get("spec", {}).get("template")
-        if not isinstance(template, Mapping):
-            raise AdmissionError("notification overlay template unavailable", reason="template_mismatch")
-        pod_digest = _overlay_pod_digest(service_json, template=template)
-        if any(_overlay_pod_digest(revision) != pod_digest for revision in revisions):
-            raise AdmissionError("notification overlay template mismatch", reason="template_mismatch")
+        try:
+            template = service_json.get("spec", {}).get("template")
+            if not isinstance(template, Mapping):
+                raise AdmissionError("notification overlay template unavailable", reason="template_mismatch")
+            pod_digest = _overlay_pod_digest(service_json, template=template)
+            if any(_overlay_pod_digest(revision) != pod_digest for revision in revisions):
+                raise AdmissionError("notification overlay template mismatch", reason="template_mismatch")
+        except AdmissionError as exc:
+            if exc.diagnostic_reason == "template_mismatch":
+                try:
+                    exc.overlay_pod_difference_categories = _overlay_pod_difference_categories(service_json, revisions)
+                    exc.template_other_env_difference_fields = _paper_other_env_difference_fields(service_json, revisions)
+                except Exception:
+                    exc.overlay_pod_difference_categories = dict.fromkeys(_OVERLAY_POD_FIELDS)
+                    exc.template_other_env_difference_fields = dict.fromkeys(_PAPER_OTHER_ENV_FIELDS)
+            raise
     if image_commit == APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE:
         configuration, retained_history = _resolve_paper_template_configuration(
             service=service,
@@ -907,10 +986,12 @@ def prepare_image_only_staging(
             if str(env.get("WORKFLOW_TARGET") or "") == "PAPER" and exc.diagnostic_reason == "template_mismatch":
                 try:
                     exc.template_difference_categories = _paper_template_difference_categories(service_json, revisions)
+                    exc.template_other_env_difference_fields = _paper_other_env_difference_fields(service_json, revisions)
                 except Exception:
                     exc.template_difference_categories = {
                         "history_or_snapshot_diff": None, "other_env_diff": None, "service_account_diff": None
                     }
+                    exc.template_other_env_difference_fields = dict.fromkeys(_PAPER_OTHER_ENV_FIELDS)
             raise
         retained_history = {}
     source_revision = ues_revision_at(image_commit, run)
@@ -1288,4 +1369,5 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

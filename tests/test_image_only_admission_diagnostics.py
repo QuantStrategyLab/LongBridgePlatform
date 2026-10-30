@@ -181,6 +181,31 @@ class ImageOnlyAdmissionDiagnosticsTest(unittest.TestCase):
         self.assertEqual(json.loads(stderr.getvalue())["template_difference_categories"], missing)
         self.assertNotIn(PRIVATE, stderr.getvalue())
 
+    def test_bounded_other_env_fields_report_no_values_or_unknown_names(self):
+        def payload(entries):
+            return {"spec": {"containers": [{"env": entries}]}}
+        service = {"spec": {"template": payload([
+            {"name": "RUNTIME_TARGET_JSON", "value": PRIVATE},
+            {"name": "SECRET_PRIVATE_NAME", "value": PRIVATE},
+        ])}}
+        revision = payload([
+            {"name": "RUNTIME_TARGET_JSON", "value": "different"},
+            {"name": "SECRET_PRIVATE_NAME", "valueFrom": {"secretKeyRef": {"name": PRIVATE, "key": PRIVATE}}},
+        ])
+        details = admission._paper_other_env_difference_fields(service, [revision])
+        self.assertTrue(details["runtime_target_json_diff"])
+        self.assertTrue(details["unclassified_env_diff"])
+        self.assertFalse(details["strategy_profile_diff"])
+        error = admission.AdmissionError(PRIVATE, reason="template_mismatch")
+        error.template_other_env_difference_fields = details
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            admission._report_staging_failure(error, phase="staging_validation")
+        self.assertEqual(json.loads(stderr.getvalue())["template_other_env_difference_fields"], details)
+        self.assertNotIn(PRIVATE, stderr.getvalue())
+        self.assertNotIn("SECRET_PRIVATE_NAME", stderr.getvalue())
+        self.assertTrue(all(value is None for value in admission._paper_other_env_difference_fields({}, [{}]).values()))
+
     def test_paper_strict_rejection_has_categories_without_extra_reads(self):
         profile = "russell_top50_leader_rotation"
         target = {"platform_id": "longbridge", "service_name": "paper-service",
@@ -205,12 +230,16 @@ class ImageOnlyAdmissionDiagnosticsTest(unittest.TestCase):
         self.assertEqual(caught.exception.template_difference_categories,
                          {"history_or_snapshot_diff": False, "other_env_diff": False,
                           "service_account_diff": True})
+        self.assertTrue(all(value is False for value in
+                            caught.exception.template_other_env_difference_fields.values()))
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][:4], ["gcloud", "run", "revisions", "describe"])
         stderr = io.StringIO()
         with redirect_stderr(stderr):
             admission._report_staging_failure(caught.exception, phase="staging_validation")
         self.assertNotIn(PRIVATE, stderr.getvalue())
+        self.assertEqual(json.loads(stderr.getvalue())["template_other_env_difference_fields"],
+                         caught.exception.template_other_env_difference_fields)
         with patch.object(admission, "_paper_template_difference_categories", side_effect=RuntimeError(PRIVATE)), \
              patch.object(admission, "_validate_image_only_source", return_value=(None, None)), \
              patch.object(admission, "_require_paper_target_identity"), \
@@ -219,6 +248,36 @@ class ImageOnlyAdmissionDiagnosticsTest(unittest.TestCase):
                 admission.prepare_image_only_staging(service="paper-service", project="project", region="region",
                     service_json=service, env={"WORKFLOW_TARGET": "PAPER"}, image_commit=SHA, run=run)
         self.assertTrue(all(value is None for value in failed.exception.template_difference_categories.values()))
+
+    def test_overlay_rejection_reports_pod_difference_without_extra_reads(self):
+        profile = "russell_top50_leader_rotation"
+        entries = [{"name": "STRATEGY_PROFILE", "value": profile}]
+        spec = {"serviceAccountName": PRIVATE, "containers": [{"env": entries, "args": [PRIVATE]}]}
+        service = {"spec": {"template": {"spec": spec}},
+                   "status": {"traffic": [{"revisionName": "serving", "percent": 100}]}}
+        calls = []
+        digest = "sha256:" + "a" * 64
+        def run(command):
+            calls.append(command)
+            return json.dumps({"status": {"imageDigest": "image@" + digest},
+                "spec": {"serviceAccountName": PRIVATE, "containers": [{"env": entries, "args": ["changed"]}]}})
+        with patch.object(admission, "_validate_image_only_source", return_value=(None, None)), \
+             patch.object(admission, "verify_service", return_value={"profile": profile}), \
+             patch.object(admission, "_require_paper_target_identity"):
+            with self.assertRaises(admission.AdmissionError) as caught:
+                admission.prepare_image_only_staging(service="paper-service", project="project", region="region",
+                    service_json=service, env={"WORKFLOW_TARGET": "PAPER", "NOTIFICATION_OVERLAY_INPUT": "true",
+                                              "OVERLAY_BASE_DIGEST": digest}, image_commit=SHA, run=run)
+        self.assertEqual(str(caught.exception), "notification overlay template mismatch")
+        self.assertEqual(caught.exception.overlay_pod_difference_categories,
+                         {"env_diff": False, "service_account_diff": False, "other_pod_diff": True})
+        self.assertEqual(len(calls), 1)
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            admission._report_staging_failure(caught.exception, phase="staging_validation")
+        self.assertEqual(json.loads(stderr.getvalue())["overlay_pod_difference_categories"],
+                         caught.exception.overlay_pod_difference_categories)
+        self.assertNotIn(PRIVATE, stderr.getvalue())
 
     def test_recoverable_http_snapshot_mismatch_emits_no_categories(self):
         sentinel = ({"env": [], "serviceAccountName": ""}, {})
@@ -364,3 +423,4 @@ def test_overlay_invalid_source_still_stops_before_cloud_reads_and_plan_write():
         assert "malformed-private-sentinel" not in stderr.getvalue()
         cloud.assert_not_called()
         assert not plan.exists()
+
