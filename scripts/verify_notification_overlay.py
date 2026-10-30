@@ -16,6 +16,7 @@ BASE_COMMIT = "822037aae994c26a38586a46397f941de5b91a60"
 OVERLAY_COMMIT = "0b59cf34b65ad66ad936828f0811a3bdbc5e9506"
 PATCH_SHA256 = "95647d2cc91e7704fcf8c9c8dd42b31b4e49bb58601817ff2d9192e8d4e20429"
 PATCH_PATH = "release-overlays/daily-notification/runtime.patch"
+_PHASE = "input_validation"
 FILES = (
     "application/account_new_risk_gate_support.py", "application/rebalance_service.py",
     "application/runtime_notification_adapters.py", "main.py",
@@ -115,9 +116,12 @@ def collect_layer(archive, files, found):
 
 def verify(repo, project, base_digest, image_digest, build_id):
     """Verify Git, builder and OCI content; the containers are created but never started."""
+    global _PHASE
+    _PHASE = "input_validation"
     _require(re.fullmatch(r"sha256:[0-9a-f]{64}", base_digest) is not None)
     _require(re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest) is not None)
     _require(re.fullmatch(r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", build_id) is not None)
+    _PHASE = "patch_validation"
     patch = _run(["git", "show", f"{OVERLAY_COMMIT}:{PATCH_PATH}"])
     _require(hashlib.sha256(patch).hexdigest() == PATCH_SHA256)
     paths = [line.split(" b/", 1)[1] for line in patch.decode().splitlines() if line.startswith("diff --git a/")]
@@ -131,6 +135,7 @@ def verify(repo, project, base_digest, image_digest, build_id):
         root = Path(temp)
         source = root / "source"
         source.mkdir()
+        _PHASE = "baseline_source"
         archive = _run(["git", "archive", BASE_COMMIT])
         with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
             # The Git archive is read from the fixed repository commit.
@@ -141,17 +146,22 @@ def verify(repo, project, base_digest, image_digest, build_id):
         _run(["git", "apply", "--check", "--unidiff-zero", str(patch_file)], cwd=source)
         _run(["git", "apply", "--unidiff-zero", str(patch_file)], cwd=source)
         files = {name: (source / name).read_bytes() for name in FILES}
+        _PHASE = "build_metadata"
         build = json.loads(_run(["gcloud", "builds", "describe", build_id, "--project", project, "--format=json"]))
         _require(build.get("id") == build_id and build.get("projectId") == project)
+        _PHASE = "build_payload"
         verify_build(build, files, dockerfile, image_digest, repo)
+        _PHASE = "image_read"
         for reference in (base, image):
             _run(["docker", "pull", reference])
         baseline, candidate = [json.loads(_run(["docker", "image", "inspect", ref]))[0] for ref in (base, image)]
+        _PHASE = "image_config_and_layers"
         verify_layer_list(baseline, candidate, len(FILES))
         old_layers, new_layers = baseline["RootFS"]["Layers"], candidate["RootFS"]["Layers"]
         try:
             for ref in (base, image):
                 containers.append(_run(["docker", "create", "--entrypoint", "/bin/true", ref]).decode().strip())
+            _PHASE = "baseline_files"
             for name, content in originals.items():
                 dest = root / "baseline-file"
                 _run(["docker", "cp", containers[0] + ":/app/" + name, str(dest)])
@@ -159,10 +169,12 @@ def verify(repo, project, base_digest, image_digest, build_id):
             # The only allowed opaque marker creates a directory absent in the base.
             absent = subprocess.run(["docker", "cp", containers[0] + ":/app/notifications/digest_snapshot", str(root / "absent")], capture_output=True)
             _require(absent.returncode != 0 and b"Could not find" in absent.stderr)
+            _PHASE = "candidate_files"
             for name, content in files.items():
                 dest = root / "candidate-file"
                 _run(["docker", "cp", containers[1] + ":/app/" + name, str(dest)])
                 _require(dest.read_bytes() == content)
+            _PHASE = "candidate_layer_contents"
             saved = root / "candidate.tar"
             _run(["docker", "save", "-o", str(saved), image])
             found = {}
@@ -191,5 +203,5 @@ if __name__ == "__main__":
     except Exception as exc:
         reasons = {"build_metadata_permission_denied", "build_metadata_unavailable", "verification_dependency_unavailable"}
         reason = str(exc) if str(exc) in reasons else "overlay_verification_failed"
-        print(json.dumps({"status": "rejected", "reason": reason}), file=sys.stderr)
+        print(json.dumps({"status": "rejected", "phase": _PHASE, "reason": reason}), file=sys.stderr)
         raise SystemExit(1) from None
