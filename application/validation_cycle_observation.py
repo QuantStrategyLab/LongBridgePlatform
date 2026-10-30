@@ -9,6 +9,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from typing import Iterator
+from urllib.parse import urlsplit
 
 
 class ValidationSubmitBlocked(RuntimeError):
@@ -61,6 +62,26 @@ _CURRENT: contextvars.ContextVar[ValidationCycleObservation | None] = contextvar
 
 def current() -> ValidationCycleObservation | None:
     return _CURRENT.get()
+
+
+def require_matching_journal_source(config, reporting) -> None:
+    """Reject observed cycles when marker and report prefixes differ or are absent."""
+    store = getattr(config, "execution_state_store", None)
+    marker_uri = getattr(store, "cloud_prefix_uri", None)
+    report_uri = getattr(reporting, "report_gcs_prefix_uri", None)
+    if not isinstance(marker_uri, str) or not isinstance(report_uri, str):
+        raise RuntimeError("validation_journal_unavailable")
+    marker_uri = marker_uri.strip().rstrip("/")
+    report_uri = report_uri.strip().rstrip("/")
+    try:
+        parsed = urlsplit(marker_uri)
+        valid = (parsed.scheme == "gs" and bool(parsed.netloc)
+                 and not parsed.query and not parsed.fragment
+                 and not parsed.username and not parsed.password and parsed.port is None)
+    except ValueError:
+        valid = False
+    if not valid or marker_uri != report_uri:
+        raise RuntimeError("validation_journal_unavailable")
 
 
 def instrument_composer(composer, observation: ValidationCycleObservation):

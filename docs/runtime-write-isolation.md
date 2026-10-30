@@ -78,14 +78,15 @@ and presence of an execution receipt are separate facts. A trace-matched event
 is not authenticated Scheduler correlation; missing, ambiguous, or invalid
 events remain unknown. This instrumentation cannot reconstruct earlier runs.
 
-For an observed PAPER validation, an error reading an execution marker or a
-prior execution report stops the cycle with `validation_journal_read_failed`.
+For an observed PAPER validation, an error propagated by the execution-marker or
+prior-report reader stops the cycle with `validation_journal_read_failed`.
 The error does not establish whether a marker or report exists. This check
 does not prove that the available journal covers every instance or that earlier
 steps in the cycle had no side effects.
 
 Observed PAPER validation requires enabled deduplication, a marker store with
-both marker and prior-report readers, and no marker bypass. It rejects enabled
+both marker and prior-report readers, a matching nonempty GCS prefix configured
+for the marker store and report archive, and no marker bypass. It rejects enabled
 paper risk-state or command producers before rebalance bootstrap. Its bootstrap
 uses the existing token without refreshing it, its business report archive and
 performance telemetry are suppressed, and a would-be marker write stops the
@@ -95,6 +96,10 @@ execution paths retain their prior behavior.
 These checks do not make the whole request read-only: strategy and plugin
 loading and broker or dependency paths need independent write-boundary evidence.
 Nor do they prove that cloud and same-instance local journal data are complete.
+A matching prefix does not prove the same store instance, a consistent snapshot,
+or complete historical coverage. The pinned prior-report reader skips unreadable
+or malformed reports and stops after a bounded scan, so its negative result does
+not prove that no matching report exists.
 A zero adapter-attempt count does not establish either property.
 
 ## Cycle heartbeat and account values
