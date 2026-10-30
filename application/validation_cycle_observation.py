@@ -16,6 +16,10 @@ class ValidationSubmitBlocked(RuntimeError):
     """The validation-only adapter never forwards an order."""
 
 
+class ValidationJournalEmpty(RuntimeError):
+    """No cloud reports were available to assess the observed journal."""
+
+
 @dataclass
 class ValidationCycleObservation:
     adapter_instrumented: bool = False
@@ -62,6 +66,19 @@ _CURRENT: contextvars.ContextVar[ValidationCycleObservation | None] = contextvar
 STRICT_REPORT_SCAN_LIMIT = 10000
 
 
+def _unique_json_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(_value):
+    raise ValueError("nonstandard JSON constant")
+
+
 def strict_prior_report_exists(store, *, platform, strategy_profile, account_scope,
                                signal_date, effective_date, dry_run_only) -> bool:
     """Search the listed cloud report scope; failure never means no report."""
@@ -95,17 +112,25 @@ def strict_prior_report_exists(store, *, platform, strategy_profile, account_sco
         objects = store._object_store()
         if not isinstance(objects, GcpObjectStore):
             raise ValueError
-        uris = objects.list(prefix)
-        count = 0
-        for uri in uris:
-            if not isinstance(uri, str) or not uri.startswith(prefix):
-                raise ValueError
-            if not uri.endswith(".json"):
-                continue
-            count += 1
+        parsed_prefix = urlsplit(prefix)
+        bucket_name = parsed_prefix.netloc
+        object_prefix = parsed_prefix.path.lstrip("/")
+        blobs = objects.client.bucket(bucket_name).list_blobs(
+            prefix=object_prefix, max_results=STRICT_REPORT_SCAN_LIMIT + 1
+        )
+        report_count = 0
+        for count, blob in enumerate(blobs, start=1):
             if count > STRICT_REPORT_SCAN_LIMIT:
                 raise ValueError
-            payload = json.loads(objects.read_text(uri))
+            name = getattr(blob, "name", None)
+            if not isinstance(name, str) or not name.startswith(object_prefix):
+                raise ValueError
+            if not name.endswith(".json"):
+                continue
+            report_count += 1
+            uri = f"gs://{bucket_name}/{name}"
+            payload = json.loads(objects.read_text(uri), object_pairs_hook=_unique_json_object,
+                                 parse_constant=_reject_json_constant)
             if (not isinstance(payload, Mapping)
                     or not all(isinstance(payload.get(key), str) and payload[key].strip()
                                for key in ("platform", "strategy_profile", "account_scope"))
@@ -143,7 +168,11 @@ def strict_prior_report_exists(store, *, platform, strategy_profile, account_sco
                     and (payload["status"] != "ok" or type(summary.get("action_done")) is not bool
                          or not all(field in summary for field in count_fields[:3]))):
                 raise ValueError
+        if not report_count:
+            raise ValidationJournalEmpty
         return False
+    except ValidationJournalEmpty:
+        raise RuntimeError("validation_journal_empty") from None
     except Exception:
         raise RuntimeError("validation_journal_read_failed") from None
 

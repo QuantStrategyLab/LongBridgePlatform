@@ -13,12 +13,13 @@ class FakeGcp(GcpObjectStore):
         self.list_error = list_error
         self.prefix = None
         self.reads = []
+        self._client = SimpleNamespace(bucket=lambda _bucket: self)
 
-    def list(self, prefix):
-        self.prefix = prefix
+    def list_blobs(self, *, prefix, max_results):
+        self.prefix = 'gs://bucket/' + prefix
         if self.list_error:
             raise self.list_error
-        return list(self.objects)
+        return (SimpleNamespace(name=uri.removeprefix('gs://bucket/')) for uri in self.objects)
 
     def read_text(self, uri):
         self.reads.append(uri)
@@ -60,7 +61,42 @@ class StrictReportTests(unittest.TestCase):
                          prefix + '2026-02/2.json': report(effective='2026-02-03')})
         self.assertFalse(self.query(cloud))
         self.assertEqual(len(cloud.reads), 2)
-        self.assertFalse(self.query(FakeGcp({})))
+        with self.assertRaisesRegex(RuntimeError, '^validation_journal_empty$'):
+            self.query(FakeGcp({}))
+
+    def test_duplicate_json_keys_or_nonstandard_constants_are_unknown(self):
+        prefix = 'gs://bucket/root/longbridge/strategy/PAPER/'
+        unrelated = report(signal='2025-01-01')
+        duplicate = unrelated.replace('"signal_date": "2025-01-01"',
+                                      '"signal_date": "2026-01-31", "signal_date": "2025-01-01"')
+        self.assertFalse(self.query(FakeGcp({prefix + 'valid.json': unrelated})))
+        for raw in (duplicate, *(unrelated[:-1] + ', "metadata": {"value": ' + value + '}}'
+                                 for value in ('NaN', 'Infinity', '-Infinity'))):
+            with self.subTest(raw=raw), self.assertRaisesRegex(RuntimeError, '^validation_journal_read_failed$'):
+                self.query(FakeGcp({prefix + 'broken.json': raw}))
+
+    def test_listing_is_bounded_before_materialization_including_non_json(self):
+        cloud = GcpObjectStore()
+        observed = []
+        def blobs(*, prefix, max_results=None):
+            observed.append((prefix, max_results))
+            for i in range(3):
+                yield SimpleNamespace(name=f'{prefix}{i}.txt')
+        cloud._client = SimpleNamespace(bucket=lambda _bucket: SimpleNamespace(list_blobs=blobs))
+        with patch('application.validation_cycle_observation.STRICT_REPORT_SCAN_LIMIT', 2):
+            with self.assertRaisesRegex(RuntimeError, '^validation_journal_read_failed$'):
+                self.query(cloud)
+        self.assertEqual(observed, [('root/longbridge/strategy/PAPER/', 3)])
+
+    def test_matching_report_stops_listing_without_requesting_more(self):
+        prefix = 'gs://bucket/root/longbridge/strategy/PAPER/'
+        cloud = FakeGcp({prefix + '2026-02/match.json': report()})
+        def blobs(*, prefix, max_results):
+            yield SimpleNamespace(name=prefix + '2026-02/match.json')
+            raise AssertionError('listing continued past a match')
+        cloud.list_blobs = blobs
+        self.assertTrue(self.query(cloud))
+        self.assertEqual(cloud.reads, [prefix + '2026-02/match.json'])
 
     def test_errors_and_unsupported_source_fail_closed(self):
         prefix = 'gs://bucket/root/longbridge/strategy/PAPER/'
@@ -88,8 +124,8 @@ class StrictReportTests(unittest.TestCase):
     def test_gcp_listing_later_page_failure_is_unknown(self):
         cloud = GcpObjectStore()
 
-        def blobs(*, prefix):
-            yield SimpleNamespace(name=prefix + '2026-01/one.json')
+        def blobs(*, prefix, max_results):
+            yield SimpleNamespace(name=prefix + '2026-01/one.txt')
             raise OSError('later page failed')
 
         cloud._client = SimpleNamespace(bucket=lambda _bucket: SimpleNamespace(list_blobs=blobs))

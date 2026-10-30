@@ -323,6 +323,8 @@ def _runtime_failure_reason(exc: Exception) -> str:
         return "validation_journal_read_failed"
     if isinstance(exc, RuntimeError) and str(exc) == "validation_journal_unavailable":
         return "validation_journal_unavailable"
+    if isinstance(exc, RuntimeError) and str(exc) == "validation_journal_empty":
+        return "validation_journal_empty"
     if isinstance(exc, RuntimeError) and str(exc) == "validation_side_effect_enabled":
         return "validation_side_effect_enabled"
     if isinstance(exc, RuntimeError) and str(exc) == "validation_marker_write_blocked":

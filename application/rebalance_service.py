@@ -1062,6 +1062,8 @@ def run_strategy(
                 live_command_deduplicated = execution_already_recorded
             except Exception as exc:
                 if validation_cycle_observation.current() is not None:
+                    if isinstance(exc, RuntimeError) and str(exc) == "validation_journal_empty":
+                        raise RuntimeError("validation_journal_empty") from None
                     raise RuntimeError("validation_journal_read_failed") from None
                 detail = (
                     "execution_report_dedup_read_failed"

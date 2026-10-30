@@ -2358,9 +2358,13 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                     "account_scope": "PAPER", "dry_run": True, "status": "ok", "summary": {
                         "signal_date": "2026-06-01", "effective_date": "2026-06-02", "action_done": False}})
                 self.listed = []
-            def list(self, prefix):
-                self.listed.append(prefix)
-                return [prefix + "2026-07/late.json"]
+                self.empty = False
+                self._client = types.SimpleNamespace(bucket=lambda _bucket: self)
+            def list_blobs(self, *, prefix, max_results):
+                self.listed.append("gs://bucket/" + prefix)
+                if self.empty:
+                    return []
+                return [types.SimpleNamespace(name=prefix + "2026-07/late.json")]
             def read_text(self, _uri):
                 return self.contents
 
@@ -2396,6 +2400,13 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         store.record_marker.assert_not_called()
         store.record_outcome.assert_not_called()
         runtime.notify_issue.assert_not_called()
+        cloud.empty = True
+        with patch.object(rebalance_service, "execute_rebalance_cycle", execute), observe(None, None):
+            with self.assertRaisesRegex(RuntimeError, "^validation_journal_empty$"):
+                rebalance_service.run_strategy(runtime=runtime, config=config)
+        execute.assert_not_called()
+        store.record_marker.assert_not_called()
+        store.record_outcome.assert_not_called()
 
     def test_run_strategy_skips_when_prior_report_matches_execution_signal(self):
         sent_messages = []

@@ -99,8 +99,13 @@ Nor do they prove that cloud and same-instance local journal data are complete.
 A matching prefix does not prove the same store instance, a consistent snapshot,
 or complete historical coverage. Observed cycles scan all listed report months
 under the configured account and profile prefix, using one GCS store instance;
-unreadable, malformed or indeterminate reports, unsupported providers, and the
-scan limit stop the cycle. A match may stop the scan early; a negative result
+unreadable, malformed or indeterminate reports (including duplicate JSON keys or
+nonstandard numeric constants), unsupported providers, and the
+scan limit stop the cycle. Listing requests at most 10,001 objects and counts
+non-JSON objects toward the 10,000-object limit. A listing with no JSON reports
+stops with `validation_journal_empty`; it is not evidence of initial coverage.
+A first cycle requires separate initial-state evidence and an approved admission
+design. A match may stop the scan early; a negative result
 requires every listed candidate to be successfully classified. It concerns only
 that listing and does not prove coverage of unarchived local reports, migrated or expired history,
 or writes concurrent with the scan, and does not authorize trading or establish
