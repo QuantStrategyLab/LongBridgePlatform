@@ -105,3 +105,10 @@ def test_build_metadata_denial_is_redacted_and_stops(monkeypatch):
                         CompletedProcess(a[0], 1, b"", b"PERMISSION_DENIED: sensitive diagnostic"))
     with pytest.raises(RuntimeError, match="^build_metadata_permission_denied$"):
         _run(["gcloud", "builds", "describe", "synthetic"])
+
+
+def test_baseline_mismatch_exposes_only_fixed_public_paths():
+    from scripts.verify_notification_overlay import VerificationError
+
+    assert VerificationError("baseline_file_mismatch", "main.py").path == "main.py"
+    assert VerificationError("baseline_file_mismatch", "private/path").path is None

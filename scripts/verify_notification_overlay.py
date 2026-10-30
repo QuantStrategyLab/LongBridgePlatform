@@ -28,6 +28,12 @@ FILES = (
 )
 
 
+class VerificationError(ValueError):
+    def __init__(self, reason, path=None):
+        super().__init__(reason)
+        self.path = path if path in FILES else None
+
+
 def _require(value):
     if not value:
         raise ValueError("notification_overlay_provenance_invalid")
@@ -165,10 +171,12 @@ def verify(repo, project, base_digest, image_digest, build_id):
             for name, content in originals.items():
                 dest = root / "baseline-file"
                 _run(["docker", "cp", containers[0] + ":/app/" + name, str(dest)])
-                _require(dest.read_bytes() == content)
+                if dest.read_bytes() != content:
+                    raise VerificationError("baseline_file_mismatch", name)
             # The only allowed opaque marker creates a directory absent in the base.
             absent = subprocess.run(["docker", "cp", containers[0] + ":/app/notifications/digest_snapshot", str(root / "absent")], capture_output=True)
-            _require(absent.returncode != 0 and b"Could not find" in absent.stderr)
+            if absent.returncode == 0 or b"Could not find" not in absent.stderr:
+                raise VerificationError("baseline_directory_absence_unconfirmed")
             _PHASE = "candidate_files"
             for name, content in files.items():
                 dest = root / "candidate-file"
@@ -201,7 +209,11 @@ if __name__ == "__main__":
     try:
         verify(*sys.argv[1:])
     except Exception as exc:
-        reasons = {"build_metadata_permission_denied", "build_metadata_unavailable", "verification_dependency_unavailable"}
+        reasons = {"build_metadata_permission_denied", "build_metadata_unavailable", "verification_dependency_unavailable",
+                   "baseline_file_mismatch", "baseline_directory_absence_unconfirmed"}
         reason = str(exc) if str(exc) in reasons else "overlay_verification_failed"
-        print(json.dumps({"status": "rejected", "phase": _PHASE, "reason": reason}), file=sys.stderr)
+        result = {"status": "rejected", "phase": _PHASE, "reason": reason}
+        if isinstance(exc, VerificationError) and exc.path:
+            result["path"] = exc.path
+        print(json.dumps(result), file=sys.stderr)
         raise SystemExit(1) from None
