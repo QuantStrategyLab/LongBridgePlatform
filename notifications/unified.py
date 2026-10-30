@@ -416,6 +416,15 @@ def cycle_facts(result, *, dry_run=False, attention_reasons=()):
             "data_error", "failed_order_count", "notification_order_issue")) and str(evidence.get("risk_gate") or "").upper() not in {
                 "BLOCK", "BLOCKED", "REJECT", "REJECTED", "DENY", "DENIED"}:
         kind = "order_submitted"
+    # Reuse the established execution-aware notification classifier so a
+    # queued command is distinguishable from a blocked or unknown outcome.
+    from types import SimpleNamespace
+    from application.rebalance_service import _has_notification_attention
+    if kind in {"routine_cycle", "order_submitted"} and _has_notification_attention(
+        config=SimpleNamespace(notification_attention_reason_codes=attention_reasons), result=result
+    ):
+        kind = "real_error"
+        healthy = False
     known_zero = healthy and not dry_run and not action and not pending
     return kind, {"schema_version": "qsl.notification_cycle.v1", "order_count": 0 if known_zero else None,
                   "fill_count": 0 if known_zero else None, "routine": healthy and not dry_run, "dry_run": dry_run}
@@ -446,6 +455,8 @@ def prepare_cycle(result, *, config, publisher, notify_issue):
     try:
         kind, facts = cycle_facts(result, dry_run=config.dry_run_only,
                                   attention_reasons=getattr(config, "notification_attention_reason_codes", ()))
+        if config.dry_run_only:
+            return (kind == "routine_cycle"), publisher
         if kind not in {"routine_cycle", "order_submitted"} and not enabled():
             return False, publisher
         event = make_event(kind, incident=cycle_incident(result, kind),

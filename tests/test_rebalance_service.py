@@ -175,6 +175,22 @@ def _build_snapshot(plan, *, phase=""):
 
 
 class RebalanceServiceNotificationTests(unittest.TestCase):
+    def setUp(self):
+        # Business-only cases run with a source-bound in-memory CAS store, so
+        # suppressing routine delivery still requires a successful candidate write.
+        from notifications import unified
+        from test_daily_policy_offline import Memory, setup
+
+        env, report = setup()
+        store = Memory()
+        persist = unified.persist_candidate
+        self.enterContext(patch.dict(os.environ, env))
+        self.enterContext(unified.bind_report(report))
+        self.enterContext(patch.object(
+            unified, "persist_candidate",
+            side_effect=lambda event, **kwargs: persist(event, env=env, store=store, **kwargs),
+        ))
+
     def test_research_no_order_plan_reaches_cycle_without_broker_or_external_writes(self):
         snapshot = PortfolioSnapshot(
             as_of="2026-09-13",
@@ -2411,6 +2427,10 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         observed_orders = []
         observed_sleeps = []
 
+        # These cases exercise the legacy message renderer and trading result.
+        # Delivery policy is covered independently by the per-run candidate tests.
+        self.enterContext(patch("notifications.unified.prepare_cycle", side_effect=lambda _result, *, config, publisher, notify_issue: (False, publisher)))
+
         if isinstance(refreshed_plan, (list, tuple)):
             plan_side_effect = [plan, *refreshed_plan]
         else:
@@ -4210,6 +4230,12 @@ class RuntimeNotificationPolicyTests(unittest.TestCase):
 
     def _run_notification_case(self, *, execution=None, dry_run=False, action=False,
                                pending=(), preview=(), reasons=(), result_reasons=()):
+        from notifications import unified
+        from test_daily_policy_offline import Memory, setup
+
+        env, report = setup()
+        store = Memory()
+        persist = unified.persist_candidate
         execution = dict(execution or {})
         plan = {"execution": {}, "portfolio": {}, "allocation": {"target_mode": "value"}}
         result = rebalance_service.ExecutionCycleResult(
@@ -4239,6 +4265,9 @@ class RuntimeNotificationPolicyTests(unittest.TestCase):
             notification_attention_reason_codes=reasons,
         )
         with (
+            patch.dict(os.environ, env, clear=True),
+            unified.bind_report(report),
+            patch.object(unified, "persist_candidate", side_effect=lambda event, **kwargs: persist(event, env=env, store=store, **kwargs)),
             patch.object(rebalance_service, "execute_rebalance_cycle", return_value=result),
             patch.object(rebalance_service, "build_signal_snapshot", return_value={}),
             patch.object(rebalance_service.notification_renderers, "render_rebalance_notification", return_value="order"),
@@ -4286,11 +4315,13 @@ class RuntimeNotificationPolicyTests(unittest.TestCase):
             for reason in ("small_account_below_recommended_equity", "negative_cash", "pending_sell_release"):
                 self.assertEqual(self._run_notification_case(dry_run=dry, result_reasons=(reason,)), ["attention"])
 
-    def test_real_order_facts_keep_delivery(self):
+    def test_unconfirmed_order_facts_keep_delivery(self):
         for status in ("submitted", "accepted", "filled", "partially_filled", "unknown", "pending_reconciliation"):
             with self.subTest(status=status):
                 self.assertEqual(self._run_notification_case(action=True, pending=({"submission_status": status},)), ["order"])
-        self.assertEqual(self._run_notification_case(action=True), ["order"])
+        # A completed action without an individual order collection is routine
+        # only after its source-bound candidate has been durably stored.
+        self.assertEqual(self._run_notification_case(action=True), [])
 
     def test_successful_preview_with_plugin_error_still_notifies(self):
         self.assertEqual(self._run_notification_case(

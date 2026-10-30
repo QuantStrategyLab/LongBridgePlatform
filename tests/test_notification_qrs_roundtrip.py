@@ -194,7 +194,8 @@ def test_archive_counts_resolve_runtime_unknown_for_only_the_same_run(qrs, tmp_p
     assert not summary["counts_unknown"] and summary["event_count"] == 2
 
 
-def test_heartbeat_without_business_receipt_stays_unknown_and_off_is_unchanged():
-    assert unified.heartbeat_observation(now=None, env={}) is None
+def test_heartbeat_without_business_receipt_stays_unknown_for_all_flags():
+    with pytest.raises(ValueError, match="receipt_business_run_unknown"):
+        unified.heartbeat_observation(now=None, env={})
     with pytest.raises(ValueError, match="receipt_business_run_unknown"):
         unified.heartbeat_observation(now=unified._stamp("2026-10-17T00:20:00Z"), env=binding_env("sg", "SG", False))

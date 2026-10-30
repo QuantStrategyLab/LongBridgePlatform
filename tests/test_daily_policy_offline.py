@@ -83,6 +83,30 @@ class DailyPolicy(unittest.TestCase):
             result=SimpleNamespace(allocation={},execution=execution,action_done=True,pending_orders=pending)
             self.assertNotIn(unified.cycle_facts(result)[0],{'routine_cycle','order_submitted'})
 
+    def test_existing_execution_attention_classifier_controls_routing(self):
+        states = [
+            {'heartbeat_execution_state':'blocked'},
+            {'no_execute':True},
+            {'heartbeat_execution_state':'waiting_window'},
+            {'heartbeat_execution_state':'waiting_window', 'durable_live_execution_command':{'status':'UNKNOWN'}},
+            {'heartbeat_execution_state':'waiting_window', 'durable_live_execution_command':{'status':'PENDING_RECONCILIATION'}},
+        ]
+        for execution in states:
+            result=SimpleNamespace(allocation={}, execution=execution, action_done=False, pending_orders=())
+            self.assertEqual(unified.cycle_facts(result)[0], 'real_error')
+        queued=SimpleNamespace(allocation={}, execution={'heartbeat_execution_state':'waiting_window',
+            'direct_live_routing_blocked':True, 'durable_live_execution_command':{'status':'QUEUED'}},
+            action_done=False, pending_orders=())
+        self.assertEqual(unified.cycle_facts(queued)[0], 'routine_cycle')
+
+    def test_dry_run_never_sends_coverage_for_normal_preview(self):
+        result=SimpleNamespace(allocation={}, execution={'execution_status':'no_action'}, action_done=False, pending_orders=())
+        config=SimpleNamespace(dry_run_only=True, notification_attention_reason_codes=())
+        publisher=SimpleNamespace(log_message=lambda *_:None, send_message=lambda *_:self.fail('unexpected send'))
+        with patch.object(unified,'persist_candidate',side_effect=AssertionError('unexpected write')):
+            suppressed, _=unified.prepare_cycle(result,config=config,publisher=publisher,notify_issue=lambda *_:self.fail('unexpected issue'))
+        self.assertTrue(suppressed)
+
     def test_archive_reuses_source_run_and_never_invents_fills(self):
         env, report = setup()
         store = Memory()
