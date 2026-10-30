@@ -114,7 +114,20 @@ Notification rendering never reads the broker or falls back to an older report.
 
 ## Safety gates kept
 
+Image-only staging rejections keep their original exit code and message and append
+one bounded `longbridge.image-only-admission.v1` diagnostic. `phase` identifies
+source validation, service observation, staging validation, or local plan writing;
+a phase is not a specific failure cause. `reason` is a fixed code assigned at an
+existing rejection site, such as `candidate_target_binding_mismatch`,
+`candidate_serving_ues_mismatch`, `template_mismatch`, or
+`serving_identity_unavailable`. Unclassified failures remain
+`admission_unavailable`. The diagnostic never includes exception text, service or
+account identifiers, configuration values, or strategy revisions. It performs no
+additional cloud reads and cannot admit a rejected candidate. Successful staging
+plans and image readback behavior are unchanged.
+
 - V7 paused PAPER binding refusal
 - Deployed runtime-target admission before traffic shift
 - Exact SHA / approved-ref checks on `image-only-no-traffic`
 - Per-environment service/region binding used by Runtime Guard
+

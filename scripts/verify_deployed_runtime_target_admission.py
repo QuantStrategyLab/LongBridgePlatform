@@ -31,6 +31,39 @@ from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
 class AdmissionError(ValueError):
     """A deployed runtime target is not safe to receive a new image."""
 
+    def __init__(self, *args: object, reason: str = "admission_unavailable") -> None:
+        super().__init__(*args)
+        self.diagnostic_reason = reason
+
+
+_STAGING_FAILURE_REASONS = frozenset({
+    "admission_unavailable", "candidate_target_binding_mismatch", "target_binding_invalid",
+    "candidate_serving_ues_mismatch", "serving_identity_unavailable",
+    "source_declarations_invalid", "image_source_not_admitted",
+    "template_mismatch", "target_identity_invalid", "target_policy_invalid",
+    "external_read_unavailable", "configuration_invalid", "source_settings_invalid",
+})
+_STAGING_FAILURE_PHASES = frozenset({
+    "source_validation", "service_observation", "staging_validation", "plan_write",
+})
+
+
+def _report_staging_failure(exc: BaseException, *, phase: str) -> None:
+    """Append fixed diagnostic enums; never render exception or target values."""
+
+    try:
+        reason = getattr(exc, "diagnostic_reason", None)
+        if not isinstance(reason, str) or reason not in _STAGING_FAILURE_REASONS:
+            reason = "admission_unavailable"
+        safe_phase = phase if phase in _STAGING_FAILURE_PHASES else "unavailable"
+        print(json.dumps({
+            "schema": "longbridge.image-only-admission.v1",
+            "status": "rejected", "phase": safe_phase, "reason": reason,
+        }, sort_keys=True), file=sys.stderr)
+    except Exception:
+        # Optional diagnostics cannot change the original rejection or exit code.
+        pass
+
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 # Reviewed PAPER history image. Workflow control stays on main; only fixed reviewed candidates may be archived.
@@ -77,12 +110,12 @@ def _locked_ues_revision(lock_text: str) -> str:
             if package.get("name") == "us-equity-strategies"
         ]
     except (KeyError, TypeError, ValueError) as exc:
-        raise AdmissionError("UES lock entry is missing or invalid") from exc
+        raise AdmissionError("UES lock entry is missing or invalid", reason='source_declarations_invalid') from exc
     if len(sources) != 1:
-        raise AdmissionError("UES lock must contain exactly one package")
+        raise AdmissionError("UES lock must contain exactly one package", reason='source_declarations_invalid')
     match = re.search(r"[?&]rev=([0-9a-f]{40})#([0-9a-f]{40})$", sources[0])
     if not match or match.group(1) != match.group(2):
-        raise AdmissionError("UES lock must resolve to one full commit SHA")
+        raise AdmissionError("UES lock must resolve to one full commit SHA", reason='source_declarations_invalid')
     return match.group(1)
 
 
@@ -100,10 +133,10 @@ def _candidate_ues_revision() -> str:
         ))
     ]
     if refs != [candidate]:
-        raise AdmissionError("UES pyproject and uv.lock revisions differ")
+        raise AdmissionError("UES pyproject and uv.lock revisions differ", reason='source_declarations_invalid')
     qsl = tomllib.loads((root / "qsl.toml").read_text(encoding="utf-8"))
     if qsl.get("qsl", {}).get("requires", {}).get("us_equity_strategies") != candidate:
-        raise AdmissionError("UES QSL contract and uv.lock revisions differ")
+        raise AdmissionError("UES QSL contract and uv.lock revisions differ", reason='source_declarations_invalid')
     return candidate
 
 
@@ -115,7 +148,7 @@ def ues_revision_from_declarations(*, lock_text: str, project_text: str, qsl_tex
         project = tomllib.loads(project_text)
         dependencies = project.get("project", {}).get("dependencies", [])
     except tomllib.TOMLDecodeError as exc:
-        raise AdmissionError("UES pyproject and uv.lock revisions differ") from exc
+        raise AdmissionError("UES pyproject and uv.lock revisions differ", reason='source_declarations_invalid') from exc
     refs = [
         match.group(1)
         for dependency in dependencies
@@ -125,13 +158,13 @@ def ues_revision_from_declarations(*, lock_text: str, project_text: str, qsl_tex
         ))
     ]
     if refs != [candidate]:
-        raise AdmissionError("UES pyproject and uv.lock revisions differ")
+        raise AdmissionError("UES pyproject and uv.lock revisions differ", reason='source_declarations_invalid')
     try:
         qsl = tomllib.loads(qsl_text)
     except tomllib.TOMLDecodeError as exc:
-        raise AdmissionError("UES QSL contract and uv.lock revisions differ") from exc
+        raise AdmissionError("UES QSL contract and uv.lock revisions differ", reason='source_declarations_invalid') from exc
     if qsl.get("qsl", {}).get("requires", {}).get("us_equity_strategies") != candidate:
-        raise AdmissionError("UES QSL contract and uv.lock revisions differ")
+        raise AdmissionError("UES QSL contract and uv.lock revisions differ", reason='source_declarations_invalid')
     return candidate
 
 
@@ -139,7 +172,7 @@ def ues_revision_at(commit: str, run: Callable[[Sequence[str]], str]) -> str:
     """Read one commit's lock declarations with git show. Do not import or run its scripts."""
 
     if not _SHA.fullmatch(commit):
-        raise AdmissionError("image source is not an exact commit")
+        raise AdmissionError("image source is not an exact commit", reason='source_declarations_invalid')
     texts: dict[str, str] = {}
     for name in _SOURCE_DECLARATIONS:
         texts[name] = run(["git", "show", f"{commit}:{name}"])
@@ -160,10 +193,10 @@ def _serving_ues_revisions(
 ) -> set[str]:
     traffic = service_json.get("status", {}).get("traffic", [])
     if not isinstance(traffic, list):
-        raise AdmissionError(f"{service}: serving traffic is unavailable")
+        raise AdmissionError(f"{service}: serving traffic is unavailable", reason='serving_identity_unavailable')
     serving = [entry.get("revisionName") for entry in traffic if isinstance(entry, Mapping) and entry.get("percent", 0) > 0]
     if not serving or any(not isinstance(revision, str) or not revision for revision in serving):
-        raise AdmissionError(f"{service}: serving revisions are unavailable")
+        raise AdmissionError(f"{service}: serving revisions are unavailable", reason='serving_identity_unavailable')
     invoke = run or _run
     revisions = set()
     for revision in serving:
@@ -178,7 +211,7 @@ def _serving_ues_revisions(
             lock_text = invoke(["git", "show", f"{source_sha}:uv.lock"])
             revisions.add(_locked_ues_revision(lock_text))
         except (KeyError, TypeError, ValueError, AdmissionError) as exc:
-            raise AdmissionError(f"{service}: serving UES revision cannot be independently verified") from exc
+            raise AdmissionError(f"{service}: serving UES revision cannot be independently verified", reason='serving_identity_unavailable') from exc
     return revisions
 
 
@@ -238,10 +271,10 @@ def _describe_service(*, service: str, project: str, region: str) -> Mapping[str
 def _container_env(service_json: Mapping[str, Any]) -> dict[str, str]:
     containers = service_json.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
     if not isinstance(containers, list) or not containers:
-        raise AdmissionError("Cloud Run service has no container configuration")
+        raise AdmissionError("Cloud Run service has no container configuration", reason='configuration_invalid')
     entries = containers[0].get("env", [])
     if not isinstance(entries, list):
-        raise AdmissionError("Cloud Run container environment is malformed")
+        raise AdmissionError("Cloud Run container environment is malformed", reason='configuration_invalid')
     return {
         str(entry.get("name") or "").strip(): str(entry.get("value") or "").strip()
         for entry in entries
@@ -257,7 +290,7 @@ def _parse_bool(value: object, *, field: str, service: str) -> bool:
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    raise AdmissionError(f"{service}: {field} must be a boolean")
+    raise AdmissionError(f"{service}: {field} must be a boolean", reason='target_policy_invalid')
 
 
 def verify_service(*, service: str, service_json: Mapping[str, Any]) -> dict[str, object]:
@@ -266,41 +299,41 @@ def verify_service(*, service: str, service_json: Mapping[str, Any]) -> dict[str
     env = _container_env(service_json)
     raw_target = env.get("RUNTIME_TARGET_JSON") or env.get("QSL_RUNTIME_TARGET_JSON")
     if not raw_target:
-        raise AdmissionError(f"{service}: RUNTIME_TARGET_JSON is required for image admission")
+        raise AdmissionError(f"{service}: RUNTIME_TARGET_JSON is required for image admission", reason='target_policy_invalid')
     try:
         target = json.loads(raw_target)
     except json.JSONDecodeError as exc:
-        raise AdmissionError(f"{service}: RUNTIME_TARGET_JSON is invalid JSON") from exc
+        raise AdmissionError(f"{service}: RUNTIME_TARGET_JSON is invalid JSON", reason='target_policy_invalid') from exc
     if not isinstance(target, Mapping):
-        raise AdmissionError(f"{service}: RUNTIME_TARGET_JSON must be an object")
+        raise AdmissionError(f"{service}: RUNTIME_TARGET_JSON must be an object", reason='target_policy_invalid')
     target_service = str(target.get("service_name") or "").strip()
     if target_service and target_service != service:
-        raise AdmissionError(f"{service}: runtime target service_name does not match the deployed service")
+        raise AdmissionError(f"{service}: runtime target service_name does not match the deployed service", reason='target_policy_invalid')
 
     raw_profile = str(target.get("strategy_profile") or "").strip()
     if not raw_profile:
-        raise AdmissionError(f"{service}: runtime target strategy_profile is required")
+        raise AdmissionError(f"{service}: runtime target strategy_profile is required", reason='target_policy_invalid')
     try:
         definition = resolve_strategy_definition(raw_profile, platform_id=LONGBRIDGE_PLATFORM)
     except (TypeError, ValueError) as exc:
-        raise AdmissionError(f"{service}: strategy profile is not admitted") from exc
+        raise AdmissionError(f"{service}: strategy profile is not admitted", reason='target_policy_invalid') from exc
     canonical_profile = definition.profile
     if str(env.get("STRATEGY_PROFILE") or "").strip() != canonical_profile:
-        raise AdmissionError(f"{service}: STRATEGY_PROFILE does not match the admitted runtime target profile")
+        raise AdmissionError(f"{service}: STRATEGY_PROFILE does not match the admitted runtime target profile", reason='target_policy_invalid')
 
     execution_mode = str(target.get("execution_mode") or "").strip().lower()
     if execution_mode not in {"paper", "live"}:
-        raise AdmissionError(f"{service}: execution_mode must be paper or live")
+        raise AdmissionError(f"{service}: execution_mode must be paper or live", reason='target_policy_invalid')
     if "dry_run_only" not in target:
-        raise AdmissionError(f"{service}: runtime target dry_run_only is required")
+        raise AdmissionError(f"{service}: runtime target dry_run_only is required", reason='target_policy_invalid')
     target_dry_run = _parse_bool(target["dry_run_only"], field="runtime target dry_run_only", service=service)
     configured_dry_run = env.get("LONGBRIDGE_DRY_RUN_ONLY")
     if configured_dry_run is not None and _parse_bool(
         configured_dry_run, field="LONGBRIDGE_DRY_RUN_ONLY", service=service
     ) != target_dry_run:
-        raise AdmissionError(f"{service}: LONGBRIDGE_DRY_RUN_ONLY does not match runtime target dry_run_only")
+        raise AdmissionError(f"{service}: LONGBRIDGE_DRY_RUN_ONLY does not match runtime target dry_run_only", reason='target_policy_invalid')
     if target_dry_run and execution_mode != "paper":
-        raise AdmissionError(f"{service}: a dry-run/shadow target must declare execution_mode=paper")
+        raise AdmissionError(f"{service}: a dry-run/shadow target must declare execution_mode=paper", reason='target_policy_invalid')
 
     enabled = _parse_bool(env.get("RUNTIME_TARGET_ENABLED", "true"), field="RUNTIME_TARGET_ENABLED", service=service)
     return {
@@ -315,7 +348,7 @@ def verify_service(*, service: str, service_json: Mapping[str, Any]) -> dict[str
 def _load_object(payload: str) -> Mapping[str, Any]:
     loaded = json.loads(payload)
     if not isinstance(loaded, Mapping):
-        raise AdmissionError("cloud read failed")
+        raise AdmissionError("cloud read failed", reason='external_read_unavailable')
     return loaded
 
 
@@ -323,53 +356,53 @@ def _run_quiet(command: Sequence[str]) -> str:
     try:
         return _run(command)
     except AdmissionError:
-        raise AdmissionError("cloud read failed") from None
+        raise AdmissionError("cloud read failed", reason='external_read_unavailable') from None
 
 
 def _pod_spec(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     spec = payload.get("spec")
     if not isinstance(spec, Mapping):
-        raise AdmissionError("container environment is malformed")
+        raise AdmissionError("container environment is malformed", reason='configuration_invalid')
     containers = spec.get("containers")
     if isinstance(containers, list):
         return spec
     template = spec.get("template")
     if isinstance(template, Mapping) and isinstance(template.get("spec"), Mapping):
         return template["spec"]
-    raise AdmissionError("container environment is malformed")
+    raise AdmissionError("container environment is malformed", reason='configuration_invalid')
 
 
 def _env_material(spec: Mapping[str, Any]) -> list[dict[str, str]]:
     containers = spec.get("containers")
     if not isinstance(containers, list) or not containers or not isinstance(containers[0], Mapping):
-        raise AdmissionError("container environment is malformed")
+        raise AdmissionError("container environment is malformed", reason='configuration_invalid')
     entries = containers[0].get("env", [])
     if not isinstance(entries, list):
-        raise AdmissionError("container environment is malformed")
+        raise AdmissionError("container environment is malformed", reason='configuration_invalid')
     material: list[dict[str, str]] = []
     names: set[str] = set()
     for entry in entries:
         if not isinstance(entry, Mapping):
-            raise AdmissionError("container environment is malformed")
+            raise AdmissionError("container environment is malformed", reason='configuration_invalid')
         name = entry.get("name")
         if not isinstance(name, str) or not name or name != name.strip() or name in names:
-            raise AdmissionError("container environment is malformed")
+            raise AdmissionError("container environment is malformed", reason='configuration_invalid')
         names.add(name)
         if "value" in entry and "valueFrom" not in entry:
             value = entry.get("value")
             if not isinstance(value, str):
-                raise AdmissionError("container environment is malformed")
+                raise AdmissionError("container environment is malformed", reason='configuration_invalid')
             material.append({"name": name, "value": value})
             continue
         secret = ((entry.get("valueFrom") or {}) if isinstance(entry.get("valueFrom"), Mapping) else {}).get(
             "secretKeyRef"
         )
         if not isinstance(secret, Mapping) or "value" in entry:
-            raise AdmissionError("container environment is malformed")
+            raise AdmissionError("container environment is malformed", reason='configuration_invalid')
         secret_name = secret.get("name")
         secret_key = secret.get("key")
         if not isinstance(secret_name, str) or not secret_name or not isinstance(secret_key, str) or not secret_key:
-            raise AdmissionError("container environment is malformed")
+            raise AdmissionError("container environment is malformed", reason='configuration_invalid')
         material.append({"key": secret_key, "name": name.strip(), "secret": secret_name})
     material.sort(key=lambda item: item["name"])
     return material
@@ -379,10 +412,10 @@ def _ingress(metadata: object) -> str:
     if metadata is None:
         metadata = {}
     if not isinstance(metadata, Mapping):
-        raise AdmissionError("container environment is malformed")
+        raise AdmissionError("container environment is malformed", reason='configuration_invalid')
     annotations = metadata.get("annotations") or {}
     if not isinstance(annotations, Mapping):
-        raise AdmissionError("container environment is malformed")
+        raise AdmissionError("container environment is malformed", reason='configuration_invalid')
     return str(annotations.get(_INGRESS) or "")
 
 
@@ -417,27 +450,27 @@ def history_update(
     if all(value == "" for value in values.values()):
         return None
     if any(not value or _UNSAFE_HISTORY.search(value) for value in values.values()):
-        raise AdmissionError("history settings are invalid")
+        raise AdmissionError("history settings are invalid", reason='source_settings_invalid')
     if values["ACCOUNT_HISTORY_RECORDING_ENABLED"] != "true":
-        raise AdmissionError("history settings are invalid")
+        raise AdmissionError("history settings are invalid", reason='source_settings_invalid')
     target_pairs = {"PAPER": ("paper", "PAPER")}
     if allow_sghk:
         target_pairs.update({"HK": ("hk", "HK"), "SG": ("sg", "SG")})
     expected = target_pairs.get(workflow_target)
     if expected is None:
-        raise AdmissionError("history settings are only admitted for approved targets")
+        raise AdmissionError("history settings are only admitted for approved targets", reason='source_settings_invalid')
     if (values["ACCOUNT_HISTORY_TARGET_ID"], values["ACCOUNT_HISTORY_EXPECTED_SCOPE"]) != expected:
-        raise AdmissionError("history settings do not match the selected target")
+        raise AdmissionError("history settings do not match the selected target", reason='source_settings_invalid')
     if _PROJECT_ID.fullmatch(project_id) is None or _TARGET_ID.fullmatch(values["ACCOUNT_HISTORY_TARGET_ID"]) is None:
-        raise AdmissionError("history settings are invalid")
+        raise AdmissionError("history settings are invalid", reason='source_settings_invalid')
     try:
         prefix, _, _ = _gcs_prefix(values["ACCOUNT_HISTORY_GCS_PREFIX"])
     except _Rejected:
-        raise AdmissionError("history settings are invalid") from None
+        raise AdmissionError("history settings are invalid", reason='source_settings_invalid') from None
     if prefix != values["ACCOUNT_HISTORY_GCS_PREFIX"]:
-        raise AdmissionError("history settings are invalid")
+        raise AdmissionError("history settings are invalid", reason='source_settings_invalid')
     if allow_sghk and prefix != "gs://qsl-runtime-logs-shared/longbridge/account_snapshots":
-        raise AdmissionError("history settings are not admitted for this candidate")
+        raise AdmissionError("history settings are not admitted for this candidate", reason='source_settings_invalid')
     return values
 
 
@@ -446,14 +479,14 @@ def _require_sghk_candidate_identity(
 ) -> None:
     expected = {"HK": ("hk", "HK"), "SG": ("sg", "SG")}.get(target_label)
     if expected is None or project != "longbridgequant":
-        raise AdmissionError("candidate target does not match the approved account")
+        raise AdmissionError("candidate target does not match the approved account", reason='target_identity_invalid')
     target_id, scope = expected
     try:
         from application.runtime_target_manifest import load_runtime_target_manifest
 
         matches = [item for item in load_runtime_target_manifest().targets if item.id == target_id]
     except Exception:
-        raise AdmissionError("candidate target does not match the approved account") from None
+        raise AdmissionError("candidate target does not match the approved account", reason='target_identity_invalid') from None
     if (
         len(matches) != 1
         or matches[0].mode != "live"
@@ -461,12 +494,12 @@ def _require_sghk_candidate_identity(
         or matches[0].service != service
         or matches[0].region != region
     ):
-        raise AdmissionError("candidate target does not match the approved account")
+        raise AdmissionError("candidate target does not match the approved account", reason='target_identity_invalid')
     env = _container_env(service_json)
     try:
         runtime_target = json.loads(env.get("RUNTIME_TARGET_JSON") or env.get("QSL_RUNTIME_TARGET_JSON") or "{}")
     except json.JSONDecodeError:
-        raise AdmissionError("runtime target identity does not match the approved account") from None
+        raise AdmissionError("runtime target identity does not match the approved account", reason='target_identity_invalid') from None
     selector = runtime_target.get("account_selector") if isinstance(runtime_target, Mapping) else None
     selectors = (selector,) if isinstance(selector, str) else tuple(selector) if isinstance(selector, list) else None
     deployment_selector = str(runtime_target.get("deployment_selector") or "") if isinstance(runtime_target, Mapping) else ""
@@ -478,7 +511,7 @@ def _require_sghk_candidate_identity(
         or selectors != (scope,)
         or deployment_selector != ("HK" if target_id == "hk" else "SG")
     ):
-        raise AdmissionError("runtime target identity does not match the approved account")
+        raise AdmissionError("runtime target identity does not match the approved account", reason='target_identity_invalid')
 
 
 def _history_arg(values: Mapping[str, str] | None) -> str:
@@ -500,20 +533,20 @@ def _require_paper_target_identity(*, service: str, service_json: Mapping[str, A
     try:
         target = json.loads(env.get("RUNTIME_TARGET_JSON") or env.get("QSL_RUNTIME_TARGET_JSON") or "{}")
     except json.JSONDecodeError as exc:
-        raise AdmissionError(f"{service}: runtime target identity does not match PAPER") from exc
+        raise AdmissionError(f"{service}: runtime target identity does not match PAPER", reason='target_identity_invalid') from exc
     if not isinstance(target, Mapping):
-        raise AdmissionError(f"{service}: runtime target identity does not match PAPER")
+        raise AdmissionError(f"{service}: runtime target identity does not match PAPER", reason='target_identity_invalid')
     if (
         str(target.get("platform_id") or "").strip().lower() != "longbridge"
         or str(target.get("service_name") or "").strip() != service
         or str(target.get("account_scope") or "").strip().upper() != "PAPER"
         or _paper_selector(target.get("account_selector")) != ("PAPER",)
     ):
-        raise AdmissionError(f"{service}: runtime target identity does not match PAPER")
+        raise AdmissionError(f"{service}: runtime target identity does not match PAPER", reason='target_identity_invalid')
     if "deployment_selector" in target and str(target.get("deployment_selector") or "").strip().upper() != "PAPER":
-        raise AdmissionError(f"{service}: runtime target identity does not match PAPER")
+        raise AdmissionError(f"{service}: runtime target identity does not match PAPER", reason='target_identity_invalid')
     if "account_selectors" in target and _paper_selector(target.get("account_selectors")) != ("PAPER",):
-        raise AdmissionError(f"{service}: runtime target identity does not match PAPER")
+        raise AdmissionError(f"{service}: runtime target identity does not match PAPER", reason='target_identity_invalid')
 
 
 def verify_template_matches_serving(
@@ -521,11 +554,11 @@ def verify_template_matches_serving(
 ) -> dict[str, Any]:
     template = service_json.get("spec", {}).get("template")
     if not isinstance(template, Mapping) or not serving_revisions:
-        raise AdmissionError(f"{service}: template does not match the serving revision")
+        raise AdmissionError(f"{service}: template does not match the serving revision", reason='template_mismatch')
     template_configuration = _configuration(service_json, template=template)
     for revision in serving_revisions:
         if _configuration(revision) != template_configuration:
-            raise AdmissionError(f"{service}: template does not match the serving revision")
+            raise AdmissionError(f"{service}: template does not match the serving revision", reason='template_mismatch')
     return template_configuration
 
 
@@ -704,19 +737,19 @@ def _require_candidate_release_binding(
     try:
         target = json.loads(env.get("RUNTIME_TARGET_JSON") or env.get("QSL_RUNTIME_TARGET_JSON") or "{}")
     except json.JSONDecodeError as exc:
-        raise AdmissionError(f"{service}: candidate UES revision does not match approved target binding") from exc
+        raise AdmissionError(f"{service}: candidate UES revision does not match approved target binding", reason='target_binding_invalid') from exc
     if not isinstance(target, Mapping):
-        raise AdmissionError(f"{service}: candidate UES revision does not match approved target binding")
+        raise AdmissionError(f"{service}: candidate UES revision does not match approved target binding", reason='target_binding_invalid')
     release = target.get("strategy_release") or {}
     risk_binding = (target.get("runtime_risk_limits") or {}).get("binding") or {}
     if not isinstance(release, Mapping) or not isinstance(risk_binding, Mapping):
-        raise AdmissionError(f"{service}: candidate UES revision does not match approved target binding")
+        raise AdmissionError(f"{service}: candidate UES revision does not match approved target binding", reason='target_binding_invalid')
     approved = release.get("strategy_revision")
     risk_pin = risk_binding.get("ues_revision")
     if approved is None and risk_pin is None:
         return
     if approved != ues_revision or (profile == "soxl_soxx_trend_income" and risk_pin != ues_revision):
-        raise AdmissionError(f"{service}: candidate UES revision does not match approved target binding")
+        raise AdmissionError(f"{service}: candidate UES revision does not match approved target binding", reason='candidate_target_binding_mismatch')
 
 
 def prepare_image_only_staging(
@@ -748,13 +781,13 @@ def prepare_image_only_staging(
             service_json=service_json,
         )
         if image_commit == APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE and admission["enabled"]:
-            raise AdmissionError(f"{service}: HK diagnostic staging requires the runtime target to remain disabled")
+            raise AdmissionError(f"{service}: HK diagnostic staging requires the runtime target to remain disabled", reason='target_policy_invalid')
     else:
         _require_paper_target_identity(service=service, service_json=service_json)
     try:
         traffic = serving_traffic_rows(service_json)
     except ReconcileError:
-        raise AdmissionError(f"{service}: serving revisions are unavailable") from None
+        raise AdmissionError(f"{service}: serving revisions are unavailable", reason='serving_identity_unavailable') from None
     revisions: list[Mapping[str, Any]] = []
     for row in traffic:
         if int(row["percent"]) <= 0:
@@ -815,7 +848,7 @@ def prepare_image_only_staging(
         service=service, project=project, region=region, service_json=service_json, run=run
     )
     if serving != {source_revision}:
-        raise AdmissionError(f"{service}: candidate UES revision differs from serving image")
+        raise AdmissionError(f"{service}: candidate UES revision differs from serving image", reason='candidate_serving_ues_mismatch')
     history_arg = _history_arg(history)
     snapshot_arg = (
         f"{_ACCOUNT_SNAPSHOT_ENV}={snapshot_value}"
@@ -850,10 +883,10 @@ def _validate_image_only_source(
     snapshot_value = _account_snapshot_update(env, workflow_target=str(env.get("WORKFLOW_TARGET") or ""))
     if image_commit == APPROVED_PAPER_HISTORY_CANDIDATE:
         if history is None or snapshot_value is not None:
-            raise AdmissionError("image source is not approved")
+            raise AdmissionError("image source is not approved", reason='image_source_not_admitted')
     elif image_commit == APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE:
         if str(env.get("WORKFLOW_TARGET") or "") != "PAPER" or history is not None:
-            raise AdmissionError("image source is not approved")
+            raise AdmissionError("image source is not approved", reason='image_source_not_admitted')
     elif image_commit in {
         APPROVED_PAPER_PROBE_SNAPSHOT_CANDIDATE,
         APPROVED_PAPER_PROBE_FINANCING_CANDIDATE,
@@ -864,26 +897,26 @@ def _validate_image_only_source(
             or history is not None
             or snapshot_value is not None
         ):
-            raise AdmissionError("image source is not approved")
+            raise AdmissionError("image source is not approved", reason='image_source_not_admitted')
     elif image_commit == APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE:
         target = str(env.get("WORKFLOW_TARGET") or "")
         if target not in {"HK", "SG"}:
-            raise AdmissionError("image source is not approved")
+            raise AdmissionError("image source is not approved", reason='image_source_not_admitted')
         # History quartet and endpoint switch stay mutually exclusive.
         if history is not None and snapshot_value is not None:
-            raise AdmissionError("image source is not approved")
+            raise AdmissionError("image source is not approved", reason='image_source_not_admitted')
         if history is None and snapshot_value is None:
-            raise AdmissionError("image source is not approved")
+            raise AdmissionError("image source is not approved", reason='image_source_not_admitted')
         # HK endpoint enable is the reviewed exception; SG keeps history-only staging.
         if snapshot_value is not None and (target != "HK" or snapshot_value != "true"):
-            raise AdmissionError("image source is not approved")
+            raise AdmissionError("image source is not approved", reason='image_source_not_admitted')
     elif image_commit == APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE:
         if (
             str(env.get("WORKFLOW_TARGET") or "") != "HK"
             or history is not None
             or snapshot_value is not None
         ):
-            raise AdmissionError("image source is not approved")
+            raise AdmissionError("image source is not approved", reason='image_source_not_admitted')
     elif image_commit == APPROVED_SGHK_STOCK_INVENTORY_CANDIDATE:
         # Read-only SG/HK inventory image: no PAPER target and no environment update.
         if (
@@ -891,12 +924,12 @@ def _validate_image_only_source(
             or history is not None
             or snapshot_value is not None
         ):
-            raise AdmissionError("image source is not approved")
+            raise AdmissionError("image source is not approved", reason='image_source_not_admitted')
     elif _is_exact_main_image(image_commit, env):
         if history is not None:
-            raise AdmissionError("image source is not approved")
+            raise AdmissionError("image source is not approved", reason='image_source_not_admitted')
     else:
-        raise AdmissionError("image source is not approved")
+        raise AdmissionError("image source is not approved", reason='image_source_not_admitted')
     return history, snapshot_value
 
 
@@ -905,14 +938,14 @@ def _account_snapshot_update(
 ) -> str | None:
     value = str(env.get(_ACCOUNT_SNAPSHOT_INPUT) or "")
     if value not in {"", "true", "false"}:
-        raise AdmissionError("account snapshot setting is invalid")
+        raise AdmissionError("account snapshot setting is invalid", reason='source_settings_invalid')
     if value and workflow_target == "PAPER":
         return value
     # Reviewed HK-only enablement for independent GET /account-snapshot on serving.
     if value == "true" and workflow_target == "HK":
         return value
     if value:
-        raise AdmissionError("account snapshot setting is only admitted for PAPER or HK enable")
+        raise AdmissionError("account snapshot setting is only admitted for PAPER or HK enable", reason='source_settings_invalid')
     return None
 
 
@@ -1047,11 +1080,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not args.plan_out:
             print("Image-only staging admission failed.", file=sys.stderr)
             return 1
+        failure_phase = "source_validation"
         try:
             image_commit = str(os.environ.get("SOURCE_COMMIT") or "")
             _validate_image_only_source(
                 image_commit=image_commit, env=os.environ, project=args.project
             )
+            failure_phase = "service_observation"
             service_json = _load_object(
                 _run_quiet(
                     [
@@ -1066,6 +1101,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ]
                 )
             )
+            failure_phase = "staging_validation"
             plan = prepare_image_only_staging(
                 service=args.service,
                 project=args.project,
@@ -1075,9 +1111,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 image_commit=image_commit,
                 run=_run_quiet,
             )
+            failure_phase = "plan_write"
             _write_plan(args.plan_out, plan)
-        except (AdmissionError, OSError):
+        except (AdmissionError, OSError) as exc:
             print("Image-only staging admission failed.", file=sys.stderr)
+            _report_staging_failure(exc, phase=failure_phase)
             return 1
         return 0
     if args.image_only_readback:
@@ -1126,3 +1164,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
