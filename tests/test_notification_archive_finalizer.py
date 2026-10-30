@@ -155,7 +155,7 @@ def test_real_finalizer_terminal_cases(finalized_cycle, bound, qrs, tmp_path, ca
         assert not summary["counts_unknown"] and "本轮 0 单" in text
     else:
         assert summary["counts_unknown"] and "未知" in text
-        assert len([c for c in calls if c[0] == "send"]) == 1
+        assert len([c for c in calls if c[0] == "send"]) == (0 if case == "order" else 1)
 
 
 def test_real_policy_zero_run_window(bound, qrs, tmp_path):

@@ -1,15 +1,25 @@
 # Unified daily notification (code only)
 
-`QSL_ROUTINE_NOTIFICATION_MODE` defaults to `immediate`. Exact `daily_digest`
-opts into one central bilingual digest. `QSL_DIGEST_ROUTINE_ORDERS=false` retains
-immediate confirmed order notices. Failed, pending, uncertain, risk, persistence
-and authentication outcomes retain immediate alerts. Healthy idle cycles and
-routine plugin observations do not produce individual pushes.
+Routine successful cycles, acknowledged actions and healthy heartbeats are
+recorded for the next daily digest regardless of legacy notification flags.
+Only a confirmed protected candidate write establishes successful deferral.
+Failed or uncertain writes produce an operational coverage diagnostic;
+they do not fall back to the normal trade or heartbeat message. Unknown order
+outcomes, risk escalation, errors and authentication failures remain urgent.
+An observed action is not proof of an order count or a fill; those counts stay
+unknown unless independently established by the archive.
 
-QPK source reference: `4cc5e55251269923771f90cd661bb62a5cfdf0cd` (notification modules only).
+Routine plugin observations are counted from live signals using the allowlisted
+routes and stored with the same source-run identity. Conflicting observations
+are rejected as unconfirmed coverage, never summed or silently overwritten.
+The scheduled archive exporter uses the existing protected bindings for every
+flag setting. This source change alone does not establish runtime deployment,
+candidate availability or notification delivery.
+
+QPK source reference: `2b04882058666ebc81d1650d93fa2105ec4ba3d8` (notification modules only).
 
 The notification-only QPK source snapshot in `notifications/digest_snapshot/` avoids an
-unrelated trading dependency upgrade. Keep these three modules byte-identical
+unrelated trading dependency upgrade. Keep these four modules byte-identical
 to the reviewed QPK notification modules. Existing QPK/strategy pins, order
 execution, funding, risk, account enablement and durable report writes are unchanged.
 

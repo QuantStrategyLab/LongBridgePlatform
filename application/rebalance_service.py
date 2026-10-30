@@ -1237,13 +1237,11 @@ def run_strategy(
     if isinstance(position_currency_by_symbol, dict):
         execution["position_currency_by_symbol"] = dict(position_currency_by_symbol)
 
-    from notifications.unified import enabled as unified_enabled, prepare_cycle
-    if unified_enabled():
-        routine_to_digest, notification_publisher = prepare_cycle(
-            execution_result, config=config, publisher=notification_publisher, notify_issue=runtime.notify_issue,
-        )
-    else:
-        routine_to_digest = _defer_cycle_notification(execution_result, config=config)
+    from notifications.unified import prepare_cycle
+    routine_to_digest, notification_publisher = prepare_cycle(
+        execution_result, config=config, publisher=notification_publisher,
+        notify_issue=lambda title, detail: runtime.notifications.send_text(f"{title}\n{detail}"),
+    )
     if routine_to_digest:
         print(config.with_prefix("notification_suppressed reason=daily_digest"), flush=True)
     elif pending_orders:
