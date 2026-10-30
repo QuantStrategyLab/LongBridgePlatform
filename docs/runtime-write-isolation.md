@@ -69,6 +69,22 @@ Scheduler correlation remains unverified, even for a single match. No match,
 truncation, and read failure do not establish an outcome; business status,
 receipt and submit count remain unknown.
 
+On a revision with validation-cycle observation installed, a PAPER `/dry-run`
+also emits a sanitized cycle event. Its count covers attempts reaching that
+request's instrumented application submit adapter, which blocks forwarding;
+any nonzero count means the guard blocked an attempt, even if a report says
+`ok`. It is not a count of all broker SDK calls. Cycle entry, return, report status,
+and presence of an execution receipt are separate facts. A trace-matched event
+is not authenticated Scheduler correlation; missing, ambiguous, or invalid
+events remain unknown. This instrumentation cannot reconstruct earlier runs.
+
+The submit guard does not make the whole cycle read-only. Existing bootstrap
+may refresh a token, report persistence may write an archive, and enabled state
+or command producers may write markers, risk state, or paper commands. An
+isolated validation executor must separately prevent or isolate these writes
+before invoking the candidate; a zero adapter-attempt count does not prove
+their absence.
+
 ## Cycle heartbeat and account values
 
 An authorized, market-open `/run` emits its no-trade heartbeat through the existing

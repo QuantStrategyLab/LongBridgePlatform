@@ -554,6 +554,157 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertTrue(observed["validation_only"])
         self.assertEqual(observed["validation_label"], "dry_run")
 
+    def test_paper_dry_run_instruments_real_composed_port_and_stays_silent(self):
+        import io
+        from contextlib import nullcontext, redirect_stdout
+
+        module = load_module()
+        from application.runtime_composer import LongBridgeRuntimeComposer
+        from application.validation_cycle_observation import ValidationSubmitBlocked, current
+        notifications, forwarded = [], []
+        original = module.build_composer(dry_run_only_override=True)
+        original_submit = original.broker_adapters.submit_order_fn
+        report = {"status": "pending", "dry_run": True}
+        reporting = types.SimpleNamespace(
+            start_run=lambda: (types.SimpleNamespace(run_id="test-run"), report),
+            log_event=lambda *args, **kwargs: None,
+            persist_execution_report=lambda _report: None,
+        )
+        notification = types.SimpleNamespace(
+            notification_port=None,
+            notify_issue=lambda *_args: notifications.append("issue"),
+            post_submit_order=lambda *_args: notifications.append("post-submit"),
+            publish_cycle_notification=lambda **_kwargs: notifications.append("cycle"),
+        )
+
+        def cycle(*, runtime, config):
+            self.assertIsNotNone(current())
+            runtime.notify_issue("synthetic", "synthetic")
+            intent = types.SimpleNamespace(symbol="TEST", order_type="LO", side="buy", quantity=1, limit_price=1)
+            with self.assertRaises(ValidationSubmitBlocked):
+                runtime.execution_port_factory(None).submit_order(intent)
+            return types.SimpleNamespace()
+
+        def finish(payload, *, status, **_kwargs):
+            payload["status"] = status
+
+        output = io.StringIO()
+        with patch.object(module, "ACCOUNT_REGION", "PAPER"), \
+             patch.object(module, "_v7_application_candidate_bound", return_value=False), \
+             patch.object(module, "is_market_open_now", return_value=True), \
+             patch.object(module, "dca_execution_unsupported_reason", return_value=None), \
+             patch.object(module, "run_rebalance_cycle", side_effect=cycle), \
+             patch.object(module, "submit_order", side_effect=lambda *_args, **_kwargs: forwarded.append(True)), \
+             patch.object(module, "_summarize_cycle_result_for_report", return_value={}), \
+             patch.object(module, "_build_notification_delivery_log_for_report", return_value={}), \
+             patch.object(module, "attach_cycle_execution_receipt", side_effect=lambda payload, _result: payload.update(execution_receipt={})), \
+             patch.object(module, "finalize_runtime_report", side_effect=finish), \
+             patch.object(module.unified_notifications, "bind_report", side_effect=lambda *_args, **_kwargs: nullcontext()), \
+             patch.object(module.unified_notifications, "enabled", return_value=False), \
+             patch.object(LongBridgeRuntimeComposer, "build_reporting_adapters", return_value=reporting), \
+             patch.object(LongBridgeRuntimeComposer, "build_notification_adapters", return_value=notification), \
+             patch.object(LongBridgeRuntimeComposer, "load_strategy_plugin_signals", return_value=((), None)), \
+             patch.object(LongBridgeRuntimeComposer, "attach_strategy_plugin_report", return_value=None), \
+             patch.object(LongBridgeRuntimeComposer, "build_rebalance_config", return_value=types.SimpleNamespace()), \
+             redirect_stdout(output), module.app.test_request_context("/dry-run", method="POST"):
+            self.assertEqual(module.handle_dry_run(), ("Dry Run OK", 200))
+
+        receipts = [json.loads(line) for line in output.getvalue().splitlines() if line.startswith('{"adapter_instrumented"')]
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(receipts[0]["adapter_submit_attempt_count"], 1)
+        self.assertTrue(receipts[0]["cycle_entered"] and receipts[0]["cycle_returned"])
+        self.assertTrue(receipts[0]["execution_receipt_present"])
+        self.assertEqual(notifications, [])
+        self.assertEqual(forwarded, [])
+        self.assertIs(module.BROKER_ADAPTERS.submit_order_fn, original_submit)
+        self.assertIsNone(current())
+
+    def test_dry_run_exception_resets_scope_and_never_notifies(self):
+        import io
+        from contextlib import redirect_stdout
+
+        module = load_module()
+        output = io.StringIO()
+        def fail(**_kwargs):
+            raise RuntimeError("private diagnostic")
+
+        with patch.object(module, "ACCOUNT_REGION", "PAPER"), \
+             patch.object(module, "run_strategy", side_effect=fail), \
+             patch.object(module, "_notify_runtime_error") as notify, \
+             redirect_stdout(output), module.app.test_request_context("/dry-run", method="POST"):
+            self.assertEqual(module.handle_dry_run(), ("Error", 500))
+        notify.assert_not_called()
+        self.assertIsNone(module.validation_cycle_observation.current())
+        self.assertNotIn("private diagnostic", output.getvalue())
+
+    def test_paper_validation_cycle_failure_is_silent_and_reports_error(self):
+        import io
+        from contextlib import nullcontext, redirect_stdout
+
+        module = load_module()
+        from application.runtime_composer import LongBridgeRuntimeComposer
+        sent = []
+        report = {"status": "pending", "dry_run": True}
+        reporting = types.SimpleNamespace(
+            start_run=lambda: (types.SimpleNamespace(run_id="test-run"), report),
+            log_event=lambda *args, **kwargs: None,
+            persist_execution_report=lambda _report: None,
+        )
+        notification = types.SimpleNamespace(
+            notification_port=None,
+            notify_issue=lambda *_args: sent.append("issue"),
+            post_submit_order=lambda *_args: sent.append("post-submit"),
+            publish_cycle_notification=lambda **_kwargs: sent.append("cycle"),
+        )
+        def finish(payload, *, status, **_kwargs):
+            payload["status"] = status
+
+        output = io.StringIO()
+        with patch.object(module, "ACCOUNT_REGION", "PAPER"), \
+             patch.object(module, "_v7_application_candidate_bound", return_value=False), \
+             patch.object(module, "is_market_open_now", return_value=True), \
+             patch.object(module, "dca_execution_unsupported_reason", return_value=None), \
+             patch.object(module, "run_rebalance_cycle", side_effect=RuntimeError("private diagnostic")), \
+             patch.object(module, "finalize_runtime_report", side_effect=finish), \
+             patch.object(module, "attach_terminal_fallback_execution_receipt", return_value=None), \
+             patch.object(module.unified_notifications, "bind_report", side_effect=lambda *_args, **_kwargs: nullcontext()), \
+             patch.object(module.unified_notifications, "enabled", return_value=False), \
+             patch.object(LongBridgeRuntimeComposer, "build_reporting_adapters", return_value=reporting), \
+             patch.object(LongBridgeRuntimeComposer, "build_notification_adapters", return_value=notification), \
+             patch.object(LongBridgeRuntimeComposer, "load_strategy_plugin_signals", return_value=((), None)), \
+             patch.object(LongBridgeRuntimeComposer, "attach_strategy_plugin_report", return_value=None), \
+             patch.object(LongBridgeRuntimeComposer, "build_rebalance_config", return_value=types.SimpleNamespace()), \
+             redirect_stdout(output), module.app.test_request_context("/dry-run", method="POST"):
+            self.assertEqual(module.handle_dry_run(), ("Error", 500))
+        receipts = [json.loads(line) for line in output.getvalue().splitlines() if line.startswith('{"adapter_instrumented"')]
+        self.assertEqual(len(receipts), 1)
+        self.assertTrue(receipts[0]["cycle_entered"])
+        self.assertFalse(receipts[0]["cycle_returned"])
+        self.assertEqual(receipts[0]["report_status"], "error")
+        self.assertEqual(sent, [])
+        self.assertNotIn("private diagnostic", output.getvalue())
+
+    def test_paper_dry_run_logging_failure_preserves_route_result(self):
+        module = load_module()
+        with patch.object(module, "ACCOUNT_REGION", "PAPER"), \
+             patch.object(module, "run_strategy", return_value=True), \
+             patch.object(module.validation_cycle_observation.json, "dumps", side_effect=OSError("sink")), \
+             module.app.test_request_context("/dry-run", method="POST"):
+            self.assertEqual(module.handle_dry_run(), ("Dry Run OK", 200))
+        self.assertIsNone(module.validation_cycle_observation.current())
+
+    def test_run_and_non_paper_dry_run_do_not_enter_observation_scope(self):
+        module = load_module()
+        seen = []
+        module.run_strategy = lambda **_kwargs: seen.append(module.validation_cycle_observation.current())
+        with patch.object(module, "ACCOUNT_REGION", "HK"):
+            with module.app.test_request_context("/dry-run", method="POST"):
+                self.assertEqual(module.handle_dry_run(), ("Dry Run OK", 200))
+        with patch.object(module, "ACCOUNT_REGION", "PAPER"):
+            with module.app.test_request_context("/run", method="POST"):
+                self.assertEqual(module.handle_trigger(), ("OK", 200))
+        self.assertEqual(seen, [None, None])
+
     def test_paper_command_consumer_rejects_any_non_paper_runtime_before_building_composer(self):
         module = load_module()
         module.build_composer = lambda **_kwargs: (_ for _ in ()).throw(
