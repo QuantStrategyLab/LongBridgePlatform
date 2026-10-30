@@ -281,6 +281,11 @@ import re
 import sys
 
 workflow = Path(sys.argv[1]).read_text()
+input_section = workflow.split("    inputs:\n", 1)[1].split("\nenv:\n", 1)[0]
+input_names = re.findall(r"^      ([a-z_]+):$", input_section, re.MULTILINE)
+assert len(input_names) <= 25, f"workflow_dispatch has {len(input_names)} inputs, exceeding GitHub's limit"
+assert "notification_overlay" not in input_names
+assert "image-only-notification-overlay" in input_section
 legacy = workflow.split("\n  sync:\n", 1)[1].split("\n  cleanup-shared-monitor:\n", 1)[0]
 
 deploy = legacy.split("      - name: Build, push, and deploy Cloud Run image\n", 1)[1]
@@ -413,7 +418,7 @@ lifecycle_job = lifecycle.split("  lifecycle:\n", 1)[1]
 lifecycle_if = re.search(r"^    if: (.+)$", lifecycle_job, re.MULTILINE)
 assert lifecycle_if, "lifecycle must skip image-only completions before matrix authentication"
 # Evaluate the actual two comparison/boolean expressions for dispatch and follow-up events.
-for mode in ("legacy", "image-only-no-traffic"):
+for mode in ("legacy", "image-only-no-traffic", "image-only-notification-overlay"):
     title = eval(run_name[1].replace("inputs.deployment_mode", "mode").replace("&&", "and").replace("||", "or"),
                  {"__builtins__": {}}, {"mode": mode})
     for event in ("workflow_run", "workflow_dispatch", "schedule"):
@@ -434,7 +439,7 @@ assert "matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}" in workflo
 legacy = workflow.split("\n  sync:\n", 1)[1].split("\n  cleanup-shared-monitor:\n", 1)[0]
 cleanup = workflow.split("\n  cleanup-shared-monitor:\n", 1)[1]
 for section in (legacy, cleanup):
-    assert "inputs.deployment_mode != 'image-only-no-traffic'" in section.split("    steps:", 1)[0]
+    assert "inputs.deployment_mode == 'legacy'" in section.split("    steps:", 1)[0]
 assert "needs: resolve-matrix" in legacy.split("    steps:", 1)[0]
 assert job.index("name: Validate image-only dispatch") < job.index("uses: google-github-actions/auth@")
 assert job.index("name: Verify exact image-only source") < job.index("uses: google-github-actions/auth@")
@@ -841,6 +846,20 @@ else:
                 if separator:
                     step_env[name] = value
         return 0, [json.loads(line) for line in log.read_text().splitlines()]
+
+    # The composite route is explicit and derives its flag from the mode.
+    selection_file = root / "selection-env"
+    selection_file.write_text("")
+    selection = subprocess.run(["bash", "-c", blocks[0]], env={**base,
+        "DEPLOYMENT_MODE": "image-only-notification-overlay", "NOTIFICATION_OVERLAY_INPUT": "true",
+        "SOURCE_COMMIT": paper_stock_inventory_candidate, "GITHUB_ENV": str(selection_file)},
+        text=True, capture_output=True, cwd=root)
+    assert selection.returncode == 0, selection.stderr
+    assert "IMAGE_STAGING_MODE=notification-overlay" in selection_file.read_text()
+    inconsistent = subprocess.run(["bash", "-c", blocks[0]], env={**base,
+        "DEPLOYMENT_MODE": "image-only-notification-overlay", "NOTIFICATION_OVERLAY_INPUT": "false",
+        "SOURCE_COMMIT": paper_stock_inventory_candidate}, text=True, capture_output=True, cwd=root)
+    assert inconsistent.returncode != 0
 
     cases = 0
     for label in ("PAPER", "HK", "SG"):
@@ -1253,10 +1272,10 @@ else:
         cases += 1
     # Overlay selection cannot escape its PAPER baseline or carry settings updates.
     for overrides in (
-        {"NOTIFICATION_OVERLAY_INPUT": "true", "SOURCE_COMMIT": paper_stock_inventory_candidate,
+        {"DEPLOYMENT_MODE": "image-only-notification-overlay", "NOTIFICATION_OVERLAY_INPUT": "true", "SOURCE_COMMIT": paper_stock_inventory_candidate,
          "WORKFLOW_TARGET": "HK"},
-        {"NOTIFICATION_OVERLAY_INPUT": "true", "SOURCE_COMMIT": "a" * 40},
-        {"NOTIFICATION_OVERLAY_INPUT": "true", "SOURCE_COMMIT": paper_stock_inventory_candidate,
+        {"DEPLOYMENT_MODE": "image-only-notification-overlay", "NOTIFICATION_OVERLAY_INPUT": "true", "SOURCE_COMMIT": "a" * 40},
+        {"DEPLOYMENT_MODE": "image-only-notification-overlay", "NOTIFICATION_OVERLAY_INPUT": "true", "SOURCE_COMMIT": paper_stock_inventory_candidate,
          "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true"},
     ):
         code, calls = execute(**overrides)

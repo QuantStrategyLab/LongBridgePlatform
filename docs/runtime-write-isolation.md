@@ -136,7 +136,7 @@ by admission and do not change its decision.
 
 The fixed PAPER notification overlay is a composite source: an existing reviewed
 base commit, the immutable notification patch and the resulting image digest.
-Select it explicitly with `notification_overlay`; leave history and snapshot
+Select it explicitly with `deployment_mode=image-only-notification-overlay`; leave history and snapshot
 inputs empty. Before staging, the workflow checks the original PAPER target,
 strategy and risk bindings, serving dependencies and exact template match. It
 also checks the recorded build inputs, patch hash, original image layers,
