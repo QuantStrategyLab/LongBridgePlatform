@@ -438,8 +438,12 @@ for section in (legacy, cleanup):
 assert "needs: resolve-matrix" in legacy.split("    steps:", 1)[0]
 assert job.index("name: Validate image-only dispatch") < job.index("uses: google-github-actions/auth@")
 assert job.index("name: Verify exact image-only source") < job.index("uses: google-github-actions/auth@")
-# The isolated job cannot bind broker/runtime credentials or run legacy helpers.
-assert re.findall(r"secrets\.([A-Z_]+)", job) == ["CLOUD_RUN_SERVICE"]
+# Only the service selector and immutable overlay provenance inputs are allowed;
+# broker and runtime credentials remain outside this isolated job.
+assert re.findall(r"secrets\.([A-Z_]+)", job) == [
+    "NOTIFICATION_OVERLAY_BASE_DIGEST", "NOTIFICATION_OVERLAY_IMAGE_DIGEST",
+    "NOTIFICATION_OVERLAY_BUILD_ID", "CLOUD_RUN_SERVICE",
+]
 assert "scripts/verify_deployed_runtime_target_admission.py" in job
 assert "record_daily_account_snapshot" not in job
 assert "git checkout" not in job
@@ -1246,6 +1250,17 @@ else:
         assert code != 0, overrides
         assert not any(call[:2] == ["docker", "build"] for call in calls)
         assert not any(call[:4] == ["gcloud", "run", "services", "update"] for call in calls)
+        cases += 1
+    # Overlay selection cannot escape its PAPER baseline or carry settings updates.
+    for overrides in (
+        {"NOTIFICATION_OVERLAY_INPUT": "true", "SOURCE_COMMIT": paper_stock_inventory_candidate,
+         "WORKFLOW_TARGET": "HK"},
+        {"NOTIFICATION_OVERLAY_INPUT": "true", "SOURCE_COMMIT": "a" * 40},
+        {"NOTIFICATION_OVERLAY_INPUT": "true", "SOURCE_COMMIT": paper_stock_inventory_candidate,
+         "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true"},
+    ):
+        code, calls = execute(**overrides)
+        assert code != 0 and calls == [], overrides
         cases += 1
     print(f"image-only no-traffic shell cases: {cases} passed")
 PY
