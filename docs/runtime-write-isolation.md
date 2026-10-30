@@ -56,6 +56,22 @@ the log guard passes. These log checks do not authorize production recovery.
 
 ## Inspect a PAPER dry-run request
 
+The manual **Inspect PAPER Serving Metadata** workflow first observes the current
+service and every positive-traffic revision using the existing PAPER environment
+and cloud identity. It reads each immutable serving image in a container with no
+network, a read-only filesystem and Python `-I -S`; it never starts the application
+or invokes a service/broker endpoint. It compares installed distribution metadata,
+the image lock, source labels and protected target declarations. Missing source,
+lock, binding or installation metadata remains unknown. Distribution metadata and
+labels are observations, not independent source provenance or original approval.
+The service and revision are re-read to reject changes during inspection; this is
+not an atomic historical snapshot. Output uses revision ordinals and traffic
+percentages, public code identities and boolean comparisons. Resource names,
+account identities and image repository/digests remain in runner memory and are
+not logged or uploaded. The workflow does not change admission, deployment,
+configuration, traffic or Scheduler, and a successful observation never authorizes
+execution or establishes account cash/ledger acceptance.
+
 Run the manual **Inspect PAPER dry-run request** workflow with `start_utc`
 (inclusive) and `end_utc` (exclusive), both in `YYYY-MM-DDTHH:MM:SSZ` format.
 The window must be positive and no longer than 15 minutes. The workflow checks

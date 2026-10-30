@@ -1,0 +1,58 @@
+name: Inspect PAPER Serving Metadata
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: Deploy Cloud Run-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  inspect:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: longbridge-paper
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_PROJECT_ID: longbridgequant
+      WORKFLOW_TARGET: PAPER
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+      EXPECTED_RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate existing PAPER selection before cloud authentication
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_REPOSITORY" = QuantStrategyLab/LongBridgePlatform
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -n "$CLOUD_RUN_REGION"
+          test -n "$CLOUD_RUN_SERVICE"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install frozen inspection dependencies
+        run: |
+          python -m pip install --upgrade pip uv
+          uv sync --frozen --no-dev
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
+          service_account: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: longbridgequant
+      - name: Read serving metadata without invoking the service
+        run: uv run --no-sync python -m scripts.inspect_paper_serving_metadata
