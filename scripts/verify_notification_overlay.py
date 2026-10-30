@@ -39,7 +39,7 @@ def _require(value):
         raise ValueError("notification_overlay_provenance_invalid")
 
 
-def verify_build(build, files, dockerfile, digest, repo):
+def verify_build(build, files, dockerfile, digest, repo, payload_digest):
     """Check the exact builder instructions and embedded source, without rendering them."""
     steps = build.get("steps") or []
     tag = (build.get("results") or {}).get("images", [{}])[0].get("name", "")
@@ -60,6 +60,7 @@ def verify_build(build, files, dockerfile, digest, repo):
     try:
         raw = base64.b64decode("".join(args[3:]), validate=True)
         _require(len(raw) < 2 * 1024 * 1024)
+        _require("sha256:" + hashlib.sha256(raw).hexdigest() == payload_digest)
         with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as archive:
             members = archive.getmembers()
             _require(len(members) == len(files) + 1 and all(m.isfile() for m in members))
@@ -103,7 +104,7 @@ def verify_layer_list(baseline, candidate, expected_count):
              (candidate.get("Os"), candidate.get("Architecture")))
 
 
-def collect_layer(archive, files, found):
+def collect_layer(archive, files, found, directory_metadata):
     parents = {"app"}
     for name in files:
         parent = Path("app") / name
@@ -111,7 +112,8 @@ def collect_layer(archive, files, found):
     for member in archive:
         path = member.name.removeprefix("./").rstrip("/")
         if member.isdir():
-            _require(path in parents and member.mode & 0o022 == 0)
+            _require(path in parents and path in directory_metadata)
+            _require([member.uid, member.gid, member.mode & 0o7777] == directory_metadata[path])
             continue
         _require(member.isfile() and path.startswith("app/"))
         name = path.removeprefix("app/")
@@ -121,26 +123,46 @@ def collect_layer(archive, files, found):
         found[name] = archive.extractfile(member).read()
 
 
-def verify_base_directory_absent(base):
-    # Execute only isolated stdlib code, without network or application imports.
-    try:
-        probe = ("import os\ntry:\n os.lstat('/app/notifications/digest_snapshot')\n"
-                 "except FileNotFoundError:\n print('ABSENT')\n"
-                 "except OSError:\n print('UNAVAILABLE')\n"
-                 "else:\n print('PRESENT')\n")
-        absent = _run(["docker", "run", "--rm", "--read-only", "--network=none", "--entrypoint", "/app/.venv/bin/python",
-                       base, "-I", "-S", "-B", "-c", probe])
-    except RuntimeError:
-        raise VerificationError("baseline_directory_absence_unconfirmed") from None
-    if absent != b"ABSENT\n":
-        raise VerificationError("baseline_directory_absence_unconfirmed")
+DIRECTORIES = ("app", "app/application", "app/notifications", "app/scripts")
+NEW_DIRECTORY = "app/notifications/digest_snapshot"
 
-def verify(repo, project, base_digest, image_digest, build_id):
+
+def _probe_directories(image):
+    # Execute only isolated stdlib code, without network or application imports.
+    probe = ("import os,json\npaths=" + repr(DIRECTORIES + (NEW_DIRECTORY,)) + "\n"
+             "out={}\nfor path in paths:\n"
+             " try:\n  st=os.lstat('/'+path);out[path]=[st.st_uid,st.st_gid,st.st_mode & 0o7777]\n"
+             " except FileNotFoundError:\n  out[path]=None\n"
+             " except OSError:\n  out[path]='UNAVAILABLE'\n"
+             "print(json.dumps(out,sort_keys=True))\n")
+    try:
+        output = _run(["docker", "run", "--rm", "--read-only", "--network=none", "--entrypoint",
+                       "/app/.venv/bin/python", image, "-I", "-S", "-B", "-c", probe])
+        value = json.loads(output)
+    except (RuntimeError, ValueError):
+        raise VerificationError("baseline_directory_absence_unconfirmed") from None
+    if not isinstance(value, dict) or set(value) != set(DIRECTORIES + (NEW_DIRECTORY,)):
+        raise VerificationError("baseline_directory_absence_unconfirmed")
+    return value
+
+
+def verify_directory_metadata(base, candidate):
+    for name in DIRECTORIES:
+        value = base.get(name)
+        _require(isinstance(value, list) and len(value) == 3 and all(type(x) is int and x >= 0 for x in value))
+        _require(candidate.get(name) == value)
+    _require(base.get(NEW_DIRECTORY) is None)
+    _require(candidate.get(NEW_DIRECTORY) == [1000, 1000, 0o755])
+    return {**{name: base[name] for name in DIRECTORIES}, NEW_DIRECTORY: [1000, 1000, 0o755]}
+
+
+def verify(repo, project, base_digest, image_digest, build_id, payload_digest):
     """Verify Git, builder and OCI content without starting the application."""
     global _PHASE
     _PHASE = "input_validation"
     _require(re.fullmatch(r"sha256:[0-9a-f]{64}", base_digest) is not None)
     _require(re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest) is not None)
+    _require(re.fullmatch(r"sha256:[0-9a-f]{64}", payload_digest) is not None)
     _require(re.fullmatch(r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", build_id) is not None)
     _PHASE = "patch_validation"
     patch = _run(["git", "show", f"{OVERLAY_COMMIT}:{PATCH_PATH}"])
@@ -171,7 +193,7 @@ def verify(repo, project, base_digest, image_digest, build_id):
         build = json.loads(_run(["gcloud", "builds", "describe", build_id, "--project", project, "--format=json"]))
         _require(build.get("id") == build_id and build.get("projectId") == project)
         _PHASE = "build_payload"
-        verify_build(build, files, dockerfile, image_digest, repo)
+        verify_build(build, files, dockerfile, image_digest, repo, payload_digest)
         _PHASE = "image_read"
         for reference in (base, image):
             _run(["docker", "pull", reference])
@@ -189,7 +211,9 @@ def verify(repo, project, base_digest, image_digest, build_id):
                 if dest.read_bytes() != content:
                     raise VerificationError("baseline_file_mismatch", name)
             # The only allowed opaque marker creates a directory absent in the base.
-            verify_base_directory_absent(base)
+            base_directories = _probe_directories(base)
+            candidate_directories = _probe_directories(image)
+            directory_metadata = verify_directory_metadata(base_directories, candidate_directories)
             _PHASE = "candidate_files"
             for name, content in files.items():
                 dest = root / "candidate-file"
@@ -206,7 +230,7 @@ def verify(repo, project, base_digest, image_digest, build_id):
                 _require(len(layers) == len(new_layers))
                 for layer in layers[len(old_layers):]:
                     with tarfile.open(fileobj=outer.extractfile(layer)) as inner:
-                        collect_layer(inner, files, found)
+                        collect_layer(inner, files, found, directory_metadata)
             _require(found == files)
         finally:
             for container in containers:
@@ -217,8 +241,8 @@ def verify(repo, project, base_digest, image_digest, build_id):
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) != 6:
-        raise SystemExit("expected image repository, project, base digest, image digest and build id")
+    if len(sys.argv) != 7:
+        raise SystemExit("expected image repository, project, base digest, image digest, build id and payload digest")
     try:
         verify(*sys.argv[1:])
     except Exception as exc:

@@ -941,6 +941,7 @@ def prepare_image_only_staging(
         **({"image_source_kind": "notification-overlay", "overlay_commit": OVERLAY_COMMIT,
             "overlay_patch_sha256": PATCH_SHA256, "overlay_digest": env["OVERLAY_IMAGE_DIGEST"],
             "overlay_base_digest": env["OVERLAY_BASE_DIGEST"], "overlay_build_id": env["OVERLAY_BUILD_ID"],
+            "overlay_payload_digest": env["OVERLAY_PAYLOAD_DIGEST"],
             "overlay_pod_digest": pod_digest} if overlay else {}),
         "service_ingress": _ingress(service_json.get("metadata")),
         "serving_traffic": traffic,
@@ -965,6 +966,7 @@ def _validate_image_only_source(
     snapshot_value = _account_snapshot_update(env, workflow_target=str(env.get("WORKFLOW_TARGET") or ""))
     if overlay == "true" and (not re.fullmatch(r"sha256:[0-9a-f]{64}", env.get("OVERLAY_BASE_DIGEST", ""))
                               or not re.fullmatch(r"sha256:[0-9a-f]{64}", env.get("OVERLAY_IMAGE_DIGEST", ""))
+                              or not re.fullmatch(r"sha256:[0-9a-f]{64}", env.get("OVERLAY_PAYLOAD_DIGEST", ""))
                               or not re.fullmatch(r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", env.get("OVERLAY_BUILD_ID", ""))):
         raise AdmissionError("notification overlay source is incomplete", reason="image_source_not_admitted")
     if overlay == "true" and (history is not None or snapshot_value is not None):
@@ -1115,6 +1117,7 @@ def confirm_image_only_readback(
                 or plan.get("overlay_commit") != OVERLAY_COMMIT
                 or plan.get("overlay_patch_sha256") != PATCH_SHA256
                 or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(plan.get("overlay_digest") or ""))
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(plan.get("overlay_payload_digest") or ""))
                 or expected_commit != OVERLAY_BASE
                 or not expected_image.endswith("@" + plan["overlay_digest"])
                 or revision.get("metadata", {}).get("labels", {}).get("qsl-overlay-commit") != OVERLAY_COMMIT

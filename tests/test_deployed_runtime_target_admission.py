@@ -1539,7 +1539,7 @@ def test_notification_overlay_keeps_paper_template_and_ues_gates():
     revision["status"]["imageDigest"] = "example/repo@" + base_digest
     env = {"WORKFLOW_TARGET": "PAPER", "NOTIFICATION_OVERLAY_INPUT": "true",
            "OVERLAY_BASE_DIGEST": base_digest, "OVERLAY_IMAGE_DIGEST": image_digest,
-           "OVERLAY_BUILD_ID": "12345678-1234-1234-1234-123456789abc"}
+           "OVERLAY_BUILD_ID": "12345678-1234-1234-1234-123456789abc", "OVERLAY_PAYLOAD_DIGEST": "sha256:" + "c" * 64}
     kwargs = dict(service="paper-service", project="synthetic-project", region="synthetic-region",
                   service_json=service, env=env, image_commit=BASE_COMMIT, run=run)
     plan = admission.prepare_image_only_staging(**kwargs)
@@ -1564,7 +1564,8 @@ def test_notification_overlay_readback_requires_immutable_image_labels_and_full_
             "serving_traffic": [{"revisionName": "serving-rev", "percent": 100}],
             "template_digest": admission._config_digest(configuration), "image_source_kind": "notification-overlay",
             "overlay_commit": OVERLAY_COMMIT, "overlay_patch_sha256": PATCH_SHA256,
-            "overlay_digest": "sha256:" + "b" * 64, "overlay_pod_digest": admission._overlay_pod_digest(revision)}
+            "overlay_digest": "sha256:" + "b" * 64, "overlay_payload_digest": "sha256:" + "c" * 64,
+            "overlay_pod_digest": admission._overlay_pod_digest(revision)}
 
     def confirm(candidate):
         def run(command):

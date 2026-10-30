@@ -175,6 +175,7 @@ jobs:
       OVERLAY_BASE_DIGEST: ${{ secrets.NOTIFICATION_OVERLAY_BASE_DIGEST }}
       OVERLAY_IMAGE_DIGEST: ${{ secrets.NOTIFICATION_OVERLAY_IMAGE_DIGEST }}
       OVERLAY_BUILD_ID: ${{ secrets.NOTIFICATION_OVERLAY_BUILD_ID }}
+      OVERLAY_PAYLOAD_DIGEST: ${{ secrets.NOTIFICATION_OVERLAY_PAYLOAD_DIGEST }}
       ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ inputs.account_history_recording_enabled }}
       ACCOUNT_HISTORY_GCS_PREFIX: ${{ inputs.account_history_gcs_prefix }}
       ACCOUNT_HISTORY_TARGET_ID: ${{ inputs.account_history_target_id }}
@@ -515,7 +516,7 @@ jobs:
           if [ "${image_mode}" = "notification-overlay" ]; then
             # Verify the exact base + patch + immutable image before using it.
             uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_notification_overlay.py" "${image_repo}" "${GCP_PROJECT_ID}" \
-              "${OVERLAY_BASE_DIGEST}" "${OVERLAY_IMAGE_DIGEST}" "${OVERLAY_BUILD_ID}"
+              "${OVERLAY_BASE_DIGEST}" "${OVERLAY_IMAGE_DIGEST}" "${OVERLAY_BUILD_ID}" "${OVERLAY_PAYLOAD_DIGEST}"
             digest="${OVERLAY_IMAGE_DIGEST}"
           else
             image="${image_repo}:${image_tag}-${GITHUB_RUN_ID}"

@@ -1,5 +1,7 @@
 import base64
 import io
+import hashlib
+import gzip
 import json
 import tarfile
 
@@ -8,14 +10,18 @@ import pytest
 from scripts.verify_notification_overlay import verify_build
 
 
-def build_for(files, dockerfile, *, digest, repo):
+def build_for(files, dockerfile, *, digest, repo, mode=0o644, uid=0, gid=0, mtime=0):
     stream = io.BytesIO()
-    with tarfile.open(fileobj=stream, mode="w:gz") as archive:
+    with tarfile.open(fileobj=stream, mode="w") as archive:
         for name, data in {**files, "Dockerfile": dockerfile}.items():
             entry = tarfile.TarInfo(name)
+            entry.mode = mode
+            entry.uid = uid
+            entry.gid = gid
+            entry.mtime = mtime
             entry.size = len(data)
             archive.addfile(entry, io.BytesIO(data))
-    encoded = base64.b64encode(stream.getvalue()).decode()
+    encoded = base64.b64encode(gzip.compress(stream.getvalue(), mtime=0)).decode()
     tag = repo + ":notification634-closeout-20261030"
     return {"status": "SUCCESS", "source": None,
             "steps": [{"name": "gcr.io/cloud-builders/git", "entrypoint": "bash",
@@ -24,21 +30,31 @@ def build_for(files, dockerfile, *, digest, repo):
             "results": {"images": [{"name": tag, "digest": digest}]}}
 
 
+def payload_digest(build):
+    raw = base64.b64decode("".join(build["steps"][0]["args"][3:]))
+    return "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
 def test_build_provenance_accepts_exact_payload():
     files = {"notifications/unified.py": b"safe\n"}
     build = build_for(files, b"dockerfile", digest="sha256:abc", repo="example/repo")
-    verify_build(build, files, b"dockerfile", "sha256:abc", "example/repo")
+    verify_build(build, files, b"dockerfile", "sha256:abc", "example/repo", payload_digest(build))
 
 
-@pytest.mark.parametrize("mutation", ["extra_file", "changed_file", "wrong_digest", "changed_builder", "extra_step", "extra_env"])
+@pytest.mark.parametrize("mutation", ["extra_file", "changed_file", "wrong_digest", "changed_builder", "extra_step", "extra_env", "header_change", "header_uid", "header_gid", "header_time"])
 def test_build_provenance_rejects_changed_inputs(mutation):
     files = {"notifications/unified.py": b"safe\n"}
+    expected_digest = payload_digest(build_for(files, b"dockerfile", digest="sha256:abc", repo="example/repo"))
     payload = dict(files)
     if mutation == "extra_file":
         payload["main.py"] = b"other"
     if mutation == "changed_file":
         payload["notifications/unified.py"] = b"other"
-    build = build_for(payload, b"dockerfile", digest="sha256:abc", repo="example/repo")
+    build = build_for(payload, b"dockerfile", digest="sha256:abc", repo="example/repo",
+                      mode=0o600 if mutation == "header_change" else 0o644,
+                      uid=1 if mutation == "header_uid" else 0,
+                      gid=1 if mutation == "header_gid" else 0,
+                      mtime=1 if mutation == "header_time" else 0)
     if mutation == "wrong_digest":
         build["results"]["images"][0]["digest"] = "sha256:wrong"
     if mutation == "changed_builder":
@@ -48,7 +64,7 @@ def test_build_provenance_rejects_changed_inputs(mutation):
     if mutation == "extra_env":
         build["steps"][0]["env"] = ["EVIL=1"]
     with pytest.raises(ValueError):
-        verify_build(build, files, b"dockerfile", "sha256:abc", "example/repo")
+        verify_build(build, files, b"dockerfile", "sha256:abc", "example/repo", expected_digest)
 
 
 def test_overlay_source_requires_exact_paper_base_and_no_config_changes():
@@ -57,7 +73,7 @@ def test_overlay_source_requires_exact_paper_base_and_no_config_changes():
 
     env = {"WORKFLOW_TARGET": "PAPER", "NOTIFICATION_OVERLAY_INPUT": "true",
            "OVERLAY_BASE_DIGEST": "sha256:" + "a" * 64, "OVERLAY_IMAGE_DIGEST": "sha256:" + "b" * 64,
-           "OVERLAY_BUILD_ID": "12345678-1234-1234-1234-123456789abc"}
+           "OVERLAY_BUILD_ID": "12345678-1234-1234-1234-123456789abc", "OVERLAY_PAYLOAD_DIGEST": "sha256:" + "c" * 64}
     assert _validate_image_only_source(image_commit=BASE_COMMIT, env=env, project="example") == (None, None)
     for changes, commit in [({"WORKFLOW_TARGET": "HK"}, BASE_COMMIT),
                             ({}, "a" * 40),
@@ -94,7 +110,7 @@ def test_layer_rejects_unapproved_files_and_whiteouts(path):
         archive.addfile(entry, io.BytesIO(b"x"))
     with tarfile.open(fileobj=io.BytesIO(stream.getvalue())) as archive:
         with pytest.raises(ValueError):
-            collect_layer(archive, {"notifications/unified.py": b"x"}, {})
+            collect_layer(archive, {"notifications/unified.py": b"x"}, {}, {})
 
 
 def test_build_metadata_denial_is_redacted_and_stops(monkeypatch):
@@ -114,23 +130,50 @@ def test_baseline_mismatch_exposes_only_fixed_public_paths():
     assert VerificationError("baseline_file_mismatch", "private/path").path is None
 
 
+
 def test_base_directory_probe_is_offline_and_fail_closed(monkeypatch):
-    from scripts.verify_notification_overlay import VerificationError, verify_base_directory_absent
+    from scripts.verify_notification_overlay import DIRECTORIES, NEW_DIRECTORY, VerificationError, _probe_directories
 
     calls = []
     def run(args):
         calls.append(args)
-        return b"ABSENT\n"
+        return json.dumps({**{p: [0, 0, 0o775] for p in DIRECTORIES}, NEW_DIRECTORY: None}).encode()
     monkeypatch.setattr("scripts.verify_notification_overlay._run", run)
-    verify_base_directory_absent("synthetic-image")
+    assert _probe_directories("synthetic-image")[NEW_DIRECTORY] is None
     assert all(flag in calls[0] for flag in ("--network=none", "--read-only", "-I", "-S", "-B"))
     assert "except FileNotFoundError" in calls[0][-1] and "except OSError" in calls[0][-1]
     compile(calls[0][-1], "<isolated-probe>", "exec")
-    monkeypatch.setattr("scripts.verify_notification_overlay._run", lambda args: b"PRESENT\n")
-    with pytest.raises(VerificationError, match="baseline_directory_absence_unconfirmed"):
-        verify_base_directory_absent("synthetic-image")
     def failed(args):
         raise RuntimeError("private diagnostic")
     monkeypatch.setattr("scripts.verify_notification_overlay._run", failed)
     with pytest.raises(VerificationError, match="baseline_directory_absence_unconfirmed"):
-        verify_base_directory_absent("synthetic-image")
+        _probe_directories("synthetic-image")
+
+
+def test_existing_directory_metadata_must_match_base_and_new_directory_is_fixed():
+    from scripts.verify_notification_overlay import DIRECTORIES, NEW_DIRECTORY, verify_directory_metadata
+
+    base = {**{p: [0, 0, 0o775] for p in DIRECTORIES}, NEW_DIRECTORY: None}
+    candidate = {**{p: [0, 0, 0o775] for p in DIRECTORIES}, NEW_DIRECTORY: [1000, 1000, 0o755]}
+    expected = verify_directory_metadata(base, candidate)
+    assert expected["app/application"] == [0, 0, 0o775]
+    for changed in ("app/application", NEW_DIRECTORY):
+        unsafe = dict(candidate)
+        unsafe[changed] = [0, 0, 0o777]
+        with pytest.raises(ValueError):
+            verify_directory_metadata(base, unsafe)
+
+
+def test_layer_existing_directory_must_match_base_metadata():
+    from scripts.verify_notification_overlay import collect_layer
+
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w") as archive:
+        entry = tarfile.TarInfo("app/notifications")
+        entry.type = tarfile.DIRTYPE
+        entry.uid = entry.gid = 0
+        entry.mode = 0o777
+        archive.addfile(entry)
+    with tarfile.open(fileobj=io.BytesIO(stream.getvalue())) as archive:
+        with pytest.raises(ValueError):
+            collect_layer(archive, {"notifications/unified.py": b"x"}, {}, {"app/notifications": [0, 0, 0o775]})

@@ -144,7 +144,9 @@ container configuration and every changed file. To verify the new directory is
 absent from the base, it runs an isolated standard-library filesystem check in a
 read-only container without network access or application startup. The revision
 records the source kind, base commit and overlay commit; the admission plan
-also binds the patch hash, build identity and immutable image digest. A failed provenance or template check stops
+also binds the patch hash, build identity, immutable image digest and complete
+build payload digest, including archive metadata. Existing directory metadata must
+match the base, and the new notification directory has fixed owner and mode. A failed provenance or template check stops
 staging; this mode neither changes configuration nor moves traffic.
 
 - V7 paused PAPER binding refusal

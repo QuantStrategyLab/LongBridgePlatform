@@ -442,7 +442,7 @@ assert job.index("name: Verify exact image-only source") < job.index("uses: goog
 # broker and runtime credentials remain outside this isolated job.
 assert re.findall(r"secrets\.([A-Z_]+)", job) == [
     "NOTIFICATION_OVERLAY_BASE_DIGEST", "NOTIFICATION_OVERLAY_IMAGE_DIGEST",
-    "NOTIFICATION_OVERLAY_BUILD_ID", "CLOUD_RUN_SERVICE",
+    "NOTIFICATION_OVERLAY_BUILD_ID", "NOTIFICATION_OVERLAY_PAYLOAD_DIGEST", "CLOUD_RUN_SERVICE",
 ]
 assert "scripts/verify_deployed_runtime_target_admission.py" in job
 assert "record_daily_account_snapshot" not in job
