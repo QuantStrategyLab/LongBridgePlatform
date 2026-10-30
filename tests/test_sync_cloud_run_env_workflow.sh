@@ -426,7 +426,7 @@ for mode in ("legacy", "image-only-no-traffic", "image-only-notification-overlay
             "github.event.workflow_run.display_title", "title").replace("||", "or")
         allowed = eval(condition, {"__builtins__": {}}, {"event": event, "title": title})
         assert allowed == (event != "workflow_run" or mode == "legacy"), (mode, event)
-print("lifecycle event condition cases: 6 passed")
+print("lifecycle event condition cases: 9 passed")
 assert "  image-only-no-traffic:\n" in workflow, "missing explicit no-traffic job"
 job = workflow.split("  image-only-no-traffic:\n", 1)[1].split("\n  resolve-matrix:\n", 1)[0]
 assert "matrix" not in job, "image-only mode must select exactly one environment"
