@@ -134,6 +134,16 @@ configuration projection, not the cause or safety of a difference; raw settings
 and secret references are never included. They use only the reads already made
 by admission and do not change its decision.
 
+For PAPER strict mismatches, `template_other_env_difference_fields` compares
+five fixed runtime keys individually and aggregates all remaining non-history
+keys. For the notification overlay pod check,
+`overlay_pod_difference_categories` separately reports environment, service
+account, and other pod differences; this projection excludes the same image and
+container name fields as the overlay gate. All fields are booleans or null when
+unavailable. They expose no settings, secret references, or unknown key names,
+and do not establish which configuration is authoritative. Resolve differences
+against an applicable reviewed baseline.
+
 The fixed PAPER notification overlay is a composite source: an existing reviewed
 base commit, the immutable notification patch and the resulting image digest.
 Select it explicitly with `deployment_mode=image-only-notification-overlay`; leave history and snapshot
@@ -153,4 +163,5 @@ staging; this mode neither changes configuration nor moves traffic.
 - Deployed runtime-target admission before traffic shift
 - Exact SHA / approved-ref checks on `image-only-no-traffic`
 - Per-environment service/region binding used by Runtime Guard
+
 

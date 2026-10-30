@@ -1549,6 +1549,9 @@ def test_notification_overlay_keeps_paper_template_and_ues_gates():
     with pytest.raises(admission.AdmissionError) as error:
         admission.prepare_image_only_staging(**kwargs)
     assert error.value.diagnostic_reason == "template_mismatch"
+    assert error.value.overlay_pod_difference_categories == {
+        "env_diff": True, "service_account_diff": False, "other_pod_diff": False}
+    assert error.value.template_other_env_difference_fields["unclassified_env_diff"] is True
 
 
 def test_notification_overlay_readback_requires_immutable_image_labels_and_full_spec():
@@ -1585,3 +1588,4 @@ def test_notification_overlay_readback_requires_immutable_image_labels_and_full_
     plan["overlay_patch_sha256"] = "0" * 64
     with pytest.raises(admission.AdmissionError, match="overlay readback"):
         confirm(revision)
+
