@@ -2368,6 +2368,14 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             def read_text(self, _uri):
                 return self.contents
 
+        local = TemporaryDirectory()
+        self.addCleanup(local.cleanup)
+        month = Path(local.name) / "longbridge/soxl_soxx_trend_income/PAPER/2025-01"
+        month.mkdir(parents=True)
+        (month / "prior.json").write_text(json.dumps({"platform": "longbridge", "strategy_profile": "soxl_soxx_trend_income",
+            "account_scope": "PAPER", "dry_run": True, "status": "ok", "summary": {
+                "signal_date": "2025-01-01", "effective_date": "2025-01-02", "action_done": False,
+                "order_events_count": 0, "orders_previewed_count": 0, "orders_skipped_count": 0}}))
         cloud = FakeGcp()
         store = Mock(cloud_prefix_uri="gs://bucket/reports")
         store.has_marker.return_value = False
@@ -2387,13 +2395,15 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             execution_state_store=store, execution_state_account_scope="PAPER",
         )
         execute = Mock(side_effect=AssertionError("execution must not run"))
-        with patch.object(rebalance_service, "execute_rebalance_cycle", execute), observe(None, None):
+        with patch.object(rebalance_service, "execute_rebalance_cycle", execute), observe(None, None) as observation:
+            observation.report_base_dir = local.name
             rebalance_service.run_strategy(runtime=runtime, config=config)
         execute.assert_not_called()
         store.has_prior_execution_report.assert_not_called()
         self.assertEqual(cloud.listed, ["gs://bucket/reports/longbridge/soxl_soxx_trend_income/PAPER/"])
         cloud.contents = "{"
-        with patch.object(rebalance_service, "execute_rebalance_cycle", execute), observe(None, None):
+        with patch.object(rebalance_service, "execute_rebalance_cycle", execute), observe(None, None) as observation:
+            observation.report_base_dir = local.name
             with self.assertRaisesRegex(RuntimeError, "^validation_journal_read_failed$"):
                 rebalance_service.run_strategy(runtime=runtime, config=config)
         execute.assert_not_called()
@@ -2401,9 +2411,29 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         store.record_outcome.assert_not_called()
         runtime.notify_issue.assert_not_called()
         cloud.empty = True
-        with patch.object(rebalance_service, "execute_rebalance_cycle", execute), observe(None, None):
+        with patch.object(rebalance_service, "execute_rebalance_cycle", execute), observe(None, None) as observation:
+            observation.report_base_dir = local.name
             with self.assertRaisesRegex(RuntimeError, "^validation_journal_empty$"):
                 rebalance_service.run_strategy(runtime=runtime, config=config)
+        execute.assert_not_called()
+        store.record_marker.assert_not_called()
+        store.record_outcome.assert_not_called()
+
+        from quant_platform_kit.common.runtime_reports import persist_runtime_report
+        locally_archived = {"platform": "longbridge", "strategy_profile": "soxl_soxx_trend_income",
+            "account_scope": "PAPER", "dry_run": True, "status": "ok", "run_id": "cloud-failed",
+            "started_at": "2026-07-01T00:00:00+00:00", "summary": {
+                "signal_date": "2026-06-01", "effective_date": "2026-06-02", "action_done": False}}
+        with patch("quant_platform_kit.common.runtime_reports.upload_runtime_report_to_cloud",
+                   side_effect=OSError("synthetic cloud write failure")):
+            with self.assertRaises(OSError):
+                persist_runtime_report(locally_archived, base_dir=local.name, cloud_prefix_uri="gs://bucket/reports")
+        self.assertTrue((Path(local.name) / "longbridge/soxl_soxx_trend_income/PAPER/2026-07/cloud-failed.json").is_file())
+        prior_lists = len(cloud.listed)
+        with patch.object(rebalance_service, "execute_rebalance_cycle", execute), observe(None, None) as observation:
+            observation.report_base_dir = local.name
+            rebalance_service.run_strategy(runtime=runtime, config=config)
+        self.assertEqual(len(cloud.listed), prior_lists)
         execute.assert_not_called()
         store.record_marker.assert_not_called()
         store.record_outcome.assert_not_called()

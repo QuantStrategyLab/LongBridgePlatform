@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import contextvars
 import json
+import os
+import stat
+from contextlib import ExitStack
 import re
 import threading
 from contextlib import contextmanager
@@ -27,6 +30,7 @@ class ValidationCycleObservation:
     cycle_returned: bool = False
     report_status: str = "unknown"
     execution_receipt_present: bool = False
+    report_base_dir: str | None = None
     _adapter_attempts: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -80,7 +84,7 @@ def _reject_json_constant(_value):
 
 
 def strict_prior_report_exists(store, *, platform, strategy_profile, account_scope,
-                               signal_date, effective_date, dry_run_only) -> bool:
+                               signal_date, effective_date, dry_run_only, report_base_dir=None) -> bool:
     """Search the listed cloud report scope; failure never means no report."""
     from collections.abc import Mapping
     from datetime import date
@@ -88,7 +92,7 @@ def strict_prior_report_exists(store, *, platform, strategy_profile, account_sco
     from quant_platform_kit.common.execution_state import (
         _report_effective_date_keys, _report_matches_execution, _report_signal_date_keys,
     )
-    from quant_platform_kit.common.runtime_reports import runtime_report_relative_path
+    from quant_platform_kit.common.runtime_reports import default_runtime_report_path, runtime_report_relative_path
 
     try:
         identity = (platform, strategy_profile, account_scope)
@@ -109,27 +113,8 @@ def strict_prior_report_exists(store, *, platform, strategy_profile, account_sco
             "run_id": "validation-probe",
         })
         prefix = f"{cloud_uri.rstrip('/')}/{path.parent.parent.as_posix()}/"
-        objects = store._object_store()
-        if not isinstance(objects, GcpObjectStore):
-            raise ValueError
-        parsed_prefix = urlsplit(prefix)
-        bucket_name = parsed_prefix.netloc
-        object_prefix = parsed_prefix.path.lstrip("/")
-        blobs = objects.client.bucket(bucket_name).list_blobs(
-            prefix=object_prefix, max_results=STRICT_REPORT_SCAN_LIMIT + 1
-        )
-        report_count = 0
-        for count, blob in enumerate(blobs, start=1):
-            if count > STRICT_REPORT_SCAN_LIMIT:
-                raise ValueError
-            name = getattr(blob, "name", None)
-            if not isinstance(name, str) or not name.startswith(object_prefix):
-                raise ValueError
-            if not name.endswith(".json"):
-                continue
-            report_count += 1
-            uri = f"gs://{bucket_name}/{name}"
-            payload = json.loads(objects.read_text(uri), object_pairs_hook=_unique_json_object,
+        def matches(raw):
+            payload = json.loads(raw, object_pairs_hook=_unique_json_object,
                                  parse_constant=_reject_json_constant)
             if (not isinstance(payload, Mapping)
                     or not all(isinstance(payload.get(key), str) and payload[key].strip()
@@ -168,6 +153,84 @@ def strict_prior_report_exists(store, *, platform, strategy_profile, account_sco
                     and (payload["status"] != "ok" or type(summary.get("action_done")) is not bool
                          or not all(field in summary for field in count_fields[:3]))):
                 raise ValueError
+            return False
+
+        report_path = default_runtime_report_path({
+            "platform": platform, "strategy_profile": strategy_profile,
+            "account_scope": account_scope, "started_at": "2001-01-01T00:00:00+00:00",
+            "run_id": "validation-probe",
+        }, base_dir=report_base_dir)
+        local_dir = report_path.parent.parent.absolute()
+        if ".." in local_dir.parts or not hasattr(os, "O_NOFOLLOW"):
+            raise ValueError
+        count = 0
+        local_reports = 0
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        with ExitStack() as stack:
+            directory_fd = os.open("/", directory_flags)
+            stack.callback(os.close, directory_fd)
+            for part in local_dir.parts[1:]:
+                directory_fd = os.open(part, directory_flags, dir_fd=directory_fd)
+                stack.callback(os.close, directory_fd)
+
+            def scan_directory(fd):
+                nonlocal count, local_reports
+                with os.scandir(fd) as entries:
+                    for entry in entries:
+                        count += 1
+                        if count > STRICT_REPORT_SCAN_LIMIT:
+                            raise ValueError
+                        mode = entry.stat(follow_symlinks=False).st_mode
+                        if stat.S_ISLNK(mode):
+                            raise ValueError
+                        if stat.S_ISDIR(mode):
+                            child = os.open(entry.name, directory_flags, dir_fd=fd)
+                            try:
+                                if scan_directory(child):
+                                    return True
+                            finally:
+                                os.close(child)
+                        elif stat.S_ISREG(mode):
+                            if not entry.name.endswith(".json"):
+                                continue
+                            local_reports += 1
+                            file_fd = os.open(entry.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                            with os.fdopen(file_fd, "r", encoding="utf-8") as handle:
+                                if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                                    raise ValueError
+                                if matches(handle.read()):
+                                    return True
+                        else:
+                            raise ValueError
+                return False
+
+            if scan_directory(directory_fd):
+                return True
+        if not local_reports:
+            raise ValidationJournalEmpty
+        objects = store._object_store()
+        if not isinstance(objects, GcpObjectStore):
+            raise ValueError
+        parsed_prefix = urlsplit(prefix)
+        bucket_name = parsed_prefix.netloc
+        object_prefix = parsed_prefix.path.lstrip("/")
+        blobs = objects.client.bucket(bucket_name).list_blobs(
+            prefix=object_prefix, max_results=STRICT_REPORT_SCAN_LIMIT - count + 1
+        )
+        report_count = 0
+        for blob in blobs:
+            count += 1
+            if count > STRICT_REPORT_SCAN_LIMIT:
+                raise ValueError
+            name = getattr(blob, "name", None)
+            if not isinstance(name, str) or not name.startswith(object_prefix):
+                raise ValueError
+            if not name.endswith(".json"):
+                continue
+            report_count += 1
+            uri = f"gs://{bucket_name}/{name}"
+            if matches(objects.read_text(uri)):
+                return True
         if not report_count:
             raise ValidationJournalEmpty
         return False

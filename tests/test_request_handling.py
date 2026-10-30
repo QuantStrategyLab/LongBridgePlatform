@@ -568,6 +568,7 @@ class RequestHandlingTests(unittest.TestCase):
         persist = unittest.mock.Mock()
         reporting = types.SimpleNamespace(
             report_gcs_prefix_uri="gs://test/reports",
+            report_base_dir="/synthetic/report-base",
             start_run=lambda: (types.SimpleNamespace(run_id="test-run"), report),
             log_event=lambda *args, **kwargs: None,
             persist_execution_report=persist,
@@ -581,6 +582,7 @@ class RequestHandlingTests(unittest.TestCase):
 
         def cycle(*, runtime, config):
             self.assertIsNotNone(current())
+            self.assertEqual(current().report_base_dir, "/synthetic/report-base")
             self.assertEqual(runtime.bootstrap.__name__, "validation_cycle")
             runtime.notify_issue("synthetic", "synthetic")
             intent = types.SimpleNamespace(symbol="TEST", order_type="LO", side="buy", quantity=1, limit_price=1)
