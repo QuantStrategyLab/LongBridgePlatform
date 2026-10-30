@@ -60,6 +60,14 @@ class LongBridgeRuntimeBootstrap:
 
     def __call__(self) -> tuple[Any, Any, Any]:
         quote_context, trade_context = self.build_contexts()
+        return self._with_indicators(quote_context, trade_context)
+
+    def validation_cycle(self) -> tuple[Any, Any, Any]:
+        """Use the existing token without refreshing it for an observed cycle."""
+        quote_context, trade_context = self.build_read_only_contexts()
+        return self._with_indicators(quote_context, trade_context)
+
+    def _with_indicators(self, quote_context: Any, trade_context: Any) -> tuple[Any, Any, Any]:
         indicators = self.calculate_strategy_indicators_fn(quote_context)
         if indicators is None:
             raise Exception("Quote data missing or API limited; cannot compute indicators")

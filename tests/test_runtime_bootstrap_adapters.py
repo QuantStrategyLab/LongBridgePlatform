@@ -210,3 +210,37 @@ def test_account_snapshot_strips_trailing_newline_before_building_context():
 
     assert observed["contexts"] == ("app-key", "app-secret", "synthetic-token")
     assert bound_version == version_name
+
+
+
+def test_validation_bootstrap_uses_existing_token_and_original_indicators():
+    observed = []
+    bootstrap = build_runtime_bootstrap(
+        project_id=None, secret_name="synthetic", token_refresh_threshold_days=30,
+        fetch_token_from_secret_fn=lambda *_: "existing-token",
+        refresh_token_if_needed_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("refresh called")),
+        build_contexts_fn=lambda _key, _secret, token: (observed.append(token) or "quote", "trade"),
+        calculate_strategy_indicators_fn=lambda quote: {"quote": quote},
+        env_reader=lambda _name, default="": default,
+    )
+    assert bootstrap.validation_cycle() == ("quote", "trade", {"quote": "quote"})
+    assert observed == ["existing-token"]
+
+
+def test_validation_bootstrap_propagates_token_and_indicator_failures():
+    def rejected(*_args, **_kwargs):
+        raise RuntimeError("token unavailable")
+
+    bootstrap = build_runtime_bootstrap(
+        project_id=None, secret_name="synthetic", token_refresh_threshold_days=30,
+        fetch_token_from_secret_fn=rejected,
+        refresh_token_if_needed_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("refresh called")),
+        build_contexts_fn=lambda *_args: ("quote", "trade"),
+        calculate_strategy_indicators_fn=lambda _quote: {}, env_reader=lambda _name, default="": default,
+    )
+    try:
+        bootstrap.validation_cycle()
+    except RuntimeError as exc:
+        assert str(exc) == "token unavailable"
+    else:
+        raise AssertionError("token failure must stop validation")

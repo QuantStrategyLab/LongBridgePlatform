@@ -649,6 +649,24 @@ def run_strategy(
     runtime: LongBridgeRebalanceRuntime,
     config: LongBridgeRebalanceConfig,
 ):
+    if validation_cycle_observation.current() is not None:
+        if not getattr(config, "dry_run_only", False) or any(
+            getattr(config, name, False)
+            for name in (
+                "strategy_risk_state_paper_enabled",
+                "durable_execution_command_paper_enabled",
+                "durable_execution_command_live_enabled",
+            )
+        ):
+            raise RuntimeError("validation_side_effect_enabled")
+        store = getattr(config, "execution_state_store", None)
+        if (
+            not getattr(config, "execution_dedup_enabled", False)
+            or _dry_run_bypasses_execution_marker(config)
+            or not callable(getattr(store, "has_marker", None))
+            or not callable(getattr(store, "has_prior_execution_report", None))
+        ):
+            raise RuntimeError("validation_journal_unavailable")
     print(config.with_prefix(f"[{datetime.now()}] Starting strategy..."), flush=True)
     notification_publisher = NotificationPublisher(
         log_message=lambda message: print(config.with_prefix(message), flush=True),
@@ -970,6 +988,8 @@ def run_strategy(
         execution["durable_execution_command"] = paper_command_observation
 
     execution_marker_key = _build_execution_marker_key(config=config, execution=execution)
+    if validation_cycle_observation.current() is not None and not execution_marker_key:
+        raise RuntimeError("validation_journal_unavailable")
     execution_state_store = getattr(config, "execution_state_store", None)
     direct_live_routing_blocked = (
         _direct_live_routing_requires_durable_command(
@@ -1196,6 +1216,8 @@ def run_strategy(
             notional_buy_compat_mode=config.notional_buy_compat_mode,
         )
         if not dry_run_bypass_marker and _should_record_execution_marker(result=execution_result, config=config):
+            if validation_cycle_observation.current() is not None:
+                raise RuntimeError("validation_marker_write_blocked")
             _record_execution_marker(
                 config=config,
                 marker_key=execution_marker_key,
@@ -1298,5 +1320,6 @@ def run_strategy(
         )
     else:
         print(config.with_prefix("notification_suppressed reason=healthy_no_order_cycle"), flush=True)
-    _record_platform_execution_telemetry(config, execution_result)
+    if validation_cycle_observation.current() is None:
+        _record_platform_execution_telemetry(config, execution_result)
     return execution_result

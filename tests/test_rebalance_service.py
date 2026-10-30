@@ -2166,6 +2166,58 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(recorded_markers, [])
         self.assertEqual(sent_messages, [])
 
+    def test_observed_paper_validation_requires_journal_before_bootstrap(self):
+        from application.validation_cycle_observation import observe
+
+        good_store = types.SimpleNamespace(has_marker=lambda _: False, has_prior_execution_report=lambda **_: False)
+        bootstrap = Mock(side_effect=RuntimeError("bootstrap reached"))
+        runtime = types.SimpleNamespace(bootstrap=bootstrap, notifications=types.SimpleNamespace(send_text=Mock()))
+        base = dict(with_prefix=lambda message: message, dry_run_only=True,
+                    execution_dedup_enabled=True, execution_state_store=good_store)
+        cases = [
+            ({"execution_dedup_enabled": False}, False),
+            ({"execution_state_store": None}, False),
+            ({"execution_state_store": types.SimpleNamespace(has_marker=lambda _: False)}, False),
+            ({"execution_state_store": types.SimpleNamespace(has_prior_execution_report=lambda **_: False)}, False),
+            ({}, True),
+        ]
+        for changes, bypass in cases:
+            with self.subTest(changes=changes, bypass=bypass):
+                bootstrap.reset_mock()
+                config = types.SimpleNamespace(**(base | changes))
+                with patch.dict(os.environ, {"DRY_RUN_BYPASS_EXECUTION_MARKER": "true" if bypass else "false"}), observe(None, None):
+                    with self.assertRaisesRegex(RuntimeError, "^validation_journal_unavailable$"):
+                        rebalance_service.run_strategy(runtime=runtime, config=config)
+                bootstrap.assert_not_called()
+        bootstrap.reset_mock()
+        with patch.dict(os.environ, {"DRY_RUN_BYPASS_EXECUTION_MARKER": "false"}), observe(None, None):
+            with self.assertRaisesRegex(RuntimeError, "^bootstrap reached$"):
+                rebalance_service.run_strategy(runtime=runtime, config=types.SimpleNamespace(**base))
+        bootstrap.assert_called_once()
+        bootstrap.reset_mock()
+        with self.assertRaisesRegex(RuntimeError, "^bootstrap reached$"):
+            rebalance_service.run_strategy(runtime=runtime, config=types.SimpleNamespace(**(base | {"execution_dedup_enabled": False})))
+        bootstrap.assert_called_once()
+
+    def test_observed_paper_validation_rejects_enabled_writers_before_bootstrap(self):
+        from application.validation_cycle_observation import observe
+
+        store = types.SimpleNamespace(has_marker=lambda _: False, has_prior_execution_report=lambda **_: False)
+        bootstrap = Mock(side_effect=RuntimeError("bootstrap reached"))
+        runtime = types.SimpleNamespace(bootstrap=bootstrap, notifications=types.SimpleNamespace(send_text=Mock()))
+        base = dict(with_prefix=lambda message: message, dry_run_only=True,
+                    execution_dedup_enabled=True, execution_state_store=store)
+        for field in ("strategy_risk_state_paper_enabled", "durable_execution_command_paper_enabled", "durable_execution_command_live_enabled"):
+            with self.subTest(field=field), observe(None, None):
+                config = types.SimpleNamespace(**(base | {field: True}))
+                with self.assertRaisesRegex(RuntimeError, "^validation_side_effect_enabled$"):
+                    rebalance_service.run_strategy(runtime=runtime, config=config)
+                bootstrap.assert_not_called()
+        bootstrap.reset_mock()
+        with self.assertRaisesRegex(RuntimeError, "^bootstrap reached$"):
+            rebalance_service.run_strategy(runtime=runtime, config=types.SimpleNamespace(**(base | {"strategy_risk_state_paper_enabled": True})))
+        bootstrap.assert_called_once()
+
     def test_observed_paper_validation_rejects_unreadable_journal(self):
         from application.validation_cycle_observation import observe
 
@@ -2203,7 +2255,8 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                     execution_dedup_enabled=True, execution_state_store=store,
                     execution_state_account_scope="PAPER",
                 )
-                with patch.object(rebalance_service, "execute_rebalance_cycle", execute), observe(None, None):
+                telemetry = Mock()
+                with patch.object(rebalance_service, "execute_rebalance_cycle", execute), patch.object(rebalance_service, "_record_platform_execution_telemetry", telemetry), observe(None, None):
                     if failure:
                         with self.assertRaisesRegex(RuntimeError, "^validation_journal_read_failed$"):
                             rebalance_service.run_strategy(runtime=runtime, config=config)
@@ -2213,6 +2266,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                     execute.assert_not_called()
                     store.record_marker.assert_not_called()
                     store.record_outcome.assert_not_called()
+                    telemetry.assert_not_called()
 
                 if failure == "marker":
                     notify.reset_mock()
@@ -2227,6 +2281,18 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                             rebalance_service.run_strategy(runtime=runtime, config=config)
                     self.assertEqual(notify.call_count, 1)
                     execute.assert_called_once()
+
+        with patch.object(rebalance_service, "_build_execution_marker_key", return_value=""), observe(None, None):
+            with self.assertRaisesRegex(RuntimeError, "^validation_journal_unavailable$"):
+                rebalance_service.run_strategy(runtime=runtime, config=config)
+        store.has_marker.return_value = False
+        store.has_prior_execution_report.return_value = False
+        result = types.SimpleNamespace(dry_run_orders=(object(),), pending_orders=(), action_done=False)
+        with patch.object(rebalance_service, "execute_rebalance_cycle", return_value=result), observe(None, None):
+            with self.assertRaisesRegex(RuntimeError, "^validation_marker_write_blocked$"):
+                rebalance_service.run_strategy(runtime=runtime, config=config)
+        store.record_marker.assert_not_called()
+        store.record_outcome.assert_not_called()
 
     def test_run_strategy_skips_when_prior_report_matches_execution_signal(self):
         sent_messages = []

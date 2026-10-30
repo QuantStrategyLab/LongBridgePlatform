@@ -565,10 +565,11 @@ class RequestHandlingTests(unittest.TestCase):
         original = module.build_composer(dry_run_only_override=True)
         original_submit = original.broker_adapters.submit_order_fn
         report = {"status": "pending", "dry_run": True}
+        persist = unittest.mock.Mock()
         reporting = types.SimpleNamespace(
             start_run=lambda: (types.SimpleNamespace(run_id="test-run"), report),
             log_event=lambda *args, **kwargs: None,
-            persist_execution_report=lambda _report: None,
+            persist_execution_report=persist,
         )
         notification = types.SimpleNamespace(
             notification_port=None,
@@ -579,6 +580,7 @@ class RequestHandlingTests(unittest.TestCase):
 
         def cycle(*, runtime, config):
             self.assertIsNotNone(current())
+            self.assertEqual(runtime.bootstrap.__name__, "validation_cycle")
             runtime.notify_issue("synthetic", "synthetic")
             intent = types.SimpleNamespace(symbol="TEST", order_type="LO", side="buy", quantity=1, limit_price=1)
             with self.assertRaises(ValidationSubmitBlocked):
@@ -614,6 +616,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(receipts[0]["adapter_submit_attempt_count"], 1)
         self.assertTrue(receipts[0]["cycle_entered"] and receipts[0]["cycle_returned"])
         self.assertTrue(receipts[0]["execution_receipt_present"])
+        persist.assert_not_called()
         self.assertEqual(notifications, [])
         self.assertEqual(forwarded, [])
         self.assertIs(module.BROKER_ADAPTERS.submit_order_fn, original_submit)
