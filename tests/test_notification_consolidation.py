@@ -119,7 +119,7 @@ def heartbeat_case(case, language):
 @pytest.mark.parametrize("flag", [None, "", "false", "invalid"])
 @pytest.mark.parametrize("language", ["zh", "en"])
 @pytest.mark.parametrize("mode", [None, "daily_digest"])
-def test_flags_off_entrypoints_match_main_golden(monkeypatch, flag, language, mode):
+def test_flags_off_preserve_execution_golden_with_daily_candidates(monkeypatch, flag, language, mode):
     if mode is None:
         monkeypatch.delenv("QSL_ROUTINE_NOTIFICATION_MODE", raising=False)
     else:
@@ -130,10 +130,15 @@ def test_flags_off_entrypoints_match_main_golden(monkeypatch, flag, language, mo
     else:
         monkeypatch.setenv("LONGBRIDGE_UNIFIED_NOTIFICATION_ENABLED", flag)
     golden = json.loads((Path(__file__).parent / "fixtures" / "notification_main_20e1f526.json").read_text())
+    fake_stores(monkeypatch)
     for case in ("healthy", "order", "pending", "blocked", "preview"):
-        assert cycle_case(case, language) == golden[language]["cycle_legacy_digest" if mode else "cycle"][case]
-    for case in ("healthy", "missing", "rejected", "disabled"):
-        assert heartbeat_case(case, language) == golden[language]["heartbeat"][case]
+        env = binding_env("paper" if case == "preview" else "sg", "PAPER" if case == "preview" else "SG", case == "preview")
+        env[unified.FLAG] = flag or "false"
+        with patch.dict(os.environ, env):
+            assert cycle_case(case, language, notification_report=source_report(env, f"run-{case}")) == golden[language]["cycle_legacy_digest"][case]
+    with patch.object(unified, "heartbeat_observation"):
+        for case in ("healthy", "missing", "rejected", "disabled"):
+            assert heartbeat_case(case, language) == golden[language]["heartbeat"][case]
 
 
 def binding_env(target_id="paper", scope="PAPER", dry_run=True):
@@ -158,7 +163,7 @@ def test_selector_off_preserves_existing_single_mode(value):
     assert unified.routing_env(env) is env
 
 
-def test_selector_on_maps_to_existing_mode_and_keeps_orders_immediate():
+def test_selector_on_maps_to_existing_mode_without_changing_caller_environment():
     env = {unified.FLAG: "true", "QSL_ROUTINE_NOTIFICATION_MODE": "immediate"}
     mapped = unified.routing_env(env)
     assert mapped["QSL_ROUTINE_NOTIFICATION_MODE"] == "daily_digest"
@@ -258,19 +263,20 @@ def test_candidate_rows_are_target_bound_and_never_invent_order_counts(monkeypat
         unified.persist_candidate(foreign, env=env, store=store)
 
 
-def test_real_orders_stay_immediate_when_on_and_counts_stay_unknown(monkeypatch):
+def test_real_orders_are_deferred_when_on_and_counts_stay_unknown(monkeypatch):
     env = binding_env("sg", "SG", False)
     env["QSL_DIGEST_ROUTINE_ORDERS"] = "true"
     stores = fake_stores(monkeypatch)
     with patch.dict(os.environ, env, clear=True):
         observed = cycle_case("order", "en", notification_report=source_report(env))
-    assert [call[0] for call in observed["calls"]] == ["bootstrap", "snapshot", "plan", "execute", "send"]
+    assert [call[0] for call in observed["calls"]] == ["bootstrap", "snapshot", "plan", "execute"]
     row = next(iter(stores[env["DIGEST_CANDIDATES_GCS_URI"]].backing.values()))[1]["runs"][0]
     assert row["order_count"] is None and row["fill_count"] is None
 
 
 def test_candidate_failure_alerts_and_is_not_a_healthy_confirmation(monkeypatch):
     env = binding_env("sg", "SG", False)
+    env["NOTIFY_LANG"] = "en"
     stores = fake_stores(monkeypatch)
     def failed(*args, **kwargs):
         raise RuntimeError("synthetic write outcome unknown")
@@ -279,20 +285,22 @@ def test_candidate_failure_alerts_and_is_not_a_healthy_confirmation(monkeypatch)
         report = source_report(env)
         observed = cycle_case("healthy", "en", notification_report=report)
     assert "candidate_persistence_unconfirmed" in report["notification_unified_errors"]
-    assert len([call for call in observed["calls"] if call[0] == "issue"]) == 1
-    assert not [call for call in observed["calls"] if call[0] == "send"]
+    sends = [call[1] for call in observed["calls"] if call[0] == "send"]
+    assert len(sends) == 1 and "Notification evidence unavailable" in sends[0]
     marker = next(iter(stores[env["QSL_NOTIFICATION_MARKER_GCS_URI"]].backing.values()))[1]
     assert marker["delivery_status"] == "uncertain"  # notify_issue has no positive transport ACK
 
 
-def test_real_order_notification_survives_candidate_storage_failure(monkeypatch):
+def test_candidate_failure_sends_coverage_error_not_order_notification(monkeypatch):
     env = binding_env("sg", "SG", False)
+    env["NOTIFY_LANG"] = "en"
     fake_stores(monkeypatch)
     monkeypatch.setattr(unified, "persist_candidate", lambda *a, **kw: (_ for _ in ()).throw(TimeoutError("synthetic write uncertainty")))
     with patch.dict(os.environ, env, clear=True):
         report = source_report(env)
         observed = cycle_case("order", "en", notification_report=report)
-    assert len([call for call in observed["calls"] if call[0] == "send"]) == 1
+    sends = [call[1] for call in observed["calls"] if call[0] == "send"]
+    assert len(sends) == 1 and "Notification evidence unavailable" in sends[0]
     assert "candidate_persistence_unconfirmed" in report["notification_unified_errors"]
 
 
@@ -378,7 +386,7 @@ def test_snapshot_matches_the_pinned_qpk_contract():
     from notifications.digest_snapshot import UNIFIED_CONTRACT_SHA256, UNIFIED_CONTRACT_QPK_SHA
     path = Path(__file__).parents[1] / "notifications" / "digest_snapshot" / "unified_contract.py"
     assert hashlib.sha256(path.read_bytes()).hexdigest() == UNIFIED_CONTRACT_SHA256
-    assert UNIFIED_CONTRACT_QPK_SHA == "07e24c0c804a9b47316b6ec3c75bb63820d8f421"
+    assert UNIFIED_CONTRACT_QPK_SHA == "2b04882058666ebc81d1650d93fa2105ec4ba3d8"
 
 
 @pytest.mark.parametrize("language", ["zh", "en"])

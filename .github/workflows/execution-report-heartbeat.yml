@@ -313,7 +313,7 @@ jobs:
 
 
       - name: Publish existing reports as unified digest candidates
-        if: ${{ !inputs.snapshot_only && ((success() && vars.QSL_ROUTINE_NOTIFICATION_MODE == 'daily_digest' && vars.LONGBRIDGE_UNIFIED_NOTIFICATION_ENABLED != 'true') || (!cancelled() && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' && vars.LONGBRIDGE_UNIFIED_NOTIFICATION_ENABLED == 'true')) }}
+        if: ${{ !cancelled() && !inputs.snapshot_only && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}
         env:
           QSL_ROUTINE_NOTIFICATION_MODE: ${{ vars.QSL_ROUTINE_NOTIFICATION_MODE || 'immediate' }}
           RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}

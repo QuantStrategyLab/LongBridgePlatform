@@ -1171,8 +1171,14 @@ def _localized_heartbeat_detail(detail: str) -> str:
 def _notify_normal_heartbeat(name: str, detail: str, *, observed_at=None, checked_at=None, observed_report=None) -> None:
     # Successful no-trade runs notify in run_strategy, using that cycle's broker
     # snapshot. Scheduled scans retain alerts but never duplicate cycle success.
-    if unified_notifications.enabled() and observed_at is not None:
-        unified_notifications.heartbeat_observation(now=checked_at, recovery_at=observed_at, report=observed_report)
+    if observed_at is not None:
+        try:
+            unified_notifications.heartbeat_observation(now=checked_at, recovery_at=observed_at, report=observed_report)
+        except Exception:
+            message = ("⚠️ 每日摘要记录未确认；请检查运行记录和摘要存储。" if unified_notifications.coverage_locale() == "zh" else
+                       "⚠️ Daily digest evidence is unconfirmed; check the run and digest storage.")
+            _send_telegram(message)
+            raise
     if _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
         print(f"Execution report success notification skipped for {name}: cycle notifications belong to the runtime; scanner is alerts-only")
 

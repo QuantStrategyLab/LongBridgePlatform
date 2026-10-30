@@ -427,16 +427,7 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
     account_identity = execution.get("account_identity")
     if isinstance(account_identity, dict):
         summary["account_identity"] = dict(account_identity)
-    from notifications.digest_snapshot.digest_routing import daily_digest_enabled
-    if unified_notifications.enabled():
-        _, summary["notification_digest"] = unified_notifications.cycle_facts(cycle_result, dry_run=dry_run)
-    elif daily_digest_enabled():
-        from notifications.digest_snapshot.digest_candidates import cycle_evidence
-        evidence = {**dict(getattr(cycle_result, "allocation", {}) or {}), **execution}
-        evidence.setdefault("execution_status", "completed" if broker_submission_done else "no_action")
-        evidence["orders_pending_count"] = len(pending_orders)
-        summary["notification_digest"] = cycle_evidence(evidence,
-            tuple(getattr(cycle_result, "submitted_orders", ()) or ()), dry_run=dry_run)
+    _, summary["notification_digest"] = unified_notifications.cycle_facts(cycle_result, dry_run=dry_run)
     return summary
 
 
@@ -740,8 +731,11 @@ def build_strategy_plugin_alert_context_label() -> str:
 
 def publish_strategy_plugin_alerts(signals, *, report=None):
     from notifications.digest_snapshot.digest_routing import immediate_plugin_signals
+    from notifications.digest_snapshot.digest_candidates import routine_observation_counts
+    if report is not None:
+        report.setdefault("summary", {})["routine_observation_counts"] = routine_observation_counts(signals)
     result = dispatch_strategy_plugin_alerts(
-        immediate_plugin_signals(signals),
+        immediate_plugin_signals(signals, mode="daily_digest"),
         notification_settings=RUNTIME_SETTINGS,
         translator=t,
         strategy_label=STRATEGY_PROFILE,
@@ -891,10 +885,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             live_execution_session_authorized=bool(market_open and not validation_only),
         )
         failure_phase = "strategy_cycle"
-        if unified_notifications.enabled():
-            with unified_notifications.bind_report(report):
-                cycle_result = run_rebalance_cycle(runtime=rebalance_runtime, config=rebalance_config)
-        else:
+        with unified_notifications.bind_report(report, validation_only=validation_only):
             cycle_result = run_rebalance_cycle(runtime=rebalance_runtime, config=rebalance_config)
         failure_phase = "reporting"
         signal_snapshot = {}
@@ -905,7 +896,9 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             cycle_result,
             dry_run=bool(report.get("dry_run")),
         )
-        if unified_notifications.enabled():
+        if "routine_observation_counts" in (report.get("summary") or {}):
+            execution_summary["routine_observation_counts"] = report["summary"]["routine_observation_counts"]
+        if not validation_only:
             try:
                 unified_notifications.attach_cycle_event(execution_summary, cycle_result, report=report, config=rebalance_config)
             except Exception:
@@ -1028,10 +1021,21 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             try:
                 report_path = reporting_adapters.persist_execution_report(report)
                 print(f"execution_report {report_path}", flush=True)
+                if not validation_only and report.get("status") in {"ok", "completed", "success"}:
+                    if not unified_notifications.report_archive_confirmed(
+                        report, report_path, reporting_adapters.report_gcs_prefix_uri
+                    ):
+                        raise ValueError("notification_report_archive_unconfirmed")
+                    if unified_notifications.persist_archived_report(report, env=os.environ) is not True:
+                        raise ValueError("notification_archive_candidate_unconfirmed")
                 if unified_notifications.enabled():
                     unified_notifications.recover_runtime(report=report)
             except Exception as persist_exc:
                 print(f"failed to persist execution report: {type(persist_exc).__name__}", flush=True)
+                if not validation_only and report.get("status") in {"ok", "completed", "success"}:
+                    unified_notifications._storage_failure(
+                        lambda title, detail: rebalance_runtime.notifications.send_text(f"{title}\n{detail}")
+                    )
 
 
 def _bounded_probe_error_code(exc: Exception) -> int | None:
