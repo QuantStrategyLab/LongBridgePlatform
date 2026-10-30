@@ -1520,7 +1520,7 @@ def test_stock_inventory_readback_requires_unchanged_configuration():
 
 
 def test_notification_overlay_keeps_paper_template_and_ues_gates():
-    from scripts.verify_notification_overlay import BASE_COMMIT, OVERLAY_COMMIT
+    from scripts.verify_notification_overlay import BASE_COMMIT, OVERLAY_COMMIT, PATCH_SHA256
 
     service, serving_env = _service_with(_paper_target())
     revision = {
@@ -1543,7 +1543,8 @@ def test_notification_overlay_keeps_paper_template_and_ues_gates():
     kwargs = dict(service="paper-service", project="synthetic-project", region="synthetic-region",
                   service_json=service, env=env, image_commit=BASE_COMMIT, run=run)
     plan = admission.prepare_image_only_staging(**kwargs)
-    assert (plan["overlay_commit"], plan["overlay_digest"]) == (OVERLAY_COMMIT, image_digest)
+    assert (plan["image_source_kind"], plan["overlay_commit"], plan["overlay_patch_sha256"], plan["overlay_digest"]) == (
+        "notification-overlay", OVERLAY_COMMIT, PATCH_SHA256, image_digest)
     revision["spec"]["containers"][0]["env"] = serving_env + [{"name": "UNEXPECTED", "value": "1"}]
     with pytest.raises(admission.AdmissionError) as error:
         admission.prepare_image_only_staging(**kwargs)
@@ -1551,16 +1552,18 @@ def test_notification_overlay_keeps_paper_template_and_ues_gates():
 
 
 def test_notification_overlay_readback_requires_immutable_image_labels_and_full_spec():
-    from scripts.verify_notification_overlay import BASE_COMMIT, OVERLAY_COMMIT
+    from scripts.verify_notification_overlay import BASE_COMMIT, OVERLAY_COMMIT, PATCH_SHA256
 
     image = "repo@sha256:" + "b" * 64
     service = _service()
     revision = _revision("paper-service-r123", BASE_COMMIT, image)
     revision["metadata"]["labels"]["qsl-overlay-commit"] = OVERLAY_COMMIT
+    revision["metadata"]["labels"]["qsl-image-source-kind"] = "notification-overlay"
     configuration = admission._configuration(service)
     plan = {"history_values": {}, "snapshot_value": None, "service_ingress": "internal",
             "serving_traffic": [{"revisionName": "serving-rev", "percent": 100}],
-            "template_digest": admission._config_digest(configuration), "overlay_commit": OVERLAY_COMMIT,
+            "template_digest": admission._config_digest(configuration), "image_source_kind": "notification-overlay",
+            "overlay_commit": OVERLAY_COMMIT, "overlay_patch_sha256": PATCH_SHA256,
             "overlay_digest": "sha256:" + "b" * 64, "overlay_pod_digest": admission._overlay_pod_digest(revision)}
 
     def confirm(candidate):
@@ -1571,9 +1574,13 @@ def test_notification_overlay_readback_requires_immutable_image_labels_and_full_
             expected_revision="paper-service-r123", run=run)
 
     confirm(revision)
-    for change in ("label", "spec"):
+    for change in ("label", "kind", "spec"):
         candidate = json.loads(json.dumps(revision))
         if change == "label": candidate["metadata"]["labels"]["qsl-overlay-commit"] = "a" * 40
+        if change == "kind": candidate["metadata"]["labels"]["qsl-image-source-kind"] = "single-source"
         if change == "spec": candidate["spec"]["containers"][0]["resources"] = {"limits": {"memory": "1Gi"}}
         with pytest.raises(admission.AdmissionError, match="overlay readback"):
             confirm(candidate)
+    plan["overlay_patch_sha256"] = "0" * 64
+    with pytest.raises(admission.AdmissionError, match="overlay readback"):
+        confirm(revision)

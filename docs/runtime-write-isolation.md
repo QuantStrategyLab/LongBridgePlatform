@@ -143,7 +143,8 @@ also checks the recorded build inputs, patch hash, original image layers,
 container configuration and every changed file. To verify the new directory is
 absent from the base, it runs an isolated standard-library filesystem check in a
 read-only container without network access or application startup. The revision
-records both the base commit and overlay commit. A failed provenance or template check stops
+records the source kind, base commit and overlay commit; the admission plan
+also binds the patch hash, build identity and immutable image digest. A failed provenance or template check stops
 staging; this mode neither changes configuration nor moves traffic.
 
 - V7 paused PAPER binding refusal

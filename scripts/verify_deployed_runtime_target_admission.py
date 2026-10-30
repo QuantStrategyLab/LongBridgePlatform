@@ -27,7 +27,7 @@ if str(_ROOT) not in sys.path:
 from scripts.reconcile_cloud_runtime import ReconcileError, observe_ready_revision, serving_traffic_rows
 from scripts.record_daily_account_snapshot import _PROJECT_ID, _Rejected, _TARGET_ID, _gcs_prefix
 from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
-from scripts.verify_notification_overlay import BASE_COMMIT as OVERLAY_BASE, OVERLAY_COMMIT
+from scripts.verify_notification_overlay import BASE_COMMIT as OVERLAY_BASE, OVERLAY_COMMIT, PATCH_SHA256
 
 
 class AdmissionError(ValueError):
@@ -938,7 +938,8 @@ def prepare_image_only_staging(
         "snapshot_arg": snapshot_arg,
         "snapshot_value": snapshot_value,
         "image_commit": image_commit,
-        **({"overlay_commit": OVERLAY_COMMIT, "overlay_digest": env["OVERLAY_IMAGE_DIGEST"],
+        **({"image_source_kind": "notification-overlay", "overlay_commit": OVERLAY_COMMIT,
+            "overlay_patch_sha256": PATCH_SHA256, "overlay_digest": env["OVERLAY_IMAGE_DIGEST"],
             "overlay_base_digest": env["OVERLAY_BASE_DIGEST"], "overlay_build_id": env["OVERLAY_BUILD_ID"],
             "overlay_pod_digest": pod_digest} if overlay else {}),
         "service_ingress": _ingress(service_json.get("metadata")),
@@ -1110,11 +1111,14 @@ def confirm_image_only_readback(
         )
     )
     if plan.get("overlay_commit") is not None:
-        if (plan.get("overlay_commit") != OVERLAY_COMMIT
+        if (plan.get("image_source_kind") != "notification-overlay"
+                or plan.get("overlay_commit") != OVERLAY_COMMIT
+                or plan.get("overlay_patch_sha256") != PATCH_SHA256
                 or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(plan.get("overlay_digest") or ""))
                 or expected_commit != OVERLAY_BASE
                 or not expected_image.endswith("@" + plan["overlay_digest"])
                 or revision.get("metadata", {}).get("labels", {}).get("qsl-overlay-commit") != OVERLAY_COMMIT
+                or revision.get("metadata", {}).get("labels", {}).get("qsl-image-source-kind") != "notification-overlay"
                 or _overlay_pod_digest(revision) != plan.get("overlay_pod_digest")):
             raise AdmissionError("notification overlay readback does not match")
     try:

@@ -532,7 +532,7 @@ jobs:
           # pins an existing LATEST selector to its current revision, without moving traffic.
           revision_labels="commit-sha=${image_tag},github-run-id=${GITHUB_RUN_ID}"
           if [ "${image_mode}" = "notification-overlay" ]; then
-            revision_labels+=",qsl-overlay-commit=0b59cf34b65ad66ad936828f0811a3bdbc5e9506"
+            revision_labels+=",qsl-overlay-commit=0b59cf34b65ad66ad936828f0811a3bdbc5e9506,qsl-image-source-kind=notification-overlay"
           fi
           update_command=(
             gcloud run services update "${CLOUD_RUN_SERVICE}"
