@@ -84,12 +84,18 @@ The error does not establish whether a marker or report exists. This check
 does not prove that the available journal covers every instance or that earlier
 steps in the cycle had no side effects.
 
-The submit guard does not make the whole cycle read-only. Existing bootstrap
-may refresh a token, report persistence may write an archive, and enabled state
-or command producers may write markers, risk state, or paper commands. An
-isolated validation executor must separately prevent or isolate these writes
-before invoking the candidate; a zero adapter-attempt count does not prove
-their absence.
+Observed PAPER validation requires enabled deduplication, a marker store with
+both marker and prior-report readers, and no marker bypass. It rejects enabled
+paper risk-state or command producers before rebalance bootstrap. Its bootstrap
+uses the existing token without refreshing it, its business report archive and
+performance telemetry are suppressed, and a would-be marker write stops the
+cycle instead. Missing marker identity and read errors stop the cycle. Other
+execution paths retain their prior behavior.
+
+These checks do not make the whole request read-only: strategy and plugin
+loading and broker or dependency paths need independent write-boundary evidence.
+Nor do they prove that cloud and same-instance local journal data are complete.
+A zero adapter-attempt count does not establish either property.
 
 ## Cycle heartbeat and account values
 

@@ -321,6 +321,14 @@ def _runtime_failure_reason(exc: Exception) -> str:
     # Match only fixed platform errors; never publish arbitrary provider text.
     if isinstance(exc, RuntimeError) and str(exc) == "validation_journal_read_failed":
         return "validation_journal_read_failed"
+    if isinstance(exc, RuntimeError) and str(exc) == "validation_journal_unavailable":
+        return "validation_journal_unavailable"
+    if isinstance(exc, RuntimeError) and str(exc) == "validation_side_effect_enabled":
+        return "validation_side_effect_enabled"
+    if isinstance(exc, RuntimeError) and str(exc) == "validation_marker_write_blocked":
+        return "validation_marker_write_blocked"
+    if isinstance(exc, RuntimeError) and str(exc) == "validation_read_only_bootstrap_unavailable":
+        return "validation_read_only_bootstrap_unavailable"
     if isinstance(exc, RuntimeError) and str(exc) in {
         "durable execution command producer is paper-only and cannot be enabled live",
         "durable execution command consumer is paper-only and cannot be enabled live",
@@ -881,7 +889,13 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 silent_cycle_notifications=validation_only,
             )
         if observation is not None:
-            rebalance_runtime = dataclasses.replace(rebalance_runtime, notify_issue=lambda _title, _detail: None)
+            validation_bootstrap = getattr(rebalance_runtime.bootstrap, "validation_cycle", None)
+            if not callable(validation_bootstrap):
+                raise RuntimeError("validation_read_only_bootstrap_unavailable")
+            rebalance_runtime = dataclasses.replace(
+                rebalance_runtime, bootstrap=validation_bootstrap,
+                notify_issue=lambda _title, _detail: None,
+            )
         rebalance_config = composer.build_rebalance_config(
             strategy_plugin_signals=strategy_plugin_signals,
             strategy_plugin_error=strategy_plugin_error,
@@ -1034,7 +1048,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             status = str(report.get("status") or "").strip().lower()
             observation.report_status = status if status in {"ok", "error", "skipped"} else "unknown"
             observation.execution_receipt_present = isinstance(report.get("execution_receipt"), dict)
-        if not (validation_only and _v7_application_candidate_bound()):
+        if observation is None and not (validation_only and _v7_application_candidate_bound()):
             try:
                 report_path = reporting_adapters.persist_execution_report(report)
                 print(f"execution_report {report_path}", flush=True)
