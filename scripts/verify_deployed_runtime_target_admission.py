@@ -62,6 +62,9 @@ def _report_staging_failure(exc: BaseException, *, phase: str) -> None:
             "schema": "longbridge.image-only-admission.v1",
             "status": "rejected", "phase": safe_phase, "reason": reason,
         }
+        if (safe_phase == "source_validation" and reason == "image_source_not_admitted"
+                and os.environ.get("NOTIFICATION_OVERLAY_INPUT") == "true"):
+            receipt["overlay_source_qualification"] = _overlay_source_qualification(os.environ)
         categories = getattr(exc, "template_difference_categories", None)
         if reason == "template_mismatch" and isinstance(categories, dict):
             keys = ("history_or_snapshot_diff", "other_env_diff", "service_account_diff")
@@ -946,6 +949,25 @@ def prepare_image_only_staging(
         "service_ingress": _ingress(service_json.get("metadata")),
         "serving_traffic": traffic,
         "template_digest": _config_digest(configuration, skip=changed_keys),
+    }
+
+
+def _overlay_source_qualification(env: Mapping[str, str]) -> dict[str, bool]:
+    """Return fixed booleans only; never expose source inputs or exception text."""
+    def matches(name: str, pattern: str) -> bool:
+        value = env.get(name, "")
+        return isinstance(value, str) and re.fullmatch(pattern, value) is not None
+
+    return {
+        "overlay_selected": env.get("NOTIFICATION_OVERLAY_INPUT") == "true",
+        "paper_target": env.get("WORKFLOW_TARGET") == "PAPER",
+        "base_commit_valid": env.get("SOURCE_COMMIT") == OVERLAY_BASE,
+        "base_digest_valid": matches("OVERLAY_BASE_DIGEST", r"sha256:[0-9a-f]{64}"),
+        "image_digest_valid": matches("OVERLAY_IMAGE_DIGEST", r"sha256:[0-9a-f]{64}"),
+        "payload_digest_valid": matches("OVERLAY_PAYLOAD_DIGEST", r"sha256:[0-9a-f]{64}"),
+        "build_id_valid": matches("OVERLAY_BUILD_ID", r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}"),
+        "no_history_update": all(not env.get(key) for key in _HISTORY_KEYS),
+        "no_snapshot_update": not env.get("ACCOUNT_SNAPSHOT_ENABLED_INPUT"),
     }
 
 

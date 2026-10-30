@@ -307,3 +307,60 @@ class ImageOnlyAdmissionDiagnosticsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_overlay_source_qualification_is_boolean_only_and_reveals_no_values():
+    env = {
+        "NOTIFICATION_OVERLAY_INPUT": "true", "WORKFLOW_TARGET": "PAPER",
+        "SOURCE_COMMIT": admission.OVERLAY_BASE,
+        "OVERLAY_BASE_DIGEST": "sha256:" + "a" * 64,
+        "OVERLAY_IMAGE_DIGEST": "sha256:" + "b" * 64,
+        "OVERLAY_PAYLOAD_DIGEST": "sha256:" + "c" * 64,
+        "OVERLAY_BUILD_ID": "12345678-1234-1234-1234-123456789abc",
+    }
+    assert all(admission._overlay_source_qualification(env).values())
+    for key, expected in (("OVERLAY_BASE_DIGEST", "base_digest_valid"),
+                          ("OVERLAY_IMAGE_DIGEST", "image_digest_valid"),
+                          ("OVERLAY_PAYLOAD_DIGEST", "payload_digest_valid"),
+                          ("OVERLAY_BUILD_ID", "build_id_valid")):
+        changed = {**env, key: PRIVATE}
+        result = admission._overlay_source_qualification(changed)
+        assert result[expected] is False
+        assert all(type(value) is bool for value in result.values())
+        assert PRIVATE not in json.dumps(result)
+
+
+def test_source_failure_prints_fixed_overlay_qualification_without_secret_values():
+    env = {"NOTIFICATION_OVERLAY_INPUT": "true", "WORKFLOW_TARGET": "PAPER",
+           "SOURCE_COMMIT": admission.OVERLAY_BASE, "OVERLAY_BASE_DIGEST": PRIVATE}
+    stderr = io.StringIO()
+    with patch.dict(admission.os.environ, env, clear=True), redirect_stderr(stderr):
+        admission._report_staging_failure(admission.AdmissionError("private", reason="image_source_not_admitted"),
+                                          phase="source_validation")
+    receipt = json.loads(stderr.getvalue())
+    assert receipt["overlay_source_qualification"]["base_digest_valid"] is False
+    assert PRIVATE not in stderr.getvalue()
+    assert all(type(value) is bool for value in receipt["overlay_source_qualification"].values())
+
+
+def test_overlay_invalid_source_still_stops_before_cloud_reads_and_plan_write():
+    env = {
+        "NOTIFICATION_OVERLAY_INPUT": "true", "WORKFLOW_TARGET": "PAPER", "SOURCE_COMMIT": admission.OVERLAY_BASE,
+        "OVERLAY_BASE_DIGEST": "sha256:" + "a" * 64,
+        "OVERLAY_IMAGE_DIGEST": "sha256:" + "b" * 64,
+        "OVERLAY_PAYLOAD_DIGEST": "malformed-private-sentinel",
+        "OVERLAY_BUILD_ID": "12345678-1234-1234-1234-123456789abc",
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        plan = Path(directory) / "plan.json"
+        stderr = io.StringIO()
+        with patch.dict(admission.os.environ, env, clear=True), \
+                patch.object(admission, "_run_quiet") as cloud, redirect_stderr(stderr):
+            assert admission.main(["--project", "synthetic", "--region", "synthetic", "--service", "synthetic",
+                                   "--image-only-staging", "--plan-out", str(plan)]) == 1
+        receipt = json.loads(stderr.getvalue().splitlines()[1])
+        assert receipt["phase"] == "source_validation" and receipt["reason"] == "image_source_not_admitted"
+        assert receipt["overlay_source_qualification"]["payload_digest_valid"] is False
+        assert "malformed-private-sentinel" not in stderr.getvalue()
+        cloud.assert_not_called()
+        assert not plan.exists()
