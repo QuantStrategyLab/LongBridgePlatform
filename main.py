@@ -907,6 +907,8 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             cash_only_execution=CASH_ONLY_EXECUTION,
             live_execution_session_authorized=bool(market_open and not validation_only),
         )
+        if observation is not None:
+            validation_cycle_observation.require_matching_journal_source(rebalance_config, reporting_adapters)
         failure_phase = "strategy_cycle"
         if observation is not None:
             observation.cycle_entered = True

@@ -567,6 +567,7 @@ class RequestHandlingTests(unittest.TestCase):
         report = {"status": "pending", "dry_run": True}
         persist = unittest.mock.Mock()
         reporting = types.SimpleNamespace(
+            report_gcs_prefix_uri="gs://test/reports",
             start_run=lambda: (types.SimpleNamespace(run_id="test-run"), report),
             log_event=lambda *args, **kwargs: None,
             persist_execution_report=persist,
@@ -607,7 +608,8 @@ class RequestHandlingTests(unittest.TestCase):
              patch.object(LongBridgeRuntimeComposer, "build_notification_adapters", return_value=notification), \
              patch.object(LongBridgeRuntimeComposer, "load_strategy_plugin_signals", return_value=((), None)), \
              patch.object(LongBridgeRuntimeComposer, "attach_strategy_plugin_report", return_value=None), \
-             patch.object(LongBridgeRuntimeComposer, "build_rebalance_config", return_value=types.SimpleNamespace()), \
+             patch.object(LongBridgeRuntimeComposer, "build_rebalance_config", return_value=types.SimpleNamespace(
+                 execution_state_store=types.SimpleNamespace(cloud_prefix_uri="gs://test/reports"))), \
              redirect_stdout(output), module.app.test_request_context("/dry-run", method="POST"):
             self.assertEqual(module.handle_dry_run(), ("Dry Run OK", 200))
 
@@ -640,6 +642,52 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertIsNone(module.validation_cycle_observation.current())
         self.assertNotIn("private diagnostic", output.getvalue())
 
+    def test_paper_validation_rejects_mismatched_journal_before_cycle(self):
+        import io
+        from contextlib import redirect_stdout
+
+        module = load_module()
+        from application.runtime_composer import LongBridgeRuntimeComposer
+        report = {"status": "pending", "dry_run": True}
+        reporting = types.SimpleNamespace(
+            report_gcs_prefix_uri="gs://test/reports",
+            start_run=lambda: (types.SimpleNamespace(run_id="test-run"), report),
+            log_event=lambda *args, **kwargs: None,
+            persist_execution_report=unittest.mock.Mock(),
+        )
+        notification = types.SimpleNamespace(
+            notification_port=None, notify_issue=lambda *_args: None,
+            post_submit_order=lambda *_args: None,
+            publish_cycle_notification=unittest.mock.Mock(),
+        )
+        def finish(payload, *, status, **kwargs):
+            payload["status"] = status
+            payload["diagnostics"] = kwargs.get("diagnostics")
+
+        config = types.SimpleNamespace(
+            execution_state_store=types.SimpleNamespace(cloud_prefix_uri="gs://test/other")
+        )
+        output = io.StringIO()
+        with patch.object(module, "ACCOUNT_REGION", "PAPER"), \
+             patch.object(module, "_v7_application_candidate_bound", return_value=False), \
+             patch.object(module, "is_market_open_now", return_value=True), \
+             patch.object(module, "dca_execution_unsupported_reason", return_value=None), \
+             patch.object(module, "run_rebalance_cycle") as cycle, \
+             patch.object(module, "finalize_runtime_report", side_effect=finish), \
+             patch.object(module, "attach_terminal_fallback_execution_receipt", return_value=None), \
+             patch.object(LongBridgeRuntimeComposer, "build_reporting_adapters", return_value=reporting), \
+             patch.object(LongBridgeRuntimeComposer, "build_notification_adapters", return_value=notification), \
+             patch.object(LongBridgeRuntimeComposer, "load_strategy_plugin_signals", return_value=((), None)), \
+             patch.object(LongBridgeRuntimeComposer, "attach_strategy_plugin_report", return_value=None), \
+             patch.object(LongBridgeRuntimeComposer, "build_rebalance_config", return_value=config), \
+             redirect_stdout(output), module.app.test_request_context("/dry-run", method="POST"):
+            self.assertEqual(module.handle_dry_run(), ("Error", 500))
+        cycle.assert_not_called()
+        reporting.persist_execution_report.assert_not_called()
+        notification.publish_cycle_notification.assert_not_called()
+        self.assertEqual(report["diagnostics"]["failure_reason"], "validation_journal_unavailable")
+        self.assertNotIn("gs://test", output.getvalue())
+
     def test_paper_validation_cycle_failure_is_silent_and_reports_error(self):
         import io
         from contextlib import nullcontext, redirect_stdout
@@ -649,6 +697,7 @@ class RequestHandlingTests(unittest.TestCase):
         sent = []
         report = {"status": "pending", "dry_run": True}
         reporting = types.SimpleNamespace(
+            report_gcs_prefix_uri="gs://test/reports",
             start_run=lambda: (types.SimpleNamespace(run_id="test-run"), report),
             log_event=lambda *args, **kwargs: None,
             persist_execution_report=lambda _report: None,
@@ -677,7 +726,8 @@ class RequestHandlingTests(unittest.TestCase):
              patch.object(LongBridgeRuntimeComposer, "build_notification_adapters", return_value=notification), \
              patch.object(LongBridgeRuntimeComposer, "load_strategy_plugin_signals", return_value=((), None)), \
              patch.object(LongBridgeRuntimeComposer, "attach_strategy_plugin_report", return_value=None), \
-             patch.object(LongBridgeRuntimeComposer, "build_rebalance_config", return_value=types.SimpleNamespace()), \
+             patch.object(LongBridgeRuntimeComposer, "build_rebalance_config", return_value=types.SimpleNamespace(
+                 execution_state_store=types.SimpleNamespace(cloud_prefix_uri="gs://test/reports"))), \
              redirect_stdout(output), module.app.test_request_context("/dry-run", method="POST"):
             self.assertEqual(module.handle_dry_run(), ("Error", 500))
         receipts = [json.loads(line) for line in output.getvalue().splitlines() if line.startswith('{"adapter_instrumented"')]
@@ -698,6 +748,7 @@ class RequestHandlingTests(unittest.TestCase):
         sent = []
         report = {"status": "pending", "dry_run": True}
         reporting = types.SimpleNamespace(
+            report_gcs_prefix_uri="gs://test/reports",
             start_run=lambda: (types.SimpleNamespace(run_id="test-run"), report),
             log_event=lambda *args, **kwargs: None,
             persist_execution_report=lambda _report: None,
@@ -726,7 +777,8 @@ class RequestHandlingTests(unittest.TestCase):
              patch.object(LongBridgeRuntimeComposer, "build_notification_adapters", return_value=notification), \
              patch.object(LongBridgeRuntimeComposer, "load_strategy_plugin_signals", return_value=((), None)), \
              patch.object(LongBridgeRuntimeComposer, "attach_strategy_plugin_report", return_value=None), \
-             patch.object(LongBridgeRuntimeComposer, "build_rebalance_config", return_value=types.SimpleNamespace()), \
+             patch.object(LongBridgeRuntimeComposer, "build_rebalance_config", return_value=types.SimpleNamespace(
+                 execution_state_store=types.SimpleNamespace(cloud_prefix_uri="gs://test/reports"))), \
              redirect_stdout(output), module.app.test_request_context("/dry-run", method="POST"):
             self.assertEqual(module.handle_dry_run(), ("Error", 500))
         receipts = [json.loads(line) for line in output.getvalue().splitlines() if line.startswith('{"adapter_instrumented"')]
