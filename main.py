@@ -319,6 +319,8 @@ def t(key, **kwargs):
 
 def _runtime_failure_reason(exc: Exception) -> str:
     # Match only fixed platform errors; never publish arbitrary provider text.
+    if isinstance(exc, RuntimeError) and str(exc) == "validation_journal_read_failed":
+        return "validation_journal_read_failed"
     if isinstance(exc, RuntimeError) and str(exc) in {
         "durable execution command producer is paper-only and cannot be enabled live",
         "durable execution command consumer is paper-only and cannot be enabled live",

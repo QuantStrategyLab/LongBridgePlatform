@@ -7,6 +7,7 @@ import os
 import re
 from datetime import datetime
 
+from application import validation_cycle_observation
 from application.execution_service import (
     ExecutionCycleResult,
     _execution_is_blocked,
@@ -1007,6 +1008,8 @@ def run_strategy(
             execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
             live_command_deduplicated = execution_already_recorded
         except Exception as exc:
+            if validation_cycle_observation.current() is not None:
+                raise RuntimeError("validation_journal_read_failed") from None
             detail = (
                 "execution_marker_read_failed"
                 if live_command_claimed
@@ -1032,6 +1035,8 @@ def run_strategy(
                 )
                 live_command_deduplicated = execution_already_recorded
             except Exception as exc:
+                if validation_cycle_observation.current() is not None:
+                    raise RuntimeError("validation_journal_read_failed") from None
                 detail = (
                     "execution_report_dedup_read_failed"
                     if live_command_claimed

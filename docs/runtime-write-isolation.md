@@ -78,6 +78,12 @@ and presence of an execution receipt are separate facts. A trace-matched event
 is not authenticated Scheduler correlation; missing, ambiguous, or invalid
 events remain unknown. This instrumentation cannot reconstruct earlier runs.
 
+For an observed PAPER validation, an error reading an execution marker or a
+prior execution report stops the cycle with `validation_journal_read_failed`.
+The error does not establish whether a marker or report exists. This check
+does not prove that the available journal covers every instance or that earlier
+steps in the cycle had no side effects.
+
 The submit guard does not make the whole cycle read-only. Existing bootstrap
 may refresh a token, report persistence may write an archive, and enabled state
 or command producers may write markers, risk state, or paper commands. An
@@ -163,5 +169,6 @@ staging; this mode neither changes configuration nor moves traffic.
 - Deployed runtime-target admission before traffic shift
 - Exact SHA / approved-ref checks on `image-only-no-traffic`
 - Per-environment service/region binding used by Runtime Guard
+
 
 
