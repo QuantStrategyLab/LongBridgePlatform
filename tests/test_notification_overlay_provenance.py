@@ -123,7 +123,9 @@ def test_base_directory_probe_is_offline_and_fail_closed(monkeypatch):
         return b"ABSENT\n"
     monkeypatch.setattr("scripts.verify_notification_overlay._run", run)
     verify_base_directory_absent("synthetic-image")
-    assert "--network=none" in calls[0] and "-I" in calls[0] and "-S" in calls[0]
+    assert all(flag in calls[0] for flag in ("--network=none", "--read-only", "-I", "-S", "-B"))
+    assert "except FileNotFoundError" in calls[0][-1] and "except OSError" in calls[0][-1]
+    compile(calls[0][-1], "<isolated-probe>", "exec")
     monkeypatch.setattr("scripts.verify_notification_overlay._run", lambda args: b"PRESENT\n")
     with pytest.raises(VerificationError, match="baseline_directory_absence_unconfirmed"):
         verify_base_directory_absent("synthetic-image")

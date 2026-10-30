@@ -140,8 +140,10 @@ Select it explicitly with `notification_overlay`; leave history and snapshot
 inputs empty. Before staging, the workflow checks the original PAPER target,
 strategy and risk bindings, serving dependencies and exact template match. It
 also checks the recorded build inputs, patch hash, original image layers,
-container configuration and every changed file. The revision records both the
-base commit and overlay commit. A failed provenance or template check stops
+container configuration and every changed file. To verify the new directory is
+absent from the base, it runs an isolated standard-library filesystem check in a
+read-only container without network access or application startup. The revision
+records both the base commit and overlay commit. A failed provenance or template check stops
 staging; this mode neither changes configuration nor moves traffic.
 
 - V7 paused PAPER binding refusal

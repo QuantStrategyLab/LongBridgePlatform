@@ -124,16 +124,19 @@ def collect_layer(archive, files, found):
 def verify_base_directory_absent(base):
     # Execute only isolated stdlib code, without network or application imports.
     try:
-        absent = _run(["docker", "run", "--rm", "--network=none", "--entrypoint", "/app/.venv/bin/python",
-                       base, "-I", "-S", "-c", "from pathlib import Path; import sys; "
-                       "sys.exit(2) if Path('/app/notifications/digest_snapshot').exists() else print('ABSENT')"])
+        probe = ("import os\ntry:\n os.lstat('/app/notifications/digest_snapshot')\n"
+                 "except FileNotFoundError:\n print('ABSENT')\n"
+                 "except OSError:\n print('UNAVAILABLE')\n"
+                 "else:\n print('PRESENT')\n")
+        absent = _run(["docker", "run", "--rm", "--read-only", "--network=none", "--entrypoint", "/app/.venv/bin/python",
+                       base, "-I", "-S", "-B", "-c", probe])
     except RuntimeError:
         raise VerificationError("baseline_directory_absence_unconfirmed") from None
     if absent != b"ABSENT\n":
         raise VerificationError("baseline_directory_absence_unconfirmed")
 
 def verify(repo, project, base_digest, image_digest, build_id):
-    """Verify Git, builder and OCI content; the containers are created but never started."""
+    """Verify Git, builder and OCI content without starting the application."""
     global _PHASE
     _PHASE = "input_validation"
     _require(re.fullmatch(r"sha256:[0-9a-f]{64}", base_digest) is not None)
