@@ -97,9 +97,15 @@ These checks do not make the whole request read-only: strategy and plugin
 loading and broker or dependency paths need independent write-boundary evidence.
 Nor do they prove that cloud and same-instance local journal data are complete.
 A matching prefix does not prove the same store instance, a consistent snapshot,
-or complete historical coverage. The pinned prior-report reader skips unreadable
-or malformed reports and stops after a bounded scan, so its negative result does
-not prove that no matching report exists.
+or complete historical coverage. Observed cycles scan all listed report months
+under the configured account and profile prefix, using one GCS store instance;
+unreadable, malformed or indeterminate reports, unsupported providers, and the
+scan limit stop the cycle. A match may stop the scan early; a negative result
+requires every listed candidate to be successfully classified. It concerns only
+that listing and does not prove coverage of unarchived local reports, migrated or expired history,
+or writes concurrent with the scan, and does not authorize trading or establish
+acceptance of a real cycle. These require independent evidence. The ordinary
+prior-report reader retains its existing bounded, best-effort behavior.
 A zero adapter-attempt count does not establish either property.
 
 ## Cycle heartbeat and account values

@@ -2256,7 +2256,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
                     execution_state_account_scope="PAPER",
                 )
                 telemetry = Mock()
-                with patch.object(rebalance_service, "execute_rebalance_cycle", execute), patch.object(rebalance_service, "_record_platform_execution_telemetry", telemetry), observe(None, None):
+                with patch.object(rebalance_service, "execute_rebalance_cycle", execute), patch.object(rebalance_service, "_record_platform_execution_telemetry", telemetry), patch.object(rebalance_service.validation_cycle_observation, "strict_prior_report_exists", side_effect=lambda _store, **kwargs: store.has_prior_execution_report(**kwargs)), observe(None, None):
                     if failure:
                         with self.assertRaisesRegex(RuntimeError, "^validation_journal_read_failed$"):
                             rebalance_service.run_strategy(runtime=runtime, config=config)
@@ -2288,11 +2288,114 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         store.has_marker.return_value = False
         store.has_prior_execution_report.return_value = False
         result = types.SimpleNamespace(dry_run_orders=(object(),), pending_orders=(), action_done=False)
-        with patch.object(rebalance_service, "execute_rebalance_cycle", return_value=result), observe(None, None):
+        with patch.object(rebalance_service, "execute_rebalance_cycle", return_value=result), patch.object(rebalance_service.validation_cycle_observation, "strict_prior_report_exists", return_value=False), observe(None, None):
             with self.assertRaisesRegex(RuntimeError, "^validation_marker_write_blocked$"):
                 rebalance_service.run_strategy(runtime=runtime, config=config)
         store.record_marker.assert_not_called()
         store.record_outcome.assert_not_called()
+
+    def test_observed_cycle_without_dates_stops_before_execution_or_writes(self):
+        from application.validation_cycle_observation import observe
+
+        plan = _build_plan(
+            strategy_symbols=("SOXX",), risk_symbols=("SOXX",), targets={"SOXX": 500.0},
+            market_values={"SOXX": 0.0}, sellable_quantities={"SOXX": 0}, quantities={"SOXX": 0},
+            current_min_trade=10.0, trade_threshold_value=10.0, investable_cash=600.0,
+            market_status="Risk on", deploy_ratio_text="100.0%", income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%", signal_message="test", available_cash=600.0,
+            total_strategy_equity=600.0, portfolio_rows=(("SOXX",),),
+            signal_date=None, effective_date=None,
+        )
+        store = Mock()
+        runtime = LongBridgeRebalanceRuntime(
+            bootstrap=lambda: ("quote", "trade", {}), resolve_rebalance_plan=lambda **kwargs: plan,
+            market_data_port_factory=lambda _: CallableMarketDataPort(quote_loader=lambda _: None),
+            estimate_max_purchase_quantity=lambda *args, **kwargs: 0,
+            notifications=CallableNotificationPort(lambda _: None), notify_issue=Mock(),
+            portfolio_port_factory=lambda *_: CallablePortfolioPort(lambda: _build_snapshot(plan)),
+            execution_port_factory=lambda _: CallableExecutionPort(lambda _: None),
+        )
+        config = LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001", limit_sell_discount=0.995, limit_buy_premium=1.005,
+            separator="-", translator=build_translator("en"), with_prefix=lambda message: message,
+            strategy_profile="soxl_soxx_trend_income", dry_run_only=True, execution_dedup_enabled=True,
+            execution_state_store=store, execution_state_account_scope="PAPER",
+        )
+        with patch.object(rebalance_service, "execute_rebalance_cycle") as execute, \
+             patch.object(rebalance_service, "claim_account_owner") as claim, \
+             patch.object(rebalance_service, "_record_platform_execution_telemetry") as telemetry, \
+             patch.object(rebalance_service.validation_cycle_observation, "strict_prior_report_exists") as scan, \
+             observe(None, None):
+            with self.assertRaisesRegex(RuntimeError, "^validation_journal_unavailable$"):
+                rebalance_service.run_strategy(runtime=runtime, config=config)
+        execute.assert_not_called()
+        claim.assert_not_called()
+        telemetry.assert_not_called()
+        scan.assert_not_called()
+        store.has_marker.assert_not_called()
+        store.has_prior_execution_report.assert_not_called()
+        store.claim_marker.assert_not_called()
+        store.record_marker.assert_not_called()
+        store.record_outcome.assert_not_called()
+        runtime.notify_issue.assert_not_called()
+
+    def test_observed_cycle_consumes_strict_cloud_report_scan(self):
+        from application.validation_cycle_observation import observe
+        from quant_platform_kit.cloud.gcp_provider import GcpObjectStore
+
+        plan = _build_plan(
+            strategy_symbols=("SOXX",), risk_symbols=("SOXX",), targets={"SOXX": 500.0},
+            market_values={"SOXX": 0.0}, sellable_quantities={"SOXX": 0}, quantities={"SOXX": 0},
+            current_min_trade=10.0, trade_threshold_value=10.0, investable_cash=600.0,
+            market_status="Risk on", deploy_ratio_text="100.0%", income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%", signal_message="test", available_cash=600.0,
+            total_strategy_equity=600.0, portfolio_rows=(("SOXX",),),
+            signal_date="2026-06-01", effective_date="2026-06-02",
+        )
+        class FakeGcp(GcpObjectStore):
+            def __init__(self):
+                self.contents = json.dumps({"platform": "longbridge", "strategy_profile": "soxl_soxx_trend_income",
+                    "account_scope": "PAPER", "dry_run": True, "status": "ok", "summary": {
+                        "signal_date": "2026-06-01", "effective_date": "2026-06-02", "action_done": False}})
+                self.listed = []
+            def list(self, prefix):
+                self.listed.append(prefix)
+                return [prefix + "2026-07/late.json"]
+            def read_text(self, _uri):
+                return self.contents
+
+        cloud = FakeGcp()
+        store = Mock(cloud_prefix_uri="gs://bucket/reports")
+        store.has_marker.return_value = False
+        store._object_store.return_value = cloud
+        runtime = LongBridgeRebalanceRuntime(
+            bootstrap=lambda: ("quote", "trade", {}), resolve_rebalance_plan=lambda **kwargs: plan,
+            market_data_port_factory=lambda _: CallableMarketDataPort(quote_loader=lambda _: None),
+            estimate_max_purchase_quantity=lambda *args, **kwargs: 0,
+            notifications=CallableNotificationPort(lambda _: None), notify_issue=Mock(),
+            portfolio_port_factory=lambda *_: CallablePortfolioPort(lambda: _build_snapshot(plan)),
+            execution_port_factory=lambda _: CallableExecutionPort(lambda _: None),
+        )
+        config = LongBridgeRebalanceConfig(
+            physical_account_id="lb-test-001", limit_sell_discount=0.995, limit_buy_premium=1.005,
+            separator="-", translator=build_translator("en"), with_prefix=lambda message: message,
+            strategy_profile="soxl_soxx_trend_income", dry_run_only=True, execution_dedup_enabled=True,
+            execution_state_store=store, execution_state_account_scope="PAPER",
+        )
+        execute = Mock(side_effect=AssertionError("execution must not run"))
+        with patch.object(rebalance_service, "execute_rebalance_cycle", execute), observe(None, None):
+            rebalance_service.run_strategy(runtime=runtime, config=config)
+        execute.assert_not_called()
+        store.has_prior_execution_report.assert_not_called()
+        self.assertEqual(cloud.listed, ["gs://bucket/reports/longbridge/soxl_soxx_trend_income/PAPER/"])
+        cloud.contents = "{"
+        with patch.object(rebalance_service, "execute_rebalance_cycle", execute), observe(None, None):
+            with self.assertRaisesRegex(RuntimeError, "^validation_journal_read_failed$"):
+                rebalance_service.run_strategy(runtime=runtime, config=config)
+        execute.assert_not_called()
+        store.record_marker.assert_not_called()
+        store.record_outcome.assert_not_called()
+        runtime.notify_issue.assert_not_called()
 
     def test_run_strategy_skips_when_prior_report_matches_execution_signal(self):
         sent_messages = []

@@ -59,6 +59,94 @@ _CURRENT: contextvars.ContextVar[ValidationCycleObservation | None] = contextvar
     "longbridge_validation_cycle", default=None
 )
 
+STRICT_REPORT_SCAN_LIMIT = 10000
+
+
+def strict_prior_report_exists(store, *, platform, strategy_profile, account_scope,
+                               signal_date, effective_date, dry_run_only) -> bool:
+    """Search the listed cloud report scope; failure never means no report."""
+    from collections.abc import Mapping
+    from datetime import date
+    from quant_platform_kit.cloud.gcp_provider import GcpObjectStore
+    from quant_platform_kit.common.execution_state import (
+        _report_effective_date_keys, _report_matches_execution, _report_signal_date_keys,
+    )
+    from quant_platform_kit.common.runtime_reports import runtime_report_relative_path
+
+    try:
+        identity = (platform, strategy_profile, account_scope)
+        if (any(not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*", value)
+                or value.lower() in {"unknown", "unknown-profile", "unknown-platform"} for value in identity)
+                or type(dry_run_only) is not bool
+                or not any(str(value or "").strip() for value in (signal_date, effective_date))):
+            raise ValueError
+        for value in (signal_date, effective_date):
+            if value:
+                date.fromisoformat(str(value)[:10])
+        cloud_uri = getattr(store, "cloud_prefix_uri", None)
+        if not isinstance(cloud_uri, str) or not cloud_uri.startswith("gs://"):
+            raise ValueError
+        path = runtime_report_relative_path({
+            "platform": platform, "strategy_profile": strategy_profile,
+            "account_scope": account_scope, "started_at": "2001-01-01T00:00:00+00:00",
+            "run_id": "validation-probe",
+        })
+        prefix = f"{cloud_uri.rstrip('/')}/{path.parent.parent.as_posix()}/"
+        objects = store._object_store()
+        if not isinstance(objects, GcpObjectStore):
+            raise ValueError
+        uris = objects.list(prefix)
+        count = 0
+        for uri in uris:
+            if not isinstance(uri, str) or not uri.startswith(prefix):
+                raise ValueError
+            if not uri.endswith(".json"):
+                continue
+            count += 1
+            if count > STRICT_REPORT_SCAN_LIMIT:
+                raise ValueError
+            payload = json.loads(objects.read_text(uri))
+            if (not isinstance(payload, Mapping)
+                    or not all(isinstance(payload.get(key), str) and payload[key].strip()
+                               for key in ("platform", "strategy_profile", "account_scope"))
+                    or not isinstance(payload.get("status"), str) or not payload["status"].strip()
+                    or type(payload.get("dry_run")) is not bool
+                    or not isinstance(payload.get("summary"), Mapping)):
+                raise ValueError
+            if not all(payload[key].strip().lower() == value.lower()
+                       for key, value in zip(("platform", "strategy_profile", "account_scope"), identity)):
+                raise ValueError
+            if payload["dry_run"] == dry_run_only:
+                if payload["status"] not in {"ok", "error", "skipped"}:
+                    raise ValueError
+                summary = payload["summary"]
+                if "action_done" in summary and type(summary["action_done"]) is not bool:
+                    raise ValueError
+                count_fields = ("order_events_count", "orders_previewed_count",
+                                "orders_skipped_count", "orders_pending_count")
+                if any(type(summary[field]) is not int or summary[field] < 0
+                       for field in count_fields if field in summary):
+                    raise ValueError
+                signal_keys = _report_signal_date_keys(payload, payload["summary"])
+                effective_keys = _report_effective_date_keys(payload, payload["summary"])
+                if ((signal_date and not signal_keys) or (effective_date and not effective_keys)):
+                    raise ValueError
+                for value in signal_keys | effective_keys:
+                    date.fromisoformat(value)
+            if _report_matches_execution(
+                payload, platform=platform, strategy_profile=strategy_profile,
+                account_scope=account_scope, signal_date=str(signal_date or ""),
+                effective_date=str(effective_date or ""), dry_run_only=dry_run_only,
+            ):
+                return True
+            if (payload["dry_run"] == dry_run_only
+                    and (payload["status"] != "ok" or type(summary.get("action_done")) is not bool
+                         or not all(field in summary for field in count_fields[:3]))):
+                raise ValueError
+        return False
+    except Exception:
+        raise RuntimeError("validation_journal_read_failed") from None
+
 
 def current() -> ValidationCycleObservation | None:
     return _CURRENT.get()
