@@ -130,6 +130,111 @@ class ImageOnlyAdmissionDiagnosticsTest(unittest.TestCase):
             admission.verify_template_matches_serving(service=PRIVATE, service_json=service, serving_revisions=[])
         self.assertEqual(caught.exception.diagnostic_reason, "template_mismatch")
 
+    def test_difference_categories_aggregate_exact_projection_privately(self):
+        def payload(entries, account="private-service-account"):
+            return {"spec": {"containers": [{"env": entries}], "serviceAccountName": account}}
+
+        entries = [{"name": "ACCOUNT_HISTORY_TARGET_ID", "value": PRIVATE},
+                   {"name": "OTHER_PRIVATE_KEY", "value": PRIVATE}]
+        service = {"spec": {"template": payload(entries)}}
+        identical = payload(list(reversed(entries)))
+        history = payload([{**entries[0], "value": "changed"}, entries[1]])
+        other = payload([entries[0], {"name": "OTHER_PRIVATE_KEY", "valueFrom": {
+            "secretKeyRef": {"name": PRIVATE, "key": PRIVATE}}}])
+        account = payload(entries, account="other-private-account")
+        def categories(revisions):
+            return admission._paper_template_difference_categories(service, revisions)
+        self.assertEqual(categories([identical]), {"history_or_snapshot_diff": False,
+                         "other_env_diff": False, "service_account_diff": False})
+        for revision, key in ((history, "history_or_snapshot_diff"),
+                              (other, "other_env_diff"), (account, "service_account_diff")):
+            expected = {"history_or_snapshot_diff": False, "other_env_diff": False,
+                        "service_account_diff": False}
+            expected[key] = True
+            self.assertEqual(categories([identical, revision]), expected)
+        all_categories = categories([history, other, account])
+        self.assertTrue(all(all_categories.values()))
+        error = admission.AdmissionError(PRIVATE, reason="template_mismatch")
+        error.template_difference_categories = all_categories
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            admission._report_staging_failure(error, phase="staging_validation")
+        receipt = json.loads(stderr.getvalue())
+        self.assertEqual(receipt["template_difference_categories"], all_categories)
+        self.assertNotIn(PRIVATE, stderr.getvalue())
+        self.assertNotIn("OTHER_PRIVATE_KEY", stderr.getvalue())
+
+    def test_difference_categories_incomplete_or_failure_are_unknown(self):
+        missing = {"history_or_snapshot_diff": None, "other_env_diff": None,
+                   "service_account_diff": None}
+        service = {"spec": {"template": {"spec": {"containers": [{"env": []}]}}}}
+        self.assertEqual(admission._paper_template_difference_categories(service, []), missing)
+        self.assertEqual(admission._paper_template_difference_categories({}, [{}]), missing)
+        self.assertEqual(admission._paper_template_difference_categories(service, [{}]), missing)
+        with patch.object(admission, "_configuration", side_effect=RuntimeError(PRIVATE)):
+            self.assertEqual(admission._paper_template_difference_categories(service, [service]), missing)
+        error = admission.AdmissionError(PRIVATE, reason="template_mismatch")
+        error.template_difference_categories = {"history_or_snapshot_diff": PRIVATE}
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            admission._report_staging_failure(error, phase="staging_validation")
+        self.assertEqual(json.loads(stderr.getvalue())["template_difference_categories"], missing)
+        self.assertNotIn(PRIVATE, stderr.getvalue())
+
+    def test_paper_strict_rejection_has_categories_without_extra_reads(self):
+        profile = "russell_top50_leader_rotation"
+        target = {"platform_id": "longbridge", "service_name": "paper-service",
+                  "account_scope": "PAPER", "account_selector": ["PAPER"],
+                  "strategy_profile": profile, "execution_mode": "live", "dry_run_only": False}
+        entries = [{"name": "RUNTIME_TARGET_JSON", "value": json.dumps(target)},
+                   {"name": "STRATEGY_PROFILE", "value": profile}]
+        spec = {"serviceAccountName": PRIVATE, "containers": [{"env": entries}]}
+        service = {"spec": {"template": {"spec": spec}},
+                   "status": {"traffic": [{"revisionName": "serving", "percent": 100}]}}
+        calls = []
+        def run(command):
+            calls.append(command)
+            return json.dumps({"spec": {"serviceAccountName": "other", "containers": [{"env": entries}]}})
+        with patch.object(admission, "_validate_image_only_source", return_value=(None, None)), \
+             patch.object(admission, "_require_paper_target_identity"), \
+             patch.object(admission, "resolve_strategy_definition", return_value=SimpleNamespace(profile=profile)):
+            with self.assertRaises(admission.AdmissionError) as caught:
+                admission.prepare_image_only_staging(service="paper-service", project="project", region="region",
+                    service_json=service, env={"WORKFLOW_TARGET": "PAPER"}, image_commit=SHA, run=run)
+        self.assertEqual(caught.exception.diagnostic_reason, "template_mismatch")
+        self.assertEqual(caught.exception.template_difference_categories,
+                         {"history_or_snapshot_diff": False, "other_env_diff": False,
+                          "service_account_diff": True})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][:4], ["gcloud", "run", "revisions", "describe"])
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            admission._report_staging_failure(caught.exception, phase="staging_validation")
+        self.assertNotIn(PRIVATE, stderr.getvalue())
+        with patch.object(admission, "_paper_template_difference_categories", side_effect=RuntimeError(PRIVATE)), \
+             patch.object(admission, "_validate_image_only_source", return_value=(None, None)), \
+             patch.object(admission, "_require_paper_target_identity"), \
+             patch.object(admission, "resolve_strategy_definition", return_value=SimpleNamespace(profile=profile)):
+            with self.assertRaises(admission.AdmissionError) as failed:
+                admission.prepare_image_only_staging(service="paper-service", project="project", region="region",
+                    service_json=service, env={"WORKFLOW_TARGET": "PAPER"}, image_commit=SHA, run=run)
+        self.assertTrue(all(value is None for value in failed.exception.template_difference_categories.values()))
+
+    def test_recoverable_http_snapshot_mismatch_emits_no_categories(self):
+        sentinel = ({"env": [], "serviceAccountName": ""}, {})
+        mismatch = admission.AdmissionError(PRIVATE, reason="template_mismatch")
+        stderr = io.StringIO()
+        with patch.object(admission, "verify_template_matches_serving", side_effect=mismatch), \
+             patch.object(admission, "_admit_http_snapshot_template_via_staged_source", return_value=sentinel), \
+             patch.object(admission, "_paper_template_difference_categories") as diagnostic, \
+             redirect_stderr(stderr):
+            result = admission._resolve_paper_template_configuration(
+                service=PRIVATE, project="project", region="region", service_json={}, serving_revisions=[],
+                image_commit=admission.APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE, run=lambda _: "")
+        self.assertIs(result, sentinel)
+        diagnostic.assert_not_called()
+        self.assertEqual(stderr.getvalue(), "")
+
     def test_readback_keeps_original_failure_output(self):
         with tempfile.TemporaryDirectory() as directory:
             plan = Path(directory) / "plan.json"

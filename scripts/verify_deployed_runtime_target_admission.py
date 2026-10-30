@@ -56,10 +56,18 @@ def _report_staging_failure(exc: BaseException, *, phase: str) -> None:
         if not isinstance(reason, str) or reason not in _STAGING_FAILURE_REASONS:
             reason = "admission_unavailable"
         safe_phase = phase if phase in _STAGING_FAILURE_PHASES else "unavailable"
-        print(json.dumps({
+        receipt = {
             "schema": "longbridge.image-only-admission.v1",
             "status": "rejected", "phase": safe_phase, "reason": reason,
-        }, sort_keys=True), file=sys.stderr)
+        }
+        categories = getattr(exc, "template_difference_categories", None)
+        if reason == "template_mismatch" and isinstance(categories, dict):
+            keys = ("history_or_snapshot_diff", "other_env_diff", "service_account_diff")
+            valid = all(isinstance(categories.get(key), bool) for key in keys)
+            receipt["template_difference_categories"] = {
+                key: categories[key] if valid else None for key in keys
+            }
+        print(json.dumps(receipt, sort_keys=True), file=sys.stderr)
     except Exception:
         # Optional diagnostics cannot change the original rejection or exit code.
         pass
@@ -549,6 +557,36 @@ def _require_paper_target_identity(*, service: str, service_json: Mapping[str, A
         raise AdmissionError(f"{service}: runtime target identity does not match PAPER", reason='target_identity_invalid')
 
 
+
+def _paper_template_difference_categories(
+    service_json: Mapping[str, Any], serving_revisions: Sequence[Mapping[str, Any]]
+) -> dict[str, bool | None]:
+    """Summarize only the existing comparison; never expose configuration material."""
+    keys = ("history_or_snapshot_diff", "other_env_diff", "service_account_diff")
+    unavailable: dict[str, bool | None] = dict.fromkeys(keys)
+    try:
+        template = service_json.get("spec", {}).get("template")
+        if not isinstance(template, Mapping) or not serving_revisions:
+            return unavailable
+        expected = _configuration(service_json, template=template)
+        observed = [_configuration(revision) for revision in serving_revisions]
+        special = set(_HISTORY_KEYS) | {_ACCOUNT_SNAPSHOT_ENV}
+
+        def subset(configuration: Mapping[str, Any], *, selected: bool) -> list[dict[str, str]]:
+            return [entry for entry in configuration["env"] if (entry["name"] in special) == selected]
+
+        return {
+            "history_or_snapshot_diff": any(subset(item, selected=True) != subset(expected, selected=True)
+                                            for item in observed),
+            "other_env_diff": any(subset(item, selected=False) != subset(expected, selected=False)
+                                  for item in observed),
+            "service_account_diff": any(item["serviceAccountName"] != expected["serviceAccountName"]
+                                        for item in observed),
+        }
+    except Exception:
+        return unavailable
+
+
 def verify_template_matches_serving(
     *, service: str, service_json: Mapping[str, Any], serving_revisions: Sequence[Mapping[str, Any]]
 ) -> dict[str, Any]:
@@ -833,9 +871,19 @@ def prepare_image_only_staging(
             allow_sghk=True,
         )
     else:
-        configuration = verify_template_matches_serving(
-            service=service, service_json=service_json, serving_revisions=revisions
-        )
+        try:
+            configuration = verify_template_matches_serving(
+                service=service, service_json=service_json, serving_revisions=revisions
+            )
+        except AdmissionError as exc:
+            if str(env.get("WORKFLOW_TARGET") or "") == "PAPER" and exc.diagnostic_reason == "template_mismatch":
+                try:
+                    exc.template_difference_categories = _paper_template_difference_categories(service_json, revisions)
+                except Exception:
+                    exc.template_difference_categories = {
+                        "history_or_snapshot_diff": None, "other_env_diff": None, "service_account_diff": None
+                    }
+            raise
         retained_history = {}
     source_revision = ues_revision_at(image_commit, run)
     _require_candidate_release_binding(

@@ -126,6 +126,14 @@ account identifiers, configuration values, or strategy revisions. It performs no
 additional cloud reads and cannot admit a rejected candidate. Successful staging
 plans and image readback behavior are unchanged.
 
+For a PAPER strict template mismatch, `template_difference_categories` reports
+independent `history_or_snapshot_diff`, `other_env_diff`, and
+`service_account_diff` booleans across all serving revisions. A null means the
+comparison could not be completed. The categories describe the existing exact
+configuration projection, not the cause or safety of a difference; raw settings
+and secret references are never included. They use only the reads already made
+by admission and do not change its decision.
+
 - V7 paused PAPER binding refusal
 - Deployed runtime-target admission before traffic shift
 - Exact SHA / approved-ref checks on `image-only-no-traffic`
