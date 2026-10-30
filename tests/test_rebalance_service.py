@@ -1663,7 +1663,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         )
         first = rebalance_service.run_strategy(runtime=runtime, config=config)
         self.assertEqual(first.execution["heartbeat_execution_state"], "waiting_window")
-        self.assertIn("Waiting for the execution window", messages[0])
+        self.assertEqual(messages, [])  # A proven queued command belongs in the digest.
         self.assertEqual(orders, [])
         self.assertIs(command_store.current_state(command_store.list_due("2026-07-20")[0]), ExecutionCommandState.QUEUED)
         rebalance_service.run_strategy(runtime=runtime, config=config)

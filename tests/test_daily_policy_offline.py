@@ -99,6 +99,12 @@ class DailyPolicy(unittest.TestCase):
             action_done=False, pending_orders=())
         self.assertEqual(unified.cycle_facts(queued)[0], 'routine_cycle')
 
+    def test_partial_summary_result_without_allocation_is_supported(self):
+        result = SimpleNamespace(execution={}, action_done=True)
+        kind, facts = unified.cycle_facts(result, dry_run=True)
+        self.assertEqual(kind, 'routine_cycle')
+        self.assertTrue(facts['dry_run'])
+
     def test_dry_run_never_sends_coverage_for_normal_preview(self):
         result=SimpleNamespace(allocation={}, execution={'execution_status':'no_action'}, action_done=False, pending_orders=())
         config=SimpleNamespace(dry_run_only=True, notification_attention_reason_codes=())

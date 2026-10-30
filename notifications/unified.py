@@ -420,8 +420,13 @@ def cycle_facts(result, *, dry_run=False, attention_reasons=()):
     # queued command is distinguishable from a blocked or unknown outcome.
     from types import SimpleNamespace
     from application.rebalance_service import _has_notification_attention
+    attention_result = SimpleNamespace(
+        execution=getattr(result, "execution", {}) or {},
+        allocation=getattr(result, "allocation", {}) or {},
+        notification_attention_reason_codes=getattr(result, "notification_attention_reason_codes", ()) or (),
+    )
     if kind in {"routine_cycle", "order_submitted"} and _has_notification_attention(
-        config=SimpleNamespace(notification_attention_reason_codes=attention_reasons), result=result
+        config=SimpleNamespace(notification_attention_reason_codes=attention_reasons), result=attention_result
     ):
         kind = "real_error"
         healthy = False
