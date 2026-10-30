@@ -1047,7 +1047,8 @@ def run_strategy(
                 report_reader = execution_state_store.has_prior_execution_report
                 if validation_cycle_observation.current() is not None:
                     report_reader = partial(
-                        validation_cycle_observation.strict_prior_report_exists, execution_state_store
+                        validation_cycle_observation.strict_prior_report_exists, execution_state_store,
+                        report_base_dir=validation_cycle_observation.current().report_base_dir,
                     )
                 execution_already_recorded = bool(
                     report_reader(

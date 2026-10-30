@@ -1,6 +1,9 @@
 """Offline contract test for the pinned Google Cloud Storage page iterator."""
 
 import unittest
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -19,6 +22,14 @@ class GcsPaginationContractTests(unittest.TestCase):
         objects = GcpObjectStore(project_id="synthetic-test")
         objects._client = client
         marker_store = SimpleNamespace(cloud_prefix_uri="gs://synthetic-bucket/root", _object_store=lambda: objects)
+        local = TemporaryDirectory()
+        self.addCleanup(local.cleanup)
+        month = Path(local.name) / "longbridge/strategy/PAPER/2025-01"
+        month.mkdir(parents=True)
+        (month / "prior.json").write_text(json.dumps({"platform": "longbridge", "strategy_profile": "strategy",
+            "account_scope": "PAPER", "dry_run": True, "status": "ok", "summary": {
+                "signal_date": "2025-01-01", "effective_date": "2025-01-02", "action_done": False,
+                "order_events_count": 0, "orders_previewed_count": 0, "orders_skipped_count": 0}}))
         prefix = "root/longbridge/strategy/PAPER/"
         calls = []
 
@@ -40,11 +51,11 @@ class GcsPaginationContractTests(unittest.TestCase):
             self.fail("scanner requested a third page")
 
         with patch.object(client._connection, "api_request", side_effect=api_request), \
-             patch("application.validation_cycle_observation.STRICT_REPORT_SCAN_LIMIT", 2):
+             patch("application.validation_cycle_observation.STRICT_REPORT_SCAN_LIMIT", 4):
             with self.assertRaisesRegex(RuntimeError, "^validation_journal_read_failed$"):
                 strict_prior_report_exists(marker_store, platform="longbridge", strategy_profile="strategy",
                                            account_scope="PAPER", signal_date="2026-01-31",
-                                           effective_date="2026-02-02", dry_run_only=True)
+                                           effective_date="2026-02-02", dry_run_only=True, report_base_dir=local.name)
         self.assertEqual(len(calls), 2)
         transport.request.assert_not_called()
 

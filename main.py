@@ -911,6 +911,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         )
         if observation is not None:
             validation_cycle_observation.require_matching_journal_source(rebalance_config, reporting_adapters)
+            observation.report_base_dir = getattr(reporting_adapters, "report_base_dir", None)
         failure_phase = "strategy_cycle"
         if observation is not None:
             observation.cycle_entered = True

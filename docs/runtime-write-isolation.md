@@ -97,8 +97,14 @@ These checks do not make the whole request read-only: strategy and plugin
 loading and broker or dependency paths need independent write-boundary evidence.
 Nor do they prove that cloud and same-instance local journal data are complete.
 A matching prefix does not prove the same store instance, a consistent snapshot,
-or complete historical coverage. Observed cycles scan all listed report months
-under the configured account and profile prefix, using one GCS store instance;
+or complete historical coverage. Observed cycles scan the report writer's local
+directory for this instance and all listed GCS report months under the configured
+account and profile prefix, using one GCS store instance. Missing or empty local
+report directories stop the cycle; they are not initialized by this check. Local
+symbolic links and unreadable or non-regular entries also stop the cycle. Local
+and cloud entries share the scan limit, including nested directories and non-JSON
+entries. A matching local report blocks the cycle even if its cloud upload failed.
+For either source,
 unreadable, malformed or indeterminate reports (including duplicate JSON keys or
 nonstandard numeric constants), unsupported providers, and the
 scan limit stop the cycle. Listing requests at most 10,001 objects and counts
