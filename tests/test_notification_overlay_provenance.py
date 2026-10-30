@@ -95,3 +95,13 @@ def test_layer_rejects_unapproved_files_and_whiteouts(path):
     with tarfile.open(fileobj=io.BytesIO(stream.getvalue())) as archive:
         with pytest.raises(ValueError):
             collect_layer(archive, {"notifications/unified.py": b"x"}, {})
+
+
+def test_build_metadata_denial_is_redacted_and_stops(monkeypatch):
+    from subprocess import CompletedProcess
+    from scripts.verify_notification_overlay import _run
+
+    monkeypatch.setattr("scripts.verify_notification_overlay.subprocess.run", lambda *a, **kw:
+                        CompletedProcess(a[0], 1, b"", b"PERMISSION_DENIED: sensitive diagnostic"))
+    with pytest.raises(RuntimeError, match="^build_metadata_permission_denied$"):
+        _run(["gcloud", "builds", "describe", "synthetic"])
