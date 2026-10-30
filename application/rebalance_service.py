@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 from datetime import datetime
+from functools import partial
 
 from application import validation_cycle_observation
 from application.execution_service import (
@@ -1043,8 +1044,13 @@ def run_strategy(
                 execution_already_recorded = True
         if not execution_already_recorded and hasattr(execution_state_store, "has_prior_execution_report"):
             try:
+                report_reader = execution_state_store.has_prior_execution_report
+                if validation_cycle_observation.current() is not None:
+                    report_reader = partial(
+                        validation_cycle_observation.strict_prior_report_exists, execution_state_store
+                    )
                 execution_already_recorded = bool(
-                    execution_state_store.has_prior_execution_report(
+                    report_reader(
                         platform="longbridge",
                         strategy_profile=getattr(config, "strategy_profile", "") or "unknown",
                         account_scope=getattr(config, "execution_state_account_scope", "") or "unknown",
