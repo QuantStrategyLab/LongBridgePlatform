@@ -2166,6 +2166,68 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(recorded_markers, [])
         self.assertEqual(sent_messages, [])
 
+    def test_observed_paper_validation_rejects_unreadable_journal(self):
+        from application.validation_cycle_observation import observe
+
+        plan = _build_plan(
+            strategy_symbols=("SOXX",), risk_symbols=("SOXX",), targets={"SOXX": 500.0},
+            market_values={"SOXX": 0.0}, sellable_quantities={"SOXX": 0}, quantities={"SOXX": 0},
+            current_min_trade=10.0, trade_threshold_value=10.0, investable_cash=600.0,
+            market_status="Risk on", deploy_ratio_text="100.0%", income_ratio_text="0.0%",
+            income_locked_ratio_text="0.0%", signal_message="test", available_cash=600.0,
+            total_strategy_equity=600.0, portfolio_rows=(("SOXX",),),
+            signal_date="2026-06-01", effective_date="2026-06-02",
+        )
+        for failure in ("marker", "report", None):
+            with self.subTest(failure=failure):
+                store = Mock()
+                store.has_marker.side_effect = RuntimeError("sensitive detail") if failure == "marker" else None
+                store.has_marker.return_value = False
+                store.has_prior_execution_report.side_effect = RuntimeError("sensitive detail") if failure == "report" else None
+                store.has_prior_execution_report.return_value = True
+                notify = Mock()
+                execute = Mock(side_effect=AssertionError("execution must not run"))
+                runtime = LongBridgeRebalanceRuntime(
+                    bootstrap=lambda: ("quote", "trade", {}),
+                    resolve_rebalance_plan=lambda **kwargs: plan,
+                    market_data_port_factory=lambda _: CallableMarketDataPort(quote_loader=lambda _: None),
+                    estimate_max_purchase_quantity=lambda *args, **kwargs: 0,
+                    notifications=CallableNotificationPort(lambda _: None), notify_issue=notify,
+                    portfolio_port_factory=lambda *_: CallablePortfolioPort(lambda: _build_snapshot(plan)),
+                    execution_port_factory=lambda _: CallableExecutionPort(lambda _: None),
+                )
+                config = LongBridgeRebalanceConfig(
+                    physical_account_id="lb-test-001", limit_sell_discount=0.995, limit_buy_premium=1.005,
+                    separator="-", translator=build_translator("en"), with_prefix=lambda message: message,
+                    strategy_profile="soxl_soxx_trend_income", dry_run_only=True,
+                    execution_dedup_enabled=True, execution_state_store=store,
+                    execution_state_account_scope="PAPER",
+                )
+                with patch.object(rebalance_service, "execute_rebalance_cycle", execute), observe(None, None):
+                    if failure:
+                        with self.assertRaisesRegex(RuntimeError, "^validation_journal_read_failed$"):
+                            rebalance_service.run_strategy(runtime=runtime, config=config)
+                        notify.assert_not_called()
+                    else:
+                        rebalance_service.run_strategy(runtime=runtime, config=config)
+                    execute.assert_not_called()
+                    store.record_marker.assert_not_called()
+                    store.record_outcome.assert_not_called()
+
+                if failure == "marker":
+                    notify.reset_mock()
+                    with patch.object(rebalance_service, "execute_rebalance_cycle", execute):
+                        rebalance_service.run_strategy(runtime=runtime, config=config)
+                    self.assertEqual(notify.call_count, 1)
+                    execute.assert_not_called()
+                elif failure == "report":
+                    notify.reset_mock()
+                    with patch.object(rebalance_service, "execute_rebalance_cycle", execute):
+                        with self.assertRaisesRegex(AssertionError, "execution must not run"):
+                            rebalance_service.run_strategy(runtime=runtime, config=config)
+                    self.assertEqual(notify.call_count, 1)
+                    execute.assert_called_once()
+
     def test_run_strategy_skips_when_prior_report_matches_execution_signal(self):
         sent_messages = []
         report_checks = []
@@ -4365,3 +4427,4 @@ class RuntimeNotificationPolicyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
