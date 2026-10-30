@@ -120,6 +120,18 @@ def collect_layer(archive, files, found):
         _require(name in files and name not in found and member.uid == member.gid == 1000 and member.mode & 0o022 == 0)
         found[name] = archive.extractfile(member).read()
 
+
+def verify_base_directory_absent(base):
+    # Execute only isolated stdlib code, without network or application imports.
+    try:
+        absent = _run(["docker", "run", "--rm", "--network=none", "--entrypoint", "/app/.venv/bin/python",
+                       base, "-I", "-S", "-c", "from pathlib import Path; import sys; "
+                       "sys.exit(2) if Path('/app/notifications/digest_snapshot').exists() else print('ABSENT')"])
+    except RuntimeError:
+        raise VerificationError("baseline_directory_absence_unconfirmed") from None
+    if absent != b"ABSENT\n":
+        raise VerificationError("baseline_directory_absence_unconfirmed")
+
 def verify(repo, project, base_digest, image_digest, build_id):
     """Verify Git, builder and OCI content; the containers are created but never started."""
     global _PHASE
@@ -174,9 +186,7 @@ def verify(repo, project, base_digest, image_digest, build_id):
                 if dest.read_bytes() != content:
                     raise VerificationError("baseline_file_mismatch", name)
             # The only allowed opaque marker creates a directory absent in the base.
-            absent = subprocess.run(["docker", "cp", containers[0] + ":/app/notifications/digest_snapshot", str(root / "absent")], capture_output=True)
-            if absent.returncode == 0 or b"Could not find" not in absent.stderr:
-                raise VerificationError("baseline_directory_absence_unconfirmed")
+            verify_base_directory_absent(base)
             _PHASE = "candidate_files"
             for name, content in files.items():
                 dest = root / "candidate-file"

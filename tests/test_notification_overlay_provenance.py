@@ -112,3 +112,23 @@ def test_baseline_mismatch_exposes_only_fixed_public_paths():
 
     assert VerificationError("baseline_file_mismatch", "main.py").path == "main.py"
     assert VerificationError("baseline_file_mismatch", "private/path").path is None
+
+
+def test_base_directory_probe_is_offline_and_fail_closed(monkeypatch):
+    from scripts.verify_notification_overlay import VerificationError, verify_base_directory_absent
+
+    calls = []
+    def run(args):
+        calls.append(args)
+        return b"ABSENT\n"
+    monkeypatch.setattr("scripts.verify_notification_overlay._run", run)
+    verify_base_directory_absent("synthetic-image")
+    assert "--network=none" in calls[0] and "-I" in calls[0] and "-S" in calls[0]
+    monkeypatch.setattr("scripts.verify_notification_overlay._run", lambda args: b"PRESENT\n")
+    with pytest.raises(VerificationError, match="baseline_directory_absence_unconfirmed"):
+        verify_base_directory_absent("synthetic-image")
+    def failed(args):
+        raise RuntimeError("private diagnostic")
+    monkeypatch.setattr("scripts.verify_notification_overlay._run", failed)
+    with pytest.raises(VerificationError, match="baseline_directory_absence_unconfirmed"):
+        verify_base_directory_absent("synthetic-image")
