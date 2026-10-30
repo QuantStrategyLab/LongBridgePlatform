@@ -2413,6 +2413,11 @@ class SanitizedRuntimeErrorTests(unittest.TestCase):
         self.assertIn("策略执行", text)
         self._assert_sanitized(text)
 
+    def test_empty_validation_journal_has_fixed_diagnostic_reason(self):
+        module = load_module()
+        self.assertEqual(module._runtime_failure_reason(RuntimeError("validation_journal_empty")),
+                         "validation_journal_empty")
+
     def _raise_sensitive(self, *args, **kwargs):
         raise RuntimeError(self.marker)
 
