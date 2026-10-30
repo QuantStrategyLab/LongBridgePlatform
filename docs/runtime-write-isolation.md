@@ -54,6 +54,21 @@ with account identity, order outcomes, and reconciliation evidence. If that
 evidence is missing or stale, business-cycle status remains unknown even when
 the log guard passes. These log checks do not authorize production recovery.
 
+## Inspect a PAPER dry-run request
+
+Run the manual **Inspect PAPER dry-run request** workflow with `start_utc`
+(inclusive) and `end_utc` (exclusive), both in `YYYY-MM-DDTHH:MM:SSZ` format.
+The window must be positive and no longer than 15 minutes. The workflow checks
+only the existing PAPER service's `POST /dry-run` request logs; it does not
+invoke the service, submit orders, or change Scheduler or traffic.
+
+The result contains bounded, sanitized HTTP observations. `observed` means a
+matching log exists, not that HTTP or the business cycle succeeded. The revision
+is fingerprinted, and a source commit label is not verified image provenance.
+Scheduler correlation remains unverified, even for a single match. No match,
+truncation, and read failure do not establish an outcome; business status,
+receipt and submit count remain unknown.
+
 ## Cycle heartbeat and account values
 
 An authorized, market-open `/run` emits its no-trade heartbeat through the existing
