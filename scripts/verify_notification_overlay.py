@@ -129,9 +129,9 @@ NEW_DIRECTORY = "app/notifications/digest_snapshot"
 
 def _probe_directories(image):
     # Execute only isolated stdlib code, without network or application imports.
-    probe = ("import os,json\npaths=" + repr(DIRECTORIES + (NEW_DIRECTORY,)) + "\n"
+    probe = ("import os,json,stat\npaths=" + repr(DIRECTORIES + (NEW_DIRECTORY,)) + "\n"
              "out={}\nfor path in paths:\n"
-             " try:\n  st=os.lstat('/'+path);out[path]=[st.st_uid,st.st_gid,st.st_mode & 0o7777]\n"
+             " try:\n  st=os.lstat('/'+path);out[path]=[st.st_uid,st.st_gid,st.st_mode & 0o7777] if stat.S_ISDIR(st.st_mode) else 'NOT_DIRECTORY'\n"
              " except FileNotFoundError:\n  out[path]=None\n"
              " except OSError:\n  out[path]='UNAVAILABLE'\n"
              "print(json.dumps(out,sort_keys=True))\n")

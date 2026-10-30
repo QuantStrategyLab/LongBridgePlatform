@@ -162,6 +162,10 @@ def test_existing_directory_metadata_must_match_base_and_new_directory_is_fixed(
         unsafe[changed] = [0, 0, 0o777]
         with pytest.raises(ValueError):
             verify_directory_metadata(base, unsafe)
+    unsafe = dict(candidate)
+    unsafe[NEW_DIRECTORY] = "NOT_DIRECTORY"
+    with pytest.raises(ValueError):
+        verify_directory_metadata(base, unsafe)
 
 
 def test_layer_existing_directory_must_match_base_metadata():
