@@ -1517,3 +1517,63 @@ def test_stock_inventory_readback_requires_unchanged_configuration():
     drifted["spec"]["containers"][0]["env"].append({"name": "UNEXPECTED", "value": "1"})
     with pytest.raises(admission.AdmissionError, match="configuration"):
         confirm(service, drifted)
+
+
+def test_notification_overlay_keeps_paper_template_and_ues_gates():
+    from scripts.verify_notification_overlay import BASE_COMMIT, OVERLAY_COMMIT
+
+    service, serving_env = _service_with(_paper_target())
+    revision = {
+        "metadata": {"name": "serving-rev", "labels": {"commit-sha": SERVING}},
+        "spec": {"serviceAccountName": "runtime@example.invalid",
+                 "containers": [{"env": serving_env, "image": "serving-image"}]},
+        "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+    }
+
+    def run(command):
+        if command[:3] == ["gcloud", "run", "revisions"]:
+            return json.dumps(revision)
+        return _declaration(command[2].split(":", 1)[1], UES)
+
+    base_digest, image_digest = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+    revision["status"]["imageDigest"] = "example/repo@" + base_digest
+    env = {"WORKFLOW_TARGET": "PAPER", "NOTIFICATION_OVERLAY_INPUT": "true",
+           "OVERLAY_BASE_DIGEST": base_digest, "OVERLAY_IMAGE_DIGEST": image_digest,
+           "OVERLAY_BUILD_ID": "12345678-1234-1234-1234-123456789abc"}
+    kwargs = dict(service="paper-service", project="synthetic-project", region="synthetic-region",
+                  service_json=service, env=env, image_commit=BASE_COMMIT, run=run)
+    plan = admission.prepare_image_only_staging(**kwargs)
+    assert (plan["overlay_commit"], plan["overlay_digest"]) == (OVERLAY_COMMIT, image_digest)
+    revision["spec"]["containers"][0]["env"] = serving_env + [{"name": "UNEXPECTED", "value": "1"}]
+    with pytest.raises(admission.AdmissionError) as error:
+        admission.prepare_image_only_staging(**kwargs)
+    assert error.value.diagnostic_reason == "template_mismatch"
+
+
+def test_notification_overlay_readback_requires_immutable_image_labels_and_full_spec():
+    from scripts.verify_notification_overlay import BASE_COMMIT, OVERLAY_COMMIT
+
+    image = "repo@sha256:" + "b" * 64
+    service = _service()
+    revision = _revision("paper-service-r123", BASE_COMMIT, image)
+    revision["metadata"]["labels"]["qsl-overlay-commit"] = OVERLAY_COMMIT
+    configuration = admission._configuration(service)
+    plan = {"history_values": {}, "snapshot_value": None, "service_ingress": "internal",
+            "serving_traffic": [{"revisionName": "serving-rev", "percent": 100}],
+            "template_digest": admission._config_digest(configuration), "overlay_commit": OVERLAY_COMMIT,
+            "overlay_digest": "sha256:" + "b" * 64, "overlay_pod_digest": admission._overlay_pod_digest(revision)}
+
+    def confirm(candidate):
+        def run(command):
+            return json.dumps(service if command[:3] == ["gcloud", "run", "services"] else candidate)
+        admission.confirm_image_only_readback(service="paper-service", project="synthetic-project",
+            region="synthetic-region", plan=plan, expected_image=image, expected_commit=BASE_COMMIT,
+            expected_revision="paper-service-r123", run=run)
+
+    confirm(revision)
+    for change in ("label", "spec"):
+        candidate = json.loads(json.dumps(revision))
+        if change == "label": candidate["metadata"]["labels"]["qsl-overlay-commit"] = "a" * 40
+        if change == "spec": candidate["spec"]["containers"][0]["resources"] = {"limits": {"memory": "1Gi"}}
+        with pytest.raises(admission.AdmissionError, match="overlay readback"):
+            confirm(candidate)

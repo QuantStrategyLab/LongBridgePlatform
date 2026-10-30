@@ -12,6 +12,11 @@ on:
         options:
           - legacy
           - image-only-no-traffic
+      notification_overlay:
+        description: "Stage the fixed reviewed PAPER notification overlay on its exact baseline image."
+        required: true
+        type: boolean
+        default: false
       approved_ref:
         description: "Exact workflow branch/tag name approved for image-only staging."
         required: false
@@ -166,6 +171,10 @@ jobs:
       WORKFLOW_TARGET: ${{ inputs.target }}
       APPROVED_REF: ${{ inputs.approved_ref }}
       SOURCE_COMMIT: ${{ inputs.source_commit }}
+      NOTIFICATION_OVERLAY_INPUT: ${{ inputs.notification_overlay }}
+      OVERLAY_BASE_DIGEST: ${{ secrets.NOTIFICATION_OVERLAY_BASE_DIGEST }}
+      OVERLAY_IMAGE_DIGEST: ${{ secrets.NOTIFICATION_OVERLAY_IMAGE_DIGEST }}
+      OVERLAY_BUILD_ID: ${{ secrets.NOTIFICATION_OVERLAY_BUILD_ID }}
       ACCOUNT_HISTORY_RECORDING_ENABLED: ${{ inputs.account_history_recording_enabled }}
       ACCOUNT_HISTORY_GCS_PREFIX: ${{ inputs.account_history_gcs_prefix }}
       ACCOUNT_HISTORY_TARGET_ID: ${{ inputs.account_history_target_id }}
@@ -306,6 +315,13 @@ jobs:
             echo "Image source is not approved." >&2
             exit 1
           fi
+          if [ "${NOTIFICATION_OVERLAY_INPUT:-false}" = "true" ]; then
+            if [ "${WORKFLOW_TARGET}" != "PAPER" ] || [ "${SOURCE_COMMIT}" != "${approved_paper_stock_inventory_candidate}" ] \
+              || [ "${history_count}" -ne 0 ] || [ -n "${snapshot_setting}" ]; then
+              echo "Notification overlay selection is invalid." >&2; exit 1
+            fi
+            image_mode=notification-overlay
+          fi
           if [ -n "${GITHUB_ENV:-}" ]; then
             echo "IMAGE_STAGING_MODE=${image_mode}" >> "${GITHUB_ENV}"
           fi
@@ -419,9 +435,19 @@ jobs:
             echo "Image source is not approved." >&2
             exit 1
           fi
+          if [ "${NOTIFICATION_OVERLAY_INPUT:-false}" = "true" ]; then
+            if [ "${WORKFLOW_TARGET}" != "PAPER" ] || [ "${SOURCE_COMMIT}" != "${approved_paper_stock_inventory_candidate}" ] \
+              || [ "${history_count}" -ne 0 ] || [ -n "${snapshot_setting}" ]; then
+              echo "Notification overlay selection is invalid." >&2; exit 1
+            fi
+            image_mode=notification-overlay
+          fi
           if [ "${image_mode}" = "same" ]; then
             archive_ref=HEAD
             image_tag="${GITHUB_SHA}"
+          elif [ "${image_mode}" = "notification-overlay" ]; then
+            archive_ref="${approved_paper_stock_inventory_candidate}"
+            image_tag="${archive_ref}"
           elif [ "${image_mode}" = "snapshot" ]; then
             archive_ref="${approved_http_snapshot_candidate}"
             image_tag="${approved_http_snapshot_candidate}"
@@ -485,23 +511,34 @@ jobs:
           fi
           artifact_registry_hostname="${GCP_ARTIFACT_REGISTRY_HOSTNAME:-${CLOUD_RUN_REGION}-docker.pkg.dev}"
           image_repo="${artifact_registry_hostname}/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY_REPOSITORY}/longbridgeplatform/${CLOUD_RUN_SERVICE}"
-          image="${image_repo}:${image_tag}-${GITHUB_RUN_ID}"
           gcloud auth configure-docker "${artifact_registry_hostname}" --quiet
-          # Auth writes temporary credentials into the workspace; build the selected commit only.
-          git archive "${archive_ref}" | docker build --pull -t "${image}" -
-          docker push "${image}"
-          digest="$(gcloud artifacts docker images describe "${image}" --format='value(image_summary.digest)')"
+          if [ "${image_mode}" = "notification-overlay" ]; then
+            # Verify the exact base + patch + immutable image before using it.
+            uv run --no-sync python "${GITHUB_WORKSPACE}/scripts/verify_notification_overlay.py" "${image_repo}" "${GCP_PROJECT_ID}" \
+              "${OVERLAY_BASE_DIGEST}" "${OVERLAY_IMAGE_DIGEST}" "${OVERLAY_BUILD_ID}"
+            digest="${OVERLAY_IMAGE_DIGEST}"
+          else
+            image="${image_repo}:${image_tag}-${GITHUB_RUN_ID}"
+            # Auth writes temporary credentials into the workspace; build the selected commit only.
+            git archive "${archive_ref}" | docker build --pull -t "${image}" -
+            docker push "${image}"
+            digest="$(gcloud artifacts docker images describe "${image}" --format='value(image_summary.digest)')"
+          fi
           if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "Published image did not resolve to an immutable digest." >&2
             exit 1
           fi
           # Preserve existing configuration and serving revisions. --no-traffic
           # pins an existing LATEST selector to its current revision, without moving traffic.
+          revision_labels="commit-sha=${image_tag},github-run-id=${GITHUB_RUN_ID}"
+          if [ "${image_mode}" = "notification-overlay" ]; then
+            revision_labels+=",qsl-overlay-commit=0b59cf34b65ad66ad936828f0811a3bdbc5e9506"
+          fi
           update_command=(
             gcloud run services update "${CLOUD_RUN_SERVICE}"
             --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}"
             --image="${image_repo}@${digest}" --no-traffic
-            --update-labels="commit-sha=${image_tag},github-run-id=${GITHUB_RUN_ID}" --quiet
+            --update-labels="${revision_labels}" --quiet
           )
           env_update_arg="${history_arg:-${snapshot_arg}}"
           if [ -n "${env_update_arg}" ]; then

@@ -8,6 +8,7 @@ checker never reads Secret Manager values and never mutates a service.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -26,6 +27,7 @@ if str(_ROOT) not in sys.path:
 from scripts.reconcile_cloud_runtime import ReconcileError, observe_ready_revision, serving_traffic_rows
 from scripts.record_daily_account_snapshot import _PROJECT_ID, _Rejected, _TARGET_ID, _gcs_prefix
 from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
+from scripts.verify_notification_overlay import BASE_COMMIT as OVERLAY_BASE, OVERLAY_COMMIT
 
 
 class AdmissionError(ValueError):
@@ -435,6 +437,19 @@ def _configuration(payload: Mapping[str, Any], *, template: Mapping[str, Any] | 
     }
 
 
+def _overlay_pod_digest(payload: Mapping[str, Any], *, template: Mapping[str, Any] | None = None) -> str:
+    spec = copy.deepcopy(_pod_spec(payload if template is None else template))
+    spec.pop("servingState", None)
+    containers = spec.get("containers")
+    if not isinstance(containers, list) or len(containers) != 1:
+        raise AdmissionError("notification overlay configuration unavailable", reason="template_mismatch")
+    for container in containers:
+        container.pop("name", None)
+        container.pop("image", None)
+        container["env"] = sorted(container.get("env", []), key=lambda row: row["name"])
+    return hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
 def _config_digest(configuration: Mapping[str, Any], *, skip: set[str] | None = None) -> str:
     omitted = skip or set()
     body = {
@@ -805,6 +820,7 @@ def prepare_image_only_staging(
     history, snapshot_value = _validate_image_only_source(
         image_commit=image_commit, env=env, project=project
     )
+    overlay = env.get("NOTIFICATION_OVERLAY_INPUT") == "true"
     admission = verify_service(service=service, service_json=service_json)
     if image_commit in {
         APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE,
@@ -846,6 +862,15 @@ def prepare_image_only_staging(
                 )
             )
         )
+    if overlay and any(not str(revision.get("status", {}).get("imageDigest", "")).endswith("@" + env["OVERLAY_BASE_DIGEST"]) for revision in revisions):
+        raise AdmissionError("notification overlay baseline image differs", reason="image_source_not_admitted")
+    if overlay:
+        template = service_json.get("spec", {}).get("template")
+        if not isinstance(template, Mapping):
+            raise AdmissionError("notification overlay template unavailable", reason="template_mismatch")
+        pod_digest = _overlay_pod_digest(service_json, template=template)
+        if any(_overlay_pod_digest(revision) != pod_digest for revision in revisions):
+            raise AdmissionError("notification overlay template mismatch", reason="template_mismatch")
     if image_commit == APPROVED_PAPER_HTTP_SNAPSHOT_CANDIDATE:
         configuration, retained_history = _resolve_paper_template_configuration(
             service=service,
@@ -913,6 +938,9 @@ def prepare_image_only_staging(
         "snapshot_arg": snapshot_arg,
         "snapshot_value": snapshot_value,
         "image_commit": image_commit,
+        **({"overlay_commit": OVERLAY_COMMIT, "overlay_digest": env["OVERLAY_IMAGE_DIGEST"],
+            "overlay_base_digest": env["OVERLAY_BASE_DIGEST"], "overlay_build_id": env["OVERLAY_BUILD_ID"],
+            "overlay_pod_digest": pod_digest} if overlay else {}),
         "service_ingress": _ingress(service_json.get("metadata")),
         "serving_traffic": traffic,
         "template_digest": _config_digest(configuration, skip=changed_keys),
@@ -922,6 +950,11 @@ def prepare_image_only_staging(
 def _validate_image_only_source(
     *, image_commit: str, env: Mapping[str, str], project: str
 ) -> tuple[dict[str, str] | None, str | None]:
+    overlay = env.get("NOTIFICATION_OVERLAY_INPUT", "false")
+    if overlay not in {"true", "false", ""}:
+        raise AdmissionError("notification overlay selection is invalid", reason="image_source_not_admitted")
+    if overlay == "true" and (image_commit != OVERLAY_BASE or env.get("WORKFLOW_TARGET") != "PAPER"):
+        raise AdmissionError("notification overlay source is not admitted", reason="image_source_not_admitted")
     history = history_update(
         env,
         workflow_target=str(env.get("WORKFLOW_TARGET") or ""),
@@ -929,6 +962,12 @@ def _validate_image_only_source(
         allow_sghk=image_commit == APPROVED_SGHK_ACCOUNT_SNAPSHOT_CANDIDATE,
     )
     snapshot_value = _account_snapshot_update(env, workflow_target=str(env.get("WORKFLOW_TARGET") or ""))
+    if overlay == "true" and (not re.fullmatch(r"sha256:[0-9a-f]{64}", env.get("OVERLAY_BASE_DIGEST", ""))
+                              or not re.fullmatch(r"sha256:[0-9a-f]{64}", env.get("OVERLAY_IMAGE_DIGEST", ""))
+                              or not re.fullmatch(r"[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}", env.get("OVERLAY_BUILD_ID", ""))):
+        raise AdmissionError("notification overlay source is incomplete", reason="image_source_not_admitted")
+    if overlay == "true" and (history is not None or snapshot_value is not None):
+        raise AdmissionError("notification overlay cannot update settings", reason="image_source_not_admitted")
     if image_commit == APPROVED_PAPER_HISTORY_CANDIDATE:
         if history is None or snapshot_value is not None:
             raise AdmissionError("image source is not approved", reason='image_source_not_admitted')
@@ -1070,6 +1109,14 @@ def confirm_image_only_readback(
             ]
         )
     )
+    if plan.get("overlay_commit") is not None:
+        if (plan.get("overlay_commit") != OVERLAY_COMMIT
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(plan.get("overlay_digest") or ""))
+                or expected_commit != OVERLAY_BASE
+                or not expected_image.endswith("@" + plan["overlay_digest"])
+                or revision.get("metadata", {}).get("labels", {}).get("qsl-overlay-commit") != OVERLAY_COMMIT
+                or _overlay_pod_digest(revision) != plan.get("overlay_pod_digest")):
+            raise AdmissionError("notification overlay readback does not match")
     try:
         observed = observe_ready_revision(revision)
     except ReconcileError:
