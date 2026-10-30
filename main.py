@@ -43,6 +43,7 @@ from application.paper_execution_command_consumer import (
 )
 from application.runtime_strategy_adapters import build_runtime_strategy_adapters
 from application.longbridge_execution import submit_order
+from application import validation_cycle_observation
 from runtime_execution_policy import fractional_buy_execution_enabled, FRACTIONAL_BUY_QUANTITY_STEP
 from application.longbridge_portfolio import fetch_strategy_account_state
 from application.account_snapshot import (
@@ -693,7 +694,8 @@ def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
 
 def _handle_route_runtime_error(exc: Exception, *, route_label: str):
     print(t("runtime_failure_log"), flush=True)
-    _notify_runtime_error(exc, route_label=route_label)
+    if validation_cycle_observation.current() is None:
+        _notify_runtime_error(exc, route_label=route_label)
     return "Error", 500
 
 
@@ -756,6 +758,9 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
         print(f"[{datetime.now()}] Runtime target disabled; skip strategy execution.", flush=True)
         return True
     composer = build_composer(dry_run_only_override=True if validation_only else None)
+    observation = validation_cycle_observation.current() if validation_only else None
+    if observation is not None:
+        composer = validation_cycle_observation.instrument_composer(composer, observation)
     reporting_adapters = composer.build_reporting_adapters()
     log_context, report = reporting_adapters.start_run()
     notification_delivery_events: list[dict] = []
@@ -873,6 +878,8 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             rebalance_runtime = composer.build_rebalance_runtime(
                 silent_cycle_notifications=validation_only,
             )
+        if observation is not None:
+            rebalance_runtime = dataclasses.replace(rebalance_runtime, notify_issue=lambda _title, _detail: None)
         rebalance_config = composer.build_rebalance_config(
             strategy_plugin_signals=strategy_plugin_signals,
             strategy_plugin_error=strategy_plugin_error,
@@ -885,8 +892,12 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             live_execution_session_authorized=bool(market_open and not validation_only),
         )
         failure_phase = "strategy_cycle"
+        if observation is not None:
+            observation.cycle_entered = True
         with unified_notifications.bind_report(report, validation_only=validation_only):
             cycle_result = run_rebalance_cycle(runtime=rebalance_runtime, config=rebalance_config)
+        if observation is not None:
+            observation.cycle_returned = True
         failure_phase = "reporting"
         signal_snapshot = {}
         if cycle_result is not None:
@@ -969,7 +980,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
             failure_phase=failure_phase,
             failure_reason=failure_reason,
         )
-        if not (validation_only and _v7_application_candidate_bound()):
+        if observation is None and not (validation_only and _v7_application_candidate_bound()):
             try:
                 def publish_failure():
                     return notification_adapters.publish_cycle_notification(
@@ -1017,6 +1028,10 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                 # Legacy targets remain evidence-missing; receipt metadata
                 # cannot affect strategy execution or error handling.
                 pass
+        if observation is not None:
+            status = str(report.get("status") or "").strip().lower()
+            observation.report_status = status if status in {"ok", "error", "skipped"} else "unknown"
+            observation.execution_receipt_present = isinstance(report.get("execution_receipt"), dict)
         if not (validation_only and _v7_application_candidate_bound()):
             try:
                 report_path = reporting_adapters.persist_execution_report(report)
@@ -1028,7 +1043,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
                         raise ValueError("notification_report_archive_unconfirmed")
                     if unified_notifications.persist_archived_report(report, env=os.environ) is not True:
                         raise ValueError("notification_archive_candidate_unconfirmed")
-                if unified_notifications.enabled():
+                if observation is None and unified_notifications.enabled():
                     unified_notifications.recover_runtime(report=report)
             except Exception as persist_exc:
                 print(f"failed to persist execution report: {type(persist_exc).__name__}", flush=True)
@@ -1376,14 +1391,21 @@ def handle_backfill():
 @app.route("/dry-run", methods=["POST", "GET"])
 def handle_dry_run():
     """Strategy dry-run entrypoint."""
-    return _route_with_runtime_error_fallback(
-        run_strategy,
-        force_run=True,
-        validation_only=True,
-        validation_label="dry_run",
-        success_body="Dry Run OK",
-        route_label="POST /dry-run",
-    )
+    def run_validation():
+        return _route_with_runtime_error_fallback(
+            run_strategy,
+            force_run=True,
+            validation_only=True,
+            validation_label="dry_run",
+            success_body="Dry Run OK",
+            route_label="POST /dry-run",
+        )
+
+    if str(ACCOUNT_REGION or "").strip().upper() != "PAPER":
+        return run_validation()
+    headers = getattr(request, "headers", {})
+    with validation_cycle_observation.observe(headers.get("X-Cloud-Trace-Context"), PROJECT_ID):
+        return run_validation()
 
 
 @app.route("/probe", methods=["POST"])
