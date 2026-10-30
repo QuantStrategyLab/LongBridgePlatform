@@ -1,0 +1,2204 @@
+diff --git a/application/account_new_risk_gate_support.py b/application/account_new_risk_gate_support.py
+index 702a264..a96e175 100644
+--- a/application/account_new_risk_gate_support.py
++++ b/application/account_new_risk_gate_support.py
+@@ -389,2 +389,2 @@ def maybe_publish_attention_for_admission(
+-    Dedupes on transition keys within the process. Never grants live, raises RRL,
+-    or invents daily-loss facts.
++    Legacy uses process-local transition keys; the opted-in notification adapter
++    uses durable claims. Never grants live, raises RRL, or invents daily-loss facts.
+@@ -419,0 +420,6 @@ def maybe_publish_attention_for_admission(
++    from notifications.unified import enabled as unified_enabled, publish_attention
++    if unified_enabled():
++        return publish_attention(decision, telegram_sender=telegram_sender,
++            recover=(not prohibited and not operational_uncertain and snapshot is not None
++                     and str(snapshot.observation_status) == "COMPLETE"
++                     and str(snapshot.reconciliation_status) == "VERIFIED"))
+diff --git a/application/rebalance_service.py b/application/rebalance_service.py
+index 4496f14..856884d 100644
+--- a/application/rebalance_service.py
++++ b/application/rebalance_service.py
+@@ -1105 +1105,8 @@ def run_strategy(
+-    if pending_orders:
++    from notifications.unified import prepare_cycle
++    routine_to_digest, notification_publisher = prepare_cycle(
++        execution_result, config=config, publisher=notification_publisher,
++        notify_issue=lambda title, detail: runtime.notifications.send_text(f"{title}\n{detail}"),
++    )
++    if routine_to_digest:
++        print(config.with_prefix("notification_suppressed reason=daily_digest"), flush=True)
++    elif pending_orders:
+diff --git a/application/runtime_notification_adapters.py b/application/runtime_notification_adapters.py
+index fbce4f7..e150227 100644
+--- a/application/runtime_notification_adapters.py
++++ b/application/runtime_notification_adapters.py
+@@ -14,0 +15 @@ from notifications.order_alerts import (
++    is_filled_status, is_partial_filled_status, is_terminal_error_status,
+@@ -92 +93 @@ def build_runtime_notification_adapters(
+-    notify_issue = build_issue_notifier(
++    legacy_notify_issue = build_issue_notifier(
+@@ -95,0 +97,16 @@ def build_runtime_notification_adapters(
++
++    def issue_with_ack(title, detail):
++        before = len(recorded_delivery_events)
++        legacy_notify_issue(title, detail)
++        events = recorded_delivery_events[before:]
++        return bool(events) and all(event.get("transport_acknowledged") is True for event in events)
++
++    def notify_issue(title, detail):
++        from notifications import unified
++        if not unified.enabled():
++            return legacy_notify_issue(title, detail)
++        # Existing callers provide fixed issue titles. Hash the category, never
++        # provider detail text, run ids or credentials into a marker identity.
++        reason = hashlib.sha256(str(title).encode()).hexdigest()
++        return unified.dispatch_immediate(lambda: issue_with_ack(title, detail),
++            kind="real_error", incident=f"runtime_issue:{reason}")
+@@ -102,5 +119,17 @@ def build_runtime_notification_adapters(
+-        publish_order_lifecycle_event(
+-            event,
+-            translator=translator,
+-            publisher=order_event_publisher,
+-        )
++        from notifications import unified
++        def publish():
++            before = len(recorded_delivery_events)
++            outcome = publish_order_lifecycle_event(event, translator=translator, publisher=order_event_publisher)
++            if not unified.enabled():
++                return outcome
++            events = recorded_delivery_events[before:]
++            return bool(events) and all(item.get("transport_acknowledged") is True for item in events)
++        if unified.enabled() and not (is_filled_status(event.status) or is_partial_filled_status(event.status)):
++            from notifications.digest_snapshot.unified_contract import order_identity_digest
++            unified.dispatch_immediate(publish, kind="order_status_unknown",
++                incident=f"order_status:{order_identity_digest(event.order_id)}", state=event.status,
++                severity=2 if is_terminal_error_status(event.status) else 1)
++        else:
++            if unified.enabled() and is_filled_status(event.status):
++                unified.record_order_resolution(event)
++            publish()
+@@ -108,0 +138,8 @@ def build_runtime_notification_adapters(
++        from notifications import unified
++        issue_notifier = legacy_notify_issue
++        if unified.enabled():
++            from notifications.digest_snapshot.unified_contract import order_identity_digest
++            if report.broker_order_id:
++                incident = f"order_status_poll:{order_identity_digest(report.broker_order_id)}"
++                def issue_notifier(title, detail):
++                    return unified.dispatch_immediate(lambda: issue_with_ack(title, detail), kind="real_error", incident=incident)
+@@ -119 +156 @@ def build_runtime_notification_adapters(
+-            notify_issue=notify_issue,
++            notify_issue=issue_notifier,
+diff --git a/main.py b/main.py
+index 8d1bbc5..28b30f0 100644
+--- a/main.py
++++ b/main.py
+@@ -10 +10 @@ import time
+-from datetime import datetime
++from datetime import datetime, timezone
+@@ -52,0 +53 @@ from notifications.telegram import build_signal_text, build_strategy_display_nam
++from notifications import unified as unified_notifications
+@@ -421,0 +423 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
++    _, summary["notification_digest"] = unified_notifications.cycle_facts(cycle_result, dry_run=dry_run)
+@@ -647 +649 @@ def _runtime_error_notification_message(exc: Exception, *, route_label: str) ->
+-def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
++def _send_runtime_error(exc: Exception, *, route_label: str) -> bool:
+@@ -676,0 +679,8 @@ def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
++def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
++    return unified_notifications.dispatch_immediate(
++        lambda: _send_runtime_error(exc, route_label=route_label), kind="real_error",
++        incident=f"runtime_route:{route_label}:{_runtime_failure_reason(exc)}",
++        occurred_at=datetime.now(timezone.utc), run_id=build_run_id(),
++    ) if unified_notifications.enabled() else _send_runtime_error(exc, route_label=route_label)
++
++
+@@ -685 +695,5 @@ def _route_with_runtime_error_fallback(handler, *, success_body: str, route_labe
+-        result = handler(**kwargs)
++        if unified_notifications.enabled():
++            with unified_notifications.bind_route(route_label):
++                result = handler(**kwargs)
++        else:
++            result = handler(**kwargs)
+@@ -711,0 +726,4 @@ def publish_strategy_plugin_alerts(signals, *, report=None):
++    from notifications.digest_snapshot.digest_routing import immediate_plugin_signals
++    from notifications.digest_snapshot.digest_candidates import routine_observation_counts
++    if report is not None:
++        report.setdefault("summary", {})["routine_observation_counts"] = routine_observation_counts(signals)
+@@ -713 +731 @@ def publish_strategy_plugin_alerts(signals, *, report=None):
+-        signals,
++        immediate_plugin_signals(signals, mode="daily_digest"),
+@@ -863 +881,2 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
+-        cycle_result = run_rebalance_cycle(runtime=rebalance_runtime, config=rebalance_config)
++        with unified_notifications.bind_report(report, validation_only=validation_only):
++            cycle_result = run_rebalance_cycle(runtime=rebalance_runtime, config=rebalance_config)
+@@ -872,0 +892,8 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
++        if "routine_observation_counts" in (report.get("summary") or {}):
++            execution_summary["routine_observation_counts"] = report["summary"]["routine_observation_counts"]
++        if not validation_only:
++            try:
++                unified_notifications.attach_cycle_event(execution_summary, cycle_result, report=report, config=rebalance_config)
++            except Exception:
++                print("notification_event_attachment_unconfirmed", flush=True)
++                unified_notifications.record_failure("notification_event_attachment_unconfirmed", report=report)
+@@ -882,0 +910,5 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
++        if unified_notifications.enabled():
++            notification_delivery_events.extend(
++                {"sink": "notification_store", "delivery_status": "failed", "transport_acknowledged": False,
++                 "error_type": code} for code in report.get("notification_unified_errors", ())
++            )
+@@ -935,4 +967,7 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
+-                notification_adapters.publish_cycle_notification(
+-                    detailed_text=_compact_error_notification(exc, phase=failure_phase),
+-                    compact_text=_compact_error_notification(exc, phase=failure_phase),
+-                )
++                def publish_failure():
++                    return notification_adapters.publish_cycle_notification(
++                        detailed_text=_compact_error_notification(exc, phase=failure_phase),
++                        compact_text=_compact_error_notification(exc, phase=failure_phase),
++                    )
++                unified_notifications.dispatch_immediate(publish_failure, kind="real_error",
++                    incident=f"runtime_failure:{failure_phase}:{failure_reason}", report=report, actually_ran=True)
+@@ -981,0 +1017,9 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
++                if not validation_only and report.get("status") in {"ok", "completed", "success"}:
++                    if not unified_notifications.report_archive_confirmed(
++                        report, report_path, reporting_adapters.report_gcs_prefix_uri
++                    ):
++                        raise ValueError("notification_report_archive_unconfirmed")
++                    if unified_notifications.persist_archived_report(report, env=os.environ) is not True:
++                        raise ValueError("notification_archive_candidate_unconfirmed")
++                if unified_notifications.enabled():
++                    unified_notifications.recover_runtime(report=report)
+@@ -983,0 +1028,4 @@ def run_strategy(*, force_run: bool = False, validation_only: bool = False, vali
++                if not validation_only and report.get("status") in {"ok", "completed", "success"}:
++                    unified_notifications._storage_failure(
++                        lambda title, detail: rebalance_runtime.notifications.send_text(f"{title}\n{detail}")
++                    )
+@@ -1103,9 +1151,9 @@ def run_probe(*, response_body: str = "Probe OK"):
+-            composer.build_notification_adapters().publish_cycle_notification(
+-                detailed_text=err,
+-                compact_text=_compact_error_notification(
+-                    exc,
+-                    title=t("health_probe_title"),
+-                    prefix=t("health_probe_error_prefix"),
+-                    phase="health_probe",
+-                ),
+-            )
++            def publish_probe_failure():
++                return composer.build_notification_adapters().publish_cycle_notification(
++                    detailed_text=err,
++                    compact_text=_compact_error_notification(
++                        exc, title=t("health_probe_title"), prefix=t("health_probe_error_prefix"), phase="health_probe",
++                    ),
++                )
++            unified_notifications.dispatch_immediate(publish_probe_failure, kind="real_error",
++                incident="runtime_failure:health_probe", report=report)
+@@ -1119,0 +1168,2 @@ def run_probe(*, response_body: str = "Probe OK"):
++                if unified_notifications.enabled():
++                    unified_notifications.recover_runtime(report=report, probe=True)
+diff --git a/notifications/digest_snapshot/__init__.py b/notifications/digest_snapshot/__init__.py
+new file mode 100644
+index 0000000..a7be4fa
+--- /dev/null
++++ b/notifications/digest_snapshot/__init__.py
+@@ -0,0 +1,4 @@
++"""Notification-only snapshot from merged QPK; trading pins stay unchanged."""
++
++UNIFIED_CONTRACT_QPK_SHA = "2b04882058666ebc81d1650d93fa2105ec4ba3d8"
++UNIFIED_CONTRACT_SHA256 = "a5a9138063940a74d4bb3575166bdd1c21b95c1afb4a13db67c6cf33e53bcfba"
+diff --git a/notifications/digest_snapshot/digest_archive.py b/notifications/digest_snapshot/digest_archive.py
+new file mode 100644
+index 0000000..1fe133a
+--- /dev/null
++++ b/notifications/digest_snapshot/digest_archive.py
+@@ -0,0 +1,128 @@
++"""Publish notification candidates from existing archives; disabled by default.
++
++Runs only inside an existing cloud monitor, with its existing identity. It never
++invokes a platform service or broker, reads secrets, or enables a runtime target.
++"""
++from __future__ import annotations
++
++import json
++import os
++import re
++import subprocess
++from datetime import datetime, timedelta, timezone
++from zoneinfo import ZoneInfo
++
++from .digest_candidates import project_reports
++
++_SAFE = re.compile(r"[a-z0-9][a-z0-9_-]{0,40}\Z")
++
++
++def _read(args):
++    result = subprocess.run(["gcloud", "storage", *args], capture_output=True, text=True, check=False)
++    if result.returncode:
++        raise ValueError("candidate_archive_read_failed")
++    return json.loads(result.stdout)
++
++
++def emit(env, *, now=None, read=_read, upload=None):
++    if env.get("QSL_ROUTINE_NOTIFICATION_MODE", "immediate") != "daily_digest":
++        return {"status": "disabled", "uploaded": False}
++    bindings = env.get("DIGEST_TARGET_BINDINGS_JSON", "").strip()
++    if bindings:
++        values = json.loads(bindings)
++        if not isinstance(values, list) or not values or len(values) > 100 or not all(isinstance(v, dict) for v in values):
++            raise ValueError("candidate_bindings_invalid")
++        results = []
++        for value in values:
++            results.append(emit({**env, **value, "DIGEST_TARGET_BINDINGS_JSON": ""}, now=now, read=read, upload=upload))
++        return {"status": "projected", "uploaded": any(v["uploaded"] for v in results), "targets": len(results)}
++    if env.get("RUNTIME_TARGET_ENABLED") == "false":
++        return {"status": "target_disabled", "uploaded": False}
++    if env.get("RUNTIME_TARGET_ENABLED") != "true":
++        raise ValueError("candidate_target_enablement_unknown")
++    target = json.loads(env.get("RUNTIME_TARGET_JSON", ""))
++    platform = target.get("platform_id", "")
++    source_platform = {"schwab": "charles_schwab"}.get(platform, platform)
++    slot = env.get("DIGEST_STORE_TARGET", "")
++    if not _SAFE.fullmatch(platform) or not _SAFE.fullmatch(slot):
++        raise ValueError("candidate_store_identity_missing")
++    uid, tid = env.get("DIGEST_OPAQUE_ACCOUNT_UID", ""), env.get("DIGEST_TARGET_ID", "")
++    if not uid or not tid:
++        raise ValueError("candidate_identity_missing")
++    prefix = env.get("EXECUTION_REPORT_GCS_URI", "").rstrip("/")
++    destination = env.get("DIGEST_CANDIDATES_GCS_URI", "").rstrip("/")
++    if any(not re.fullmatch(r"gs://[a-z0-9][a-z0-9._-]+/[^\s?#*]+", value) for value in (prefix, destination)):
++        raise ValueError("candidate_store_configuration_missing")
++    current = now or datetime.now(timezone.utc)
++    if current.astimezone(ZoneInfo("Asia/Singapore")).hour < 6:
++        return {"status": "before_cutoff", "uploaded": False}
++    day = (current.astimezone(ZoneInfo("Asia/Singapore")) - timedelta(hours=6)).date() - timedelta(days=1)
++    # Monitor runs after the fixed 06:00 SGT cut-off. Reject early runs rather
++    # than overwriting the previous day's complete candidate with partial facts.
++    end = datetime(day.year, day.month, day.day, 6, tzinfo=ZoneInfo("Asia/Singapore")) + timedelta(days=1)
++    start = end - timedelta(days=1)
++    months = {start.astimezone(timezone.utc).strftime("%Y-%m"), end.astimezone(timezone.utc).strftime("%Y-%m")}
++    entries = []
++    for month in sorted(months):
++        entries.extend(read(["ls", "--json", f"{prefix}/{source_platform}/**/{month}/*.json"]))
++    if len(entries) > 10000:
++        raise ValueError("candidate_archive_budget_exceeded")
++    reports, uris = [], set()
++    for entry in entries:
++        uri = str(entry.get("url", "")).split("#", 1)[0]
++        if uri in uris:
++            continue
++        if not uri.startswith(f"{prefix}/{source_platform}/"):
++            raise ValueError("candidate_source_locator_mismatch")
++        uris.add(uri)
++        raw_stamp = (entry.get("metadata") or {}).get("updated") or (entry.get("metadata") or {}).get("timeCreated")
++        stamp = datetime.fromisoformat(str(raw_stamp).replace("Z", "+00:00"))
++        if stamp.tzinfo is None:
++            raise ValueError("candidate_archive_time_missing")
++        if stamp < start or stamp > current:
++            continue
++        source = read(["cat", uri])
++        source_target = source.get("runtime_target") or {}
++        keys = ("platform_id", "strategy_profile", "service_name", "account_scope", "account_selector", "deployment_selector", "dry_run_only")
++        if not isinstance(source_target, dict) or any(source_target.get(key) != target.get(key) for key in keys):
++            continue
++        source_stamp = datetime.fromisoformat(str(source.get("started_at", "")).replace("Z", "+00:00"))
++        if source_stamp.tzinfo is None:
++            raise ValueError("candidate_source_time_invalid")
++        if start <= source_stamp < end:
++            reports.append(source)
++    if not reports:
++        schedule_raw = env.get("DIGEST_NOTIFICATION_SCHEDULE_JSON", "").strip()
++        if not schedule_raw:
++            raise ValueError("candidate_source_absent")
++        from scripts.runtime_heartbeat_policy import filter_due_targets
++        schedule = json.loads(schedule_raw)
++        due, evaluated = filter_due_targets([schedule], since=start, now=end - timedelta(microseconds=1),
++            publication_grace=timedelta(0), warning_logger=lambda message: None)
++        if not evaluated or due:
++            raise ValueError("candidate_due_source_absent")
++        payload = {"schema_version": "qsl.digest_candidates.v1", "runs": [{
++            "platform_id": platform, "strategy_profile": target["strategy_profile"],
++            "opaque_account_uid": uid, "target_id": tid, "business_day": day.isoformat(),
++            "actually_ran": False, "status": "ok", "scheduled_idle": True,
++            "evidence_provenance": "candidates",
++        }]}
++    else:
++        payload = project_reports(reports, expected_target=target, opaque_account_uid=uid, target_id=tid, now=current)
++    if upload is None:
++        from google.cloud import storage
++        def upload(uri, body):
++            storage.Blob.from_string(uri, client=storage.Client()).upload_from_string(
++                body, content_type="application/json", retry=None, timeout=30)
++    # Never retry an unknown write result. Public output contains no identities.
++    upload(f"{destination}/{platform}/{day.isoformat()}/{slot}.json", json.dumps(payload, allow_nan=False))
++    return {"status": "projected", "uploaded": True, "runs": len(reports)}
++
++
++def main():
++    try:
++        print(json.dumps(emit(os.environ), sort_keys=True))
++        return 0
++    except Exception:
++        print(json.dumps({"status": "blocked", "uploaded": False, "reason": "candidate_projection_failed"}))
++        return 1
+diff --git a/notifications/digest_snapshot/digest_candidates.py b/notifications/digest_snapshot/digest_candidates.py
+new file mode 100644
+index 0000000..e92c3d4
+--- /dev/null
++++ b/notifications/digest_snapshot/digest_candidates.py
+@@ -0,0 +1,141 @@
++"""Notification-only facts projected from existing, privately archived reports.
++
++No broker calls. Missing or contradictory evidence stays unknown. Callers must
++supply the exact protected runtime target; public labels never establish it.
++"""
++from __future__ import annotations
++
++from collections.abc import Mapping, Sequence
++from datetime import datetime, timedelta
++from zoneinfo import ZoneInfo
++
++_ROUTINE_ROUTES = frozenset({"watch", "opportunity_watch", "panic_reversal", "taco_rebound"})
++_ROUTINE_ACTIONS = frozenset({"watch", "observe", "notify_manual_review"})
++
++
++def routine_observation_counts(observations) -> dict[str, int]:
++    """Count live signals using the same criteria as the immediate filter."""
++    counts: dict[str, int] = {}
++    for item in observations:
++        route = str(getattr(item, "canonical_route", "") or "").lower()
++        action = str(getattr(item, "suggested_action", "") or "").lower()
++        if route in _ROUTINE_ROUTES and action in _ROUTINE_ACTIONS and not any(getattr(item, k, None) for k in ("error", "errors", "risk_halt", "auth_expired")):
++            counts[route] = counts.get(route, 0) + 1
++    return counts
++
++
++def cycle_evidence(execution: Mapping, orders: Sequence[Mapping], *, dry_run: bool = False,
++                   known_pending: bool = False) -> dict:
++    """Keep counts from broker responses; known_pending requires producer proof."""
++    from .digest_routing import defer_routine_cycle_to_digest
++
++    count = len(orders)
++    valid = all(isinstance(order, Mapping) and bool(order.get("status")) for order in orders)
++    confirmed = valid and all(str(order["status"]).lower() in {"filled", "completed", "executed"} for order in orders)
++    healthy = defer_routine_cycle_to_digest(execution, submitted_order_count=count,
++        submitted_orders=orders, mode="daily_digest", include_orders=True, known_pending=known_pending)
++    fill_ids = []
++    fills_known = confirmed and healthy
++    for order in orders:
++        records = order.get("fills") if isinstance(order, Mapping) else None
++        if not isinstance(records, (list, tuple)) or not records:
++            fills_known = False
++            break
++        for record in records:
++            identity = next((record.get(k) for k in ("execution_id", "execId", "tradeId") if record.get(k) is not None), None) if isinstance(record, Mapping) else None
++            if identity is None:
++                fills_known = False
++                break
++            fill_ids.append(str(identity))
++    fills_known = fills_known and len(fill_ids) == len(set(fill_ids))
++    return {
++        "schema_version": "qsl.notification_cycle.v1",
++        "order_count": count if valid and not dry_run else None,
++        "fill_count": len(fill_ids) if fills_known and not dry_run else None,
++        "routine": healthy and not dry_run,
++        "dry_run": dry_run,
++    }
++
++
++def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
++                    opaque_account_uid: str, target_id: str, now: datetime) -> dict:
++    """Aggregate each unique persisted cycle for the same target and source day."""
++    if any(not isinstance(v, str) or not v.strip() for v in (opaque_account_uid, target_id)) or now.tzinfo is None:
++        raise ValueError("candidate_identity_or_time_missing")
++    required = {"platform_id", "strategy_profile", "service_name", "account_scope", "account_selector", "deployment_selector", "dry_run_only"}
++    if not required.issubset(expected_target) or expected_target.get("dry_run_only") is not False:
++        raise ValueError("candidate_target_invalid")
++    if (any(not isinstance(expected_target[k], str) or not expected_target[k].strip()
++            for k in required - {"account_selector", "dry_run_only"})
++            or not isinstance(expected_target["account_selector"], list) or not expected_target["account_selector"]
++            or any(not isinstance(v, str) or not v.strip() for v in expected_target["account_selector"])):
++        raise ValueError("candidate_target_invalid")
++    rows, seen = {}, set()
++    for report in reports:
++        target = report.get("runtime_target") or {}
++        if not isinstance(target, Mapping) or any(target.get(k) != expected_target[k] for k in required):
++            raise ValueError("candidate_source_identity_mismatch")
++        if (report.get("schema_version") != "runtime_report.v1" or report.get("dry_run") is not False
++                or report.get("platform") not in ({"schwab", "charles_schwab"} if expected_target["platform_id"] == "schwab" else {expected_target["platform_id"]})
++                or report.get("strategy_profile") != expected_target["strategy_profile"]
++                or report.get("service_name") != expected_target["service_name"]):
++            raise ValueError("candidate_source_invalid")
++        stamp = datetime.fromisoformat(str(report.get("started_at", "")).replace("Z", "+00:00"))
++        if stamp.tzinfo is None or not timedelta(0) <= now - stamp <= timedelta(hours=36):
++            raise ValueError("candidate_source_time_invalid")
++        if report.get("status") not in {"ok", "completed", "success", "error", "aborted", "failed"}:
++            raise ValueError("candidate_source_incomplete")
++        run_id = report.get("run_id")
++        if not isinstance(run_id, str) or not run_id:
++            raise ValueError("candidate_run_id_missing")
++        if run_id in seen:
++            raise ValueError("candidate_duplicate_run")
++        seen.add(run_id)
++        day = (stamp.astimezone(ZoneInfo("Asia/Singapore")) - timedelta(hours=6)).date().isoformat()
++        summary = report.get("summary") or {}
++        facts = summary.get("notification_digest") or {}
++        known = (facts.get("schema_version") == "qsl.notification_cycle.v1" and facts.get("dry_run") is False
++                 and type(facts.get("order_count")) is int and facts["order_count"] >= 0
++                 and (facts.get("fill_count") is None or (type(facts["fill_count"]) is int and facts["fill_count"] >= 0)))
++        error = report.get("status") in {"error", "failed", "aborted"} or bool((report.get("error_summary") or {}).get("errors"))
++        alert = error or not known or facts.get("routine") is not True
++        row = rows.setdefault(day, {
++            "platform_id": expected_target["platform_id"], "strategy_profile": expected_target["strategy_profile"],
++            "opaque_account_uid": opaque_account_uid, "target_id": target_id, "business_day": day,
++            "actually_ran": True, "as_of": stamp.isoformat(), "status": "ok", "fill_count": 0,
++            "order_count": 0, "cycle_count": 0, "field_status": {}, "evidence_provenance": "candidates",
++            "persistence_status": "persisted", "delivery_status": "pending_central",
++        })
++        row["cycle_count"] += 1
++        row["as_of"] = max(row["as_of"], stamp.isoformat())
++        for key in ("fill_count", "order_count"):
++            row[key] = row[key] + facts[key] if known and type(facts.get(key)) is int and row[key] is not None else None
++            row["field_status"][key] = "known" if row[key] is not None else "counts_unknown"
++        if not alert and row["status"] == "ok":
++            pending = str(summary.get("execution_status") or "").lower() == "pending_reconciliation" and facts.get("routine") is True and bool(facts.get("order_count"))
++            if pending or row.get("execution_status") == "order_submitted":
++                row["execution_status"] = "order_submitted"
++            else:
++                row["execution_status"] = "executed" if row["order_count"] else "no_action"
++        if alert:
++            row.update(status="alert", reason_code="source_cycle_alert" if error else "execution_evidence_missing_or_attention",
++                       execution_status="execution_alert" if error else "execution_unknown")
++    return {"schema_version": "qsl.digest_candidates.v1", "producer_status": "projected", "runs": list(rows.values())}
++
++
++def summary_evidence(summary: Mapping, *, dry_run: bool = False, known_pending: bool = False) -> dict:
++    """IBKR named order collections are broker facts, unlike formatted logs."""
++    if not isinstance(summary.get("orders_submitted"), (list, tuple)):
++        return {"schema_version": "qsl.notification_cycle.v1", "order_count": None,
++                "fill_count": None, "routine": False, "dry_run": dry_run}
++    orders = list(summary.get("orders_submitted") or ()) + list(summary.get("option_orders_submitted") or ())
++    filled = list(summary.get("orders_filled") or ()) + list(summary.get("option_orders_filled") or ())
++    evidence = dict(summary)
++    if (orders and len(orders) == len(filled) and not summary.get("orders_pending")
++            and not summary.get("option_orders_pending") and not summary.get("orders_partially_filled")
++            and not summary.get("option_orders_partially_filled")):
++        # These collections are populated by the existing broker reconciliation.
++        facts = [{**order, "status": "filled"} for order in filled] if all(isinstance(order, Mapping) for order in filled) else orders
++    else:
++        facts = orders
++    return cycle_evidence(evidence, facts, dry_run=dry_run, known_pending=known_pending)
+diff --git a/notifications/digest_snapshot/digest_routing.py b/notifications/digest_snapshot/digest_routing.py
+new file mode 100644
+index 0000000..3b25088
+--- /dev/null
++++ b/notifications/digest_snapshot/digest_routing.py
+@@ -0,0 +1,100 @@
++"""Opt-in routing for routine cycles whose persisted reports feed a daily digest.
++
++This decides notification delivery only. It never changes an execution result,
++calls a broker, grants order permissions, or treats deferral as delivery.
++"""
++
++from __future__ import annotations
++
++import os
++from collections.abc import Mapping, Sequence
++
++
++def daily_digest_enabled(mode: str | None = None) -> bool:
++    return (mode if mode is not None else os.getenv("QSL_ROUTINE_NOTIFICATION_MODE", "immediate")) == "daily_digest"
++
++
++def defer_routine_cycle_to_digest(
++    execution: Mapping[str, object],
++    *,
++    submitted_order_count: int,
++    mode: str | None = None,
++    submitted_orders: Sequence[Mapping[str, object]] | None = None,
++    include_orders: bool | None = None,
++    known_pending: bool = False,
++) -> bool:
++    """Defer healthy cycles and confirmed routine orders; urgent states stay live.
++
++    Default ``QSL_ROUTINE_NOTIFICATION_MODE=immediate`` preserves existing
++    callers. An owner can opt a verified producer/recipient into ``daily_digest``
++    after validating the existing private report-to-digest replacement path.
++    """
++    if not daily_digest_enabled(mode) or type(submitted_order_count) is not int or submitted_order_count < 0:
++        return False
++    if not isinstance(execution, Mapping):
++        return False
++    pending_proven = known_pending is True and submitted_order_count > 0
++    status = str(execution.get("execution_status") or "").lower()
++    if status not in {"no_action", "no_op", "completed", "executed"} and not (pending_proven and status == "pending_reconciliation"):
++        return False
++    if execution.get("no_op_reason") not in (
++        None, "", "no_action", "no_signal", "no_rebalance", "below_threshold",
++        "rebalance_diff_below_threshold", "threshold_not_met",
++    ) and not (pending_proven and execution.get("no_op_reason") == "broker_order_pending_confirmation"):
++        return False
++    if any(execution.get(key) for key in (
++        "error", "errors", "fail_reason", "execution_blocked_reason",
++        "plugin_error", "persistence_error", "report_persistence_error", "notification_error",
++        "reconciliation_required", "market_data_retry_required",
++        "notification_attention_reason_codes",
++        "account_new_risk_buy_blocked", "small_account_buy_blocked", "risk_flags",
++        "execution_blocked", "execution_blocking_skips", "strategy_run_persistence_error",
++        "strategy_plugin_error", "strategy_plugin_alert_error", "auth_expired",
++        "strategy_plugin_alert_failed_count", "strategy_plugin_alert_telegram_failed_count",
++        "data_error", "blocked_reason", "failed_order_count", "outcome_unknown", "submission_halted",
++    )):
++        # Independent failure, risk or unclassified evidence remains urgent,
++        # including when a producer has established a pending acknowledgement.
++        return False
++    if not pending_proven and (execution.get("pending_reconciliation") or execution.get("orders_pending_count")):
++        return False
++    if str(execution.get("risk_gate") or "").upper() in {"BLOCK", "BLOCKED", "REJECT", "REJECTED", "DENY", "DENIED"}:
++        return False
++    if submitted_order_count:
++        orders_enabled = include_orders if include_orders is not None else os.getenv("QSL_DIGEST_ROUTINE_ORDERS", "true") == "true"
++        if not orders_enabled or submitted_orders is None or len(submitted_orders) != submitted_order_count:
++            return False
++        # Only producer-verified acknowledgements may use the pending statuses;
++        # rejected and unknown outcomes remain immediate. No fill is inferred.
++        routine_statuses = {"filled", "completed", "executed"}
++        if pending_proven:
++            routine_statuses |= {"accepted", "submitted", "pending", "pendingsubmit", "apipending", "apipendingsubmit", "presubmitted", "partiallyfilled", "partial", "partially_filled", "broker_acknowledged"}
++        if any(not isinstance(order, Mapping) or str(order.get("status") or "").lower() not in routine_statuses
++               for order in submitted_orders):
++            return False
++    elif execution.get("broker_submission_done"):
++        return False
++    return True
++
++
++def immediate_plugin_signals(signals, *, mode: str | None = None):
++    """Filter notification inputs only; callers retain original strategy signals."""
++    if not daily_digest_enabled(mode):
++        return signals
++    return tuple(signal for signal in signals if not (
++        str(getattr(signal, "canonical_route", "") or "").lower() in {"watch", "opportunity_watch", "panic_reversal", "taco_rebound"}
++        and str(getattr(signal, "suggested_action", "") or "").lower() in {"notify_manual_review", "watch", "observe"}
++        and not any(getattr(signal, key, None) for key in ("error", "errors", "risk_halt", "auth_expired"))
++    ))
++
++
++def routine_notification(sender, runtime, report, text, *, routine_order=True):
++    """Route only explicitly classified routine call sites, never message text."""
++    orders_enabled = os.getenv("QSL_DIGEST_ROUTINE_ORDERS", "true") == "true"
++    if daily_digest_enabled() and (not routine_order or orders_enabled):
++        report.setdefault("notifications", []).append({
++            "delivery_status": "deferred_digest", "transport_acknowledged": False,
++            "sink": "telegram", "routine_order": routine_order,
++        })
++        return False
++    return sender(runtime, report, text)
+diff --git a/notifications/digest_snapshot/unified_contract.py b/notifications/digest_snapshot/unified_contract.py
+new file mode 100644
+index 0000000..bbb2cdb
+--- /dev/null
++++ b/notifications/digest_snapshot/unified_contract.py
+@@ -0,0 +1,282 @@
++"""Opt-in notification facts and routing; no broker, transport, or storage IO.
++
++Consumers inject their existing candidate producer and durable marker storage.
++This module neither changes receipt acceptance nor replaces the central daily
++recipient/report-date guard. Unknown evidence is never converted to zero.
++"""
++from __future__ import annotations
++
++import hashlib
++import json
++from collections.abc import Callable, Mapping
++from dataclasses import asdict, dataclass
++from datetime import date, datetime, time, timedelta
++from typing import Literal, Protocol
++from zoneinfo import ZoneInfo
++
++Route = Literal["immediate", "digest_candidate", "legacy"]
++EVENT_KINDS = frozenset({
++    "routine_cycle", "healthy_heartbeat", "order_submitted", "fill",
++    "receipt_missing", "receipt_stale", "receipt_unacceptable", "auth_failure",
++    "order_status_unknown", "risk_escalation", "real_error", "blocked_run",
++    "expected_block_observed",
++})
++ROUTINE_EVENT_KINDS = frozenset({"routine_cycle", "healthy_heartbeat"})
++ORDER_EVENT_KINDS = frozenset({"order_submitted", "fill"})
++SGT = ZoneInfo("Asia/Singapore")
++
++
++def unified_notification_enabled(env: Mapping[str, object], key: str) -> bool:
++    """Read a release flag: only boolean True or the string 'true' enables it."""
++    value = env.get(key)
++    return value is True or isinstance(value, str) and value.strip().lower() == "true"
++
++
++def effective_notification_mode(env: Mapping[str, object], flag_key: str) -> str:
++    """Map the release boolean onto the existing single routing mode."""
++    if unified_notification_enabled(env, flag_key):
++        return "daily_digest"
++    return str(env.get("QSL_ROUTINE_NOTIFICATION_MODE") or "immediate")
++
++
++def select_notification_route(*, event_kind: str, env: Mapping[str, object], flag_key: str) -> Route:
++    """Route routine facts to durable daily evidence in every flag state.
++
++    Flags retain their existing meaning for urgent and unknown event kinds.
++    """
++    if event_kind in ROUTINE_EVENT_KINDS | ORDER_EVENT_KINDS:
++        return "digest_candidate"
++    if not unified_notification_enabled(env, flag_key):
++        return "legacy"
++    return "immediate"
++
++
++@dataclass(frozen=True)
++class BusinessWindow:
++    start: datetime
++    end: datetime
++    business_day: date
++    report_date: date
++    window_id: str
++
++
++def sgt_business_window(occurred_at: datetime) -> BusinessWindow:
++    """Containing half-open [D 06:00, D+1 06:00) window; not a send guard."""
++    if occurred_at.tzinfo is None or occurred_at.utcoffset() is None:
++        raise ValueError("notification_time_timezone_missing")
++    day = (occurred_at.astimezone(SGT) - timedelta(hours=6)).date()
++    start = datetime.combine(day, time(6), SGT)
++    end = start + timedelta(days=1)
++    return BusinessWindow(start, end, day, end.date(), f"sgt-0600:{day.isoformat()}")
++
++
++def _digest(parts: list[object]) -> str:
++    return hashlib.sha256(json.dumps(parts, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
++
++
++def order_identity_digest(order_or_execution_id: str) -> str:
++    """Irreversible, domain-separated identity; never put raw broker IDs in keys."""
++    if not isinstance(order_or_execution_id, str) or not order_or_execution_id.strip():
++        raise ValueError("notification_order_identity_missing")
++    return _digest(["qsl.notification_order.v1", order_or_execution_id])
++
++
++@dataclass(frozen=True)
++class NotificationEvent:
++    event_kind: str
++    occurred_at: datetime
++    platform_id: str | None = None
++    opaque_account_uid: str | None = None
++    target_id: str | None = None
++    strategy_profile: str | None = None
++    source_run_id: str | None = None
++    order_execution_digest: str | None = None
++    incident_reason: str | None = None
++    order_count: int | None = None
++    fill_count: int | None = None
++    expected_block_evidence: str | None = None
++
++    def __post_init__(self) -> None:
++        sgt_business_window(self.occurred_at)
++        for count in (self.order_count, self.fill_count):
++            if count is not None and (type(count) is not int or count < 0):
++                raise ValueError("notification_count_invalid")
++        digest = self.order_execution_digest
++        if digest is not None and (len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest)):
++            raise ValueError("notification_order_digest_invalid")
++        if self.event_kind == "expected_block_observed" and not _identity_present(self.expected_block_evidence):
++            raise ValueError("notification_expected_block_evidence_missing")
++
++    @property
++    def coverage_status(self) -> str:
++        return "known" if routine_dedupe_key(self) is not None else "unknown"
++
++    def to_candidate(self) -> dict[str, object]:
++        """Private producer fact, to be projected with existing digest_candidates.
++
++        This event envelope is not a replacement for qsl.digest_candidates.v1;
++        the existing archive projector remains responsible for window counts.
++        """
++        result = asdict(self)
++        window = sgt_business_window(self.occurred_at)
++        result.update(
++            schema_version="qsl.notification_event.v1", occurred_at=self.occurred_at.isoformat(),
++            business_day=window.business_day.isoformat(), report_date=window.report_date.isoformat(),
++            window_id=window.window_id, dedupe_key=routine_dedupe_key(self),
++            coverage_status=self.coverage_status,
++        )
++        if self.coverage_status == "unknown":
++            result.update(order_count=None, fill_count=None)
++        return result
++
++
++def _identity_present(value: object) -> bool:
++    return isinstance(value, str) and bool(value.strip())
++
++
++def routine_dedupe_key(event: NotificationEvent) -> str | None:
++    parts = [event.platform_id, event.opaque_account_uid, event.target_id,
++             event.strategy_profile, event.source_run_id, event.event_kind]
++    if event.event_kind in ORDER_EVENT_KINDS:
++        parts.append(event.order_execution_digest)
++    return _digest(["qsl.notification_routine.v1", *parts]) if all(map(_identity_present, parts)) else None
++
++
++class CandidatePersistenceError(RuntimeError):
++    pass
++
++
++@dataclass(frozen=True)
++class RoutingResult:
++    route: Route
++    candidate_persisted: bool
++    result: object = None
++
++
++def route_notification_event(
++    event: NotificationEvent, *, env: Mapping[str, object], flag_key: str,
++    persist_candidate: Callable[[dict[str, object]], bool],
++    legacy: Callable[[], object], immediate: Callable[[], object],
++) -> RoutingResult:
++    """Persist before deferral. Alert delivery survives candidate-write failure.
++
++    The immediate callback owns durable incident reservation and receipt ACK.
++    Callers must inspect candidate_persisted; deferral is never delivery.
++    """
++    route = select_notification_route(event_kind=event.event_kind, env=env, flag_key=flag_key)
++    if route == "legacy":
++        return RoutingResult(route, False, legacy())
++    if route == "digest_candidate":
++        if event.coverage_status != "known":
++            raise CandidatePersistenceError("notification_candidate_identity_unknown")
++        try:
++            persisted = persist_candidate(event.to_candidate()) is True
++        except Exception:
++            raise CandidatePersistenceError("notification_candidate_write_unconfirmed") from None
++        if not persisted:
++            raise CandidatePersistenceError("notification_candidate_write_unconfirmed")
++        return RoutingResult(route, True)
++    try:
++        persisted = persist_candidate(event.to_candidate()) is True
++    except Exception:
++        # A routine evidence-store failure cannot suppress a real alert.
++        persisted = False
++    return RoutingResult(route, persisted, immediate())
++
++
++class IncidentMarkerStore(Protocol):
++    """Durable JSON state, with atomic compare-and-set across workers.
++
++    Missing key -> (None, None); read failures MUST raise, not act like missing.
++    A version is an opaque storage generation. No non-atomic has/write adapter
++    is provided: existing alert_marker has no atomic claim or readable receipt.
++    """
++    def read(self, key: str) -> tuple[object, Mapping[str, object] | None]: ...
++
++    def compare_and_set(self, key: str, version: object, value: Mapping[str, object]) -> bool: ...
++
++
++@dataclass(frozen=True)
++class IncidentDecision:
++    action: Literal["send", "duplicate", "recovered", "coverage_unknown"]
++    incident_key: str | None = None
++    transition_key: str | None = None
++
++
++class IncidentTracker:
++    """Reserve before sending; pending/uncertain is never blindly resent.
++
++    The caller supplies ordered observations and explicit recovery evidence.
++    Merely seeing a healthy label elsewhere is not proof of recovery. Severity
++    is a caller-owned nonnegative rank; a rise is a new escalation. Storage
++    errors propagate; a process-local set is never a production fallback.
++    """
++    def __init__(self, store: IncidentMarkerStore):
++        self.store = store
++
++    def _read_marker(self, key: str) -> tuple[object, dict[str, object] | None]:
++        version, value = self.store.read(key)
++        if version is None and value is None:
++            return version, None
++        required = {"schema_version", "active", "state", "severity", "generation",
++                    "transition_key", "delivery_status", "receipt_id"}
++        if (version is None or not isinstance(value, Mapping) or not required.issubset(value)
++                or value["schema_version"] != "qsl.notification_incident.v1"
++                or type(value["active"]) is not bool
++                or not _identity_present(value["state"])
++                or any(type(value[k]) is not int or value[k] < 0 for k in ("severity", "generation"))
++                or value["delivery_status"] not in {"not_attempted", "pending", "uncertain", "delivered"}
++                or (value["generation"] > 0 and not _identity_present(value["transition_key"]))):
++            raise RuntimeError("notification_marker_history_incomplete")
++        return version, dict(value)
++
++    def observe(self, event: NotificationEvent, *, state: str, severity: int = 1,
++                recovered: bool = False) -> IncidentDecision:
++        parts = [event.platform_id, event.target_id, event.opaque_account_uid,
++                 event.strategy_profile, event.incident_reason]
++        if not all(map(_identity_present, parts)):
++            return IncidentDecision("coverage_unknown")
++        if not _identity_present(state) or type(severity) is not int or severity < 0:
++            raise ValueError("notification_incident_state_invalid")
++        key = _digest(["qsl.notification_incident.v1", *parts])
++        for _ in range(8):
++            version, previous = self._read_marker(key)
++            previous = previous or {
++                "schema_version": "qsl.notification_incident.v1", "active": False,
++                "state": None, "severity": 0, "generation": 0,
++                "transition_key": None, "delivery_status": "not_attempted", "receipt_id": None,
++            }
++            active = previous.get("active") is True
++            generation = int(previous.get("generation", 0))
++            transition = previous.get("transition_key")
++            if recovered:
++                value = {**previous, "active": False, "state": state, "severity": severity}
++                action = "recovered"
++            elif active and severity <= int(previous["severity"]):
++                # A downgrade updates observation state without sending. Later
++                # severity-up remains visible, even before full recovery.
++                value = {**previous, "state": state, "severity": severity}
++                action = "duplicate"
++            else:
++                generation += 1
++                transition = _digest([key, generation, previous.get("state"), state, severity])
++                value = {"schema_version": "qsl.notification_incident.v1",
++                         "active": True, "state": state, "severity": severity,
++                         "generation": generation, "transition_key": transition,
++                         "delivery_status": "pending", "receipt_id": None}
++                action = "send"
++            if value == previous or self.store.compare_and_set(key, version, value):
++                return IncidentDecision(action, key, transition)
++        raise RuntimeError("notification_marker_concurrent_update")
++
++    def record_delivery(self, decision: IncidentDecision, *, receipt_id: str | None = None) -> None:
++        """Only an explicit receipt is delivered; absent receipt stays uncertain."""
++        if decision.action != "send" or not decision.incident_key:
++            raise ValueError("notification_delivery_without_reservation")
++        version, previous = self._read_marker(decision.incident_key)
++        if not previous or previous.get("transition_key") != decision.transition_key:
++            raise RuntimeError("notification_marker_transition_changed")
++        value = {**previous, "delivery_status": "delivered" if _identity_present(receipt_id) else "uncertain",
++                 "receipt_id": receipt_id if _identity_present(receipt_id) else None}
++        if not self.store.compare_and_set(decision.incident_key, version, value):
++            raise RuntimeError("notification_marker_concurrent_update")
+diff --git a/notifications/display_names.json b/notifications/display_names.json
+new file mode 100644
+index 0000000..5f2e628
+--- /dev/null
++++ b/notifications/display_names.json
+@@ -0,0 +1,241 @@
++{
++  "account_aliases": {
++    "hk": {
++      "en": "HK",
++      "zh": "香港"
++    },
++    "live": {
++      "en": "live",
++      "zh": "实盘"
++    },
++    "paper": {
++      "en": "paper",
++      "zh": "模拟"
++    },
++    "sg": {
++      "en": "SG",
++      "zh": "新加坡"
++    },
++    "soxl": {
++      "en": "SOXL",
++      "zh": "SOXL"
++    },
++    "tqqq": {
++      "en": "TQQQ",
++      "zh": "TQQQ"
++    }
++  },
++  "accounts": {
++    "binance": {
++      "Binance": {
++        "en": "live",
++        "zh": "实盘"
++      },
++      "binance": {
++        "en": "live",
++        "zh": "实盘"
++      },
++      "crypto_combo": {
++        "en": "live",
++        "zh": "实盘"
++      },
++      "default": {
++        "en": "live",
++        "zh": "实盘"
++      }
++    }
++  },
++  "domains": {
++    "cn_equity": {
++      "en": "CN A-share",
++      "zh": "A股"
++    },
++    "crypto": {
++      "en": "Crypto",
++      "zh": "加密"
++    },
++    "hk_equity": {
++      "en": "HK Equity",
++      "zh": "港股"
++    },
++    "us_equity": {
++      "en": "US Equity",
++      "zh": "美股"
++    }
++  },
++  "lanes": {
++    "dry_run": {
++      "en": "dry run",
++      "zh": "演练"
++    },
++    "live": {
++      "en": "live",
++      "zh": "实盘"
++    },
++    "paper": {
++      "en": "paper",
++      "zh": "模拟"
++    },
++    "research": {
++      "en": "research",
++      "zh": "研究"
++    },
++    "shadow": {
++      "en": "shadow",
++      "zh": "影子"
++    }
++  },
++  "platforms": {
++    "binance": "Binance",
++    "firstrade": "Firstrade",
++    "ibkr": "IBKR",
++    "longbridge": "LongBridge",
++    "qmt": "QMT",
++    "schwab": "Schwab"
++  },
++  "senders": {
++    "quant_sentinel": {
++      "en": "QuantSentinel",
++      "zh": "量化哨兵"
++    }
++  },
++  "strategies": {
++    "cn_chinext_growth_momentum_quality": {
++      "en": "CN ChiNext Growth Momentum Quality",
++      "zh": "创业板成长动量质量"
++    },
++    "cn_chinext_growth_momentum_quality_snapshot": {
++      "en": "CN ChiNext Growth Quality Snapshot",
++      "zh": "创业板成长质量快照"
++    },
++    "cn_chinext_tactical_rotation": {
++      "en": "CN ChiNext Tactical Rotation",
++      "zh": "创业板战术轮动"
++    },
++    "cn_csi500_multi_factor_snapshot": {
++      "en": "CN CSI 500 Multi-Factor Snapshot",
++      "zh": "A股中证500多因子"
++    },
++    "cn_dividend_quality_snapshot": {
++      "en": "CN Dividend Quality",
++      "zh": "A股红利质量"
++    },
++    "cn_equity_combo": {
++      "en": "CN Alpha Combo",
++      "zh": "A股进取组合"
++    },
++    "cn_index_etf_tactical_rotation": {
++      "en": "CN Index ETF Tactical Rotation",
++      "zh": "A股宽基ETF战术轮动"
++    },
++    "cn_industry_etf_rotation": {
++      "en": "CN Industry ETF Rotation",
++      "zh": "A股行业ETF轮动"
++    },
++    "cn_industry_etf_rotation_aggressive": {
++      "en": "CN ETF Rotation",
++      "zh": "A股ETF轮动"
++    },
++    "cn_star_growth_momentum_quality": {
++      "en": "CN STAR Growth Momentum Quality",
++      "zh": "科创板成长动量质量"
++    },
++    "cn_stock_momentum_rotation": {
++      "en": "CN Stock Momentum Rotation",
++      "zh": "A股股票动量轮动"
++    },
++    "crypto_btc_dca": {
++      "en": "BTC DCA",
++      "zh": "BTC定投"
++    },
++    "crypto_equity_combo": {
++      "en": "Crypto Core Combo",
++      "zh": "加密动量组合"
++    },
++    "crypto_leader_rotation": {
++      "en": "Crypto Leader Rotation",
++      "zh": "加密领涨轮动"
++    },
++    "crypto_live_pool_rotation": {
++      "en": "Crypto Pool Rotation",
++      "zh": "加密池轮动"
++    },
++    "crypto_trend_rotation": {
++      "en": "Altcoin Trend",
++      "zh": "山寨趋势轮动"
++    },
++    "global_etf_confidence_vol_gate": {
++      "en": "Global ETF Confidence Vol Gate",
++      "zh": "全球 ETF 置信波动门控"
++    },
++    "global_etf_rotation": {
++      "en": "Global ETF Rotation",
++      "zh": "全球ETF轮动"
++    },
++    "hk_equity_combo": {
++      "en": "HK Core Combo",
++      "zh": "港股恒生组合"
++    },
++    "hk_global_etf_tactical_rotation": {
++      "en": "HK ETF Tactical Rotation",
++      "zh": "港股ETF战术轮动"
++    },
++    "hk_low_vol_dividend_quality_snapshot": {
++      "en": "HK Dividend Quality",
++      "zh": "港股红利质量"
++    },
++    "ibit_smart_dca": {
++      "en": "IBIT Bitcoin DCA",
++      "zh": "IBIT比特币定投"
++    },
++    "nasdaq_sp500_smart_dca": {
++      "en": "NASDAQ/S&P 500 DCA",
++      "zh": "纳指标普定投"
++    },
++    "qqq_tech_enhancement": {
++      "en": "Tech/Communication Pullback Enhancement",
++      "zh": "科技通信回调增强"
++    },
++    "russell_top50_leader_rotation": {
++      "en": "Russell Top50 Leaders",
++      "zh": "罗素Top50领涨"
++    },
++    "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve": {
++      "en": "SOXL/SOXX Core Compounding (Cash Reserve)",
++      "zh": "SOXL/SOXX 核心复利（现金保留）"
++    },
++    "soxl_soxx_trend_income": {
++      "en": "Semiconductor Trend Income",
++      "zh": "半导体趋势收益"
++    },
++    "tech_communication_pullback_enhancement": {
++      "en": "Tech/Communication Pullback Enhancement",
++      "zh": "科技通信回调增强"
++    },
++    "tecl_xlk_trend_income": {
++      "en": "TECL/XLK Trend Income",
++      "zh": "TECL/XLK趋势收益"
++    },
++    "tqqq_growth_income": {
++      "en": "NASDAQ Growth Income",
++      "zh": "纳斯达克增长收益"
++    },
++    "us_equity_combo": {
++      "en": "US Core Income Combo",
++      "zh": "美股核心收益组合"
++    },
++    "us_equity_combo_core": {
++      "en": "US Core Combo",
++      "zh": "美股核心组合"
++    },
++    "us_equity_combo_leveraged": {
++      "en": "US Alpha Combo",
++      "zh": "美股加速组合"
++    }
++  },
++  "strategy_aliases": {
++    "bitcoin_etf_smart_dca": "ibit_smart_dca",
++    "global_etf_confidence_vol_gate": "global_etf_rotation",
++    "global_macro_etf_rotation": "global_etf_rotation"
++  }
++}
+diff --git a/notifications/display_names.py b/notifications/display_names.py
+new file mode 100644
+index 0000000..a045cee
+--- /dev/null
++++ b/notifications/display_names.py
+@@ -0,0 +1,54 @@
++"""Display-only resolver; generated defaults come from QRS platform-config.json.
++
++Never use resolved names for execution identity, bindings, keys or deduplication.
++QSL_DISPLAY_NAMES_JSON accepts an optional JSON object with per-section overrides.
++Invalid overrides fall back to bundled names so an urgent alert can still render.
++"""
++from __future__ import annotations
++
++import json
++import os
++from functools import lru_cache
++from pathlib import Path
++
++
++@lru_cache(maxsize=1)
++def _defaults():
++    return json.loads(Path(__file__).with_suffix(".json").read_text(encoding="utf-8"))
++
++
++@lru_cache(maxsize=8)
++def _overrides(raw):
++    try:
++        value = json.loads(raw or "{}")
++    except (ValueError, TypeError):
++        return {}
++    return value if isinstance(value, dict) else {}
++
++
++def _text(value, locale):
++    if isinstance(value, dict):
++        language = "zh" if str(locale).lower().startswith("zh") else "en"
++        value = value.get(language) or value.get("en")
++    return value.strip() if isinstance(value, str) else ""
++
++
++def display_name(kind, key, locale="en", *, fallback="", platform=""):
++    """Resolve an explicit display key, retaining unknown operator labels."""
++    key = str(key or "").strip()
++    defaults = _defaults()
++    overrides = _overrides(os.environ.get("QSL_DISPLAY_NAMES_JSON", ""))
++    aliases = {**defaults.get("strategy_aliases", {}), **(overrides.get("strategy_aliases", {}) if isinstance(overrides.get("strategy_aliases"), dict) else {})}
++    canonical = aliases.get(key, key) if kind == "strategies" else key
++    if not isinstance(canonical, str):
++        canonical = key
++    for source in (overrides, defaults):
++        section = source.get(kind, {})
++        if kind == "accounts" and isinstance(section, dict):
++            section = section.get(str(platform).lower(), {})
++        if isinstance(section, dict):
++            first, second = (key, canonical) if source is overrides else (canonical, key)
++            result = _text(section.get(first), locale) or _text(section.get(second), locale)
++            if result:
++                return result
++    return str(fallback or key)
+diff --git a/notifications/unified.py b/notifications/unified.py
+new file mode 100644
+index 0000000..0fbb0a8
+--- /dev/null
++++ b/notifications/unified.py
+@@ -0,0 +1,835 @@
++"""LongBridge adapter for opt-in, target-bound notification candidates.
++
++Only notification facts and markers belong here. No broker, execution-state,
++schedule, risk-admission or runtime enablement mutations are permitted.
++"""
++from __future__ import annotations
++
++import json
++import os
++import hashlib
++import re
++from dataclasses import replace
++from datetime import datetime, timezone
++from collections.abc import Mapping
++from contextlib import contextmanager
++from contextvars import ContextVar
++
++from .digest_snapshot.unified_contract import (
++    NotificationEvent, IncidentTracker, IncidentDecision, CandidatePersistenceError,
++    effective_notification_mode, unified_notification_enabled, route_notification_event,
++)
++from .unified_store import GCSNotificationStore
++
++
++FLAG = "LONGBRIDGE_UNIFIED_NOTIFICATION_ENABLED"
++_TARGET_KEYS = ("platform_id", "strategy_profile", "service_name", "account_scope",
++                "account_selector", "deployment_selector", "dry_run_only")
++_REPORT = ContextVar("longbridge_notification_report", default=None)
++_ROUTE = ContextVar("longbridge_notification_route", default=None)
++_VALIDATION = ContextVar("longbridge_notification_validation", default=False)
++
++
++@contextmanager
++def bind_report(report, *, validation_only=False):
++    token = _REPORT.set(report)
++    validation_token = _VALIDATION.set(validation_only)
++    try:
++        yield
++    finally:
++        _VALIDATION.reset(validation_token)
++        _REPORT.reset(token)
++
++
++@contextmanager
++def bind_route(route):
++    token = _ROUTE.set(route)
++    try:
++        yield
++    finally:
++        _ROUTE.reset(token)
++
++
++def enabled(env=None):
++    env = os.environ if env is None else env
++    return unified_notification_enabled(env, FLAG)
++
++
++def routing_env(env=None):
++    env = os.environ if env is None else env
++    if not enabled(env):
++        return env
++    # The release flag selects the existing single routing mode. It does not
++    # mutate the process environment or authorize any runtime target.
++    return {**env, "QSL_ROUTINE_NOTIFICATION_MODE": effective_notification_mode(env, FLAG),
++            "QSL_DIGEST_ROUTINE_ORDERS": "false"}
++
++
++def target_binding(env=None, *, report=None):
++    env = os.environ if env is None else env
++    if env.get("RUNTIME_TARGET_ENABLED") != "true":
++        raise ValueError("notification_target_not_enabled")
++    target = json.loads(env.get("RUNTIME_TARGET_JSON") or "{}")
++    if not isinstance(target, dict) or any(key not in target for key in _TARGET_KEYS):
++        raise ValueError("notification_target_binding_missing")
++    for key in _TARGET_KEYS[:-1]:
++        if not target[key]:
++            raise ValueError("notification_target_binding_missing")
++    if (type(target["dry_run_only"]) is not bool
++            or not isinstance(target["account_selector"], list)
++            or any(not isinstance(value, str) or not value.strip() for value in target["account_selector"])
++            or any(not isinstance(target[key], str) or not target[key].strip() for key in _TARGET_KEYS[:-1] if key != "account_selector")):
++        raise ValueError("notification_target_binding_missing")
++    if target.get("runtime_target_enabled") is False:
++        raise ValueError("notification_target_not_enabled")
++    if report is not None:
++        source = report.get("runtime_target")
++        if not isinstance(source, Mapping) or any(source.get(key) != target[key] for key in _TARGET_KEYS):
++            raise ValueError("notification_source_binding_mismatch")
++        if (report.get("platform") != target["platform_id"]
++                or report.get("strategy_profile") != target["strategy_profile"]
++                or report.get("service_name") != target["service_name"]
++                or report.get("dry_run") is not target["dry_run_only"]):
++            raise ValueError("notification_source_binding_mismatch")
++    target_id = str(env.get("DIGEST_TARGET_ID") or "").strip()
++    account_uid = str(env.get("DIGEST_OPAQUE_ACCOUNT_UID") or "").strip()
++    matrix_id = str(env.get("DIGEST_MATRIX_TARGET_ID") or "").strip()
++    matrix_scope = str(env.get("DIGEST_MATRIX_ACCOUNT_SCOPE") or "").strip()
++    if not target_id or not account_uid:
++        raise ValueError("notification_identity_unknown")
++    if (matrix_id and target_id != matrix_id) or (matrix_scope and target["account_scope"] != matrix_scope):
++        raise ValueError("notification_matrix_binding_mismatch")
++    return {"platform_id": target["platform_id"], "strategy_profile": target["strategy_profile"],
++            "target_id": target_id, "opaque_account_uid": account_uid}, target
++
++
++def _stamp(value):
++    stamp = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
++    if stamp.tzinfo is None:
++        raise ValueError("notification_time_timezone_missing")
++    return stamp.astimezone(timezone.utc)
++
++
++def make_event(kind, *, env=None, report=None, incident=None, occurred_at=None, run_id=None, **counts):
++    env = os.environ if env is None else env
++    report = report if report is not None else _REPORT.get()
++    identity, _ = target_binding(env, report=report)
++    source_run = run_id or (report or {}).get("run_id")
++    stamp = occurred_at or (report or {}).get("started_at")
++    if not source_run or not stamp:
++        raise ValueError("notification_source_run_unknown")
++    return NotificationEvent(kind, _stamp(stamp), **identity, source_run_id=str(source_run),
++                             incident_reason=incident, **counts)
++
++
++def _hash(value):
++    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
++
++
++def report_archive_confirmed(report, persisted_path, configured_prefix):
++    """Require the existing persister's confirmed cloud URI, not a local path."""
++    prefix = str(configured_prefix or "").rstrip("/")
++    artifacts = report.get("artifacts") if isinstance(report, Mapping) else None
++    return bool(prefix.startswith("gs://") and isinstance(persisted_path, str)
++                and persisted_path.startswith(prefix + "/") and isinstance(artifacts, Mapping)
++                and artifacts.get("runtime_report_cloud_uri") == persisted_path)
++
++
++def _export_projection(store, state_store, key, state):
++    version, previous = store.read(key)
++    _, latest = state_store.read(f"candidate_state/{key}")
++    if latest != state:
++        raise CandidatePersistenceError("notification_candidate_concurrent_update")
++    allowed = {"platform_id", "strategy_profile", "opaque_account_uid", "target_id", "business_day", "actually_ran",
++               "as_of", "status", "execution_status", "order_count", "fill_count", "cycle_count", "field_status",
++               "evidence_provenance", "reason_code", "execution_mode", "source_run_id", "notification_events",
++               "scheduled_idle", "routine_observation_counts"}
++    rows = [{key: value for key, value in row.items() if key in allowed} for row in state["runs"]]
++    for row in rows:
++        row.update(evidence_persistence_status="persisted", evidence_delivery_status="pending_central")
++    payload = {"schema_version": "qsl.digest_candidates.v1", "producer_status": "projected", "runs": rows}
++    if previous == payload:
++        return True
++    if not store.compare_and_set(key, version, payload):
++        raise CandidatePersistenceError("notification_candidate_concurrent_update")
++    return True
++
++
++def persist_candidate(event, *, env=None, actually_ran=True, dry_run=False, preview_count=None, store=None, state_store=None, not_run=False, skip_reason=None, observation_counts=None):
++    """Bridge private event facts into the existing per-target candidate object.
++
++    Merge by source run, never by evidence-source count. Runtime and archive
++    producers share the same run identity and must agree on its facts.
++    """
++    env = os.environ if env is None else env
++    identity, target = target_binding(env)
++    dry_run = target["dry_run_only"]
++    if any(event.get(key) != value for key, value in identity.items()) or event.get("coverage_status") != "known":
++        raise CandidatePersistenceError("notification_candidate_identity_unknown")
++    slot = str(env.get("DIGEST_STORE_TARGET") or "")
++    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,40}", slot):
++        raise ValueError("candidate_store_identity_missing")
++    injected_store = store
++    store = store or GCSNotificationStore(env.get("DIGEST_CANDIDATES_GCS_URI", ""))
++    state_store = state_store or injected_store or GCSNotificationStore(env.get("QSL_NOTIFICATION_MARKER_GCS_URI", ""))
++    key = f"{identity['platform_id']}/{event['business_day']}/{slot}"
++    version, previous = state_store.read(f"candidate_state/{key}")
++    previous = previous or {}
++    if not previous and store.read(key)[1] is not None:
++        raise ValueError("notification_candidate_history_unknown")
++    scope_key = _hash(identity)
++    if previous and previous.get("notification_scope_key") != scope_key:
++        # An old-format or differently bound object cannot be silently replaced.
++        raise ValueError("notification_candidate_scope_conflict")
++    events = dict(previous.get("notification_events") or {})
++    fact_key = event["dedupe_key"]
++    conflicts = list(previous.get("notification_conflicts") or [])
++    if fact_key in events and events[fact_key] != event:
++        # Preserve different observations without interpreting event counters
++        # as whole-run counters. Archive run facts below own those counters.
++        fact_key = f"{fact_key}-{_hash(event)}"
++    events[fact_key] = event
++    sources = dict(previous.get("notification_source_runs") or {})
++    if not_run:
++        if actually_ran or event["order_count"] is not None or event["fill_count"] is not None:
++            raise ValueError("candidate_non_execution_conflict")
++        source = {"not_run": True, "as_of": event["occurred_at"], "skip_reason": skip_reason}
++        old_source = sources.get(event["source_run_id"])
++        if old_source is not None and old_source != source:
++            raise ValueError("candidate_non_execution_conflict")
++        sources[event["source_run_id"]] = source
++    if actually_ran:
++        source = {"order_count": event["order_count"], "fill_count": event["fill_count"],
++                  "dry_run": dry_run, "preview_count": preview_count,
++                  "as_of": event["occurred_at"], "event_kind": event["event_kind"]}
++        run_id = event["source_run_id"]
++        old_source = sources.get(run_id, {})
++        if observation_counts is None and _REPORT.get() is not None:
++            observation_counts = (_REPORT.get().get("summary") or {}).get("routine_observation_counts")
++        if observation_counts is not None:
++            allowed = {"watch", "opportunity_watch", "panic_reversal", "taco_rebound"}
++            if not isinstance(observation_counts, Mapping) or any(k not in allowed or type(v) is not int or v < 0 for k, v in observation_counts.items()):
++                raise ValueError("candidate_plugin_observations_invalid")
++            if "routine_observation_counts" in old_source and old_source["routine_observation_counts"] != observation_counts:
++                raise ValueError("candidate_plugin_observations_conflict")
++            source["routine_observation_counts"] = dict(observation_counts)
++        elif "routine_observation_counts" in old_source:
++            source["routine_observation_counts"] = old_source["routine_observation_counts"]
++        if old_source.get("not_run"):
++            raise ValueError("candidate_non_execution_conflict")
++        for name in ("order_count", "fill_count", "preview_count"):
++            old, observed = old_source.get(name), source[name]
++            if old is not None and observed is not None and old != observed:
++                conflict = {"source_run_id": run_id, "field": name, "previous": old, "observed": observed}
++                if conflict not in conflicts:
++                    conflicts.append(conflict)
++            if old is not None:
++                source[name] = old
++        sources[run_id] = source
++    rows = []
++    for run_id, source in sorted(sources.items()):
++        run_events = [item for item in events.values() if item["source_run_id"] == run_id]
++        if source.get("not_run"):
++            rows.append({**identity, "source_run_id": run_id, "business_day": event["business_day"],
++                         "actually_ran": False, "as_of": source["as_of"],
++                         "status": "ok" if source["skip_reason"] == "market_closed" else "alert",
++                         "execution_status": "not_run", "reason_code": source["skip_reason"],
++                         "order_count": None, "fill_count": None, "cycle_count": 0,
++                         "field_status": {"order_count": "unknown", "fill_count": "unknown", "cycle_count": "known"},
++                         "notification_events": []})
++            continue
++        run_conflicts = [item for item in conflicts if item["source_run_id"] == run_id]
++        counts = {name: source[name] if not any(item.get("field", name) == name for item in run_conflicts) else None
++                  for name in ("order_count", "fill_count", "preview_count")}
++        urgent = bool(run_conflicts) or any(item["event_kind"] not in {
++            "routine_cycle", "healthy_heartbeat", "order_submitted", "fill"} for item in run_events)
++        row = {**identity, "source_run_id": run_id, "business_day": event["business_day"],
++               "actually_ran": True, "as_of": source["as_of"],
++               "status": "alert" if urgent else "ok", "execution_status": "execution_alert" if urgent else
++                   "executed" if counts["order_count"] else "ok_no_order",
++               **counts, "cycle_count": 1, "dry_run": dry_run,
++               "execution_mode": "dry_run" if dry_run else "live",
++               "field_status": {name: "known" if counts[name] is not None else "unknown"
++                                for name in ("order_count", "fill_count")},
++               "evidence_provenance": "candidates", "persistence_status": "persisted", "delivery_status": "pending_central",
++               "notification_events": run_events}
++        row["field_status"]["cycle_count"] = "known"
++        if "routine_observation_counts" in source:
++            row["routine_observation_counts"] = source["routine_observation_counts"]
++        if not urgent and row["order_count"] is None and not dry_run:
++            row["execution_status"] = "execution_unknown"
++        if urgent:
++            row["reason_code"] = "source_cycle_alert"
++        rows.append(row)
++    payload = {"schema_version": "qsl.digest_candidates.v1", "producer_status": "projected", "runs": rows,
++               "notification_scope_key": scope_key, "notification_events": events, "notification_source_runs": sources,
++               "notification_conflicts": conflicts}
++    if payload != previous and not state_store.compare_and_set(f"candidate_state/{key}", version, payload):
++        # No retries after an uncertain write; an explicit CAS conflict is visible.
++        raise CandidatePersistenceError("notification_candidate_concurrent_update")
++    return _export_projection(store, state_store, key, payload)
++
++
++class _StaleObservation(RuntimeError):
++    pass
++
++
++class _OrderedStore:
++    def __init__(self, store, stamp):
++        self.store, self.stamp = store, stamp
++
++    def read(self, key):
++        version, value = self.store.read(key)
++        if value and value.get("observed_at") and _stamp(value["observed_at"]) > self.stamp:
++            raise _StaleObservation("notification_observation_out_of_order")
++        return version, value
++
++    def compare_and_set(self, key, version, value):
++        return self.store.compare_and_set(key, version, {**value, "observed_at": self.stamp.isoformat()})
++
++    def advance(self, key):
++        version, value = self.read(key)
++        if value and value.get("observed_at") != self.stamp.isoformat():
++            if not self.compare_and_set(key, version, value):
++                raise RuntimeError("notification_marker_concurrent_update")
++
++
++def observe_incident(event, *, state, severity=1, recovered=False, env=None, store=None):
++    env = os.environ if env is None else env
++    store = store or GCSNotificationStore(env.get("QSL_NOTIFICATION_MARKER_GCS_URI", ""))
++    ordered = _OrderedStore(store, event.occurred_at)
++    try:
++        decision = IncidentTracker(ordered).observe(event, state=state, severity=severity, recovered=recovered)
++        if decision.incident_key:
++            ordered.advance(decision.incident_key)
++        group = next((prefix for prefix in ("cycle_attention:", "new_risk_attention:", "runtime_issue:")
++                      if str(event.incident_reason or "").startswith(prefix)), None)
++        if not recovered and group:
++            identity = [event.platform_id, event.target_id, event.opaque_account_uid, event.strategy_profile]
++            index_key = f"incident_groups/{_hash([*identity, group])}"
++            version, index = store.read(index_key)
++            reasons = dict((index or {}).get("reasons") or {})
++            if reasons.get(event.incident_reason) != event.source_run_id:
++                reasons[event.incident_reason] = event.source_run_id
++                if not store.compare_and_set(index_key, version, {"reasons": reasons}):
++                    raise RuntimeError("notification_marker_concurrent_update")
++        return decision, IncidentTracker(store)
++    except _StaleObservation:
++        return IncidentDecision("duplicate"), IncidentTracker(store)
++
++
++def recover_incident_group(event, group, *, env=None, store=None, skip_current_run=False):
++    env = os.environ if env is None else env
++    store = store or GCSNotificationStore(env.get("QSL_NOTIFICATION_MARKER_GCS_URI", ""))
++    identity = [event.platform_id, event.target_id, event.opaque_account_uid, event.strategy_profile]
++    _, index = store.read(f"incident_groups/{_hash([*identity, group])}")
++    for reason, source_run in (index or {}).get("reasons", {}).items():
++        if skip_current_run and source_run == event.source_run_id:
++            continue
++        observe_incident(replace(event, incident_reason=reason), state="healthy", recovered=True, severity=0, env=env, store=store)
++
++
++def recover_cycle_incidents(event, *, env=None, store=None):
++    return recover_incident_group(event, "cycle_attention:", env=env, store=store)
++
++
++def send_incident(event, send, *, state=None, severity=1, env=None, store=None):
++    decision, tracker = observe_incident(event, state=state or event.event_kind, severity=severity, env=env, store=store)
++    if decision.action != "send":
++        return False
++    try:
++        result = send()
++    except Exception:
++        tracker.record_delivery(decision)
++        raise
++    # Existing boolean senders acknowledge transport only. A sender may supply
++    # its actual unique send-history receipt, but we never manufacture one.
++    receipt = result.get("receipt_id") if isinstance(result, Mapping) else None
++    if (not isinstance(receipt, str) or not receipt.strip() or receipt.startswith("transport-ack:")
++            or receipt in {decision.transition_key, event.to_candidate()["dedupe_key"]}):
++        receipt = None
++    tracker.record_delivery(decision, receipt_id=receipt)
++    return result is True or receipt is not None
++
++
++def coverage_locale():
++    raw = str(os.environ.get("QSL_NOTIFY_LANG") or "").strip()
++    raw = raw or str(os.environ.get("NOTIFY_LANG") or "").strip() or "zh"
++    return "en" if raw.lower().startswith("en") else "zh"
++
++
++def _storage_failure(notify_issue):
++    if notify_issue is None:
++        return
++    try:
++        if coverage_locale() == "en":
++            return notify_issue("Notification evidence unavailable", "Candidate storage or incident history could not be confirmed.")
++        return notify_issue("通知证据不可用", "无法确认候选记录或告警历史，请检查通知存储。")
++    except Exception:
++        print("notification_coverage_diagnostic_failed", flush=True)
++
++
++def _safe_send_incident(event, send, **kwargs):
++    try:
++        return send_incident(event, send, **kwargs)
++    except Exception as exc:
++        # A missing/unreadable reservation cannot authorize an untracked send.
++        print(f"notification_incident_unconfirmed error_type={type(exc).__name__}", flush=True)
++        record_failure("incident_history_unconfirmed")
++        return False
++
++
++def record_failure(code, *, report=None):
++    report = report if report is not None else _REPORT.get()
++    if report is not None:
++        failures = report.setdefault("notification_unified_errors", [])
++        if code not in failures:
++            failures.append(code)
++
++
++def _has_notification_attention(*, config, result) -> bool:
++    """Read structured cycle facts without changing execution or gate dedup."""
++    if getattr(config, "notification_attention_reason_codes", ()) or getattr(
++        result, "notification_attention_reason_codes", ()
++    ):
++        return True
++    for scope in (result.execution, result.allocation):
++        if any(scope.get(key) for key in (
++            "error", "errors", "fail_reason", "blocked_reason", "execution_blocked_reason",
++            "plugin_error", "data_error", "persistence_error", "report_persistence_error",
++            "reconciliation_required", "pending_reconciliation",
++            "account_identity_blocked",
++        )):
++            return True
++        command = scope.get("durable_live_execution_command") or {}
++        command_status = str(command.get("status") or "").strip().upper()
++        if command_status and command_status not in {"QUEUED", "ALREADY_QUEUED"}:
++            return True
++        if scope.get("direct_live_routing_blocked") and not (
++            scope.get("heartbeat_execution_state") == "waiting_window"
++            and command_status in {"QUEUED", "ALREADY_QUEUED"}
++        ):
++            return True
++        for key in ("execution_status", "heartbeat_execution_state"):
++            status = str(scope.get(key) or "").strip().lower()
++            if status == "waiting_window":
++                if command_status not in {"QUEUED", "ALREADY_QUEUED"}:
++                    return True
++            elif status not in {
++                "", "no_op", "no_action", "completed", "executed", "dry_run",
++                "dry_run_completed", "already_recorded",
++            }:
++                return True
++        if str(scope.get("risk_gate") or "").strip().upper() in {
++            "REJECT", "REJECTED", "BLOCK", "BLOCKED", "DENY", "DENIED"
++        }:
++            return True
++        flags = scope.get("risk_flags") or ()
++        if isinstance(flags, str):
++            flags = (flags,)
++        if any(str(flag).startswith("rejected:") for flag in flags):
++            return True
++        if scope.get("no_execute") or "no_execute" in flags:
++            # This explicit research contract is a normal non-execution lane.
++            # A bare/unknown no_execute is not evidence of a healthy cycle.
++            if not (scope.get("no_order") is True and scope.get("execution_authorized") is False):
++                return True
++    return False
++
++
++
++def cycle_facts(result, *, dry_run=False, attention_reasons=()):
++    from .digest_snapshot.digest_routing import defer_routine_cycle_to_digest
++    evidence = {**dict(getattr(result, "allocation", {}) or {}), **dict(getattr(result, "execution", {}) or {})}
++    action = bool(getattr(result, "action_done", False))
++    pending = tuple(getattr(result, "pending_orders", ()) or ())
++    evidence.setdefault("execution_status", "completed" if action else "no_action")
++    evidence["broker_submission_done"] = action and not dry_run
++    evidence["orders_pending_count"] = len(pending)
++    evidence["notification_attention_reason_codes"] = tuple(getattr(result, "notification_attention_reason_codes", ()) or ()) + tuple(attention_reasons)
++    # Passed diagnostics do not constitute a risk escalation. Keep all others.
++    evidence["risk_flags"] = tuple(flag for flag in (evidence.get("risk_flags") or ()) if flag != "risk_gate:passed")
++    healthy = defer_routine_cycle_to_digest(evidence, submitted_order_count=0, mode="daily_digest", include_orders=False)
++    kind = "routine_cycle" if healthy else "real_error"
++    status = str(evidence.get("execution_status") or "").lower()
++    if pending or "unknown" in status or "pending" in status:
++        kind = "order_status_unknown"
++    elif evidence.get("auth_expired"):
++        kind = "auth_failure"
++    elif status in {"blocked", "rejected"} or evidence.get("execution_blocked_reason") or evidence.get("blocked_reason"):
++        kind = "blocked_run"
++    elif action and not dry_run and status in {"", "completed", "executed", "submitted"} and not any(evidence.get(key) for key in (
++            "error", "errors", "fail_reason", "plugin_error", "persistence_error", "report_persistence_error",
++            "notification_error", "notification_attention_reason_codes", "risk_flags", "execution_blocked",
++            "execution_blocking_skips", "account_new_risk_buy_blocked", "small_account_buy_blocked",
++            "outcome_unknown", "submission_halted", "reconciliation_required", "market_data_retry_required",
++            "strategy_run_persistence_error", "strategy_plugin_error", "strategy_plugin_alert_error",
++            "data_error", "failed_order_count", "notification_order_issue")) and str(evidence.get("risk_gate") or "").upper() not in {
++                "BLOCK", "BLOCKED", "REJECT", "REJECTED", "DENY", "DENIED"}:
++        kind = "order_submitted"
++    # Reuse the established execution-aware notification classifier so a
++    # queued command is distinguishable from a blocked or unknown outcome.
++    from types import SimpleNamespace
++    attention_result = SimpleNamespace(
++        execution=getattr(result, "execution", {}) or {},
++        allocation=getattr(result, "allocation", {}) or {},
++        notification_attention_reason_codes=getattr(result, "notification_attention_reason_codes", ()) or (),
++    )
++    if kind in {"routine_cycle", "order_submitted"} and _has_notification_attention(
++        config=SimpleNamespace(notification_attention_reason_codes=attention_reasons), result=attention_result
++    ):
++        kind = "real_error"
++        healthy = False
++    known_zero = healthy and not dry_run and not action and not pending
++    return kind, {"schema_version": "qsl.notification_cycle.v1", "order_count": 0 if known_zero else None,
++                  "fill_count": 0 if known_zero else None, "routine": healthy and not dry_run, "dry_run": dry_run}
++
++
++def cycle_incident(result, kind):
++    if kind in {"routine_cycle", "order_submitted"}:
++        return None
++    evidence = dict(getattr(result, "execution", {}) or {})
++    reason = next((str(evidence[key]) for key in ("blocked_reason", "execution_blocked_reason", "no_op_reason")
++                   if isinstance(evidence.get(key), str) and re.fullmatch(r"[a-zA-Z0-9_.:-]{1,128}", evidence[key])), "unknown")
++    identities = []
++    from .digest_snapshot.unified_contract import order_identity_digest
++    for order in getattr(result, "pending_orders", ()) or ():
++        if isinstance(order, Mapping):
++            identity = order.get("order_id") or order.get("broker_order_id")
++            if identity:
++                identities.append(order_identity_digest(str(identity)))
++    return f"cycle_attention:{kind}:{reason}" + (f":{_hash(sorted(identities))}" if identities else "")
++
++
++def prepare_cycle(result, *, config, publisher, notify_issue):
++    """Persist routine facts before suppressing their original notification."""
++    from .events import NotificationPublisher
++    if _VALIDATION.get():
++        return False, publisher
++    kind = None
++    try:
++        kind, facts = cycle_facts(result, dry_run=config.dry_run_only,
++                                  attention_reasons=getattr(config, "notification_attention_reason_codes", ()))
++        if config.dry_run_only:
++            return (kind == "routine_cycle"), publisher
++        if kind not in {"routine_cycle", "order_submitted"} and not enabled():
++            return False, publisher
++        event = make_event(kind, incident=cycle_incident(result, kind),
++                           order_count=facts["order_count"], fill_count=facts["fill_count"])
++        if kind == "order_submitted":
++            # There is no complete order collection on ExecutionCycleResult.
++            # This is a run fact, not an invented individual order event.
++            fact = replace(event, event_kind="routine_cycle", incident_reason=None).to_candidate()
++            if persist_candidate(fact, dry_run=False) is not True:
++                raise CandidatePersistenceError("notification_candidate_write_unconfirmed")
++            return True, publisher
++        result_route = route_notification_event(event, env=routing_env(), flag_key=FLAG,
++            persist_candidate=lambda fact: persist_candidate(fact, dry_run=config.dry_run_only,
++                preview_count=len(getattr(result, "dry_run_orders", ()) or ()) if config.dry_run_only else None),
++            legacy=lambda: None, immediate=lambda: None)
++        if not result_route.candidate_persisted:
++            record_failure("candidate_persistence_unconfirmed")
++            failure = replace(event, event_kind="real_error", incident_reason="candidate_persistence_failed")
++            _safe_send_incident(failure, lambda: _storage_failure(notify_issue))
++        if kind == "routine_cycle":
++            # Only this same source's clean terminal result proves recovery.
++            try:
++                recover_cycle_incidents(event)
++                observe_incident(replace(event, incident_reason="candidate_persistence_failed"), state="persisted", recovered=True, severity=0)
++            except Exception:
++                print("notification_recovery_unconfirmed", flush=True)
++                record_failure("incident_recovery_unconfirmed")
++            return True, publisher
++        wrapped = NotificationPublisher(log_message=publisher.log_message,
++            send_message=lambda text: _safe_send_incident(event, lambda: publisher.send_message(text)))
++        return False, wrapped
++    except Exception as exc:
++        print(f"notification_candidate_unconfirmed error_type={type(exc).__name__}", flush=True)
++        record_failure("candidate_persistence_unconfirmed")
++        try:
++            failure = make_event("real_error", incident="candidate_persistence_failed")
++            send_incident(failure, lambda: _storage_failure(notify_issue))
++        except Exception:
++            print("notification_identity_or_history_unknown", flush=True)
++            _storage_failure(notify_issue)
++        if kind not in {"routine_cycle", "order_submitted"}:
++            return False, publisher
++        # Candidate failure is an explicit operational failure, never a healthy
++        # zero-trade confirmation. Broker/result/persistence paths stay intact.
++        return False, NotificationPublisher(log_message=publisher.log_message, send_message=lambda text: False)
++
++
++def dispatch_immediate(send, *, kind, incident, report=None, occurred_at=None, run_id=None,
++                       actually_ran=False, state=None, severity=1):
++    if not enabled():
++        return send()
++    try:
++        event = make_event(kind, report=report, incident=incident, occurred_at=occurred_at, run_id=run_id)
++        def immediate():
++            with bind_report(report if report is not None else _REPORT.get()):
++                return _safe_send_incident(event, send, state=state, severity=severity)
++        if not actually_ran and report is None and _REPORT.get() is None:
++            # A missing receipt has no business run to export. The QRS
++            # contract has no independent non-counting monitor channel.
++            return immediate()
++        route = route_notification_event(event, env=routing_env(), flag_key=FLAG,
++            persist_candidate=lambda fact: persist_candidate(fact, actually_ran=actually_ran,
++                dry_run=bool((report or {}).get("dry_run"))), legacy=send,
++            immediate=immediate)
++        if not route.candidate_persisted:
++            print("notification_candidate_unconfirmed coverage_status=unknown", flush=True)
++            record_failure("candidate_persistence_unconfirmed", report=report)
++        return route.result
++    except Exception as exc:
++        print(f"notification_incident_unconfirmed error_type={type(exc).__name__}", flush=True)
++        record_failure("incident_history_unconfirmed", report=report)
++        return False
++
++
++def record_order_resolution(order_event):
++    from .digest_snapshot.unified_contract import order_identity_digest
++    try:
++        digest = order_identity_digest(order_event.order_id)
++        fact = make_event("fill", order_execution_digest=digest)
++        persist_candidate(fact.to_candidate(), actually_ran=False)
++        for stream in ("order_status", "order_status_poll"):
++            observe_incident(replace(fact, incident_reason=f"{stream}:{digest}"), state="filled", recovered=True, severity=0)
++    except Exception:
++        record_failure("order_notification_evidence_unconfirmed")
++
++
++def recover_runtime(*, report=None, route_label=None, occurred_at=None, run_id=None, probe=False):
++    if not enabled():
++        return
++    if report is not None:
++        if report.get("status") != "ok" or report.get("notification_unified_errors"):
++            return
++        summary = report.get("summary") or {}
++        if summary.get("orders_pending_count") or summary.get("execution_status") in {"blocked", "pending_reconciliation"}:
++            return
++    try:
++        reasons = ("unknown", "paper_live_conflict")
++        incidents = ([f"runtime_route:{route_label}:{reason}" for reason in reasons] if route_label else
++                     ["runtime_failure:health_probe"] if probe else
++                     [f"runtime_failure:{phase}:{reason}" for phase in (
++                         "market_hours", "runtime_configuration", "strategy_cycle", "reporting") for reason in reasons])
++        # Only a persisted successful run/probe can recover its own route.
++        # A plain HTTP success (for example a skipped market window) is not proof.
++        if report is not None and _ROUTE.get():
++            incidents.extend(f"runtime_route:{_ROUTE.get()}:{reason}" for reason in reasons)
++        for incident in incidents:
++            event = make_event("real_error", report=report, incident=incident, occurred_at=occurred_at, run_id=run_id)
++            observe_incident(event, state="healthy", recovered=True, severity=0)
++        if report is not None and not probe:
++            recover_incident_group(event, "runtime_issue:", skip_current_run=True)
++    except Exception:
++        record_failure("runtime_recovery_unconfirmed", report=report)
++
++
++def attach_cycle_event(summary, result, *, report, config):
++    kind, facts = cycle_facts(result, dry_run=config.dry_run_only,
++                             attention_reasons=getattr(config, "notification_attention_reason_codes", ()))
++    if kind == "order_submitted":
++        kind = "routine_cycle"
++    event = make_event(kind, report=report, incident=cycle_incident(result, kind),
++                       order_count=facts["order_count"], fill_count=facts["fill_count"])
++    summary["notification_digest"] = {**facts, "event": event.to_candidate(),
++        "preview_count": len(getattr(result, "dry_run_orders", ()) or ()) if config.dry_run_only else None}
++
++
++def _archived_event(report, env):
++    identity, target = target_binding(env, report=report)
++    if report.get("schema_version") != "runtime_report.v1" or report.get("status") not in {
++            "ok", "completed", "success", "error", "aborted", "failed", "skipped"}:
++        raise ValueError("candidate_source_incomplete")
++    facts = (report.get("summary") or {}).get("notification_digest") or {}
++    if report.get("status") == "skipped":
++        if ((report.get("diagnostics") or {}).get("skip_reason") not in
++                {"market_closed", "fractional_share_execution_unsupported"} or facts):
++            raise ValueError("candidate_non_execution_conflict")
++    known = facts.get("schema_version") == "qsl.notification_cycle.v1" and facts.get("dry_run") is target["dry_run_only"]
++    failed = report.get("status") in {"error", "aborted", "failed"}
++    event = make_event("real_error" if failed else "routine_cycle", env=env, report=report,
++        incident="runtime_failure" if failed else None,
++        order_count=facts.get("order_count") if known else None,
++        fill_count=facts.get("fill_count") if known else None)
++    saved = facts.get("event")
++    if saved is not None:
++        if (not isinstance(saved, dict) or any(saved.get(key) != value for key, value in identity.items())
++                or saved.get("source_run_id") != report.get("run_id")
++                or _stamp(saved.get("occurred_at")) != event.occurred_at):
++            raise ValueError("notification_archived_event_mismatch")
++        # The run summary owns counts; a saved event cannot contradict it.
++        if any(saved.get(name) != getattr(event, name) for name in ("order_count", "fill_count")):
++            raise ValueError("notification_archived_event_mismatch")
++        event = replace(event, event_kind=saved["event_kind"], incident_reason=saved.get("incident_reason"),
++                        order_count=saved.get("order_count"), fill_count=saved.get("fill_count"))
++        canonical = event.to_candidate()
++        normalized = dict(saved)
++        # QPK 07e24c0 NotificationEvent declares these five payload fields
++        # nullable. The pinned runtime-report finalizer omits their nulls.
++        # Normalize only this event envelope, never identity/window fields or
++        # known counts, and preserve every present value and unexpected key.
++        for name in ("incident_reason", "order_execution_digest", "expected_block_evidence",
++                     "order_count", "fill_count"):
++            if name not in normalized and canonical[name] is None:
++                normalized[name] = None
++        if canonical != normalized:
++            raise ValueError("notification_archived_event_mismatch")
++    return event, facts
++
++
++def persist_archived_report(report, *, env, store=None, state_store=None, heartbeat=False):
++    event, facts = _archived_event(report, env)
++    skipped = report.get("status") == "skipped"
++    _, target = target_binding(env, report=report)
++    return persist_candidate(event.to_candidate(), env=env, store=store, state_store=state_store,
++                             actually_ran=not skipped, not_run=skipped, dry_run=target["dry_run_only"],
++                             skip_reason=(report.get("diagnostics") or {}).get("skip_reason") if skipped else None,
++                             preview_count=facts.get("preview_count") if heartbeat or target["dry_run_only"] else None,
++                             observation_counts=(report.get("summary") or {}).get("routine_observation_counts"))
++
++
++def heartbeat_observation(*, now, report=None, recovery_at=None, env=None):
++    env = os.environ if env is None else env
++    try:
++        if not isinstance(report, Mapping):
++            raise ValueError("notification_receipt_business_run_unknown")
++        archived, facts = _archived_event(report, env)
++        if archived.occurred_at > _stamp(now):
++            raise ValueError("notification_receipt_time_invalid")
++        persist_candidate(archived.to_candidate(), env=env, preview_count=facts.get("preview_count"))
++        # The observed receipt owns both the run identity and its business
++        # window. A next-window monitor job is not another business run.
++        event = replace(archived, event_kind="healthy_heartbeat", incident_reason="execution_receipt",
++                        order_count=None, fill_count=None)
++        persist_candidate(event.to_candidate(), env=env, actually_ran=False)
++        if recovery_at is not None:
++            observe_incident(replace(event, occurred_at=_stamp(recovery_at)), state="accepted",
++                             recovered=True, severity=0, env=env)
++    except Exception as exc:
++        print(f"notification_heartbeat_candidate_unconfirmed error_type={type(exc).__name__}", flush=True)
++        raise
++
++
++def publish_attention(decision, *, recover, telegram_sender=None):
++    from quant_platform_kit.risk.attention import render_attention_compact
++    from quant_platform_kit.risk.attention_notify import _default_telegram_sender
++    from .display_names import display_name
++    try:
++        event = make_event("risk_escalation", incident=f"new_risk_attention:{_hash(sorted(decision.reason_codes))}")
++        if decision.level.value not in {"action", "halt"}:
++            if recover:
++                recover_incident_group(event, "new_risk_attention:")
++            return {"sent": 0, "skipped": 1, "failed": 0}
++        identity, _ = target_binding()
++        locale = os.environ.get("QSL_NOTIFY_LANG") or os.environ.get("NOTIFY_LANG") or "zh"
++        english = str(locale).lower().startswith("en")
++        text = render_attention_compact(locale=locale,
++            platform=display_name("platforms", identity["platform_id"], locale, fallback="Platform" if english else "平台"),
++            account_alias=display_name("accounts", identity["opaque_account_uid"], locale, platform=identity["platform_id"],
++                                       fallback="Account" if english else "账户"),
++            strategy_profile=display_name("strategies", identity["strategy_profile"], locale,
++                                          fallback="Unnamed strategy" if english else "未命名策略"), decision=decision)
++        sender = telegram_sender or _default_telegram_sender
++        outcome = dispatch_immediate(lambda: bool(sender(text=text, alert_key=event.incident_reason)),
++            kind="risk_escalation", incident=event.incident_reason, state=decision.level.value,
++            severity=decision.level.severity_order)
++        return {"sent": int(outcome is True), "skipped": int(outcome is not True), "failed": 0}
++    except Exception as exc:
++        print(f"notification_risk_history_unconfirmed error_type={type(exc).__name__}", flush=True)
++        record_failure("risk_notification_history_unconfirmed")
++        return {"sent": 0, "skipped": 0, "failed": 1}
++
++
++def emit_archived(env, *, now=None, read=None, store=None):
++    """Catch up the completed window from existing reports, including PAPER.
++
++    No runtime invocation, target enablement or scheduler changes. The same
++    source run and routine event kind are used by the synchronous producer.
++    """
++    from .digest_snapshot.digest_archive import _read
++    from .digest_snapshot.unified_contract import sgt_business_window
++    from datetime import timedelta
++    if env.get("RUNTIME_TARGET_ENABLED") == "false":
++        return {"status": "target_disabled", "uploaded": False}
++    values = env.get("DIGEST_TARGET_BINDINGS_JSON", "").strip()
++    if values:
++        bindings = json.loads(values)
++        if not isinstance(bindings, list) or not all(isinstance(value, dict) for value in bindings):
++            raise ValueError("candidate_bindings_invalid")
++        selected = [value for value in bindings if value.get("DIGEST_TARGET_ID") == env.get("DIGEST_MATRIX_TARGET_ID")]
++        if len(selected) != 1:
++            raise ValueError("notification_matrix_binding_unknown")
++        env = {**env, **selected[0], "DIGEST_TARGET_BINDINGS_JSON": ""}
++    identity, target = target_binding(env)
++    current = _stamp(now or datetime.now(timezone.utc))
++    window = sgt_business_window(current)
++    start, end = window.start - timedelta(days=1), window.start
++    prefix = str(env.get("EXECUTION_REPORT_GCS_URI") or "").rstrip("/")
++    from .unified_store import validate_prefix
++    validate_prefix(prefix)
++    read = read or _read
++    months = {start.astimezone(timezone.utc).strftime("%Y-%m"), end.astimezone(timezone.utc).strftime("%Y-%m")}
++    entries = []
++    for month in sorted(months):
++        entries.extend(read(["ls", "--json", f"{prefix}/{identity['platform_id']}/**/{month}/*.json"]))
++    if len(entries) > 10000:
++        raise ValueError("candidate_archive_budget_exceeded")
++    seen, count = set(), 0
++    for entry in entries:
++        uri = str(entry.get("url") or "").split("#", 1)[0]
++        if uri in seen:
++            continue
++        seen.add(uri)
++        if not uri.startswith(f"{prefix}/{identity['platform_id']}/"):
++            raise ValueError("candidate_source_locator_mismatch")
++        updated = _stamp((entry.get("metadata") or {}).get("updated") or (entry.get("metadata") or {}).get("timeCreated"))
++        if not start <= updated <= current:
++            continue
++        report = read(["cat", uri])
++        source = report.get("runtime_target") or {}
++        if any(source.get(key) != target[key] for key in _TARGET_KEYS):
++            continue
++        stamp = _stamp(report.get("started_at"))
++        if not start <= stamp < end:
++            continue
++        # Run facts keep the cycle kind even when real-order notifications were
++        # immediate. Absence of per-order evidence remains null, never zero.
++        persist_archived_report(report, env=env, store=store)
++        count += 1
++    if not count:
++        # Absence is not proof of a healthy no-run window. Preserve the existing
++        # archive producer's fail-closed schedule check for expected live runs.
++        schedule = env.get("DIGEST_NOTIFICATION_SCHEDULE_JSON")
++        if not schedule:
++            raise ValueError("candidate_source_absent")
++        from scripts.runtime_heartbeat_policy import filter_due_targets
++        due, evaluated = filter_due_targets([json.loads(schedule)], since=start, now=end - timedelta(microseconds=1),
++            publication_grace=timedelta(0), warning_logger=lambda message: None)
++        if not evaluated or due:
++            raise ValueError("candidate_due_source_absent")
++        # This is a proved idle window, with no invented run or event time.
++        injected_store = store
++        store = store or GCSNotificationStore(env.get("DIGEST_CANDIDATES_GCS_URI", ""))
++        state_store = injected_store or GCSNotificationStore(env.get("QSL_NOTIFICATION_MARKER_GCS_URI", ""))
++        slot = str(env.get("DIGEST_STORE_TARGET") or "")
++        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,40}", slot):
++            raise ValueError("candidate_store_identity_missing")
++        key = f"{identity['platform_id']}/{start.date().isoformat()}/{slot}"
++        version, previous = state_store.read(f"candidate_state/{key}")
++        if not previous and store.read(key)[1] is not None:
++            raise ValueError("notification_candidate_history_unknown")
++        if previous:
++            if previous.get("notification_scope_key") != _hash(identity):
++                raise ValueError("notification_candidate_scope_conflict")
++            if previous.get("notification_source_runs"):
++                raise ValueError("notification_idle_contradicts_runs")
++        payload = {"schema_version": "qsl.digest_candidates.v1", "notification_scope_key": _hash(identity),
++                   "notification_events": {}, "notification_source_runs": {}, "notification_conflicts": [],
++                   "runs": [{**identity, "business_day": start.date().isoformat(), "actually_ran": False,
++                             "scheduled_idle": True, "status": "ok", "evidence_provenance": "candidates"}]}
++        if payload != previous and not state_store.compare_and_set(f"candidate_state/{key}", version, payload):
++            raise CandidatePersistenceError("notification_candidate_concurrent_update")
++        _export_projection(store, state_store, key, payload)
++    return {"status": "projected", "uploaded": True, "runs": count}
+diff --git a/notifications/unified_store.py b/notifications/unified_store.py
+new file mode 100644
+index 0000000..9715e7c
+--- /dev/null
++++ b/notifications/unified_store.py
+@@ -0,0 +1,58 @@
++"""Private notification storage, separate from all execution state.
++
++Conditional writes are single attempts. An uncertain transport/storage result
++must be reconciled from its persisted marker, never retried as a fresh send.
++"""
++from __future__ import annotations
++
++import json
++import re
++
++
++def validate_prefix(value: str) -> str:
++    value = str(value or "").rstrip("/")
++    if not re.fullmatch(r"gs://[a-z0-9][a-z0-9._-]+/[^\s?#*]+", value):
++        raise ValueError("notification_store_configuration_missing")
++    return value
++
++
++class GCSNotificationStore:
++    def __init__(self, prefix: str, *, client=None):
++        self.prefix = validate_prefix(prefix)
++        if client is None:
++            from google.cloud import storage
++            client = storage.Client()
++        self.client = client
++
++    def _blob(self, key):
++        from google.cloud import storage
++        if not re.fullmatch(r"[a-zA-Z0-9_./-]+", key) or ".." in key:
++            raise ValueError("notification_store_key_invalid")
++        return storage.Blob.from_string(f"{self.prefix}/{key}.json", client=self.client)
++
++    def read(self, key):
++        from google.api_core.exceptions import NotFound
++        blob = self._blob(key)
++        try:
++            blob.reload(retry=None, timeout=30)
++        except NotFound:
++            return None, None
++        generation = int(blob.generation)
++        # Disappearance/change after metadata was observed is incomplete
++        # history, not a new absent marker authorizing a fresh send.
++        raw = blob.download_as_bytes(if_generation_match=generation, retry=None, timeout=30)
++        value = json.loads(raw)
++        if not isinstance(value, dict):
++            raise ValueError("notification_marker_invalid")
++        return generation, value
++
++    def compare_and_set(self, key, expected_generation, value):
++        from google.api_core.exceptions import PreconditionFailed
++        blob = self._blob(key)
++        try:
++            blob.upload_from_string(json.dumps(value, allow_nan=False, sort_keys=True),
++                content_type="application/json", if_generation_match=expected_generation or 0,
++                retry=None, timeout=30)
++        except PreconditionFailed:
++            return False
++        return True
+diff --git a/scripts/emit_unified_digest_candidates.py b/scripts/emit_unified_digest_candidates.py
+new file mode 100644
+index 0000000..f24b14b
+--- /dev/null
++++ b/scripts/emit_unified_digest_candidates.py
+@@ -0,0 +1,14 @@
++"""Project existing private reports; no service or broker invocation."""
++from __future__ import annotations
++import sys
++from pathlib import Path
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++if __name__ == "__main__":
++    from notifications.unified import emit_archived
++    import os
++    import json
++    try:
++        print(json.dumps(emit_archived(os.environ), sort_keys=True))
++    except Exception:
++        print(json.dumps({"status": "blocked", "uploaded": False, "reason": "candidate_projection_failed"}))
++        raise SystemExit(1)
+diff --git a/scripts/execution_report_heartbeat.py b/scripts/execution_report_heartbeat.py
+index 80f0cea..9df36b3 100644
+--- a/scripts/execution_report_heartbeat.py
++++ b/scripts/execution_report_heartbeat.py
+@@ -16,0 +17,2 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
++from notifications import unified as unified_notifications
++
+@@ -1159,10 +1161,28 @@ def _localized_heartbeat_detail(detail: str) -> str:
+-def _notify_normal_heartbeat(name: str, detail: str) -> None:
+-    if not _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
+-        return
+-    message = format_operational_heartbeat_status(
+-        locale=_notification_locale(),
+-        name=name,
+-        detail=_localized_heartbeat_detail(detail),
+-    )
+-    if not _send_telegram(message):
+-        print("Execution report heartbeat normal-summary notification was not acknowledged", file=sys.stderr)
++def _notify_normal_heartbeat(name: str, detail: str, *, observed_at=None, checked_at=None, observed_report=None) -> None:
++    # Successful no-trade runs notify in run_strategy, using that cycle's broker
++    # snapshot. Scheduled scans retain alerts but never duplicate cycle success.
++    if observed_at is not None:
++        try:
++            unified_notifications.heartbeat_observation(now=checked_at, recovery_at=observed_at, report=observed_report)
++        except Exception:
++            message = ("⚠️ 每日摘要记录未确认；请检查运行记录和摘要存储。" if unified_notifications.coverage_locale() == "zh" else
++                       "⚠️ Daily digest evidence is unconfirmed; check the run and digest storage.")
++            _send_telegram(message)
++            raise
++    if _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
++        print(f"Execution report success notification skipped for {name}: cycle notifications belong to the runtime; scanner is alerts-only")
++
++
++def _notify_heartbeat_alert(message, *, now, kind, inspected_count=0):
++    if not unified_notifications.enabled():
++        return _send_telegram(message)
++    locale = _notification_locale()
++    issue = (_notice("heartbeat_no_recent_report", lookback_hours=os.environ.get("RUNTIME_HEARTBEAT_LOOKBACK_HOURS") or "36")
++             if kind == "receipt_missing" else _notice("heartbeat_no_acceptable_report", count=inspected_count))
++    # Keep raw diagnostics in the existing logs; use the shared localized
++    # template without private target names, archive URIs or mixed raw reasons.
++    compact = format_operational_alert(locale=locale, alert_type="execution_report_heartbeat",
++        name="Execution receipts" if locale == "en" else "执行回执", context={}, issues=[issue])
++    return unified_notifications.dispatch_immediate(lambda: _send_telegram(compact[:3900]),
++        kind=kind, incident="execution_receipt", occurred_at=now,
++        run_id=os.environ.get("GITHUB_RUN_ID"), actually_ran=False)
+@@ -1222 +1242 @@ def main(now: dt.datetime | None = None) -> int:
+-        _send_telegram(message)
++        _notify_heartbeat_alert(message, now=now, kind="receipt_unacceptable")
+@@ -1322,0 +1343,2 @@ def main(now: dt.datetime | None = None) -> int:
++    notification_recovery_proofs = {}
++    notification_recovery_reports = {}
+@@ -1346,0 +1369,10 @@ def main(now: dt.datetime | None = None) -> int:
++            if unified_notifications.enabled():
++                try:
++                    unified_notifications.target_binding(report=payload)
++                    # Object upload time alone cannot prove a new execution.
++                    proof = unified_notifications._stamp(payload.get("finished_at") or payload.get("started_at"))
++                    if proof <= now:
++                        notification_recovery_proofs[uri] = proof
++                        notification_recovery_reports[uri] = payload
++                except (ValueError, TypeError):
++                    print("notification_receipt_recovery_proof_unknown", flush=True)
+@@ -1366 +1398,10 @@ def main(now: dt.datetime | None = None) -> int:
+-            _notify_normal_heartbeat(name, summary_details)
++            if unified_notifications.enabled():
++                uris = [accepted_by_service[key][0] for key in required_keys]
++                if any(uri not in notification_recovery_proofs for uri in uris):
++                    raise ValueError("notification_receipt_binding_or_time_unknown")
++                proof = min(notification_recovery_proofs[uri] for uri in uris)
++                for uri in uris:
++                    _notify_normal_heartbeat(name, summary_details, observed_at=proof, checked_at=now,
++                        observed_report=notification_recovery_reports[uri])
++            else:
++                _notify_normal_heartbeat(name, summary_details)
+@@ -1373 +1414,8 @@ def main(now: dt.datetime | None = None) -> int:
+-        _notify_normal_heartbeat(name, f"{activity}@{updated.isoformat()}")
++        if unified_notifications.enabled():
++            if uri not in notification_recovery_proofs:
++                raise ValueError("notification_receipt_binding_or_time_unknown")
++            _notify_normal_heartbeat(name, f"{activity}@{updated.isoformat()}",
++                observed_at=notification_recovery_proofs[uri], checked_at=now,
++                observed_report=notification_recovery_reports[uri])
++        else:
++            _notify_normal_heartbeat(name, f"{activity}@{updated.isoformat()}")
+@@ -1416 +1464,3 @@ def main(now: dt.datetime | None = None) -> int:
+-    _send_telegram(message[:3900])
++    _notify_heartbeat_alert(message[:3900], now=now,
++        kind="receipt_missing" if not sorted_objects else "receipt_unacceptable",
++        inspected_count=min(len(sorted_objects), max_reports))
