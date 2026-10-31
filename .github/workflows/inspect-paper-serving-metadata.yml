@@ -2,6 +2,15 @@ name: Inspect PAPER Serving Metadata
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Read image installation metadata, or only existing source-chain records without executing an image.
+        required: true
+        type: choice
+        default: serving-image
+        options:
+          - serving-image
+          - source-chain
 
 permissions:
   contents: read
@@ -22,6 +31,7 @@ jobs:
     env:
       GCP_PROJECT_ID: longbridgequant
       WORKFLOW_TARGET: PAPER
+      INSPECTION_MODE: ${{ inputs.mode }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
       EXPECTED_RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
@@ -55,4 +65,10 @@ jobs:
         with:
           project_id: longbridgequant
       - name: Read serving metadata without invoking the service
-        run: uv run --no-sync python -m scripts.inspect_paper_serving_metadata
+        run: |
+          set -euo pipefail
+          case "$INSPECTION_MODE" in
+            serving-image) uv run --no-sync python -m scripts.inspect_paper_serving_metadata ;;
+            source-chain) uv run --no-sync python -m scripts.inspect_paper_serving_metadata --source-chain ;;
+            *) exit 2 ;;
+          esac

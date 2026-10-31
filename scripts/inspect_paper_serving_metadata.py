@@ -10,9 +10,10 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from scripts.verify_deployed_runtime_target_admission import (
     _container_env,
@@ -157,6 +158,139 @@ def target_projection(payload, *, service, expected):
             "independent_approval_verified": False}
 
 
+def _run_locator(value):
+    return value if isinstance(value, str) and re.fullmatch(r"[1-9][0-9]{0,19}", value) else None
+
+
+def _optional_read(args, load):
+    try:
+        return load(args), None
+    except ObservationError as error:
+        return None, str(error) if str(error) in {"external_read_denied", "external_read_unavailable"} else "external_read_unavailable"
+
+
+def registry_projection(raw):
+    """Observe provider record shape; do not attest a builder or signature."""
+    if not isinstance(raw, dict):
+        raise ObservationError("registry_metadata_invalid")
+    result = {}
+    for alias, wrapper, field in (("provenance", "provenance_summary", "provenance"),
+                                   ("build_details", "build_details_summary", "build_details")):
+        summary = raw.get(wrapper)
+        rows = summary.get(field) if isinstance(summary, dict) else None
+        valid = isinstance(rows, list) and all(isinstance(row, dict) for row in rows)
+        result[alias + "_shape_valid"] = valid
+        result[alias + "_present"] = bool(rows) if valid else None
+    result.update(signature_verified=False, subject_source_builder_verified=False)
+    return result
+
+
+def audit_projection(raw, *, name, digest, source):
+    """Project bounded service events without actor/resource/account values."""
+    if not isinstance(raw, list):
+        raise ObservationError("audit_metadata_invalid")
+    methods = {"google.cloud.run.v1.Services.ReplaceService", "google.cloud.run.v1.Services.UpdateService",
+               "google.cloud.run.v1.Services.CreateService", "google.cloud.run.v2.Services.UpdateService",
+               "google.cloud.run.v2.Services.CreateService"}
+    records = []
+    for entry in raw[:50]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("protoPayload"), dict):
+            raise ObservationError("audit_metadata_invalid")
+        body = entry["protoPayload"]
+        request = body.get("request") or {}
+        if not isinstance(request, dict):
+            raise ObservationError("audit_metadata_invalid")
+        service = request.get("service", request)
+        spec = service.get("spec", {}) if isinstance(service, dict) else {}
+        template = spec.get("template", {}) if isinstance(spec, dict) else {}
+        metadata = template.get("metadata", {}) if isinstance(template, dict) else {}
+        source_label = sha((metadata.get("labels") or {}).get("commit-sha")) if isinstance(metadata, dict) else None
+        revision_name = metadata.get("name") if isinstance(metadata, dict) else None
+        containers = template.get("spec", {}).get("containers") if isinstance(template, dict) else None
+        image = containers[0].get("image") if isinstance(containers, list) and len(containers) == 1 and isinstance(containers[0], dict) else None
+        stamp = entry.get("timestamp")
+        try:
+            stamp = datetime.fromisoformat(stamp.replace("Z", "+00:00")).astimezone(timezone.utc).isoformat()
+        except (ValueError, AttributeError, TypeError):
+            stamp = None
+        code = (body.get("status") or {}).get("code")
+        records.append({"timestamp": stamp,
+            "method": body.get("methodName") if body.get("methodName") in methods else "other_cloud_run_admin_method",
+            "status_code": code if type(code) is int else None,
+            "request_source_commit": source_label,
+            "source_equals_revision_label": nullable_equal(source_label, source),
+            "request_revision_equals_observed": None if not isinstance(revision_name, str) else revision_name == name,
+            "request_image_equals_observed_digest": None if not isinstance(image, str) or "@sha256:" not in image else image == digest})
+    return {"records_returned": len(raw), "record_limit": 50, "truncated": len(raw) > 50,
+            "records": records, "all_history_verified": False,
+            "original_approval_verified": False}
+
+
+def observe_source_chain(*, env=os.environ, load=read_json):
+    """Read existing service/revision, registry and creation-window audit data only."""
+    project, region, service = (env.get(k, "") for k in ("GCP_PROJECT_ID", "CLOUD_RUN_REGION", "CLOUD_RUN_SERVICE"))
+    if env.get("WORKFLOW_TARGET") != "PAPER" or not all(re.fullmatch(r"[a-z][a-z0-9-]{0,62}", x) for x in (project, region, service)):
+        raise ObservationError("configuration_unavailable")
+    service_cmd = ["gcloud", "run", "services", "describe", service, "--project=" + project, "--region=" + region, "--format=json"]
+    started = datetime.now(timezone.utc).isoformat()
+    before = load(service_cmd)
+    if before.get("metadata", {}).get("name") != service:
+        raise ObservationError("service_identity_invalid")
+    _require_paper_target_identity(service=service, service_json=before)
+    verify_service(service=service, service_json=before)
+    rows = traffic_rows(before)
+    result = {"schema": SCHEMA, "mode": "source-chain", "workflow_sha": sha(env.get("GITHUB_SHA")),
+              "observed_started_at": started, "positive_traffic_revision_count": len(rows), "revisions": [],
+              "image_execution_performed": False, "broker_invoked": False, "service_invoked": False,
+              "business_writes": False, "resource_identifiers_disclosed": False, "image_digest_disclosed": False,
+              "independent_approval_verified": False}
+    for ordinal, (name, percent) in enumerate(rows, 1):
+        revision_cmd = ["gcloud", "run", "revisions", "describe", name, "--project=" + project, "--region=" + region, "--format=json"]
+        revision = load(revision_cmd)
+        metadata = revision.get("metadata", {})
+        if metadata.get("name") != name or not name.startswith(service + "-"):
+            raise ObservationError("revision_identity_invalid")
+        _require_paper_target_identity(service=service, service_json={"spec": {"template": {"spec": revision.get("spec", {})}}})
+        digest = revision.get("status", {}).get("imageDigest")
+        if not isinstance(digest, str) or not re.fullmatch(r"[a-z0-9-]+-docker\.pkg\.dev/[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}", digest):
+            raise ObservationError("immutable_image_unavailable")
+        labels = metadata.get("labels") or {}
+        source = sha(labels.get("commit-sha"))
+        row = {"ordinal": ordinal, "traffic_percent": percent, "revision_source_commit": source,
+               "reported_github_run_id": _run_locator(labels.get("github-run-id")),
+               "overlay_source_commit": sha(labels.get("qsl-overlay-commit")),
+               "image_source_kind": "notification-overlay" if labels.get("qsl-image-source-kind") == "notification-overlay" else None}
+        registry, error = _optional_read(["gcloud", "artifacts", "docker", "images", "describe", digest,
+            "--project=" + project, "--show-provenance", "--show-build-details", "--format=json"], load)
+        try:
+            row["registry"] = {"read_status": error} if error else {"read_status": "read", **registry_projection(registry)}
+        except ObservationError:
+            row["registry"] = {"read_status": "registry_metadata_invalid"}
+        try:
+            created = datetime.fromisoformat(metadata["creationTimestamp"].replace("Z", "+00:00"))
+            if created.tzinfo is None:
+                raise ValueError
+            start, end = created - timedelta(minutes=15), created + timedelta(minutes=15)
+            resources = ["namespaces/" + project + "/services/" + service,
+                         "projects/" + project + "/locations/" + region + "/services/" + service]
+            query = ('protoPayload.serviceName="run.googleapis.com" AND ('
+                + ' OR '.join('protoPayload.resourceName=' + json.dumps(r) for r in resources)
+                + ') AND timestamp>=' + json.dumps(start.isoformat()) + ' AND timestamp<' + json.dumps(end.isoformat()))
+            audit, error = _optional_read(["gcloud", "logging", "read", query, "--project=" + project,
+                "--order=asc", "--limit=51", "--format=json"], load)
+            row["creation_window_audit"] = {"start_utc": start.isoformat(), "end_utc": end.isoformat(),
+                **({"read_status": error} if error else {"read_status": "read", **audit_projection(audit, name=name, digest=digest, source=source)})}
+        except (KeyError, ValueError, TypeError):
+            row["creation_window_audit"] = {"read_status": "creation_time_or_audit_shape_unavailable"}
+        if load(revision_cmd) != revision:
+            raise ObservationError("revision_changed_during_observation")
+        result["revisions"].append(row)
+    if load(service_cmd) != before:
+        raise ObservationError("service_changed_during_observation")
+    result.update(status="observed", service_stable=True, observed_finished_at=datetime.now(timezone.utc).isoformat())
+    return result
+
+
 def observe(*, env=os.environ, run=command, load=read_json):
     started = datetime.now(timezone.utc).isoformat()
     project, region, service = (env.get(k, "") for k in ("GCP_PROJECT_ID", "CLOUD_RUN_REGION", "CLOUD_RUN_SERVICE"))
@@ -234,13 +368,17 @@ def observe(*, env=os.environ, run=command, load=read_json):
     return result
 
 
-def main():
+def main(argv=None):
     try:
-        result = observe()
+        args = list(sys.argv[1:] if argv is None else argv)
+        if args not in ([], ["--source-chain"]):
+            raise ObservationError("arguments_invalid")
+        result = observe_source_chain() if args else observe()
     except Exception as exc:
         reasons = {"configuration_unavailable", "traffic_unavailable", "service_identity_invalid", "revision_identity_invalid",
                    "image_identity_invalid", "immutable_image_unavailable", "image_readback_mismatch", "image_probe_invalid",
-                   "external_read_unavailable", "external_read_denied", "service_changed_during_observation", "revision_changed_during_observation"}
+                   "external_read_unavailable", "external_read_denied", "service_changed_during_observation", "revision_changed_during_observation",
+                   "arguments_invalid", "registry_metadata_invalid", "audit_metadata_invalid"}
         result = {"schema": SCHEMA, "status": "unknown", "reason": str(exc) if isinstance(exc, ObservationError) and str(exc) in reasons else "observation_unavailable"}
     print(json.dumps(result, sort_keys=True))
     return 0 if result["status"] == "observed" else 1
