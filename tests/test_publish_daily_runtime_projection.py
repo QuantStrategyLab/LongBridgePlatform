@@ -1332,7 +1332,7 @@ def test_workflow_adds_a_paper_projection_after_auth_with_existing_sync_token() 
     heartbeat_step = workflow.index("name: Check recent execution report")
     projection = workflow.index("name: Publish daily runtime projection")
     assert heartbeat_step < projection
-    assert "uv run --no-sync python scripts/execution_report_heartbeat.py" in workflow
+    assert "uv run --no-sync python scripts/with_heartbeat_digest_binding.py heartbeat" in workflow
     assert "uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-paper" in workflow
     step = workflow.split("name: Publish daily runtime projection", 1)[1].split("\n      - ", 1)[0]
     assert "matrix.target.label == 'PAPER'" in step
