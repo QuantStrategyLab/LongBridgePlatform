@@ -35,8 +35,11 @@ callers can supply handlers to
 
 ## Decision: retain the compatibility bootstrap
 
-**Status:** preparatory extraction. Plain `main` imports still initialize the
-runtime. Full import isolation is pending an owner-approved entry point change.
+**Status:** entry point migration is pending offline replay equivalence. The
+owner's decision is to retain `main:app` and the eager compatibility bootstrap
+until replay demonstrates equivalent behavior for the supported service and CLI
+launch contracts. The proposed `main:initialize_runtime()` migration remains
+pending; successful preparatory characterization does not satisfy that condition.
 
 The locked Gunicorn version is 26.0.0. Its
 [`import_app` resolver](https://github.com/benoitc/gunicorn/blob/26.0.0/gunicorn/util.py)
@@ -58,9 +61,10 @@ For these reasons, this extraction keeps the existing `main:app` selector and
 the eager compatibility call. It does not add a lazy application export,
 change exception handling, or change the container command.
 
-## Owner decision needed for full import isolation
+## Pending migration and replay acceptance
 
-The next change must be reviewed as one coordinated change:
+Any future production migration must be reviewed as one coordinated change after
+the replay condition is satisfied:
 
 1. Change only the final application selector in the Docker command from
    `main:app` to `main:initialize_runtime()`; preserve all Gunicorn options.
@@ -76,9 +80,47 @@ factory-call handling also distinguishes an internal `TypeError` from an
 invalid factory argument list. The exact locked resolver has been exercised
 offline for these cases.
 
-The owner must authorize the production entry point change before this next
-step. No deployment or dependency update is part of the preparatory extraction.
-Rollback of the eventual isolation change must restore both the `main:app`
+The current draft retains the selector and compatibility call. Offline replay
+must bind its baseline and candidate to the exact source revisions, launcher
+arguments, Python and Gunicorn versions, dependency identities, configuration
+fixtures and input versions used. Keep the production launcher and dependency
+configuration unchanged while preparing replay, and record each intended
+candidate launch difference. An older draft's Dockerfile is not a substitute for
+a current production baseline. Missing or mismatched identities leave acceptance
+pending.
+
+The existing `test_explicit_gunicorn_factory_reuses_import_bootstrap` test imports
+`main` while the eager compatibility call is still present. It verifies reuse of
+an initialized runtime. It does not exercise a cold module import followed by the
+factory call after removal of that bootstrap.
+
+Replay acceptance requires the following observations from both versions:
+
+| Area | Required comparison |
+| --- | --- |
+| Startup | Dependency and startup event order, settings and adapter lifetimes, startup receipts, route-registration order, and application availability before the first request. Repeat initialization after success must retain its established behavior. |
+| Failure paths | Configuration, dependency, adapter and route failures, including internal `AttributeError` and `TypeError`. Preserve propagated exception identity within each run; compare exception type, message, cause chain, failure stage and worker exit classification across runs using the exact Gunicorn resolver and worker failure contract. |
+| Partial initialization | State retained after each injected startup failure, repeated initialization and fresh-worker restart. A cold factory failure can leave `main` imported; a failed eager import removes the module. That difference must be evaluated rather than assumed equivalent. |
+| HTTP behavior | All 11 application route registrations, their methods, endpoint and handler identities, HEAD/OPTIONS/405 responses, callback arguments, health responses and headers, and unknown or paused outcomes. |
+| CLI behavior | Initialization timing and the host/port arguments used by `python main.py`, without opening a listening socket. |
+| Determinism and effects | Controlled clocks and fixed synthetic or approved frozen inputs. Compare captured output and effect intents. Broker, credential, notification, cloud, DNS and socket operations must be intercepted; any real external service I/O attempt invalidates the offline run. |
+
+Cold-import isolation deliberately changes bare-import side effects. Record that
+difference and the affected direct callers separately. Equivalence of supported
+service and CLI launches must not be described as equivalence of every import or
+direct-call behavior. Synthetic characterization establishes only its recorded
+cases; it is not proof of historical production replay. A replay report must
+identify its tested cases and unresolved coverage without converting missing
+observations into successful outcomes.
+
+Completing offline acceptance does not grant merge, deployment or operational
+authority. Drafts remain subject to automated checks, independent AI review and
+the applicable risk tier. The production entry point remains unchanged until
+the replay condition and normal operational approval are satisfied. If an active
+governance check requires `owner-approved`, only the repository owner may apply
+that label; agents must stop advancing that PR, keep it as a draft and list it
+for owner approval.
+Rollback of an eventual isolation change must restore both the `main:app`
 selector and the eager compatibility call together.
 
 ## Verification boundary
