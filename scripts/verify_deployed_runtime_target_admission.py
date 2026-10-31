@@ -249,16 +249,25 @@ def _serving_ues_revisions(
     return revisions
 
 
+_UES_PIN_PROFILES = frozenset({"soxl_soxx_trend_income", "russell_top50_leader_rotation"})
+
+
 def verify_ues_image_pin(
     *, service: str, project: str, region: str, service_json: Mapping[str, Any], admission: Mapping[str, object]
 ) -> None:
-    """Keep a configured account on its serving UES pin until the target approves a change."""
+    """Keep a configured account on its serving UES pin until the target approves a change.
+
+    An enabled target whose profile has no reviewed pin policy must be denied
+    rather than skipped: silently passing would let a new profile roll forward
+    without the pin discipline this check exists to enforce.
+    """
     if not admission["enabled"]:
         return
-    if admission["profile"] not in {
-        "soxl_soxx_trend_income", "russell_top50_leader_rotation"
-    }:
-        return
+    if admission["profile"] not in _UES_PIN_PROFILES:
+        raise AdmissionError(
+            f"{service}: no UES pin policy for the enabled profile",
+            reason="target_policy_invalid",
+        )
     candidate = _candidate_ues_revision()
     env = _container_env(service_json)
     target = json.loads(env.get("RUNTIME_TARGET_JSON") or env.get("QSL_RUNTIME_TARGET_JSON") or "{}")

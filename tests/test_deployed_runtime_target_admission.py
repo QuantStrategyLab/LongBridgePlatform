@@ -1589,3 +1589,47 @@ def test_notification_overlay_readback_requires_immutable_image_labels_and_full_
     with pytest.raises(admission.AdmissionError, match="overlay readback"):
         confirm(revision)
 
+
+def _ues_pin_service_payload(target: dict) -> dict:
+    return {"spec": {"template": {"spec": {"containers": [{"env": [
+        {"name": "RUNTIME_TARGET_JSON", "value": json.dumps(target)},
+    ]}]}}}}
+
+
+def test_ues_pin_policy_rejects_enabled_profile_without_reviewed_policy():
+    with pytest.raises(admission.AdmissionError) as exc:
+        admission.verify_ues_image_pin(
+            service="hk-service", project="synthetic-project", region="synthetic-region",
+            service_json=_ues_pin_service_payload({}),
+            admission={"enabled": True, "profile": "tqqq_growth_income"},
+        )
+    assert exc.value.diagnostic_reason == "target_policy_invalid"
+
+
+def test_ues_pin_policy_skips_disabled_profile_without_reviewed_policy():
+    admission.verify_ues_image_pin(
+        service="hk-service", project="synthetic-project", region="synthetic-region",
+        service_json=_ues_pin_service_payload({}),
+        admission={"enabled": False, "profile": "tqqq_growth_income"},
+    )
+
+
+def test_ues_pin_policy_accepts_listed_profile_with_matching_binding(monkeypatch):
+    candidate = "a" * 40
+    monkeypatch.setattr(admission, "_candidate_ues_revision", lambda: candidate)
+    admission.verify_ues_image_pin(
+        service="paper-service", project="synthetic-project", region="synthetic-region",
+        service_json=_ues_pin_service_payload({"strategy_release": {"strategy_revision": candidate}}),
+        admission={"enabled": True, "profile": "russell_top50_leader_rotation"},
+    )
+
+
+def test_ues_pin_policy_rejects_listed_profile_with_diverging_binding(monkeypatch):
+    monkeypatch.setattr(admission, "_candidate_ues_revision", lambda: "a" * 40)
+    with pytest.raises(admission.AdmissionError, match="does not match approved target binding"):
+        admission.verify_ues_image_pin(
+            service="paper-service", project="synthetic-project", region="synthetic-region",
+            service_json=_ues_pin_service_payload({"strategy_release": {"strategy_revision": "b" * 40}}),
+            admission={"enabled": True, "profile": "russell_top50_leader_rotation"},
+        )
+
