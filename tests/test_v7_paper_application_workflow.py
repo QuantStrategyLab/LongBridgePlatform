@@ -18,7 +18,8 @@ def test_lifecycle_workflow_uses_the_v7_profile_constant_by_value() -> None:
 
 def test_v7_profile_name_is_not_duplicated_in_python_sources() -> None:
     literal = V7_LONGTERM_COMPOUNDING_PROFILE
-    excluded = {".git", ".venv", "tests", "release-overlays", "research"}
+    # external/ holds the vendored upstream package that owns the constant.
+    excluded = {".git", ".venv", "external", "tests", "release-overlays", "research"}
     offenders = [
         str(path.relative_to(ROOT))
         for path in ROOT.rglob("*.py")
