@@ -23,7 +23,7 @@ Guard / Lifecycle / Heartbeat / Deploy（`sync-cloud-run-env.yml`）四个 workf
 | `id` | 目标唯一 id（如 `paper` / `hk` / `sg`） |
 | `mode` | 仅允许 `live` / `paper` / `shadow`（语义不得混淆） |
 | `region` | Cloud Run region |
-| `strategy_profile` | 预期策略 profile 名 |
+| `strategy_profile` | 预期策略 profile 名；必须与 Environment `RUNTIME_TARGET_JSON.strategy_profile` 一致，由 Runtime Guard 校验 |
 | `service` | Cloud Run 服务名（全局唯一） |
 | `environment` | GitHub Environment 名（全局唯一） |
 | `secret_ref` | Secret Manager **名称**引用，不是密钥值 |
@@ -53,10 +53,38 @@ Guard / Lifecycle / Heartbeat / Deploy（`sync-cloud-run-env.yml`）四个 workf
 | id | environment | service | region | mode | strategy_profile（公开声明） |
 | --- | --- | --- | --- | --- | --- |
 | `paper` | `longbridge-paper` | `longbridge-quant-paper-service` | `asia-east1` | `paper` | `russell_top50_leader_rotation` |
-| `hk` | `longbridge-hk` | `longbridge-quant-hk-service` | `asia-east2` | `live` | `hk_global_etf_tactical_rotation` |
+| `hk` | `longbridge-hk` | `longbridge-quant-hk-service` | `asia-east2` | `live` | `tqqq_growth_income` |
 | `sg` | `longbridge-sg` | `longbridge-quant-sg-service` | `asia-southeast1` | `live` | `soxl_soxx_trend_income` |
 
 示例中三个目标的 `enabled` 均为 `false`。这表示公开清单的安全默认值，**不**覆盖 Environment 里现有的启停状态，也不授权交易。parity 测试锁定上述三个目标的 matrix 字段与历史硬编码一致。
+
+## 漂移防护（manifest ↔ Environment）
+
+结构校验只能证明 manifest 合法，不能证明它**真的**描述当前部署。`strategy_profile` 这类可变事实同时存在于公开 manifest 和 Environment `RUNTIME_TARGET_JSON` / `STRATEGY_PROFILE`，而且四个 matrix 都不消费它，手改一处、漏改另一处不会报错：HK 的 manifest 从 2026-09-20 引入起就写成 `hk_global_etf_tactical_rotation`，实际部署从 2026-07-30 起一直是 `tqqq_growth_income`。
+
+`Runtime Guard` 的每个目标 job 在认证云账号前运行：
+
+```bash
+uv run --no-sync python scripts/check_runtime_target_manifest_drift.py --target-id "$MANIFEST_TARGET_ID"
+```
+
+它把 manifest 目标与当前 Environment 的 `RUNTIME_TARGET_JSON`（`platform_id` / `strategy_profile` / `account_scope` / `service_name`）以及 `STRATEGY_PROFILE` 对照，不一致时以固定原因码失败，例如 `strategy_profile_mismatch`、`strategy_profile_conflict`、`account_scope_mismatch`、`service_name_mismatch`。只读、无云调用、不打印整份 target JSON。
+
+不纳入比对的字段：
+
+- `enabled`：按设计只是新增目标的安全默认值，启停只看 Environment `RUNTIME_TARGET_ENABLED`。
+- `mode`：账户类别（`live` 实盘账户 / `paper` 模拟账户），由部署准入和账户快照合同就地和 Cloud Run 配置核对；HK 是实盘账户但 `dry_run_only=true`，两者并不矛盾。
+- `region`：由 Cloud Run 读回路径校验，不依赖 manifest。
+
+本地复核：
+
+```bash
+RUNTIME_TARGET_JSON='{"platform_id":"longbridge","strategy_profile":"tqqq_growth_income","account_scope":"HK","service_name":"longbridge-quant-hk-service"}' \
+STRATEGY_PROFILE=tqqq_growth_income \
+uv run --no-sync python scripts/check_runtime_target_manifest_drift.py --target-id hk
+```
+
+发现漂移时先确认部署事实，再在 PR 里更新 manifest；manifest 永远不反向覆盖生产配置。
 
 ## 动态 matrix
 
@@ -112,6 +140,8 @@ uv run --no-sync python -m pytest -q tests/test_runtime_target_manifest.py tests
 uv run --no-sync python scripts/validate_runtime_target_manifest.py
 uv run --no-sync python scripts/validate_runtime_target_manifest.py --json
 uv run --no-sync python scripts/render_runtime_target_matrix.py --profile guard
-uv run --no-sync python -m pytest -q tests/test_runtime_target_manifest.py tests/test_runtime_target_matrix.py tests/test_runtime_monitor_workflows.py
+# 需要目标 Environment 的 RUNTIME_TARGET_JSON / STRATEGY_PROFILE，见上节「漂移防护」
+uv run --no-sync python scripts/check_runtime_target_manifest_drift.py --target-id hk
+uv run --no-sync python -m pytest -q tests/test_runtime_target_manifest.py tests/test_runtime_target_manifest_drift.py tests/test_runtime_target_matrix.py tests/test_runtime_monitor_workflows.py
 bash tests/test_sync_cloud_run_env_workflow.sh
 ```
