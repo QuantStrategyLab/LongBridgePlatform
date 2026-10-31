@@ -55,3 +55,39 @@ The real comparison needs read access to those GitHub upstream trees. No-change
 pins do not fetch upstream. Output contains paths and commit identifiers only,
 not source patches or credentials. Fetch and diff output is bounded to 2 MB and
 the rendered summary to 900 KB; exceeding either makes the report INCOMPLETE.
+
+## Broker snapshot compatibility regression
+
+`tests/test_candidate_dependency_compatibility.py` exercises synthetic SDK-shaped
+position rows through `fetch_strategy_account_state` and the LongBridge managed
+portfolio adapter. It checks that negative quantity remains signed, same-symbol
+rows from separate channels are aggregated by root symbol, and the resulting
+managed snapshot lacks cost and account details even when supplied on a row.
+Its portfolio PnL is unknown without cost details.
+
+Separate tests start from synthetic portfolio snapshots and exercise the UES
+cash-only normalization, QPK reconstruction and QPK portfolio diagnostics. For
+the candidate QPK `350dd38ece0952beef096893a7dcf8ae3871609a` and UES
+`8412d8338879f335ef8830678c2733e02e53e7c7`, they check signed short PnL,
+cost preservation, duplicate-symbol rejection at the reconstruction boundary,
+and unknown portfolio PnL with incomplete or invalid costs. The duplicate
+rejection and cost preservation are properties of this synthetic snapshot
+round trip; they do not describe the broker-row aggregation path.
+
+Run this with the repository's frozen dependencies:
+
+```sh
+PYTHONPATH=. uv run --no-sync python -m pytest -q tests/test_candidate_dependency_compatibility.py
+```
+
+The observed serving QPK `03ab459d95c456e46315952932544cdd8e286510` and UES
+`4a3943883cd6b5bbfe32a559e56a91b40a81b7ce` are different exact revisions.
+A source-level offline comparison of the exercised modules found that the
+serving QPK reconstruction drops negative positions and cost details, does not
+reject duplicate-symbol reconstruction, and does not report cost coverage. The
+candidate contract is therefore not a compatibility assertion about the serving
+image. Both revisions' UES cash-only normalization module is the same blob.
+The local comparison loaded fixed-revision source modules, not full installed distributions;
+this test does not cover every UES strategy or execution path. It uses no real
+broker data, does not establish deployment or admission, and does not replace a
+review of the exact dependency combination and an authorized runtime acceptance.
