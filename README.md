@@ -99,7 +99,9 @@ Direct runtime profiles can usually run from market history or portfolio state. 
 
 ## Quick start
 
-`main.create_app()` builds an independent Flask application with the existing handlers. It reuses the runtime prepared by importing `main`; settings validation, adapter construction and startup logging retain their existing import-time lifecycle. The `main.app` WSGI export keeps its original construction and route contracts.
+`main.initialize_runtime()` prepares configuration, runtime adapters and routes, then returns the module's WSGI application. Repeated calls after successful startup return the same application without repeating initialization. A compatibility call still runs during `main` import, preserving the deployed `main:app` startup and failure behavior. Plain imports therefore still initialize the runtime; completing import isolation requires the coordinated entry point change described in [Runtime startup](docs/runtime-startup.md).
+
+`main.create_app()` builds an independent Flask application with the existing handlers over that prepared runtime. Each application has separate HTTP configuration and routes; settings and runtime adapters are shared.
 
 Tests or callers supplying their own handlers can use `application.http_app.create_http_app(import_name, handlers)` to assemble the HTTP layer without loading platform runtime modules.
 

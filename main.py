@@ -12,89 +12,12 @@ from datetime import datetime, timezone
 
 from flask import Flask, request
 
-import google.auth
-import requests
-from application.http_app import create_http_app, register_http_routes
-from application.monitor_dispatcher import dispatch_due_monitors, load_monitor_targets
-from application.startup_config import (
-    StartupConfigReceipt,
-    normalize_monitor_dispatch_targets,
-    normalize_plugin_mounts_strategy,
-    overlay_env,
-)
-from application.broker_reconciliation import (
-    account_snapshot_enabled,
-    collect_read_only_reconciliation_observations,
-    reconciliation_enabled,
-    run_read_only_account_snapshot,
-    run_read_only_broker_reconciliation,
-)
-from application.execution_receipt_adapter import (
-    attach_cycle_execution_receipt,
-    attach_terminal_fallback_execution_receipt,
-)
-from application.runtime_broker_adapters import build_runtime_broker_adapters
-from application.runtime_composer import build_runtime_composer
-from application.rebalance_service import run_strategy as run_rebalance_cycle
-from application.durable_execution_commands import (
-    resolve_paper_execution_command_consumer_enabled,
-)
-from application.paper_execution_command_consumer import (
-    consume_due_paper_execution_commands,
-)
-from application.runtime_strategy_adapters import build_runtime_strategy_adapters
-from application.longbridge_execution import submit_order
-from application import validation_cycle_observation
-from runtime_execution_policy import fractional_buy_execution_enabled, FRACTIONAL_BUY_QUANTITY_STEP
-from application.longbridge_portfolio import fetch_strategy_account_state
-from application.account_snapshot import (
-    begin_natural_cycle_history, cycle_history_observation, end_natural_cycle_history,
-    read_cycle_account_balance, read_cycle_stock_positions,
-)
-from scripts.record_daily_account_snapshot import record_projected_daily_account
-from entrypoints.cloud_run import is_market_open_now
-from runtime_execution_policy import dca_execution_unsupported_reason
-from runtime_config_support import load_platform_runtime_settings
-from notifications.telegram import build_signal_text, build_strategy_display_name, build_translator
-from notifications import unified as unified_notifications
-from quant_platform_kit.common.runtime_reports import (
-    append_runtime_report_error,
-    build_runtime_report_base,
-    finalize_runtime_report,
-    persist_runtime_report,
-)
-from quant_platform_kit.common.strategy_plugins import (
-    build_strategy_plugin_report_payload,
-    load_configured_strategy_plugin_signals,
-    parse_strategy_plugin_mounts,
-)
-from quant_platform_kit.notifications.strategy_plugin_alerts import (
-    StrategyPluginAlertStateSettings,
-    build_strategy_plugin_alert_context_label as build_alert_context_label,
-    publish_strategy_plugin_alerts as dispatch_strategy_plugin_alerts,
-)
-from quant_platform_kit.common.runtime_inputs import build_strategy_evaluation_inputs
-from runtime_logging import build_run_id, emit_runtime_log
-from quant_platform_kit.longbridge import (
-    build_contexts,
-    calculate_rotation_indicators,
-    estimate_max_purchase_quantity,
-    fetch_last_price,
-    fetch_order_status,
-    fetch_token_from_secret,
-    refresh_token_if_needed,
-)
-from strategy_runtime import load_strategy_runtime
-from decision_mapper import map_strategy_decision_to_plan
 
-app = Flask(__name__)
+_runtime_initialized = False
 
-# This collector is limited to documented LongPort read endpoints and is
-# independently fail-closed for incomplete account identity/order coverage.
-READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = collect_read_only_reconciliation_observations
 
 # ---------------------------------------------------------------------------
-# Config and constants (GCP project, Telegram, execution and strategy params)
+# Startup configuration helpers
 # ---------------------------------------------------------------------------
 def get_project_id():
     try:
@@ -102,13 +25,6 @@ def get_project_id():
         return project_id
     except Exception:
         return os.getenv("GOOGLE_CLOUD_PROJECT")
-
-RUNTIME_SETTINGS = load_platform_runtime_settings(project_id_resolver=get_project_id)
-PROJECT_ID = RUNTIME_SETTINGS.project_id
-SECRET_NAME = RUNTIME_SETTINGS.secret_name
-ACCOUNT_PREFIX = RUNTIME_SETTINGS.account_prefix
-STRATEGY_PROFILE = RUNTIME_SETTINGS.strategy_profile
-STRATEGY_DISPLAY_NAME = RUNTIME_SETTINGS.strategy_display_name
 
 
 def _normalize_plugin_mounts_strategy(raw_mounts_json: str | None) -> str | None:
@@ -149,50 +65,12 @@ def _adopt_startup_config(settings, env):
     return settings, overrides, receipt
 
 
-RUNTIME_SETTINGS, MONITOR_DISPATCH_ENV_OVERRIDES, STARTUP_CONFIG_RECEIPT = _adopt_startup_config(
-    RUNTIME_SETTINGS,
-    os.environ,
-)
-
-
 def _load_monitor_dispatch_targets():
     # No corrections: identical call to before. Corrections: read through an
     # explicit overlay instead of the previously mutated ``os.environ``.
     if not MONITOR_DISPATCH_ENV_OVERRIDES:
         return load_monitor_targets()
     return load_monitor_targets(overlay_env(os.environ, MONITOR_DISPATCH_ENV_OVERRIDES))
-
-
-ACCOUNT_REGION = RUNTIME_SETTINGS.account_region
-MARKET = RUNTIME_SETTINGS.market
-MARKET_CALENDAR = RUNTIME_SETTINGS.market_calendar
-MARKET_TIMEZONE = RUNTIME_SETTINGS.market_timezone
-SYMBOL_SUFFIX = RUNTIME_SETTINGS.symbol_suffix
-TRADING_CURRENCY = RUNTIME_SETTINGS.trading_currency
-NOTIFY_LANG = RUNTIME_SETTINGS.notify_lang
-TG_TOKEN = RUNTIME_SETTINGS.tg_token
-TG_CHAT_ID = RUNTIME_SETTINGS.tg_chat_id
-from quant_platform_kit.notifications.cycle_channel import resolve_cycle_channel_and_url
-
-_NOTIFICATION_CHANNEL, _NOTIFICATION_WEBHOOK_URL = resolve_cycle_channel_and_url(
-    explicit_channel=RUNTIME_SETTINGS.notification_channel,
-    telegram_token=TG_TOKEN,
-    telegram_chat_id=TG_CHAT_ID,
-    wecom_url=RUNTIME_SETTINGS.wecom_webhook_url,
-    dingtalk_url=RUNTIME_SETTINGS.dingtalk_webhook_url,
-    feishu_url=RUNTIME_SETTINGS.feishu_webhook_url,
-    serverchan_url=RUNTIME_SETTINGS.serverchan_webhook_url,
-)
-CASH_ONLY_EXECUTION = getattr(RUNTIME_SETTINGS, "cash_only_execution", True)
-STRATEGY_RUNTIME = load_strategy_runtime(
-    STRATEGY_PROFILE,
-    runtime_settings=RUNTIME_SETTINGS,
-    logger=lambda message: print(message, flush=True),
-)
-STRATEGY_RUNTIME_CONFIG = dict(STRATEGY_RUNTIME.merged_runtime_config)
-MANAGED_SYMBOLS = STRATEGY_RUNTIME.managed_symbols
-AVAILABLE_INPUTS = frozenset(STRATEGY_RUNTIME.runtime_adapter.available_inputs)
-BENCHMARK_SYMBOL = str(STRATEGY_RUNTIME_CONFIG.get("benchmark_symbol", "QQQ"))
 
 
 def _emit_v7_loaded_version_log() -> None:
@@ -235,30 +113,6 @@ def _emit_v7_loaded_version_log() -> None:
         )
 
 
-_emit_v7_loaded_version_log()
-SIGNAL_EFFECTIVE_AFTER_TRADING_DAYS = getattr(
-    getattr(STRATEGY_RUNTIME.runtime_adapter, "runtime_policy", None),
-    "signal_effective_after_trading_days",
-    None,
-)
-
-# Order pricing: limit order discount/premium relative to last price
-LIMIT_SELL_DISCOUNT = 0.995               # sell limit at 0.5% below last
-LIMIT_BUY_PREMIUM = 1.005                 # buy limit at 0.5% above last
-DEFAULT_LIMIT_BUY_PREMIUM_BY_SYMBOL = {"SOXL": 1.015, "TQQQ": 1.010}
-
-# Order monitoring: poll interval and max attempts for fill check
-ORDER_POLL_INTERVAL_SEC = 1
-ORDER_POLL_MAX_ATTEMPTS = 8
-
-# Token refresh: days before expiry to trigger refresh
-TOKEN_REFRESH_THRESHOLD_DAYS = 30
-DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
-DEFAULT_MIN_ORDER_NOTIONAL_USD = 100.0
-
-_FRACTIONAL_BUY_EXECUTION = fractional_buy_execution_enabled(STRATEGY_PROFILE)
-
-
 def _profile_submit_order(t_ctx, symbol, **kwargs):
     return submit_order(
         t_ctx,
@@ -276,9 +130,6 @@ def _profile_estimate_max_purchase_quantity(t_ctx, symbol, **kwargs):
         fractional_shares=_FRACTIONAL_BUY_EXECUTION,
         **kwargs,
     )
-
-SEPARATOR = "━━━━━━━━━━━━━━━━━━"
-COMPACT_ERROR_NOTIFICATION_MAX_CHARS = 3500
 
 
 def _load_limit_buy_premium_by_symbol(*env_names: str) -> dict[str, float]:
@@ -306,12 +157,6 @@ def _load_limit_buy_premium_by_symbol(*env_names: str) -> dict[str, float]:
             raise ValueError(f"Limit buy premium for {symbol_text} must be positive.")
         parsed[symbol_text] = premium_value
     return parsed
-
-
-LIMIT_BUY_PREMIUM_BY_SYMBOL = _load_limit_buy_premium_by_symbol(
-    "LONGBRIDGE_LIMIT_BUY_PREMIUM_BY_SYMBOL_JSON",
-    "LIMIT_BUY_PREMIUM_BY_SYMBOL_JSON",
-)
 
 
 def t(key, **kwargs):
@@ -502,66 +347,12 @@ def _build_notification_delivery_summary(delivery_events: list[dict]) -> dict:
     }
 
 
-signal_text = build_signal_text(t)
-strategy_display_name = build_strategy_display_name(t)(
-    STRATEGY_PROFILE,
-    fallback_name=STRATEGY_DISPLAY_NAME,
-    metadata=RUNTIME_SETTINGS.strategy_metadata,
-    locale=NOTIFY_LANG,
-)
-
-
 def log_position_snapshot(message):
     print(f"[{ACCOUNT_REGION}] {message}", flush=True)
 
 
 def log_runtime_warning(message):
     print(f"[{ACCOUNT_REGION}] [warning] {message}", flush=True)
-
-
-BROKER_ADAPTERS = build_runtime_broker_adapters(
-    strategy_symbols=tuple(MANAGED_SYMBOLS),
-    account_hash=ACCOUNT_PREFIX or ACCOUNT_REGION or "longbridge",
-    fetch_last_price_fn=fetch_last_price,
-    fetch_strategy_account_state_fn=lambda quote_context, trade_context: fetch_strategy_account_state(
-        quote_context,
-        trade_context,
-        list(MANAGED_SYMBOLS),
-        cash_currency=TRADING_CURRENCY,
-        position_log_fn=(
-            log_position_snapshot
-            if getattr(RUNTIME_SETTINGS, "debug_position_snapshot", False)
-            else None
-        ),
-        warning_log_fn=log_runtime_warning,
-    ),
-    submit_order_fn=_profile_submit_order,
-    symbol_suffix=SYMBOL_SUFFIX,
-    currency=TRADING_CURRENCY,
-    cash_only_execution=CASH_ONLY_EXECUTION,
-)
-STRATEGY_ADAPTERS = build_runtime_strategy_adapters(
-    strategy_runtime=STRATEGY_RUNTIME,
-    strategy_profile=STRATEGY_PROFILE,
-    strategy_runtime_config=STRATEGY_RUNTIME_CONFIG,
-    available_inputs=AVAILABLE_INPUTS,
-    benchmark_symbol=BENCHMARK_SYMBOL,
-    signal_text_fn=signal_text,
-    translator=t,
-    broker_adapters=BROKER_ADAPTERS,
-    calculate_rotation_indicators_fn=calculate_rotation_indicators,
-    build_strategy_evaluation_inputs_fn=build_strategy_evaluation_inputs,
-    map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan,
-    execution_policy={
-        "reserved_cash_floor_usd": getattr(RUNTIME_SETTINGS, "reserved_cash_floor_usd", 0.0),
-        "reserved_cash_ratio": getattr(RUNTIME_SETTINGS, "reserved_cash_ratio", 0.0),
-        "cash_only_execution": CASH_ONLY_EXECUTION,
-    },
-    execution_materials=getattr(STRATEGY_RUNTIME, "execution_materials", {}),
-    build_strategy_plugin_report_payload_fn=build_strategy_plugin_report_payload,
-    load_configured_strategy_plugin_signals_fn=load_configured_strategy_plugin_signals,
-    parse_strategy_plugin_mounts_fn=parse_strategy_plugin_mounts,
-)
 
 
 def _safe_haven_cash_substitute_threshold_usd() -> float:
@@ -1569,12 +1360,272 @@ def _http_handlers():
     }
 
 
+def initialize_runtime() -> Flask:
+    """Prepare the module runtime once and return its registered WSGI app.
+
+    The compatibility bootstrap below still calls this during import. Runtime
+    failures therefore remain at the existing Gunicorn and CLI import boundary.
+    """
+    global _runtime_initialized, google, requests, create_http_app, register_http_routes
+    global dispatch_due_monitors, load_monitor_targets, StartupConfigReceipt
+    global normalize_monitor_dispatch_targets, normalize_plugin_mounts_strategy, overlay_env
+    global account_snapshot_enabled, collect_read_only_reconciliation_observations
+    global reconciliation_enabled, run_read_only_account_snapshot
+    global run_read_only_broker_reconciliation, attach_cycle_execution_receipt
+    global attach_terminal_fallback_execution_receipt, build_runtime_broker_adapters
+    global build_runtime_composer, run_rebalance_cycle
+    global resolve_paper_execution_command_consumer_enabled, consume_due_paper_execution_commands
+    global build_runtime_strategy_adapters, submit_order, validation_cycle_observation
+    global fractional_buy_execution_enabled, FRACTIONAL_BUY_QUANTITY_STEP
+    global fetch_strategy_account_state, begin_natural_cycle_history, cycle_history_observation
+    global end_natural_cycle_history, read_cycle_account_balance, read_cycle_stock_positions
+    global record_projected_daily_account, is_market_open_now, dca_execution_unsupported_reason
+    global load_platform_runtime_settings, build_signal_text, build_strategy_display_name
+    global build_translator, unified_notifications, append_runtime_report_error
+    global build_runtime_report_base, finalize_runtime_report, persist_runtime_report
+    global build_strategy_plugin_report_payload, load_configured_strategy_plugin_signals
+    global parse_strategy_plugin_mounts, StrategyPluginAlertStateSettings, build_alert_context_label
+    global dispatch_strategy_plugin_alerts, build_strategy_evaluation_inputs, build_run_id
+    global emit_runtime_log, build_contexts, calculate_rotation_indicators
+    global estimate_max_purchase_quantity, fetch_last_price, fetch_order_status
+    global fetch_token_from_secret, refresh_token_if_needed, load_strategy_runtime
+    global map_strategy_decision_to_plan, app, READ_ONLY_BROKER_RECONCILIATION_COLLECTOR
+    global RUNTIME_SETTINGS, PROJECT_ID, SECRET_NAME, ACCOUNT_PREFIX, STRATEGY_PROFILE
+    global STRATEGY_DISPLAY_NAME, MONITOR_DISPATCH_ENV_OVERRIDES, STARTUP_CONFIG_RECEIPT
+    global ACCOUNT_REGION, MARKET, MARKET_CALENDAR, MARKET_TIMEZONE, SYMBOL_SUFFIX, TRADING_CURRENCY
+    global NOTIFY_LANG, TG_TOKEN, TG_CHAT_ID, resolve_cycle_channel_and_url, _NOTIFICATION_CHANNEL
+    global _NOTIFICATION_WEBHOOK_URL, CASH_ONLY_EXECUTION, STRATEGY_RUNTIME, STRATEGY_RUNTIME_CONFIG
+    global MANAGED_SYMBOLS, AVAILABLE_INPUTS, BENCHMARK_SYMBOL, SIGNAL_EFFECTIVE_AFTER_TRADING_DAYS
+    global LIMIT_SELL_DISCOUNT, LIMIT_BUY_PREMIUM, DEFAULT_LIMIT_BUY_PREMIUM_BY_SYMBOL
+    global ORDER_POLL_INTERVAL_SEC, ORDER_POLL_MAX_ATTEMPTS, TOKEN_REFRESH_THRESHOLD_DAYS
+    global DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD, DEFAULT_MIN_ORDER_NOTIONAL_USD
+    global _FRACTIONAL_BUY_EXECUTION, SEPARATOR, COMPACT_ERROR_NOTIFICATION_MAX_CHARS
+    global LIMIT_BUY_PREMIUM_BY_SYMBOL, signal_text, strategy_display_name, BROKER_ADAPTERS
+    global STRATEGY_ADAPTERS
+
+    if _runtime_initialized:
+        return app
+
+    import google.auth
+    import requests
+    from application.http_app import create_http_app, register_http_routes
+    from application.monitor_dispatcher import dispatch_due_monitors, load_monitor_targets
+    from application.startup_config import (
+        StartupConfigReceipt,
+        normalize_monitor_dispatch_targets,
+        normalize_plugin_mounts_strategy,
+        overlay_env,
+    )
+    from application.broker_reconciliation import (
+        account_snapshot_enabled,
+        collect_read_only_reconciliation_observations,
+        reconciliation_enabled,
+        run_read_only_account_snapshot,
+        run_read_only_broker_reconciliation,
+    )
+    from application.execution_receipt_adapter import (
+        attach_cycle_execution_receipt,
+        attach_terminal_fallback_execution_receipt,
+    )
+    from application.runtime_broker_adapters import build_runtime_broker_adapters
+    from application.runtime_composer import build_runtime_composer
+    from application.rebalance_service import run_strategy as run_rebalance_cycle
+    from application.durable_execution_commands import (
+        resolve_paper_execution_command_consumer_enabled,
+    )
+    from application.paper_execution_command_consumer import (
+        consume_due_paper_execution_commands,
+    )
+    from application.runtime_strategy_adapters import build_runtime_strategy_adapters
+    from application.longbridge_execution import submit_order
+    from application import validation_cycle_observation
+    from runtime_execution_policy import fractional_buy_execution_enabled, FRACTIONAL_BUY_QUANTITY_STEP
+    from application.longbridge_portfolio import fetch_strategy_account_state
+    from application.account_snapshot import (
+        begin_natural_cycle_history, cycle_history_observation, end_natural_cycle_history,
+        read_cycle_account_balance, read_cycle_stock_positions,
+    )
+    from scripts.record_daily_account_snapshot import record_projected_daily_account
+    from entrypoints.cloud_run import is_market_open_now
+    from runtime_execution_policy import dca_execution_unsupported_reason
+    from runtime_config_support import load_platform_runtime_settings
+    from notifications.telegram import build_signal_text, build_strategy_display_name, build_translator
+    from notifications import unified as unified_notifications
+    from quant_platform_kit.common.runtime_reports import (
+        append_runtime_report_error,
+        build_runtime_report_base,
+        finalize_runtime_report,
+        persist_runtime_report,
+    )
+    from quant_platform_kit.common.strategy_plugins import (
+        build_strategy_plugin_report_payload,
+        load_configured_strategy_plugin_signals,
+        parse_strategy_plugin_mounts,
+    )
+    from quant_platform_kit.notifications.strategy_plugin_alerts import (
+        StrategyPluginAlertStateSettings,
+        build_strategy_plugin_alert_context_label as build_alert_context_label,
+        publish_strategy_plugin_alerts as dispatch_strategy_plugin_alerts,
+    )
+    from quant_platform_kit.common.runtime_inputs import build_strategy_evaluation_inputs
+    from runtime_logging import build_run_id, emit_runtime_log
+    from quant_platform_kit.longbridge import (
+        build_contexts,
+        calculate_rotation_indicators,
+        estimate_max_purchase_quantity,
+        fetch_last_price,
+        fetch_order_status,
+        fetch_token_from_secret,
+        refresh_token_if_needed,
+    )
+    from strategy_runtime import load_strategy_runtime
+    from decision_mapper import map_strategy_decision_to_plan
+
+    app = Flask(__name__)
+
+    # This collector is limited to documented LongPort read endpoints and is
+    # independently fail-closed for incomplete account identity/order coverage.
+    READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = collect_read_only_reconciliation_observations
+
+    RUNTIME_SETTINGS = load_platform_runtime_settings(project_id_resolver=get_project_id)
+    PROJECT_ID = RUNTIME_SETTINGS.project_id
+    SECRET_NAME = RUNTIME_SETTINGS.secret_name
+    ACCOUNT_PREFIX = RUNTIME_SETTINGS.account_prefix
+    STRATEGY_PROFILE = RUNTIME_SETTINGS.strategy_profile
+    STRATEGY_DISPLAY_NAME = RUNTIME_SETTINGS.strategy_display_name
+
+    RUNTIME_SETTINGS, MONITOR_DISPATCH_ENV_OVERRIDES, STARTUP_CONFIG_RECEIPT = _adopt_startup_config(
+        RUNTIME_SETTINGS,
+        os.environ,
+    )
+
+    ACCOUNT_REGION = RUNTIME_SETTINGS.account_region
+    MARKET = RUNTIME_SETTINGS.market
+    MARKET_CALENDAR = RUNTIME_SETTINGS.market_calendar
+    MARKET_TIMEZONE = RUNTIME_SETTINGS.market_timezone
+    SYMBOL_SUFFIX = RUNTIME_SETTINGS.symbol_suffix
+    TRADING_CURRENCY = RUNTIME_SETTINGS.trading_currency
+    NOTIFY_LANG = RUNTIME_SETTINGS.notify_lang
+    TG_TOKEN = RUNTIME_SETTINGS.tg_token
+    TG_CHAT_ID = RUNTIME_SETTINGS.tg_chat_id
+    from quant_platform_kit.notifications.cycle_channel import resolve_cycle_channel_and_url
+
+    _NOTIFICATION_CHANNEL, _NOTIFICATION_WEBHOOK_URL = resolve_cycle_channel_and_url(
+        explicit_channel=RUNTIME_SETTINGS.notification_channel,
+        telegram_token=TG_TOKEN,
+        telegram_chat_id=TG_CHAT_ID,
+        wecom_url=RUNTIME_SETTINGS.wecom_webhook_url,
+        dingtalk_url=RUNTIME_SETTINGS.dingtalk_webhook_url,
+        feishu_url=RUNTIME_SETTINGS.feishu_webhook_url,
+        serverchan_url=RUNTIME_SETTINGS.serverchan_webhook_url,
+    )
+    CASH_ONLY_EXECUTION = getattr(RUNTIME_SETTINGS, "cash_only_execution", True)
+    STRATEGY_RUNTIME = load_strategy_runtime(
+        STRATEGY_PROFILE,
+        runtime_settings=RUNTIME_SETTINGS,
+        logger=lambda message: print(message, flush=True),
+    )
+    STRATEGY_RUNTIME_CONFIG = dict(STRATEGY_RUNTIME.merged_runtime_config)
+    MANAGED_SYMBOLS = STRATEGY_RUNTIME.managed_symbols
+    AVAILABLE_INPUTS = frozenset(STRATEGY_RUNTIME.runtime_adapter.available_inputs)
+    BENCHMARK_SYMBOL = str(STRATEGY_RUNTIME_CONFIG.get("benchmark_symbol", "QQQ"))
+
+    _emit_v7_loaded_version_log()
+    SIGNAL_EFFECTIVE_AFTER_TRADING_DAYS = getattr(
+        getattr(STRATEGY_RUNTIME.runtime_adapter, "runtime_policy", None),
+        "signal_effective_after_trading_days",
+        None,
+    )
+
+    # Order pricing: limit order discount/premium relative to last price
+    LIMIT_SELL_DISCOUNT = 0.995               # sell limit at 0.5% below last
+    LIMIT_BUY_PREMIUM = 1.005                 # buy limit at 0.5% above last
+    DEFAULT_LIMIT_BUY_PREMIUM_BY_SYMBOL = {"SOXL": 1.015, "TQQQ": 1.010}
+
+    # Order monitoring: poll interval and max attempts for fill check
+    ORDER_POLL_INTERVAL_SEC = 1
+    ORDER_POLL_MAX_ATTEMPTS = 8
+
+    # Token refresh: days before expiry to trigger refresh
+    TOKEN_REFRESH_THRESHOLD_DAYS = 30
+    DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
+    DEFAULT_MIN_ORDER_NOTIONAL_USD = 100.0
+
+    _FRACTIONAL_BUY_EXECUTION = fractional_buy_execution_enabled(STRATEGY_PROFILE)
+
+    SEPARATOR = "━━━━━━━━━━━━━━━━━━"
+    COMPACT_ERROR_NOTIFICATION_MAX_CHARS = 3500
+
+    LIMIT_BUY_PREMIUM_BY_SYMBOL = _load_limit_buy_premium_by_symbol(
+        "LONGBRIDGE_LIMIT_BUY_PREMIUM_BY_SYMBOL_JSON",
+        "LIMIT_BUY_PREMIUM_BY_SYMBOL_JSON",
+    )
+
+    signal_text = build_signal_text(t)
+    strategy_display_name = build_strategy_display_name(t)(
+        STRATEGY_PROFILE,
+        fallback_name=STRATEGY_DISPLAY_NAME,
+        metadata=RUNTIME_SETTINGS.strategy_metadata,
+        locale=NOTIFY_LANG,
+    )
+
+    BROKER_ADAPTERS = build_runtime_broker_adapters(
+        strategy_symbols=tuple(MANAGED_SYMBOLS),
+        account_hash=ACCOUNT_PREFIX or ACCOUNT_REGION or "longbridge",
+        fetch_last_price_fn=fetch_last_price,
+        fetch_strategy_account_state_fn=lambda quote_context, trade_context: fetch_strategy_account_state(
+            quote_context,
+            trade_context,
+            list(MANAGED_SYMBOLS),
+            cash_currency=TRADING_CURRENCY,
+            position_log_fn=(
+                log_position_snapshot
+                if getattr(RUNTIME_SETTINGS, "debug_position_snapshot", False)
+                else None
+            ),
+            warning_log_fn=log_runtime_warning,
+        ),
+        submit_order_fn=_profile_submit_order,
+        symbol_suffix=SYMBOL_SUFFIX,
+        currency=TRADING_CURRENCY,
+        cash_only_execution=CASH_ONLY_EXECUTION,
+    )
+    STRATEGY_ADAPTERS = build_runtime_strategy_adapters(
+        strategy_runtime=STRATEGY_RUNTIME,
+        strategy_profile=STRATEGY_PROFILE,
+        strategy_runtime_config=STRATEGY_RUNTIME_CONFIG,
+        available_inputs=AVAILABLE_INPUTS,
+        benchmark_symbol=BENCHMARK_SYMBOL,
+        signal_text_fn=signal_text,
+        translator=t,
+        broker_adapters=BROKER_ADAPTERS,
+        calculate_rotation_indicators_fn=calculate_rotation_indicators,
+        build_strategy_evaluation_inputs_fn=build_strategy_evaluation_inputs,
+        map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan,
+        execution_policy={
+            "reserved_cash_floor_usd": getattr(RUNTIME_SETTINGS, "reserved_cash_floor_usd", 0.0),
+            "reserved_cash_ratio": getattr(RUNTIME_SETTINGS, "reserved_cash_ratio", 0.0),
+            "cash_only_execution": CASH_ONLY_EXECUTION,
+        },
+        execution_materials=getattr(STRATEGY_RUNTIME, "execution_materials", {}),
+        build_strategy_plugin_report_payload_fn=build_strategy_plugin_report_payload,
+        load_configured_strategy_plugin_signals_fn=load_configured_strategy_plugin_signals,
+        parse_strategy_plugin_mounts_fn=parse_strategy_plugin_mounts,
+    )
+
+    register_http_routes(app, _http_handlers())
+    _runtime_initialized = True
+    return app
+
+
 def create_app() -> Flask:
     """Create a separate HTTP application over the prepared module runtime."""
     return create_http_app(__name__, _http_handlers())
 
 
-register_http_routes(app, _http_handlers())
+# Preserve the deployed main:app startup boundary until the owner approves
+# the explicit factory selector and removal of this compatibility call.
+initialize_runtime()
 
 
 if __name__ == "__main__":
