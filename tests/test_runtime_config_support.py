@@ -599,20 +599,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertTrue(settings.ibit_zscore_exit_enabled)
         self.assertEqual(settings.ibit_zscore_exit_mode, "live")
 
-    def test_tech_runtime_execution_window_override_rejects_research_only_profile(self):
-        with patch.dict(
-            os.environ,
-            {
-                "RUNTIME_TARGET_JSON": runtime_target_json(
-                    "tech_communication_pullback_enhancement"
-                ),
-                "LONGBRIDGE_TECH_RUNTIME_EXECUTION_WINDOW_TRADING_DAYS": "31",
-            },
-            clear=True,
-        ):
-            with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
-                load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
-
     def test_rejects_invalid_qqqi_income_ratio(self):
         with patch.dict(
             os.environ,

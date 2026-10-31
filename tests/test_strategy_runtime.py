@@ -71,11 +71,11 @@ class _SemiconductorEntrypoint:
         return StrategyDecision(diagnostics={"signal_message": "ok"})
 
 
-class _TechEntrypoint:
+class _SnapshotEntrypoint:
     manifest = StrategyManifest(
-        profile="tech_communication_pullback_enhancement",
+        profile="global_etf_rotation",
         domain="us_equity",
-        display_name="Tech/Communication Pullback Enhancement",
+        display_name="Global ETF Rotation",
         description="test entrypoint",
         required_inputs=frozenset({"feature_snapshot"}),
         default_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},
@@ -133,7 +133,6 @@ def _build_runtime_settings(
     ibit_zscore_exit_risk_reduced_exposure: float | None = None,
     ibit_zscore_exit_risk_off_exposure: float | None = None,
     ibit_zscore_exit_allow_outside_execution_window: bool | None = None,
-    runtime_execution_window_trading_days: int | None = None,
     reserved_cash_floor_usd: float = 0.0,
     reserved_cash_ratio: float = 0.0,
 ) -> PlatformRuntimeSettings:
@@ -143,7 +142,7 @@ def _build_runtime_settings(
         account_prefix="HK",
         strategy_profile=profile,
         strategy_display_name=(
-            "Tech/Communication Pullback Enhancement" if profile == "tech_communication_pullback_enhancement" else "SOXL/SOXX Semiconductor Trend Income"
+            "Global ETF Rotation" if profile == "global_etf_rotation" else "SOXL/SOXX Semiconductor Trend Income"
         ),
         strategy_domain="us_equity",
         account_region="HK",
@@ -168,7 +167,6 @@ def _build_runtime_settings(
         ibit_zscore_exit_allow_outside_execution_window=(
             ibit_zscore_exit_allow_outside_execution_window
         ),
-        runtime_execution_window_trading_days=runtime_execution_window_trading_days,
         feature_snapshot_path=feature_snapshot_path,
         feature_snapshot_manifest_path=None,
         strategy_config_path=None,
@@ -253,7 +251,7 @@ class StrategyRuntimeTests(unittest.TestCase):
             self.assertFalse(validate_capital_base(caps["capital_base"], binding=replace(caps["capital_base_binding"], **change)).is_valid)
 
     def test_capital_context_supports_other_currency_and_feature_snapshot_profile(self):
-        entrypoint = _TechEntrypoint()
+        entrypoint = _SnapshotEntrypoint()
         runtime = self._capital_runtime(currency="HKD", entrypoint=entrypoint)
         snapshot = self._capital_snapshot(currency="HKD")
         request = SimpleNamespace(
@@ -533,27 +531,8 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.merged_runtime_config["reserved_cash_floor_usd"], 150.0)
         self.assertEqual(runtime.merged_runtime_config["reserved_cash_ratio"], 0.03)
 
-    def test_load_strategy_runtime_applies_tech_execution_window_overrides_from_settings(self):
-        entrypoint = _TechEntrypoint()
-
-        with patch.object(strategy_runtime_module, "load_strategy_entrypoint_for_profile", return_value=entrypoint):
-            with patch.object(
-                strategy_runtime_module,
-                "load_strategy_runtime_adapter_for_profile",
-                return_value=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
-            ):
-                runtime = strategy_runtime_module.load_strategy_runtime(
-                    "tech_communication_pullback_enhancement",
-                    runtime_settings=_build_runtime_settings(
-                        "tech_communication_pullback_enhancement",
-                        runtime_execution_window_trading_days=31,
-                    ),
-                )
-
-        self.assertEqual(runtime.merged_runtime_config["runtime_execution_window_trading_days"], 31)
-
     def test_feature_snapshot_runtime_loads_snapshot_into_context(self):
-        entrypoint = _TechEntrypoint()
+        entrypoint = _SnapshotEntrypoint()
         runtime = strategy_runtime_module.LoadedStrategyRuntime(
             entrypoint=entrypoint,
             runtime_adapter=StrategyRuntimeAdapter(
@@ -566,7 +545,7 @@ class StrategyRuntimeTests(unittest.TestCase):
                 runtime_policy=StrategyRuntimePolicy(runtime_execution_window_trading_days=1),
             ),
             runtime_settings=_build_runtime_settings(
-                "tech_communication_pullback_enhancement",
+                "global_etf_rotation",
                 feature_snapshot_path="gs://bucket/tech.csv",
             ),
             merged_runtime_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},

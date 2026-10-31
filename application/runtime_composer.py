@@ -36,6 +36,7 @@ from notifications.telegram import build_prefixer
 from quant_platform_kit.notifications.cycle_channel import build_cycle_sender
 from application.longbridge_execution import fetch_live_order_status
 from runtime_execution_policy import FRACTIONAL_BUY_QUANTITY_STEP, dca_compat_mode_enabled, fractional_buy_execution_enabled
+from strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
 
 
 def _trusted_cloud_run_region(env_reader: Callable[[str, str], str | None]) -> str | None:
@@ -251,7 +252,7 @@ class LongBridgeRuntimeComposer:
             if (
                 silent_cycle_notifications
                 and self.strategy_profile
-                == "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+                == V7_LONGTERM_COMPOUNDING_PROFILE
             )
             else notification_adapters.notify_issue
         )
@@ -363,7 +364,7 @@ class LongBridgeRuntimeComposer:
             )
         live_command_enabled = self._live_execution_command_enabled()
         v7_evidence_execution = bool(
-            self.strategy_profile == "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+            self.strategy_profile == V7_LONGTERM_COMPOUNDING_PROFILE
             and getattr(getattr(self.strategy_adapters, "strategy_runtime", None), "uses_evidence_execution", False)
             and self.runtime_target is not None
             and self.runtime_target.strategy_release is not None
@@ -372,7 +373,7 @@ class LongBridgeRuntimeComposer:
             raise RuntimeError("durable live execution command is only verified for the SOXL profile")
         validation_suppressed = bool(
             self.suppress_live_execution_commands
-            and self.strategy_profile == "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+            and self.strategy_profile == V7_LONGTERM_COMPOUNDING_PROFILE
         )
         return LongBridgeRebalanceConfig(
             limit_sell_discount=self.limit_sell_discount,
