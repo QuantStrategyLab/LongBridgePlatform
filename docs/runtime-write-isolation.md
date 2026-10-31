@@ -72,6 +72,18 @@ not logged or uploaded. The workflow does not change admission, deployment,
 configuration, traffic or Scheduler, and a successful observation never authorizes
 execution or establishes account cash/ledger acceptance.
 
+Choose `source-chain` to inspect existing source/run labels, registry record
+shape and a bounded audit window around each serving revision's creation time.
+This mode does not pull or execute an image. The audit read is scoped to the
+selected service, 15 minutes on either side of the recorded creation time and
+at most 51 entries; more than 50 is explicitly truncated. Empty results do not
+prove that deployment or approval never existed, and read failures are reported
+separately. Registry presence and structure do not verify a signature, source,
+builder or original approval. Audit entries expose only timestamps, fixed method
+categories, status codes and code/digest equality observations; actors, resource
+names, request bodies and digests remain inside the runner. A GitHub run label
+is a locator to inspect independently, not an authenticated deployment chain.
+
 Run the manual **Inspect PAPER dry-run request** workflow with `start_utc`
 (inclusive) and `end_utc` (exclusive), both in `YYYY-MM-DDTHH:MM:SSZ` format.
 The window must be positive and no longer than 15 minutes. The workflow checks

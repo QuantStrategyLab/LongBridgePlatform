@@ -140,7 +140,7 @@ def test_stdout_contains_only_fixed_reason_on_external_exception(monkeypatch, ca
     def fail():
         raise RuntimeError("synthetic-private-account-token")
     monkeypatch.setattr(inspect, "observe", fail)
-    assert inspect.main() == 1
+    assert inspect.main([]) == 1
     assert json.loads(capsys.readouterr().out)["reason"] == "observation_unavailable"
 
 
@@ -169,3 +169,124 @@ def test_workflow_reuses_paper_environment_and_identity_without_write_actions():
     assert "Deploy Cloud Run-${{ github.ref_name }}" in workflow
     assert workflow.index("Validate existing PAPER selection") < workflow.index("google-github-actions/auth")
     assert all(token not in workflow for token in ("upload-artifact", "update-traffic", "scheduler", "curl", "secret-access"))
+
+
+def source_chain_io(*, registry_error=None, audit_error=None, changed=False, audit_rows=None):
+    env, service, revision, image, _ = fixtures()
+    revision["metadata"].update(creationTimestamp="2026-10-30T12:00:00Z")
+    revision["metadata"]["labels"].update({"github-run-id": "123456", "qsl-overlay-commit": "d" * 40,
+                                           "qsl-image-source-kind": "notification-overlay"})
+    calls = []
+    reads = {}
+
+    def load(args, **kwargs):
+        calls.append(args)
+        assert "docker" != args[0], "source-chain must never pull or execute an image"
+        if args[:4] == ["gcloud", "run", "services", "describe"]:
+            return copy.deepcopy(service)
+        if args[:4] == ["gcloud", "run", "revisions", "describe"]:
+            result = copy.deepcopy(revision)
+            result["metadata"]["name"] = args[4]
+            reads[args[4]] = reads.get(args[4], 0) + 1
+            if changed and reads[args[4]] == 2:
+                result["metadata"]["labels"]["commit-sha"] = "f" * 40
+            return result
+        if args[:5] == ["gcloud", "artifacts", "docker", "images", "describe"]:
+            if registry_error:
+                raise inspect.ObservationError(registry_error)
+            return {"provenance_summary": {"provenance": [{"synthetic-private-subject": image}]},
+                    "build_details_summary": {"build_details": []}}
+        if args[:3] == ["gcloud", "logging", "read"]:
+            if audit_error:
+                raise inspect.ObservationError(audit_error)
+            assert "--limit=51" in args and "--order=asc" in args
+            query = args[3]
+            assert "synthetic-service" in query and 'timestamp>="2026-10-30T11:45:00+00:00"' in query
+            return [] if audit_rows is None else copy.deepcopy(audit_rows)
+        raise AssertionError(args)
+    return env, load, calls
+
+
+def test_source_chain_reads_existing_records_without_reprobing_image_or_exporting_subject():
+    env, load, calls = source_chain_io()
+    result = inspect.observe_source_chain(env=env, load=load)
+    assert result["image_execution_performed"] is False
+    assert [r["traffic_percent"] for r in result["revisions"]] == [40, 60]
+    row = result["revisions"][0]
+    assert row["reported_github_run_id"] == "123456"
+    assert row["overlay_source_commit"] == "d" * 40
+    assert row["registry"]["provenance_present"] is True
+    assert row["registry"]["build_details_present"] is False
+    assert row["registry"]["subject_source_builder_verified"] is False
+    assert row["creation_window_audit"]["records_returned"] == 0
+    assert row["creation_window_audit"]["read_status"] == "read"
+    assert result["independent_approval_verified"] is False
+    text = json.dumps(result)
+    assert all(token not in text for token in ("synthetic-private", "synthetic-service", "example-project", "1" * 64))
+
+
+def test_registry_failure_does_not_hide_independent_audit_result():
+    env, load, calls = source_chain_io(registry_error="external_read_denied")
+    result = inspect.observe_source_chain(env=env, load=load)
+    for row in result["revisions"]:
+        assert row["registry"]["read_status"] == "external_read_denied"
+        assert row["creation_window_audit"]["read_status"] == "read"
+    assert len([c for c in calls if c[:3] == ["gcloud", "logging", "read"]]) == 2
+
+
+def test_malformed_registry_does_not_hide_independent_audit_result():
+    env, original, calls = source_chain_io()
+    def load(args, **kwargs):
+        if args[:5] == ["gcloud", "artifacts", "docker", "images", "describe"]:
+            return None
+        return original(args, **kwargs)
+    result = inspect.observe_source_chain(env=env, load=load)
+    for row in result["revisions"]:
+        assert row["registry"]["read_status"] == "registry_metadata_invalid"
+        assert row["creation_window_audit"]["read_status"] == "read"
+
+
+def test_audit_failure_does_not_mean_empty_history():
+    env, load, calls = source_chain_io(audit_error="external_read_unavailable")
+    result = inspect.observe_source_chain(env=env, load=load)
+    for row in result["revisions"]:
+        assert row["creation_window_audit"]["read_status"] == "external_read_unavailable"
+        assert "records_returned" not in row["creation_window_audit"]
+
+
+def test_source_chain_rejects_revision_change_before_claiming_stability():
+    env, load, calls = source_chain_io(changed=True)
+    with pytest.raises(inspect.ObservationError, match="revision_changed_during_observation"):
+        inspect.observe_source_chain(env=env, load=load)
+
+
+def test_audit_projection_keeps_truncation_and_does_not_disclose_actor_or_body():
+    _, _, revision, image, _ = fixtures()
+    entry = {"timestamp": "2026-10-30T12:00:00Z", "protoPayload": {
+        "methodName": "google.cloud.run.v1.Services.ReplaceService", "status": {"code": 0},
+        "authenticationInfo": {"principalEmail": "synthetic-private-actor@example.invalid"},
+        "resourceName": "synthetic-private-resource", "request": {"service": {
+            "spec": {"template": {"metadata": revision["metadata"], "spec": revision["spec"]}}}}}}
+    result = inspect.audit_projection([entry] * 51, name=revision["metadata"]["name"], digest=image, source="b" * 40)
+    assert result["truncated"] is True and len(result["records"]) == 50
+    assert result["records"][0]["request_image_equals_observed_digest"] is True
+    assert result["records"][0]["source_equals_revision_label"] is True
+    assert result["original_approval_verified"] is False and result["all_history_verified"] is False
+    text = json.dumps(result)
+    assert all(value not in text for value in ("synthetic-private", image, "synthetic-service"))
+
+
+@pytest.mark.parametrize("value", [None, {}, {"provenance_summary": {"provenance": "invalid"}}])
+def test_missing_registry_shape_is_not_authenticated_provenance(value):
+    if value is None:
+        with pytest.raises(inspect.ObservationError, match="registry_metadata_invalid"):
+            inspect.registry_projection(value)
+    else:
+        row = inspect.registry_projection(value)
+        assert row["provenance_shape_valid"] is False
+        assert row["provenance_present"] is None
+
+
+@pytest.mark.parametrize("value", ["", "0", "-1", "123abc", "9" * 21, None])
+def test_invalid_deployment_run_label_stays_unknown(value):
+    assert inspect._run_locator(value) is None
