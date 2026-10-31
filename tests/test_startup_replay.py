@@ -1,6 +1,7 @@
 """Check deterministic replay and demonstrate that its comparator detects drift."""
 
 from copy import deepcopy
+import importlib
 import sys
 
 from gunicorn.errors import AppImportError
@@ -136,6 +137,44 @@ def test_matching_null_effect_observations_are_rejected(baseline, section, case)
     incomplete[section][case]["effects"] = None
     with pytest.raises(ValueError, match="invalid external-effect observations"):
         replay.compare(incomplete, deepcopy(incomplete))
+
+
+@pytest.mark.parametrize("case", [{}, {"failure_stage": "settings"}])
+def test_replay_restores_application_boundaries(case):
+    targets = [
+        (importlib.import_module("application.longbridge_portfolio"), "fetch_strategy_account_state"),
+        (importlib.import_module("application.longbridge_execution"), "submit_order"),
+    ]
+    originals = [getattr(module, name) for module, name in targets]
+    replay._capture_service(replay.ROOT / "main.py", "main:app", case)
+    for (module, name), original in zip(targets, originals):
+        assert getattr(module, name) is original
+
+
+def test_replay_restores_clocks_imported_during_capture(monkeypatch):
+    import datetime as datetime_module
+    import time as time_module
+    from types import ModuleType
+
+    original_datetime, original_time = datetime_module.datetime, time_module.time
+    frozen_class = replay._FrozenDateTime
+    previous_datetime, previous_time = object(), object()
+    existing = ModuleType("synthetic_existing_clock_dependency")
+    existing.datetime, existing.time = previous_datetime, previous_time
+    monkeypatch.setitem(sys.modules, existing.__name__, existing)
+    dependency = ModuleType("synthetic_startup_replay_clock_dependency")
+    with replay._load(replay.ROOT / "main.py", "main:app", {}, [], []) as (state, _error, _output):
+        assert state.error is None
+        monkeypatch.setitem(sys.modules, dependency.__name__, dependency)
+        for module in (existing, dependency):
+            exec("from datetime import datetime\nfrom time import time\n", vars(module))
+        assert dependency.datetime is replay._FrozenDateTime
+        assert dependency.time() == original_datetime.fromisoformat(replay.CLOCK).timestamp()
+    assert dependency.datetime is original_datetime
+    assert dependency.time is original_time
+    assert existing.datetime is previous_datetime
+    assert existing.time is previous_time
+    assert replay._FrozenDateTime is frozen_class
 
 
 @pytest.mark.parametrize("invalid", ["source", "case", "environment", "effects", "bare_effects", "launcher", "launcher_type", "missing_effects", "missing_bare_effects"])

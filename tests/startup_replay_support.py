@@ -22,6 +22,7 @@ from pathlib import Path
 import re
 import runpy
 import sys
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -177,6 +178,33 @@ def _load(source, selector, case, timeline, effects, dependency_sources=None):
         effects.append("runtime-boundary")
         raise AssertionError("broker, credential, cloud or notification operation attempted")
 
+    original_time = time.time
+
+    def frozen_time():
+        return datetime.fromisoformat(CLOCK).timestamp()
+
+    clock_globals = {
+        id(module): (module, dict(vars(module))) for module in tuple(sys.modules.values())
+        if isinstance(getattr(module, "__dict__", None), dict)
+    }
+
+    def restore_imported_clocks():
+        # Imports can copy patched clocks into native module globals. Restore
+        # only those exact objects, including aliases rebound during capture.
+        for module in tuple(sys.modules.values()):
+            namespace = getattr(module, "__dict__", None)
+            if not isinstance(namespace, dict):
+                continue
+            previous = clock_globals.get(id(module))
+            before = previous[1] if previous is not None and previous[0] is module else {}
+            for name, value in tuple(namespace.items()):
+                if value is _FrozenDateTime:
+                    namespace[name] = before.get(name, datetime)
+                elif value is frozen_time:
+                    namespace[name] = before.get(name, original_time)
+
+    boundary_denials = ExitStack()
+    boundary_denials.callback(restore_imported_clocks)
     with ExitStack() as controls:
         controls.enter_context(redirect_stdout(output))
         controls.enter_context(redirect_stderr(output))
@@ -184,7 +212,7 @@ def _load(source, selector, case, timeline, effects, dependency_sources=None):
         controls.enter_context(patch.object(composition, "SimpleNamespace", state_factory))
         controls.enter_context(patch.object(sys, "dont_write_bytecode", True))
         controls.enter_context(patch("datetime.datetime", _FrozenDateTime))
-        controls.enter_context(patch("time.time", lambda: datetime.fromisoformat(CLOCK).timestamp()))
+        controls.enter_context(patch("time.time", frozen_time))
         controls.enter_context(patch.object(builtins, "__import__", trace_import))
         sys.meta_path.insert(0, finder)
 
@@ -203,7 +231,7 @@ def _load(source, selector, case, timeline, effects, dependency_sources=None):
                 "application.longbridge_portfolio": ("fetch_strategy_account_state",),
             }.items():
                 for attribute in attributes:
-                    controls.enter_context(patch.object(sys.modules[module_name], attribute, forbidden))
+                    boundary_denials.enter_context(patch.object(sys.modules[module_name], attribute, forbidden))
             with patch.object(importlib, "import_module", original_import):
                 if selector is None:
                     return original_import("main")
@@ -213,12 +241,15 @@ def _load(source, selector, case, timeline, effects, dependency_sources=None):
         try:
             with patch.object(importlib, "import_module", import_main):
                 loader = composition.import_entrypoint.__wrapped__()
+                # Restore our nested denials before the fixture restores the
+                # original shared application functions.
                 with loader(failure_stage=case.get("failure_stage"), premium=case.get("premium"),
-                            route_failure=tuple(case["route_failure"]) if case.get("route_failure") else None) as state:
+                            route_failure=tuple(case["route_failure"]) if case.get("route_failure") else None) as state, boundary_denials:
                     yield state, injected, output
                     if dependency_sources is not None:
                         dependency_sources.update(_dependency_sources())
         finally:
+            boundary_denials.close()
             sys.meta_path.remove(finder)
             _ACTIVE_EFFECTS.reset(active)
 
