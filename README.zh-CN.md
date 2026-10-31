@@ -84,7 +84,9 @@ composer 将它设为 false。这个选项不会恢复成功预览的通知。
 
 ## 快速开始
 
-`main.create_app()` 使用现有处理函数创建独立的 Flask 应用，并复用导入 `main` 时准备的运行上下文；配置校验、适配器构造及启动日志仍保持现有的导入时生命周期。`main.app` WSGI 导出保留原有构造和路由契约。
+`main.initialize_runtime()` 准备配置、运行适配器和路由，随后返回模块的 WSGI 应用。启动成功后重复调用会返回同一个应用，不会重复初始化。为保持现有 `main:app` 启动及失败行为，导入 `main` 时仍会调用该函数。因此，普通导入仍会初始化运行上下文；完成导入隔离需要同步调整入口，详见 [Runtime startup](docs/runtime-startup.md)。
+
+`main.create_app()` 使用现有处理函数和已准备的运行上下文创建独立的 Flask 应用。各应用的 HTTP 配置及路由独立，配置对象和运行适配器共享。
 
 测试或自行提供处理函数的调用方，可使用 `application.http_app.create_http_app(import_name, handlers)` 组装 HTTP 层，无需加载平台运行模块。
 
