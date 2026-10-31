@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -133,9 +135,47 @@ def test_unknown_pending_orders_parks_even_when_every_other_gate_is_verified() -
     assert result["gates"]["unknown_pending_orders"] is True
 
 
+@pytest.mark.parametrize("value", [None, 0, 1, "", "false", [], {}])
+def test_non_boolean_pending_orders_status_parks(value: object) -> None:
+    result = evaluate_local_admission(_input(unknown_pending_orders=value))
+
+    assert result["disposition"] == "PARK"
+    assert result["reason_code"] == "unknown_pending_orders_not_confirmed"
+    assert result["gates"]["unknown_pending_orders"] is None
+
+
+def test_missing_pending_orders_status_parks() -> None:
+    payload = _input()
+    del payload["unknown_pending_orders"]
+
+    result = evaluate_local_admission(payload)
+
+    assert result["disposition"] == "PARK"
+    assert result["reason_code"] == "unknown_pending_orders_not_confirmed"
+    assert result["gates"]["unknown_pending_orders"] is None
+
+
 def test_command_emits_only_the_sanitized_preflight_result(tmp_path: Path, capsys) -> None:
     evidence_path = tmp_path / "admission.json"
     evidence_path.write_text(json.dumps(_input()), encoding="utf-8")
 
     assert admission_script.main(["--input", str(evidence_path)]) == 0
     assert json.loads(capsys.readouterr().out) == evaluate_local_admission(_input())
+
+
+def test_command_parks_unknown_pending_orders_without_exposing_input(
+    tmp_path: Path, capsys
+) -> None:
+    evidence_path = tmp_path / "admission.json"
+    evidence_path.write_text(
+        json.dumps(_input(unknown_pending_orders="private-input-sentinel")),
+        encoding="utf-8",
+    )
+
+    assert admission_script.main(["--input", str(evidence_path)]) == 2
+    output = capsys.readouterr().out
+    result = json.loads(output)
+    assert result["disposition"] == "PARK"
+    assert result["reason_code"] == "unknown_pending_orders_not_confirmed"
+    assert result["gates"]["unknown_pending_orders"] is None
+    assert "private-input-sentinel" not in output
