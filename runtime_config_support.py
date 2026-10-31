@@ -34,6 +34,7 @@ from quant_platform_kit.common.broker_costs import (
 from strategy_registry import (
     LONGBRIDGE_PLATFORM,
     STRATEGY_CATALOG,
+    V7_LONGTERM_COMPOUNDING_PROFILE,
     resolve_strategy_definition,
     resolve_strategy_metadata,
 )
@@ -68,7 +69,7 @@ DEFAULT_LONGBRIDGE_MIN_ORDER_NOTIONAL_USD = minimum_economic_order_notional_usd(
 
 
 def _bound_v7_profile() -> str:
-    return "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+    return V7_LONGTERM_COMPOUNDING_PROFILE
 
 
 def _load_bound_v7_application() -> dict[str, object] | None:
@@ -120,7 +121,6 @@ class PlatformRuntimeSettings:
     ibit_zscore_exit_risk_reduced_exposure: float | None = None
     ibit_zscore_exit_risk_off_exposure: float | None = None
     ibit_zscore_exit_allow_outside_execution_window: bool | None = None
-    runtime_execution_window_trading_days: int | None = None
     market_signal_handoff_index_uri: str | None = None
     market_signal_handoff_manifest_uri: str | None = None
     market_signal_consumption_audit_uri: str | None = None
@@ -401,9 +401,6 @@ def load_platform_runtime_settings(
         ibit_zscore_exit_allow_outside_execution_window=_optional_bool_env(
             "IBIT_ZSCORE_EXIT_ALLOW_OUTSIDE_EXECUTION_WINDOW"
         ),
-        runtime_execution_window_trading_days=_runtime_execution_window_trading_days_env(
-            strategy_definition.profile
-        ),
         market_signal_handoff_index_uri=_first_non_empty(
             os.getenv("LONGBRIDGE_MARKET_SIGNAL_HANDOFF_INDEX_URI"),
             os.getenv("MARKET_SIGNAL_HANDOFF_INDEX_URI"),
@@ -609,22 +606,3 @@ def _optional_int(raw_value: str | None) -> int | None:
         return None
     return int(value)
 
-
-
-def _runtime_execution_window_trading_days_env(strategy_profile: str) -> int | None:
-    if strategy_profile != "tech_communication_pullback_enhancement":
-        return None
-    raw_value = os.getenv("LONGBRIDGE_TECH_RUNTIME_EXECUTION_WINDOW_TRADING_DAYS")
-    if raw_value is None or not str(raw_value).strip():
-        return None
-    try:
-        value = int(str(raw_value).strip())
-    except ValueError as exc:
-        raise ValueError(
-            "LONGBRIDGE_TECH_RUNTIME_EXECUTION_WINDOW_TRADING_DAYS must be a positive integer"
-        ) from exc
-    if value <= 0:
-        raise ValueError(
-            "LONGBRIDGE_TECH_RUNTIME_EXECUTION_WINDOW_TRADING_DAYS must be a positive integer"
-        )
-    return value

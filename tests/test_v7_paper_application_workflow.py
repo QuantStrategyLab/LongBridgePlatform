@@ -4,8 +4,28 @@ import os
 import subprocess
 import sys
 
+from strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
 
+
+ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = Path(".github/workflows/apply-paper-candidate.yml").read_text(encoding="utf-8")
+LIFECYCLE_WORKFLOW = (ROOT / ".github/workflows/runtime-target-lifecycle.yml").read_text(encoding="utf-8")
+
+
+def test_lifecycle_workflow_uses_the_v7_profile_constant_by_value() -> None:
+    assert f'binding.get("strategy_profile") != "{V7_LONGTERM_COMPOUNDING_PROFILE}"' in LIFECYCLE_WORKFLOW
+
+
+def test_v7_profile_name_is_not_duplicated_in_python_sources() -> None:
+    literal = V7_LONGTERM_COMPOUNDING_PROFILE
+    excluded = {".git", ".venv", "tests", "release-overlays", "research"}
+    offenders = [
+        str(path.relative_to(ROOT))
+        for path in ROOT.rglob("*.py")
+        if path.relative_to(ROOT).parts[0] not in excluded
+        and literal in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
 
 
 def test_workflow_has_only_bounded_application_dispatch_and_main_source_gate() -> None:

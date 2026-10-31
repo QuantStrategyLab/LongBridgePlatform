@@ -22,6 +22,7 @@ from application.durable_execution_commands import (  # noqa: E402
 from application.rebalance_service import _validate_live_command_binding  # noqa: E402
 from quant_platform_kit.common.paper_execution_admission import build_paper_risk_admission_receipt
 from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt
+from strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
 
 
 def _execution() -> dict[str, object]:
@@ -289,7 +290,7 @@ def test_live_command_carries_immutable_strategy_release() -> None:
     command = build_live_execution_command(
         platform="longbridge",
         account_scope="PAPER",
-        strategy_profile="soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve",
+        strategy_profile=V7_LONGTERM_COMPOUNDING_PROFILE,
         physical_account_id="account-123",
         runtime_identity_digest="a" * 64,
         execution=_execution(),
@@ -306,7 +307,7 @@ def test_release_mismatch_is_rejected_before_any_broker_submit() -> None:
     command = build_live_execution_command(
         platform="longbridge",
         account_scope="PAPER",
-        strategy_profile="soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve",
+        strategy_profile=V7_LONGTERM_COMPOUNDING_PROFILE,
         physical_account_id="account-123",
         runtime_identity_digest="a" * 64,
         execution=_execution(),
@@ -315,7 +316,7 @@ def test_release_mismatch_is_rejected_before_any_broker_submit() -> None:
     )
     config = SimpleNamespace(
         execution_state_account_scope="PAPER",
-        strategy_profile="soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve",
+        strategy_profile=V7_LONGTERM_COMPOUNDING_PROFILE,
         physical_account_id="account-123",
         durable_execution_runtime_identity_digest="a" * 64,
         expected_strategy_release=expected,
