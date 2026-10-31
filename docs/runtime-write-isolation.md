@@ -182,6 +182,12 @@ Notification rendering never reads the broker or falls back to an older report.
 
 ## Safety gates kept
 
+The local admission preflight requires `unknown_pending_orders` to be the
+literal boolean `false` before it can return READY. A missing or non-boolean
+value parks with `unknown_pending_orders_not_confirmed` and a null gate value;
+`true` parks with `unknown_pending_orders_present`. This local classification
+does not establish that the supplied evidence is current or authorize execution.
+
 Image-only staging rejections keep their original exit code and message and append
 one bounded `longbridge.image-only-admission.v1` diagnostic. `phase` identifies
 source validation, service observation, staging validation, or local plan writing;

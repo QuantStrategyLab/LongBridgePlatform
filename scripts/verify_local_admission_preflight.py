@@ -2,7 +2,7 @@
 """Classify a local, redacted LongBridge admission-evidence JSON file.
 
 The command has no provider, broker, Secret Manager, deployment, scheduler,
-or order side effect.  It emits only fixed gate booleans and a reason code.
+or order side effect. It emits fixed gate booleans or null and a reason code.
 """
 
 from __future__ import annotations

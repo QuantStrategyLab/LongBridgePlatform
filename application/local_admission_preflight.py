@@ -68,9 +68,9 @@ def _reconciliation_is_verified(value: object) -> bool:
 def evaluate_local_admission(payload: object) -> dict[str, object]:
     """Return only fixed, sanitized gate state and one terminal disposition.
 
-    Every affirmative assertion except ``unknown_pending_orders`` must be the
-    literal boolean ``true``.  The supplied runtime target and reconciliation
-    receipt are independently parsed using the existing runtime code.
+    Affirmative assertions must be literal ``true``; absence of unknown
+    pending orders must be literal ``false``. The supplied runtime target and
+    reconciliation receipt are independently parsed using the existing runtime code.
     """
 
     source = payload if isinstance(payload, Mapping) else {}
@@ -81,11 +81,21 @@ def evaluate_local_admission(payload: object) -> dict[str, object]:
         "broker_session_token_refresh": _strict_true(source, "broker_session_token_refresh"),
         "data_entitlement": _strict_true(source, "data_entitlement"),
         "ledger": _strict_true(source, "ledger"),
-        "unknown_pending_orders": _strict_true(source, "unknown_pending_orders"),
+        "unknown_pending_orders": (
+            source["unknown_pending_orders"]
+            if type(source.get("unknown_pending_orders")) is bool
+            else None
+        ),
         "reconciliation": _reconciliation_is_verified(source.get("reconciliation_receipt")),
     }
     for gate, reason_code in _PARK_REASONS:
         if gate == "unknown_pending_orders":
+            if gates[gate] is None:
+                return {
+                    "disposition": "PARK",
+                    "reason_code": "unknown_pending_orders_not_confirmed",
+                    "gates": gates,
+                }
             if gates[gate]:
                 return {"disposition": "PARK", "reason_code": reason_code, "gates": gates}
         elif not gates[gate]:
