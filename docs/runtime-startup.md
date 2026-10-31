@@ -125,6 +125,59 @@ selector and the eager compatibility call together.
 
 ## Verification boundary
 
+### Synthetic differential replay
+
+`tests/startup_replay_support.py` captures a reviewed entrypoint file through the
+existing offline boundary doubles. The source file is supplied explicitly; the
+runner does not generate a candidate, edit an entrypoint or change a Docker
+command. The normal repository CI self-replays the unchanged current source and
+tests the comparator's rejection and drift-detection controls. It does not test
+an unpublished candidate that is absent from the CI checkout.
+
+Run both captures with the same interpreter, frozen dependencies and hash seed:
+
+```bash
+PYTHONHASHSEED=0 python tests/startup_replay_support.py \
+  --source /path/to/reviewed-baseline/main.py --selector main:app \
+  --output /tmp/startup-baseline.json
+PYTHONHASHSEED=0 python tests/startup_replay_support.py \
+  --source /path/to/reviewed-candidate/main.py \
+  --selector 'main:initialize_runtime()' --output /tmp/startup-candidate.json
+PYTHONHASHSEED=0 python tests/startup_replay_support.py \
+  --compare /tmp/startup-baseline.json /tmp/startup-candidate.json \
+  --output /tmp/startup-comparison.json
+```
+
+The captures bind source content, launcher arguments, Python/Gunicorn/Flask,
+clock, dependency and fixture source identities, and input cases. They record
+all application routes and callback arguments, HTTP bodies and headers, initial
+and repeated startup events, exception identity within each capture, exception
+types/messages/causes across captures, and the installed Gunicorn failure
+classification. CLI invocation captures the server arguments without opening a
+listener. A process audit hook and explicit boundary denials reject external
+I/O attempts; existing network-denial fixtures remain active in unit tests.
+
+Comparison is type preserving, including boolean versus numeric values. Missing
+required observations, incompatible inputs/dependencies and recorded external
+effects are rejected. Exit status 0 means all recorded observations match; 1
+means service/CLI records differ; 2 means only direct-import diagnostics differ.
+These are synthetic comparison outcomes, not operational authorization.
+
+`initial_launch_and_http_equal` compares each service/CLI record with its
+`repeated_failure` field excluded. It is a narrower diagnostic, not the strict
+equivalence result: module/global state after a failed load remains in
+`direct_import_diagnostics`, and all repeated-failure events remain in the
+strict comparison. Same-interpreter retry observations are not a claim about
+the production Gunicorn supervisor's restart path. The worker classifier
+executes the installed arbiter's exception handlers without creating a worker.
+
+The runner uses synthetic configuration and HTTP callback doubles. It does not
+replay historical broker executions, an attested deployed image or actual
+production configuration. `production_equivalence` remains `not_established`
+and `execution_authority_granted` remains false, including on a self-match.
+Keep source reports outside Git and use the pending migration criteria above
+to assess evidence not covered by this harness.
+
 `tests/test_http_composition.py` preserves the existing startup order, route
 registration, handler identity, HTTP responses and failure behavior.
 `tests/test_runtime_initialization.py` exercises the actual Gunicorn resolver,
