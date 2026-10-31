@@ -601,6 +601,98 @@ class RequestHandlingTests(unittest.TestCase):
                 notification.publish_cycle_notification.assert_not_called()
                 self.assertIsNone(module.validation_cycle_observation.current())
 
+    def test_paper_validation_indicator_failure_restores_scope_without_business_writes(self):
+        import io
+        from contextlib import nullcontext, redirect_stdout
+
+        module = load_module()
+        from application import runtime_strategy_adapters
+        from application.runtime_composer import LongBridgeRuntimeComposer
+
+        observations = []
+        def fail_indicators(*_args, **_kwargs):
+            observations.append(module.validation_cycle_observation.current())
+            raise RuntimeError("synthetic indicator failure")
+
+        reporting = types.SimpleNamespace(
+            report_gcs_prefix_uri="gs://test/reports", report_base_dir="/synthetic",
+            start_run=lambda: (types.SimpleNamespace(run_id="test"), {"status": "pending"}),
+            log_event=lambda *_args, **_kwargs: None,
+            persist_execution_report=unittest.mock.Mock(),
+        )
+        notification = types.SimpleNamespace(
+            notification_port=None, notify_issue=unittest.mock.Mock(),
+            post_submit_order=unittest.mock.Mock(), publish_cycle_notification=unittest.mock.Mock(),
+        )
+        store = unittest.mock.Mock(cloud_prefix_uri="gs://test/reports")
+        risk_store, command_store = unittest.mock.Mock(), unittest.mock.Mock()
+        config = types.SimpleNamespace(
+            with_prefix=lambda message: message, dry_run_only=True, execution_dedup_enabled=True,
+            execution_state_store=store, strategy_risk_state_store=risk_store,
+            execution_command_store=command_store,
+        )
+        strategy = dataclasses.replace(module.STRATEGY_ADAPTERS, calculate_rotation_indicators_fn=fail_indicators)
+        submit = unittest.mock.Mock()
+        broker = dataclasses.replace(module.BROKER_ADAPTERS, submit_order_fn=submit)
+        original_composer = module.build_composer
+        def composer(**kwargs):
+            return dataclasses.replace(original_composer(**kwargs), env_reader=lambda *_args: "")
+
+        def finish(report, *, status, **kwargs):
+            report["status"] = status
+            report["diagnostics"] = kwargs.get("diagnostics")
+
+        output = io.StringIO()
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(module, "ACCOUNT_REGION", "PAPER"))
+            stack.enter_context(patch.object(module, "STRATEGY_ADAPTERS", strategy))
+            stack.enter_context(patch.object(module, "BROKER_ADAPTERS", broker))
+            stack.enter_context(patch.object(module, "build_composer", side_effect=composer))
+            read_token = stack.enter_context(patch.object(module, "fetch_token_from_secret", return_value="synthetic-token"))
+            refresh_token = stack.enter_context(patch.object(module, "refresh_token_if_needed"))
+            contexts = stack.enter_context(patch.object(module, "build_contexts", return_value=(object(), object())))
+            stack.enter_context(patch.object(runtime_strategy_adapters, "_completed_xnys_session_date", return_value="2026-01-02"))
+            stack.enter_context(patch.object(module, "_v7_application_candidate_bound", return_value=False))
+            stack.enter_context(patch.object(module, "is_market_open_now", return_value=True))
+            stack.enter_context(patch.object(module, "dca_execution_unsupported_reason", return_value=None))
+            stack.enter_context(patch.object(module, "finalize_runtime_report", side_effect=finish))
+            stack.enter_context(patch.object(module, "attach_terminal_fallback_execution_receipt", return_value=None))
+            stack.enter_context(patch.object(module.unified_notifications, "bind_report", side_effect=lambda *_a, **_k: nullcontext()))
+            stack.enter_context(patch.object(LongBridgeRuntimeComposer, "build_reporting_adapters", return_value=reporting))
+            stack.enter_context(patch.object(LongBridgeRuntimeComposer, "build_notification_adapters", return_value=notification))
+            stack.enter_context(patch.object(LongBridgeRuntimeComposer, "load_strategy_plugin_signals", return_value=((), None)))
+            stack.enter_context(patch.object(LongBridgeRuntimeComposer, "attach_strategy_plugin_report", return_value=None))
+            stack.enter_context(patch.object(LongBridgeRuntimeComposer, "build_rebalance_config", return_value=config))
+            stack.enter_context(redirect_stdout(output))
+            for path, handler in (("/dry-run", module.handle_dry_run), ("/backfill", module.handle_backfill)):
+                with module.app.test_request_context(path, method="POST"):
+                    self.assertEqual(handler(), ("Error", 500))
+                self.assertIsNone(module.validation_cycle_observation.current())
+
+        self.assertEqual(len(observations), 2)
+        self.assertTrue(all(observation is not None for observation in observations))
+        self.assertIsNot(observations[0], observations[1])
+        self.assertEqual(read_token.call_count, 2)
+        self.assertEqual(contexts.call_count, 2)
+        refresh_token.assert_not_called()
+        submit.assert_not_called()
+        self.assertEqual(store.mock_calls, [])
+        self.assertEqual(risk_store.mock_calls, [])
+        self.assertEqual(command_store.mock_calls, [])
+        reporting.persist_execution_report.assert_not_called()
+        notification.notify_issue.assert_not_called()
+        notification.post_submit_order.assert_not_called()
+        notification.publish_cycle_notification.assert_not_called()
+        receipts = [json.loads(line) for line in output.getvalue().splitlines() if line.startswith('{"adapter_instrumented"')]
+        self.assertEqual(len(receipts), 2)
+        for receipt in receipts:
+            self.assertTrue(receipt["cycle_entered"])
+            self.assertFalse(receipt["cycle_returned"])
+            self.assertEqual(receipt["report_status"], "error")
+            self.assertEqual(receipt["adapter_submit_attempt_count"], 0)
+
     def test_backfill_observation_scope_is_paper_only_and_resets(self):
         import io
         from contextlib import redirect_stdout
