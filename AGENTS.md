@@ -71,6 +71,8 @@ Organization documentation rules are checked by `python scripts/check_style.py`,
 
 ## Do not
 
+- Only the owner, or a reviewer explicitly authorized by the owner, may apply the `owner-approved` label; coding agents must never apply it to their own PRs.
+
 - Do not infer live eligibility from an account label such as `sg`; `paper` is a
   broker simulation identity, not a deployment tag.
 - Do not rotate, print or commit LongPort tokens and secrets outside the approved
