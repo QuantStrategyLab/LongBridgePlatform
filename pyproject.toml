@@ -32,8 +32,8 @@ test = [
 
 [tool.coverage.run]
 branch = true
-source = ["src"]
-omit = ["tests/*", "*/external/*"]
+source = ["."]
+omit = ["*/tests/*", "*/external/*", "*/.venv/*"]
 
 [tool.coverage.report]
 show_missing = true
