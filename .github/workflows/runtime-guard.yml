@@ -94,6 +94,18 @@ jobs:
           set -euo pipefail
           uv sync --frozen --no-dev
 
+      # The public manifest duplicates RUNTIME_TARGET_JSON.strategy_profile and
+      # friends; nothing else consumes strategy_profile, so only this explicit
+      # comparison can catch a wrong-but-valid manifest value.
+      - name: Verify public manifest matches Environment runtime target
+        env:
+          MANIFEST_TARGET_ID: ${{ matrix.target.id }}
+          RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+          STRATEGY_PROFILE: ${{ vars.STRATEGY_PROFILE }}
+        run: |
+          set -euo pipefail
+          uv run --no-sync python scripts/check_runtime_target_manifest_drift.py --target-id "${MANIFEST_TARGET_ID}"
+
       - name: Authenticate to Google Cloud
         id: gcp_auth_primary
         continue-on-error: true
