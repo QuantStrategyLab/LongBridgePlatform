@@ -14,6 +14,7 @@ from flask import Flask, request
 
 import google.auth
 import requests
+from application.http_app import create_http_app, register_http_routes
 from application.monitor_dispatcher import dispatch_due_monitors, load_monitor_targets
 from application.startup_config import (
     StartupConfigReceipt,
@@ -1385,7 +1386,6 @@ def run_account_snapshot():
     )
 
 
-@app.route("/run", methods=["POST"])
 def handle_trigger():
     """Entrypoint for Cloud Run / scheduler: run strategy and return 200."""
     if request_method() != "POST":
@@ -1397,7 +1397,6 @@ def handle_trigger():
     )
 
 
-@app.route("/backfill", methods=["POST", "GET"])
 def handle_backfill():
     """Manual backfill entrypoint for verification-only execution."""
     def run_validation():
@@ -1416,7 +1415,6 @@ def handle_backfill():
         return run_validation()
 
 
-@app.route("/dry-run", methods=["POST", "GET"])
 def handle_dry_run():
     """Strategy dry-run entrypoint."""
     def run_validation():
@@ -1436,7 +1434,6 @@ def handle_dry_run():
         return run_validation()
 
 
-@app.route("/probe", methods=["POST"])
 def handle_probe():
     """Post-open broker/account health probe; notify only on failure."""
     if request_method() != "POST":
@@ -1448,7 +1445,6 @@ def handle_probe():
     )
 
 
-@app.route("/paper-command-consumer", methods=["POST"])
 def handle_paper_execution_command_consumer():
     """Explicit paper-only command verification endpoint; never scheduler-routed."""
     return _route_with_runtime_error_fallback(
@@ -1458,7 +1454,6 @@ def handle_paper_execution_command_consumer():
     )
 
 
-@app.route("/reconcile", methods=["POST"])
 def handle_broker_reconciliation():
     """Return only redacted QPK E3 evidence; never invoke normal execution."""
 
@@ -1468,7 +1463,6 @@ def handle_broker_reconciliation():
     return json.dumps(payload, ensure_ascii=True), status, {"Content-Type": "application/json"}
 
 
-@app.route("/account-snapshot", methods=["GET"])
 def handle_account_snapshot():
     """Return a non-cacheable, read-only and authority-free account snapshot."""
 
@@ -1481,7 +1475,6 @@ def handle_account_snapshot():
     }
 
 
-@app.route("/v7-paper-application-loaded", methods=["GET"])
 def handle_v7_paper_application_loaded():
     """Read back the disabled V7 process identity without broker access."""
 
@@ -1526,7 +1519,6 @@ def _v7_application_candidate_bound() -> bool:
     return load_v7_paper_application_binding(os.environ) is not None
 
 
-@app.route("/monitor-dispatch", methods=["POST", "GET"])
 def handle_monitor_dispatch():
     if request_method() == "GET":
         return "Monitor Dispatch OK - use POST to dispatch due monitor checks", 200
@@ -1544,8 +1536,6 @@ def request_method() -> str:
         return "GET"
 
 
-@app.route("/healthz", methods=["GET"])
-@app.route("/health", methods=["GET"])
 def health():
     critical_errors: list[str] = []
     for module_path in (
@@ -1562,6 +1552,29 @@ def health():
     if critical_errors:
         return json.dumps({"status": "unhealthy", "errors": critical_errors}, ensure_ascii=False), 500
     return "OK", 200
+
+
+def _http_handlers():
+    return {
+        "handle_trigger": handle_trigger,
+        "handle_backfill": handle_backfill,
+        "handle_dry_run": handle_dry_run,
+        "handle_probe": handle_probe,
+        "handle_paper_execution_command_consumer": handle_paper_execution_command_consumer,
+        "handle_broker_reconciliation": handle_broker_reconciliation,
+        "handle_account_snapshot": handle_account_snapshot,
+        "handle_v7_paper_application_loaded": handle_v7_paper_application_loaded,
+        "handle_monitor_dispatch": handle_monitor_dispatch,
+        "health": health,
+    }
+
+
+def create_app() -> Flask:
+    """Create a separate HTTP application over the prepared module runtime."""
+    return create_http_app(__name__, _http_handlers())
+
+
+register_http_routes(app, _http_handlers())
 
 
 if __name__ == "__main__":

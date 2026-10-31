@@ -84,6 +84,10 @@ composer 将它设为 false。这个选项不会恢复成功预览的通知。
 
 ## 快速开始
 
+`main.create_app()` 使用现有处理函数创建独立的 Flask 应用，并复用导入 `main` 时准备的运行上下文；配置校验、适配器构造及启动日志仍保持现有的导入时生命周期。`main.app` WSGI 导出保留原有构造和路由契约。
+
+测试或自行提供处理函数的调用方，可使用 `application.http_app.create_http_app(import_name, handlers)` 组装 HTTP 层，无需加载平台运行模块。
+
 ```bash
 uv sync --frozen --extra test
 uv run --no-sync ruff check --exclude external .

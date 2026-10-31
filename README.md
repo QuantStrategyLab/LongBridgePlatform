@@ -99,6 +99,10 @@ Direct runtime profiles can usually run from market history or portfolio state. 
 
 ## Quick start
 
+`main.create_app()` builds an independent Flask application with the existing handlers. It reuses the runtime prepared by importing `main`; settings validation, adapter construction and startup logging retain their existing import-time lifecycle. The `main.app` WSGI export keeps its original construction and route contracts.
+
+Tests or callers supplying their own handlers can use `application.http_app.create_http_app(import_name, handlers)` to assemble the HTTP layer without loading platform runtime modules.
+
 ```bash
 uv sync --frozen --extra test
 uv run --no-sync ruff check --exclude external .
