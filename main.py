@@ -1400,13 +1400,20 @@ def handle_trigger():
 @app.route("/backfill", methods=["POST", "GET"])
 def handle_backfill():
     """Manual backfill entrypoint for verification-only execution."""
-    return _route_with_runtime_error_fallback(
-        run_strategy,
-        force_run=True,
-        validation_only=True,
-        success_body="OK",
-        route_label="POST /backfill",
-    )
+    def run_validation():
+        return _route_with_runtime_error_fallback(
+            run_strategy,
+            force_run=True,
+            validation_only=True,
+            success_body="OK",
+            route_label="POST /backfill",
+        )
+
+    if str(ACCOUNT_REGION or "").strip().upper() != "PAPER":
+        return run_validation()
+    headers = getattr(request, "headers", {})
+    with validation_cycle_observation.observe(headers.get("X-Cloud-Trace-Context"), PROJECT_ID):
+        return run_validation()
 
 
 @app.route("/dry-run", methods=["POST", "GET"])

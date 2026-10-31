@@ -118,8 +118,14 @@ for the marker store and report archive, and no marker bypass. It rejects enable
 paper risk-state or command producers before rebalance bootstrap. Its bootstrap
 uses the existing token without refreshing it, its business report archive and
 performance telemetry are suppressed, and a would-be marker write stops the
-cycle instead. Missing marker identity and read errors stop the cycle. Other
-execution paths retain their prior behavior.
+cycle instead. Missing marker identity and read errors stop the cycle.
+
+PAPER `/backfill` is also a verification-only request and uses this same
+observed validation boundary. It fails closed if the journal prerequisites or
+writer settings do not satisfy that boundary, and does not refresh the token or
+persist a business report. This is a change from the earlier `/backfill` path;
+non-PAPER `/backfill` retains its prior behavior. The dry-run inspection workflow
+described above still searches `/dry-run` requests only.
 
 These checks do not make the whole request read-only: strategy and plugin
 loading and broker or dependency paths need independent write-boundary evidence.
