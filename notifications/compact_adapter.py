@@ -79,18 +79,8 @@ def label_holding_currencies(
     return "\n".join(output)
 
 
-def adapt_compact_sections(
-    dashboard_text: str,
-    *,
-    locale: str,
-    supplemental_lines: Iterable[object] = (),
-) -> tuple[str, ...]:
-    """Return normalized non-zero holdings followed by explicit supplements.
-
-    Holdings are read from the already-rendered same-cycle dashboard so each
-    platform keeps ownership of broker-specific valuation and quantity rules.
-    Supplemental lines must already be localized by the platform translator.
-    """
+def _compact_holding_lines(dashboard_text: str, *, locale: str) -> list[str]:
+    """Read localized non-zero holdings from the rendered dashboard."""
     holdings: list[str] = []
     in_holdings = False
     for raw_line in str(dashboard_text or "").splitlines():
@@ -111,6 +101,22 @@ def adapt_compact_sections(
             continue
         detail = _localize_holding_detail(detail, locale=locale)
         holdings.append(f"- {symbol}: {detail}")
+    return holdings
+
+
+def adapt_compact_sections(
+    dashboard_text: str,
+    *,
+    locale: str,
+    supplemental_lines: Iterable[object] = (),
+) -> tuple[str, ...]:
+    """Return normalized non-zero holdings followed by explicit supplements.
+
+    Holdings are read from the already-rendered same-cycle dashboard so each
+    platform keeps ownership of broker-specific valuation and quantity rules.
+    Supplemental lines must already be localized by the platform translator.
+    """
+    holdings = _compact_holding_lines(dashboard_text, locale=locale)
 
     lines: list[str] = []
     if holdings:
