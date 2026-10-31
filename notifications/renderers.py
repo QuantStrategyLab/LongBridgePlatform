@@ -361,6 +361,23 @@ def _heartbeat_account_equity_line(execution, *, translator) -> str:
     return translator("heartbeat_account_equity", value=f"{currency} {amount:,.2f}")
 
 
+def _append_compact_dashboard_sections(lines, *, execution, translator) -> None:
+    """Append the shared compact dashboard projection without changing its order."""
+    compact_dashboard = _format_dashboard_text(
+        execution.get("dashboard_text"),
+        translator=translator,
+        cash_only_execution=bool(execution.get("cash_only_execution", True)),
+        position_currency_by_symbol=execution.get("position_currency_by_symbol"),
+    )
+    lines.extend(
+        adapt_compact_sections(
+            compact_dashboard,
+            locale="zh" if _translator_uses_zh(translator) else "en",
+            supplemental_lines=execution.get("compact_supplemental_lines", ()),
+        )
+    )
+
+
 def render_rebalance_notification(
     *,
     execution,
@@ -399,19 +416,7 @@ def render_rebalance_notification(
     total_assets_line = _compact_total_assets_line(execution, translator=translator)
     if total_assets_line:
         compact_lines.append(total_assets_line)
-    compact_dashboard = _format_dashboard_text(
-        execution.get("dashboard_text"),
-        translator=translator,
-        cash_only_execution=bool(execution.get("cash_only_execution", True)),
-        position_currency_by_symbol=execution.get("position_currency_by_symbol"),
-    )
-    compact_lines.extend(
-        adapt_compact_sections(
-            compact_dashboard,
-            locale="zh" if _translator_uses_zh(translator) else "en",
-            supplemental_lines=execution.get("compact_supplemental_lines", ()),
-        )
-    )
+    _append_compact_dashboard_sections(compact_lines, execution=execution, translator=translator)
     compact_lines.extend(str(log).strip() for log in logs if str(log).strip())
     return RenderedNotification(
         detailed_text="\n".join(detailed_lines),
@@ -504,19 +509,7 @@ def render_heartbeat_notification(
         total_assets_line = _compact_total_assets_line(execution, translator=translator)
     if total_assets_line:
         compact_lines.append(total_assets_line)
-    compact_dashboard = _format_dashboard_text(
-        execution.get("dashboard_text"),
-        translator=translator,
-        cash_only_execution=bool(execution.get("cash_only_execution", True)),
-        position_currency_by_symbol=execution.get("position_currency_by_symbol"),
-    )
-    compact_lines.extend(
-        adapt_compact_sections(
-            compact_dashboard,
-            locale="zh" if _translator_uses_zh(translator) else "en",
-            supplemental_lines=execution.get("compact_supplemental_lines", ()),
-        )
-    )
+    _append_compact_dashboard_sections(compact_lines, execution=execution, translator=translator)
     compact_lines.append(translator(outcome_key))
 
     return RenderedNotification(
