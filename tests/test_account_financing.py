@@ -173,7 +173,7 @@ def test_producer_rejects_invalid_financing_with_zero_writes():
     writes = []
     env = {
         "ACCOUNT_HISTORY_RECORDING_ENABLED": "true",
-        "ACCOUNT_HISTORY_GCS_PREFIX": "gs://qsl-runtime-logs-shared/longbridge/account_snapshots",
+        "ACCOUNT_HISTORY_GCS_PREFIX": "gs://synthetic-runtime-logs/longbridge/account_snapshots",
         "ACCOUNT_HISTORY_EXPECTED_SCOPE": "SG",
         "ACCOUNT_HISTORY_TARGET_ID": "sg",
         "GOOGLE_CLOUD_PROJECT": "longbridge-prod",
