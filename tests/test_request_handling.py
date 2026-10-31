@@ -1,3 +1,4 @@
+import dataclasses
 import importlib
 import json
 import os
@@ -534,6 +535,96 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(body, "OK")
         self.assertTrue(observed["force_run"])
         self.assertTrue(observed["validation_only"])
+
+    def test_paper_backfill_blocks_enabled_writers_before_broker_bootstrap(self):
+        from contextlib import redirect_stdout
+        import io
+        for flag in ("strategy_risk_state_paper_enabled", "durable_execution_command_paper_enabled",
+                     "durable_execution_command_live_enabled"):
+            with self.subTest(flag=flag):
+                module = load_module()
+                from application.runtime_composer import LongBridgeRuntimeComposer
+                calls = []
+                class Bootstrap:
+                    def __call__(self):
+                        calls.append("normal_bootstrap")
+                        raise RuntimeError("synthetic stop")
+
+                    def validation_cycle(self):
+                        calls.append("validation_bootstrap")
+                        raise RuntimeError("synthetic stop")
+
+                report = {"status": "pending"}
+                reporting = types.SimpleNamespace(
+                    report_gcs_prefix_uri="gs://test/reports", report_base_dir="/synthetic",
+                    start_run=lambda: (types.SimpleNamespace(run_id="test"), report),
+                    log_event=lambda *_a, **_k: None,
+                    persist_execution_report=unittest.mock.Mock(),
+                )
+                notification = types.SimpleNamespace(
+                    notification_port=None, notify_issue=lambda *_: None,
+                    post_submit_order=lambda *_: None,
+                    publish_cycle_notification=unittest.mock.Mock(),
+                )
+                store = types.SimpleNamespace(cloud_prefix_uri="gs://test/reports",
+                    has_marker=lambda _: False, has_prior_execution_report=lambda **_: False,
+                    claim_marker=unittest.mock.Mock(), record_marker=unittest.mock.Mock())
+                risk_store, command_store = unittest.mock.Mock(), unittest.mock.Mock()
+                config = types.SimpleNamespace(with_prefix=lambda message: message, dry_run_only=True,
+                    execution_dedup_enabled=True,
+                    execution_state_store=store, strategy_risk_state_store=risk_store,
+                    execution_command_store=command_store, **{flag: True})
+                with patch.object(module, "ACCOUNT_REGION", "PAPER"), \
+                     patch.object(module, "_v7_application_candidate_bound", return_value=False), \
+                     patch.object(module, "is_market_open_now", return_value=True), \
+                     patch.object(module, "dca_execution_unsupported_reason", return_value=None), \
+                     patch.object(module, "attach_terminal_fallback_execution_receipt", return_value=None), \
+                     patch.object(LongBridgeRuntimeComposer, "build_reporting_adapters", return_value=reporting), \
+                     patch.object(LongBridgeRuntimeComposer, "build_notification_adapters", return_value=notification), \
+                     patch.object(LongBridgeRuntimeComposer, "load_strategy_plugin_signals", return_value=((), None)), \
+                     patch.object(LongBridgeRuntimeComposer, "attach_strategy_plugin_report", return_value=None), \
+                     patch.object(LongBridgeRuntimeComposer, "build_rebalance_config", return_value=config), \
+                     redirect_stdout(io.StringIO()), module.app.test_request_context("/backfill", method="POST"):
+                    # Replace only bootstrap construction, retaining the actual rebalance cycle.
+                    original = module.build_composer
+                    def composer(**kwargs):
+                        return dataclasses.replace(original(**kwargs), bootstrap_builder=lambda **_: Bootstrap())
+                    with patch.object(module, "build_composer", side_effect=composer):
+                        self.assertEqual(module.handle_backfill(), ("Error", 500))
+                self.assertEqual(calls, [])
+                self.assertEqual(report["diagnostics"]["failure_reason"], "validation_side_effect_enabled")
+                risk_store.append.assert_not_called()
+                command_store.enqueue.assert_not_called()
+                store.claim_marker.assert_not_called()
+                store.record_marker.assert_not_called()
+                reporting.persist_execution_report.assert_not_called()
+                notification.publish_cycle_notification.assert_not_called()
+                self.assertIsNone(module.validation_cycle_observation.current())
+
+    def test_backfill_observation_scope_is_paper_only_and_resets(self):
+        import io
+        from contextlib import redirect_stdout
+
+        module = load_module()
+        for region, error in (("PAPER", False), ("PAPER", True), ("HK", False)):
+            with self.subTest(region=region, error=error):
+                seen = []
+                def run(**kwargs):
+                    seen.append(module.validation_cycle_observation.current())
+                    self.assertTrue(kwargs["validation_only"])
+                    if error:
+                        raise RuntimeError("private diagnostic")
+                    return True
+                with patch.object(module, "ACCOUNT_REGION", region), \
+                     patch.object(module, "run_strategy", side_effect=run), \
+                     patch.object(module, "_notify_runtime_error") as notify, \
+                     redirect_stdout(io.StringIO()), module.app.test_request_context("/backfill", method="POST"):
+                    self.assertEqual(module.handle_backfill(), ("Error", 500) if error else ("OK", 200))
+                self.assertEqual(seen[0] is not None, region == "PAPER")
+                if region == "PAPER":
+                    notify.assert_not_called()
+                self.assertIsNone(module.validation_cycle_observation.current())
+
     def test_handle_dry_run_forces_strategy_dry_run(self):
         module = load_module()
         observed = {"force_run": None, "validation_only": None}
@@ -555,6 +646,12 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(observed["validation_label"], "dry_run")
 
     def test_paper_dry_run_instruments_real_composed_port_and_stays_silent(self):
+        self._assert_paper_validation_instruments_and_stays_silent("/dry-run")
+
+    def test_paper_backfill_instruments_real_composed_port_and_stays_silent(self):
+        self._assert_paper_validation_instruments_and_stays_silent("/backfill")
+
+    def _assert_paper_validation_instruments_and_stays_silent(self, path):
         import io
         from contextlib import nullcontext, redirect_stdout
 
@@ -612,8 +709,9 @@ class RequestHandlingTests(unittest.TestCase):
              patch.object(LongBridgeRuntimeComposer, "attach_strategy_plugin_report", return_value=None), \
              patch.object(LongBridgeRuntimeComposer, "build_rebalance_config", return_value=types.SimpleNamespace(
                  execution_state_store=types.SimpleNamespace(cloud_prefix_uri="gs://test/reports"))), \
-             redirect_stdout(output), module.app.test_request_context("/dry-run", method="POST"):
-            self.assertEqual(module.handle_dry_run(), ("Dry Run OK", 200))
+             redirect_stdout(output), module.app.test_request_context(path, method="POST"):
+            handler = module.handle_dry_run if path == "/dry-run" else module.handle_backfill
+            self.assertEqual(handler(), ("Dry Run OK" if path == "/dry-run" else "OK", 200))
 
         receipts = [json.loads(line) for line in output.getvalue().splitlines() if line.startswith('{"adapter_instrumented"')]
         self.assertEqual(len(receipts), 1)
@@ -645,6 +743,12 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertNotIn("private diagnostic", output.getvalue())
 
     def test_paper_validation_rejects_mismatched_journal_before_cycle(self):
+        self._assert_paper_validation_rejects_mismatched_journal("/dry-run")
+
+    def test_paper_backfill_rejects_mismatched_journal_before_cycle(self):
+        self._assert_paper_validation_rejects_mismatched_journal("/backfill")
+
+    def _assert_paper_validation_rejects_mismatched_journal(self, path):
         import io
         from contextlib import redirect_stdout
 
@@ -682,8 +786,9 @@ class RequestHandlingTests(unittest.TestCase):
              patch.object(LongBridgeRuntimeComposer, "load_strategy_plugin_signals", return_value=((), None)), \
              patch.object(LongBridgeRuntimeComposer, "attach_strategy_plugin_report", return_value=None), \
              patch.object(LongBridgeRuntimeComposer, "build_rebalance_config", return_value=config), \
-             redirect_stdout(output), module.app.test_request_context("/dry-run", method="POST"):
-            self.assertEqual(module.handle_dry_run(), ("Error", 500))
+             redirect_stdout(output), module.app.test_request_context(path, method="POST"):
+            handler = module.handle_dry_run if path == "/dry-run" else module.handle_backfill
+            self.assertEqual(handler(), ("Error", 500))
         cycle.assert_not_called()
         reporting.persist_execution_report.assert_not_called()
         notification.publish_cycle_notification.assert_not_called()
