@@ -189,12 +189,13 @@ def test_preconditions_accept_legal_native_profile_when_old_and_service_match():
 
     assert len(selected) == 3
     assert contract["target"]["strategy_profile"] == profile
-    manifest_hk_profile = next(
-        item.strategy_profile
+    hk_target = next(
+        item
         for item in canary.load_runtime_target_manifest().targets
         if item.id == "hk"
     )
-    assert manifest_hk_profile == DEFAULT_PROFILE
+    assert (hk_target.mode, hk_target.account_scope) == ("live", "HK")
+    assert (hk_target.service, hk_target.region) == (SERVICE, REGION)
 
 
 @pytest.mark.parametrize("drift", ["env", "container_config"])

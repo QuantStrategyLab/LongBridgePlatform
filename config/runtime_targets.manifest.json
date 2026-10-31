@@ -28,7 +28,7 @@
       "environment": "longbridge-hk",
       "service": "longbridge-quant-hk-service",
       "region": "asia-east2",
-      "strategy_profile": "hk_global_etf_tactical_rotation",
+      "strategy_profile": "tqqq_growth_income",
       "secret_ref": {
         "longport_token": "longport_token_hk",
         "longport_app_key": "longport-app-key-hk",

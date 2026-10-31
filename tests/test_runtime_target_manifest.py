@@ -69,7 +69,7 @@ def test_checked_in_manifest_loads_existing_paper_hk_sg_targets():
     assert hk.environment == "longbridge-hk"
     assert hk.service == "longbridge-quant-hk-service"
     assert hk.region == "asia-east2"
-    assert hk.strategy_profile == "hk_global_etf_tactical_rotation"
+    assert hk.strategy_profile == "tqqq_growth_income"
 
     sg = by_id["sg"]
     assert sg.mode == "live"
