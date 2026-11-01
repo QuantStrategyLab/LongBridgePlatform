@@ -163,7 +163,8 @@ def test_paper_producer_persists_observation_gate_receipt_without_authorizing_a_
     assert gate["enforcement"] == "observe"
     assert gate["mode"] == "active"
     assert gate["policy_allows"] is False
-    assert gate["broker_write_allowed"] is True
+    # The pinned QPK command gate never treats observation as broker authority.
+    assert gate["broker_write_allowed"] is False
     assert "exposure_effect_unknown" in gate["reasons"]
     assert result["consumer_authorized"] is False
 

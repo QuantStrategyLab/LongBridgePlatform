@@ -510,27 +510,11 @@ def build_sender(token, chat_id, *, with_prefix_fn, requests_module=None):
     def send_tg_message(message) -> bool:
         if not token or not chat_id:
             return False
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        try:
-            prefixed = with_prefix_fn(message)
-            response = requests_module.post(
-                url,
-                json={"chat_id": chat_id, "text": _break_telegram_market_symbol_auto_links(prefixed)},
-                timeout=10,
-            )
-            status_code = int(getattr(response, "status_code", 200) or 200)
-            if status_code < 200 or status_code >= 300:
-                print(f"Telegram send failed: HTTP {status_code}", flush=True)
-                return False
-            load_payload = getattr(response, "json", None)
-            payload = load_payload() if callable(load_payload) else None
-            if isinstance(payload, Mapping) and payload.get("ok") is False:
-                print("Telegram send failed: negative API acknowledgement", flush=True)
-                return False
-        except Exception as exc:
-            print(f"Telegram send failed: {type(exc).__name__}", flush=True)
-            return False
-        return True
+        from .intent_transport import send_intent
+        return send_intent(
+            with_prefix_fn(message), chat_id=chat_id, token=token,
+            requests_module=requests_module, timeout=10,
+        )["ok"]
 
     return send_tg_message
 
