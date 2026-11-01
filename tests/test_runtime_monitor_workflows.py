@@ -73,7 +73,7 @@ def test_runtime_monitor_workflows_use_frozen_runtime_environment() -> None:
     setup_uv = "uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9"
     workflows = {
         "execution-report-heartbeat.yml": (
-            "uv run --no-sync python scripts/execution_report_heartbeat.py",
+            "uv run --no-sync python scripts/with_heartbeat_digest_binding.py heartbeat",
         ),
         "runtime-guard.yml": (
             "uv run --no-sync python scripts/cloud_run_runtime_guard.py",

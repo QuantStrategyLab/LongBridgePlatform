@@ -272,7 +272,7 @@ jobs:
 
       - name: Check recent execution report
         if: ${{ !inputs.snapshot_only && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}
-        run: uv run --no-sync python scripts/execution_report_heartbeat.py
+        run: uv run --no-sync python scripts/with_heartbeat_digest_binding.py heartbeat
 
       - name: Publish read-only runtime execution evidence
         if: ${{ !inputs.snapshot_only && matrix.target.label == 'PAPER' && env.INSPECT_SG_PROBE_PERMISSIONS != 'true' }}
@@ -325,7 +325,7 @@ jobs:
           DIGEST_TARGET_ID: ${{ secrets.DIGEST_TARGET_ID }}
           DIGEST_TARGET_BINDINGS_JSON: ${{ secrets.DIGEST_TARGET_BINDINGS_JSON }}
           DIGEST_NOTIFICATION_SCHEDULE_JSON: ${{ vars.DIGEST_NOTIFICATION_SCHEDULE_JSON }}
-        run: uv run --no-sync python scripts/emit_unified_digest_candidates.py
+        run: uv run --no-sync python scripts/with_heartbeat_digest_binding.py candidates
 
   inspect-account-snapshot:
     needs: resolve-matrix
