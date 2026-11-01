@@ -170,7 +170,7 @@ def test_preconditions_accept_both_existing_hk_selector_shapes(selector):
     ]
 
 
-def test_preconditions_accept_legal_native_profile_when_old_and_service_match():
+def test_preconditions_accept_retired_native_profile_when_old_and_service_match():
     profile = "hk_low_vol_dividend_quality_snapshot"
     selected, contract, _ = canary.validate_canary_preconditions(
         service=_service(profile=profile),
@@ -232,6 +232,8 @@ def test_preconditions_reject_old_revision_profile_or_config_drift(drift):
     [
         ("", ""),
         ("unsupported_profile", "unsupported_profile"),
+        ("global_etf_rotation", "global_etf_rotation"),
+        ("hk_equity_combo", "hk_equity_combo"),
         ("hk_low_vol_dividend_quality_snapshot", DEFAULT_PROFILE),
     ],
 )
@@ -1120,3 +1122,21 @@ def test_pause_failure_does_not_mask_terminal_observation_failure(
     assert state["run_count"] == 1
     assert state["uri_restores"] == 0
     assert state["traffic_restores"] == 0
+
+
+@pytest.mark.parametrize("profile", [DEFAULT_PROFILE, "hk_low_vol_dividend_quality_snapshot"])
+@pytest.mark.parametrize("unsafe_field", ["enabled", "live", "target_not_dry_run", "environment_not_dry_run"])
+def test_retired_target_inspection_preserves_disabled_paper_guards(profile, unsafe_field):
+    env = _runtime_env("HK", profile)
+    target = json.loads(env["RUNTIME_TARGET_JSON"])
+    if unsafe_field == "enabled":
+        env["RUNTIME_TARGET_ENABLED"] = "true"
+    elif unsafe_field == "live":
+        target["execution_mode"] = "live"
+    elif unsafe_field == "target_not_dry_run":
+        target["dry_run_only"] = False
+    else:
+        env["LONGBRIDGE_DRY_RUN_ONLY"] = "false"
+    env["RUNTIME_TARGET_JSON"] = json.dumps(target)
+    with pytest.raises(canary.CanaryError, match="runtime_target_mismatch"):
+        canary._runtime_target(env, service=SERVICE)
