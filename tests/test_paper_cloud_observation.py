@@ -277,3 +277,38 @@ def test_manual_verification_does_not_create_official_snapshot(monkeypatch, caps
     assert cli.main() == 0
     assert all(key.startswith("health/verification/") for key in store.data)
     assert "official_snapshot_created" in capsys.readouterr().out
+
+
+def test_expired_calendar_alert_is_deduplicated_when_storage_works():
+    store, messages = MemoryStore(), []
+    now = datetime(2029, 1, 2, 22, tzinfo=UTC)
+    watch = Watchdog(
+        store,
+        lambda message: (messages.append(message), True)[1],
+        Calendar(),
+        date(2028, 12, 31),
+        now,
+    )
+    assert watch.run(now) == "calendar_unavailable"
+    assert watch.run(now + timedelta(minutes=15)) == "calendar_unavailable"
+    assert (
+        len([message for message in messages if "calendar_unavailable" in message]) == 1
+    )
+
+
+def test_notification_verification_does_not_consume_production_incident():
+    store, messages = MemoryStore(), []
+
+    def send(message):
+        messages.append(message)
+        return True
+
+    watch = Watchdog(store, send, Calendar(), date(2026, 11, 2), NOW, verification=True)
+    watch.notify("synthetic_failure", True, NOW)
+    assert messages == ["[verification] PAPER observation alert: synthetic_failure"]
+    assert store.get("alerts/verification/synthetic_failure/ack.json")
+    assert not store.get("alerts/synthetic_failure/ack.json")
+    Watchdog(store, send, Calendar(), date(2026, 11, 2), NOW).notify(
+        "synthetic_failure", True, NOW
+    )
+    assert len(messages) == 2
