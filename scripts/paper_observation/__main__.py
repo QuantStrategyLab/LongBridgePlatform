@@ -150,13 +150,10 @@ def sender(token, recipient):
 
     def send(message):
         try:
-            response = requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": recipient, "text": message},
-                timeout=10,
-                allow_redirects=False,
-            )
-            return response.status_code == 200 and response.json().get("ok") is True
+            from notifications.intent_transport import send_intent
+            receipt = send_intent(message, token=token, chat_id=recipient, requests_module=requests,
+                                  timeout=10, request_options={"allow_redirects": False})
+            return receipt["http_status"] == 200 and receipt["ok"]
         except Exception:
             return False
 
@@ -164,6 +161,8 @@ def sender(token, recipient):
 
 
 def main():
+    from quant_platform_kit.notifications import install_log_redaction
+    install_log_redaction(wrap_streams=True)
     logging.disable(logging.CRITICAL)
     try:
         if len(sys.argv) != 2 or sys.argv[1] not in ("collect", "watchdog", "verify"):

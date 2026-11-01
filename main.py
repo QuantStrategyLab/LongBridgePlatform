@@ -87,6 +87,9 @@ from quant_platform_kit.longbridge import (
 from strategy_runtime import load_strategy_runtime
 from decision_mapper import map_strategy_decision_to_plan
 
+from quant_platform_kit.notifications import install_log_redaction
+install_log_redaction(wrap_streams=True)
+
 app = Flask(__name__)
 
 # This collector is limited to documented LongPort read endpoints and is
@@ -676,18 +679,10 @@ def _send_runtime_error(exc: Exception, *, route_label: str) -> bool:
     outcomes = []
     for token, chat_id in targets:
         try:
-            response = requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": chat_id, "text": message},
-                timeout=10,
-            )
-            status_code = int(getattr(response, "status_code", 200) or 200)
-            acknowledged = 200 <= status_code < 300
-            load_payload = getattr(response, "json", None)
-            payload = load_payload() if acknowledged and callable(load_payload) else None
-            if isinstance(payload, dict) and payload.get("ok") is False:
-                acknowledged = False
-            outcomes.append(acknowledged)
+            from notifications.intent_transport import send_intent
+            outcomes.append(send_intent(
+                message, token=token, chat_id=chat_id, requests_module=requests, timeout=10,
+            )["ok"])
         except Exception:
             print(
                 t("runtime_notification_delivery_failed"),

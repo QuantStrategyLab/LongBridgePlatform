@@ -512,7 +512,7 @@ def test_runtime_strategy_adapters_builds_escalated_plugin_alert_message():
     alerts = adapters.build_strategy_plugin_alert_messages((signal,))
 
     assert len(alerts) == 1
-    assert alerts[0].subject == "alert:soxl_soxx_trend_income:Crisis:true crisis"
+    assert alerts[0].subject == "alert:Semiconductor Trend Income:Crisis:true crisis"
     assert "plugin=Crisis" in alerts[0].body
     assert "route=true crisis" in alerts[0].body
     assert "action=defend" in alerts[0].body
