@@ -5,6 +5,7 @@ from threading import Lock
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from unittest.mock import Mock
 
 from scripts.paper_observation.core import (
     Calendar,
@@ -215,3 +216,64 @@ def test_watchdog_storage_failure_still_notifies():
     )
     assert watch.run(NOW) == "storage_unavailable"
     assert len(messages) == 1
+
+
+def test_ambiguous_store_write_reads_back_without_retry():
+    from scripts.paper_observation.__main__ import Store
+
+    store = Store.__new__(Store)
+    store.bucket = Mock()
+    blob = store.bucket.blob.return_value
+    blob.upload_from_string.side_effect = TimeoutError("sensitive error")
+    store.get = Mock(return_value={"value": 1})
+    assert store.create("synthetic/key.json", {"value": 1}) is True
+    assert blob.upload_from_string.call_count == 1
+    assert blob.upload_from_string.call_args.kwargs["if_generation_match"] == 0
+    assert blob.upload_from_string.call_args.kwargs["retry"] is None
+
+
+def test_competing_write_does_not_overwrite_existing_value():
+    from google.api_core.exceptions import PreconditionFailed
+    from scripts.paper_observation.__main__ import Store
+
+    store = Store.__new__(Store)
+    store.bucket = Mock()
+    blob = store.bucket.blob.return_value
+    blob.upload_from_string.side_effect = PreconditionFailed("collision")
+    store.get = Mock(return_value={"original": True})
+    assert store.create("synthetic/key.json", {"original": False}) is False
+    assert blob.upload_from_string.call_count == 1
+
+
+def test_watchdog_permission_failure_alerts_on_next_tick():
+    store, messages = MemoryStore(), []
+    store.create("health/stopped/2026-11-02.json", {"reason": "http_403"})
+    watch = Watchdog(
+        store,
+        lambda message: (messages.append(message), True)[1],
+        Calendar(),
+        date(2026, 11, 2),
+        NOW,
+    )
+    watch.run(NOW + timedelta(minutes=7))
+    assert any("permission_identity_schema" in message for message in messages)
+
+
+def test_manual_verification_does_not_create_official_snapshot(monkeypatch, capsys):
+    from scripts.paper_observation import __main__ as cli
+
+    store = MemoryStore()
+    now = datetime.now(UTC)
+    monkeypatch.setattr(cli, "Store", lambda _: store)
+    monkeypatch.setattr(cli, "snapshot_fetcher", lambda *_: lambda: payload(now))
+    monkeypatch.setattr(cli.sys, "argv", ["observation", "verify"])
+    for key, value in {
+        "OBSERVATION_BUCKET": "synthetic-bucket",
+        "OBSERVATION_START": "2026-11-02",
+        "PAPER_SERVICE_URL": "https://synthetic.run.app",
+        "EXPECTED_SOURCE_BINDING": BINDING,
+    }.items():
+        monkeypatch.setenv(key, value)
+    assert cli.main() == 0
+    assert all(key.startswith("health/verification/") for key in store.data)
+    assert "official_snapshot_created" in capsys.readouterr().out

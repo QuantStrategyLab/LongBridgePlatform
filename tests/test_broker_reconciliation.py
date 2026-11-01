@@ -978,11 +978,13 @@ def test_duplicate_execution_with_different_offset_has_one_utc_identity():
 
 
 def test_recent_orders_include_terminal_rows_without_raw_identifiers():
+    from longport.openapi import OrderSide, OrderStatus, OrderType
+
     context, calls = _read_only_trade_context()
     reference = datetime(2026, 11, 2, 21, 30, tzinfo=timezone.utc)
     context.history_orders = lambda **kwargs: [SimpleNamespace(
-        order_id="synthetic-private-order", status="FILLED", symbol="SOXL.US",
-        currency="USD", side="BUY", order_type="LO", quantity="2",
+        order_id="synthetic-private-order", status=OrderStatus.Filled, symbol="SOXL.US",
+        currency="USD", side=OrderSide.Buy, order_type=OrderType.LO, quantity="2",
         executed_quantity="2", submitted_at=reference-timedelta(hours=2), updated_at=reference,
     )]
     payload, status = reconciliation.run_read_only_account_snapshot(
@@ -993,6 +995,8 @@ def test_recent_orders_include_terminal_rows_without_raw_identifiers():
     assert status == 200
     assert payload["known_non_terminal_orders_7d"] == []
     assert payload["recent_orders_7d"][0]["status"] == "FILLED"
+    assert payload["recent_orders_7d"][0]["side"] == "BUY"
+    assert payload["recent_orders_7d"][0]["order_type"] == "LO"
     assert len(payload["recent_orders_7d"][0]["order_digest"]) == 64
     assert "synthetic-private-order" not in json.dumps(payload)
     assert payload["recent_orders_complete"] is False

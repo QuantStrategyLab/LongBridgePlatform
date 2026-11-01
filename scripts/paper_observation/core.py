@@ -12,6 +12,22 @@ from zoneinfo import ZoneInfo
 
 UTC = timezone.utc
 NY = ZoneInfo("America/New_York")
+WORKING_STATUSES = frozenset(
+    {
+        "NOTREPORTED",
+        "REPLACEDNOTREPORTED",
+        "PROTECTEDNOTREPORTED",
+        "VARIETIESNOTREPORTED",
+        "WAITTONEW",
+        "NEW",
+        "WAITTOREPLACE",
+        "PENDINGREPLACE",
+        "REPLACED",
+        "PARTIALFILLED",
+        "WAITTOCANCEL",
+        "PENDINGCANCEL",
+    }
+)
 
 
 class ObservationError(Exception):
@@ -211,6 +227,9 @@ def _sanitize(payload, binding, now):
         "broker_reported_balances": balances,
         "positions": positions,
         "recent_orders_7d": list(by_id.values()),
+        "known_non_terminal_orders_7d": [
+            order for order in by_id.values() if order["status"] in WORKING_STATUSES
+        ],
         "recent_orders_complete": False,
         "open_orders_complete": False,
         "orders_query_start": begin.isoformat(),
@@ -425,6 +444,8 @@ class Watchdog:
                 now,
             )
             for day, due in self.calendar.expected(self.start, now):
+                stopped = self.store.get(f"health/stopped/{day}.json")
+                self.notify(f"{day}/permission_identity_schema", bool(stopped), now)
                 if now < max(due + timedelta(minutes=60), self.activation):
                     continue
                 marker = self.store.get(f"health/days/{day}.json")
@@ -434,8 +455,6 @@ class Watchdog:
                     bool(marker and marker.get("status") == "late_snapshot"),
                     now,
                 )
-                stopped = self.store.get(f"health/stopped/{day}.json")
-                self.notify(f"{day}/permission_identity_schema", bool(stopped), now)
             remaining = (self.calendar.end - now.date()).days
             for threshold in (90, 30, 7):
                 self.notify(

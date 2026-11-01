@@ -14,7 +14,15 @@ from google.auth.transport.requests import Request
 from google.cloud import storage
 from google.oauth2.id_token import fetch_id_token
 
-from .core import Calendar, Collector, ObservationError, UTC, Watchdog, instant
+from .core import (
+    Calendar,
+    Collector,
+    ObservationError,
+    UTC,
+    Watchdog,
+    instant,
+    sanitize,
+)
 
 LIMIT = 1024 * 1024
 
@@ -66,7 +74,7 @@ class Store:
             raise ObservationError("storage_unavailable") from None
 
 
-def snapshot_fetcher(base):
+def snapshot_fetcher(base, audience=None):
     parsed = urlsplit(base)
     if (
         parsed.scheme != "https"
@@ -80,6 +88,19 @@ def snapshot_fetcher(base):
     ):
         raise ObservationError("configuration_invalid")
     base = base.rstrip("/")
+    audience = (audience or base).rstrip("/")
+    audience_parts = urlsplit(audience)
+    if (
+        audience_parts.scheme != "https"
+        or not audience_parts.hostname
+        or not audience_parts.hostname.endswith(".run.app")
+        or audience_parts.path
+        or audience_parts.query
+        or audience_parts.fragment
+        or audience_parts.username
+        or audience_parts.port
+    ):
+        raise ObservationError("configuration_invalid")
 
     def fetch():
         def deadline(_signum, _frame):
@@ -88,7 +109,7 @@ def snapshot_fetcher(base):
         previous = signal.signal(signal.SIGALRM, deadline)
         signal.setitimer(signal.ITIMER_REAL, 20)
         try:
-            token = fetch_id_token(Request(), base)
+            token = fetch_id_token(Request(), audience)
             with requests.get(
                 base + "/account-snapshot",
                 headers={"Authorization": "Bearer " + token},
@@ -145,16 +166,36 @@ def sender(token, recipient):
 def main():
     logging.disable(logging.CRITICAL)
     try:
-        if len(sys.argv) != 2 or sys.argv[1] not in ("collect", "watchdog"):
+        if len(sys.argv) != 2 or sys.argv[1] not in ("collect", "watchdog", "verify"):
             raise ObservationError("configuration_invalid")
         mode = sys.argv[1]
         store = Store(os.environ["OBSERVATION_BUCKET"])
         start = date.fromisoformat(os.environ["OBSERVATION_START"])
         now = datetime.now(UTC)
-        if mode == "collect":
+        if mode in ("collect", "verify"):
+            fetch = snapshot_fetcher(
+                os.environ["PAPER_SERVICE_URL"], os.environ.get("PAPER_TOKEN_AUDIENCE")
+            )
+            if mode == "verify":
+                record = sanitize(
+                    fetch(), os.environ["EXPECTED_SOURCE_BINDING"], datetime.now(UTC)
+                )
+                store.create(
+                    f"health/verification/{now.strftime('%Y%m%dT%H%M%fZ')}.json",
+                    {
+                        "verified_at": now.isoformat(),
+                        "schema_version": record["schema_version"],
+                        "identity_verification": record["identity_verification"],
+                        "orders_complete": False,
+                    },
+                )
+                print(
+                    '{"component":"verification","result":"verified","official_snapshot_created":false}'
+                )
+                return 0
             runner = Collector(
                 store,
-                snapshot_fetcher(os.environ["PAPER_SERVICE_URL"]),
+                fetch,
                 os.environ["EXPECTED_SOURCE_BINDING"],
                 Calendar(),
                 start,

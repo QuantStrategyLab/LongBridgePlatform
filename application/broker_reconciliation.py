@@ -740,6 +740,8 @@ def run_read_only_account_snapshot(
         recent_orders = []
         for order in observations.recent_orders:
             record = {key: order[key] for key in safe_order_keys}
+            record["side"] = str(record["side"]).removeprefix("ORDERSIDE.")
+            record["order_type"] = str(record["order_type"]).removeprefix("ORDERTYPE.")
             # SDK naive timestamps represent local time; do not infer an event
             # date from updated_at, nor expose broker identifiers over HTTP.
             for key in ("submitted_at", "updated_at"):

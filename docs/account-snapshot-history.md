@@ -11,6 +11,13 @@ across releases so private order digests remain comparable. Do not commit any
 of these bindings. The collector never imports the broker SDK or calls a
 trading route.
 
+The manual `verify` subcommand validates the same response and writes only a
+nonfinancial `health/verification/` receipt. It never creates a daily snapshot
+or t0. For internal no-traffic candidate validation, `PAPER_TOKEN_AUDIENCE` may
+provide the canonical service audience while `PAPER_SERVICE_URL` selects its
+protected candidate tag URL. Restore the normal service URL and `collect`
+subcommand before activating the Scheduler.
+
 The response adds `recent_orders_7d` using the existing bounded history query,
 including terminal orders, UTC event times and query bounds. Original order
 identifiers are replaced with a keyed SHA256 digest when the salt is configured;
