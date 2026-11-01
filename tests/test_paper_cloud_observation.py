@@ -277,3 +277,20 @@ def test_manual_verification_does_not_create_official_snapshot(monkeypatch, caps
     assert cli.main() == 0
     assert all(key.startswith("health/verification/") for key in store.data)
     assert "official_snapshot_created" in capsys.readouterr().out
+
+
+def test_expired_calendar_alert_is_deduplicated_when_storage_works():
+    store, messages = MemoryStore(), []
+    now = datetime(2029, 1, 2, 22, tzinfo=UTC)
+    watch = Watchdog(
+        store,
+        lambda message: (messages.append(message), True)[1],
+        Calendar(),
+        date(2028, 12, 31),
+        now,
+    )
+    assert watch.run(now) == "calendar_unavailable"
+    assert watch.run(now + timedelta(minutes=15)) == "calendar_unavailable"
+    assert (
+        len([message for message in messages if "calendar_unavailable" in message]) == 1
+    )

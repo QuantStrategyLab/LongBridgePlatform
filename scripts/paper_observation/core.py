@@ -461,12 +461,14 @@ class Watchdog:
                     f"calendar/coverage_{threshold}", remaining <= threshold, now
                 )
         except ObservationError as exc:
+            if str(exc) == "calendar_unavailable":
+                try:
+                    self.notify(f"{now.date()}/calendar_unavailable", True, now)
+                    return "calendar_unavailable"
+                except ObservationError:
+                    pass
             # Storage failure must not depend on storage-based deduplication.
-            code = (
-                "calendar_unavailable"
-                if str(exc) == "calendar_unavailable"
-                else "storage_unavailable"
-            )
+            code = "storage_unavailable"
             self.send(
                 f"PAPER observation alert: {now.date()}/{code}; persistent dedup unavailable"
             )
