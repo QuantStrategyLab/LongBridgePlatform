@@ -204,18 +204,25 @@ def main():
             notify = sender(
                 os.environ["TELEGRAM_TOKEN"], os.environ["GLOBAL_TELEGRAM_CHAT_ID"]
             )
-            try:
-                calendar = Calendar()
-            except Exception:
-                notify("PAPER observation alert: calendar_unavailable")
-                raise ObservationError("calendar_unavailable") from None
             runner = Watchdog(
                 store,
                 notify,
-                calendar,
+                None,
                 start,
                 instant(os.environ["OBSERVATION_ACTIVATED_AT"]),
+                verification=os.environ.get("OBSERVATION_VERIFY_NOTIFICATIONS")
+                == "true",
             )
+            try:
+                runner.calendar = Calendar()
+            except Exception:
+                try:
+                    runner.notify(f"{now.date()}/calendar_unavailable", True, now)
+                except ObservationError:
+                    runner.send(
+                        "PAPER observation alert: calendar_unavailable; persistent dedup unavailable"
+                    )
+                raise ObservationError("calendar_unavailable") from None
         result = runner.run(now)
         print(json.dumps({"component": mode, "result": result}))
         return (

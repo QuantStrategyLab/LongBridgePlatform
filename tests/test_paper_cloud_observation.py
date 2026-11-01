@@ -294,3 +294,21 @@ def test_expired_calendar_alert_is_deduplicated_when_storage_works():
     assert (
         len([message for message in messages if "calendar_unavailable" in message]) == 1
     )
+
+
+def test_notification_verification_does_not_consume_production_incident():
+    store, messages = MemoryStore(), []
+
+    def send(message):
+        messages.append(message)
+        return True
+
+    watch = Watchdog(store, send, Calendar(), date(2026, 11, 2), NOW, verification=True)
+    watch.notify("synthetic_failure", True, NOW)
+    assert messages == ["[verification] PAPER observation alert: synthetic_failure"]
+    assert store.get("alerts/verification/synthetic_failure/ack.json")
+    assert not store.get("alerts/synthetic_failure/ack.json")
+    Watchdog(store, send, Calendar(), date(2026, 11, 2), NOW).notify(
+        "synthetic_failure", True, NOW
+    )
+    assert len(messages) == 2

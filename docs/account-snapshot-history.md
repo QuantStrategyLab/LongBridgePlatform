@@ -50,6 +50,13 @@ An ambiguous Telegram acknowledgment can duplicate a later delivery. Sender ACK
 does not prove receiver receipt. Storage failure uses one bounded direct alert
 per execution because persistent deduplication is then unavailable.
 
+For pre-activation notification testing only, set
+`OBSERVATION_VERIFY_NOTIFICATIONS=true`. Messages carry a verification label and
+incident state uses `alerts/verification/`, preserving normal incident keys.
+Remove this setting before enabling the watchdog Scheduler. These test sends
+remain real external notifications and require the same existing-channel
+authorization as production notifications.
+
 Run both jobs with one task, parallelism one, platform retries disabled and a
 180-second timeout. Collector ticks are every 15 minutes; watchdog ticks are at
 minutes 7, 22, 37 and 52. Give only the collector service-level invoker on the

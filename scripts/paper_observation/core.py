@@ -387,7 +387,7 @@ class Collector:
 
 
 class Watchdog:
-    def __init__(self, store, send, calendar, start, activation):
+    def __init__(self, store, send, calendar, start, activation, verification=False):
         self.store, self.send, self.calendar, self.start, self.activation = (
             store,
             send,
@@ -395,9 +395,13 @@ class Watchdog:
             start,
             activation,
         )
+        self.verification = verification
+        if verification:
+            self.send = lambda message: send("[verification] " + message)
 
     def notify(self, incident, active, now):
-        root = f"alerts/{incident}"
+        prefix = "verification/" if self.verification else ""
+        root = f"alerts/{prefix}{incident}"
         if active and not self.store.get(f"{root}/ack.json"):
             claim = f"{root}/claims/{slot(now)}.json"
             if self.store.create(claim, {"at": now.isoformat()}) and self.send(
