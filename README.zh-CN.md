@@ -10,6 +10,8 @@ LongBridge 兼容的券商连接执行，并在真实下单前经过区域化的
 
 > 投资有风险。本项目不构成投资建议，仅用于学习、研究和工程审阅。
 
+固定依赖中的港股策略政策已无可选策略。`hk_global_etf_tactical_rotation` 和 `hk_low_vol_dividend_quality_snapshot` 均拒绝新选择，包括 dry-run 切换计划；历史策略元数据和适配器仍保留。美股策略版本及现有部署配置不变。
+
 ## QSL 架构角色
 
 - **层级**：`执行平台`。

@@ -12,6 +12,8 @@ English | [简体中文](README.zh-CN.md)
 
 > Investing involves risk. This project does not provide investment advice and is for education, research, and engineering review only.
 
+The pinned HK strategy policy has no selectable profiles. New selection of `hk_global_etf_tactical_rotation` and `hk_low_vol_dividend_quality_snapshot` is rejected, including dry-run switch plans. Historical catalog metadata and adapters remain available. US strategy pins and existing deployment configuration are unchanged.
+
 ## QSL architecture role
 
 - **Layer**: `runtime-platform`.
