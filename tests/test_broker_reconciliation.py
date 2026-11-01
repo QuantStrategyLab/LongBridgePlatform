@@ -202,6 +202,18 @@ def test_account_snapshot_returns_only_safe_partial_account_facts():
                 "updated_at": None,
             }
         ],
+        "recent_orders_7d": [{
+            "status": "NEW", "symbol": "SOXL.US", "currency": "USD",
+            "side": "BUY", "order_type": "LO", "quantity": "2",
+            "executed_quantity": "1", "submitted_at": "2026-09-05T10:00:00+00:00",
+            "updated_at": None, "order_digest": None,
+        }],
+        "recent_orders_complete": False,
+        "recent_orders_query": {
+            "start_at": (now - timedelta(days=7)).isoformat(),
+            "end_at": now.isoformat(), "lookback_days": 7,
+            "paging_complete": False,
+        },
         "known_recent_executions_7d_count": 1,
         "positions_complete": True,
         "cash_complete": True,
@@ -963,3 +975,30 @@ def test_duplicate_execution_with_different_offset_has_one_utc_identity():
     )
     assert len(observations.recent_executions) == 1
     assert observations.recent_executions[0]["trade_done_at"] == now.isoformat()
+
+
+def test_recent_orders_include_terminal_rows_without_raw_identifiers():
+    from longport.openapi import OrderSide, OrderStatus, OrderType
+
+    context, calls = _read_only_trade_context()
+    reference = datetime(2026, 11, 2, 21, 30, tzinfo=timezone.utc)
+    context.history_orders = lambda **kwargs: [SimpleNamespace(
+        order_id="synthetic-private-order", status=OrderStatus.Filled, symbol="SOXL.US",
+        currency="USD", side=OrderSide.Buy, order_type=OrderType.LO, quantity="2",
+        executed_quantity="2", submitted_at=reference-timedelta(hours=2), updated_at=reference,
+    )]
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True, account_scope="PAPER", build_read_only_contexts=_snapshot_contexts(context),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+        now_reader=lambda: reference, order_digest_salt="synthetic-test-only-salt-0123456789",
+    )
+    assert status == 200
+    assert payload["known_non_terminal_orders_7d"] == []
+    assert payload["recent_orders_7d"][0]["status"] == "FILLED"
+    assert payload["recent_orders_7d"][0]["side"] == "BUY"
+    assert payload["recent_orders_7d"][0]["order_type"] == "LO"
+    assert len(payload["recent_orders_7d"][0]["order_digest"]) == 64
+    assert "synthetic-private-order" not in json.dumps(payload)
+    assert payload["recent_orders_complete"] is False
+    assert payload["recent_orders_query"]["start_at"] == (reference-timedelta(days=7)).isoformat()
+    assert payload["recent_orders_query"]["end_at"] == reference.isoformat()
