@@ -59,7 +59,7 @@ def main():
     (args.output / "application").mkdir()
     (args.output / "application/broker_reconciliation.py").write_text(result)
     shutil.copytree(root / "scripts/paper_observation", args.output / "scripts/paper_observation", ignore=shutil.ignore_patterns("__pycache__"))
-    (args.output / "Dockerfile").write_text(f"FROM {args.base_image}\nCOPY application/broker_reconciliation.py /app/application/broker_reconciliation.py\nCOPY scripts/paper_observation /app/scripts/paper_observation\n")
+    (args.output / "Dockerfile").write_text(f"FROM {args.base_image}\nCOPY --chmod=0644 application/broker_reconciliation.py /app/application/broker_reconciliation.py\nCOPY --chmod=0755 scripts/paper_observation /app/scripts/paper_observation\n")
 
 
 if __name__ == "__main__":
