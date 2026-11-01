@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from longport.openapi import OrderStatus
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -220,6 +221,86 @@ def test_account_snapshot_returns_only_safe_partial_account_facts():
     assert "private-trade-id" not in serialized
     assert "private-account-id" not in serialized
     assert calls[:2] == ["account_balance", "stock_positions"]
+
+
+@pytest.mark.parametrize("representation", ["sdk", "qualified_string", "plain_string"])
+@pytest.mark.parametrize(
+    "name,working",
+    [
+        ("NotReported", True),
+        ("ReplacedNotReported", True),
+        ("ProtectedNotReported", True),
+        ("VarietiesNotReported", True),
+        ("WaitToNew", True),
+        ("New", True),
+        ("WaitToReplace", True),
+        ("PendingReplace", True),
+        ("Replaced", True),
+        ("PartialFilled", True),
+        ("WaitToCancel", True),
+        ("PendingCancel", True),
+        ("Filled", False),
+        ("Canceled", False),
+        ("Rejected", False),
+        ("Expired", False),
+        ("PartialWithdrawal", False),
+        ("Unknown", False),
+    ],
+)
+def test_account_snapshot_classifies_only_working_order_statuses(name, working, representation):
+    value = getattr(OrderStatus, name)
+    if representation == "qualified_string":
+        value = str(value)
+    elif representation == "plain_string":
+        value = name.upper()
+    context, _calls = _read_only_trade_context()
+    context.history_orders = lambda **_kwargs: [
+        SimpleNamespace(
+            order_id="synthetic-order", status=value, symbol="TEST.US", currency="USD",
+            quantity="2", executed_quantity="1",
+            side="BUY", order_type="LO", submitted_at="2026-09-05T10:00:00Z",
+        )
+    ]
+
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True, account_scope="PAPER",
+        build_read_only_contexts=_snapshot_contexts(context),
+        collect_evidence=reconciliation.collect_read_only_reconciliation_observations,
+    )
+
+    assert status == 200
+    orders = payload["known_non_terminal_orders_7d"]
+    assert len(orders) == int(working)
+    if working:
+        assert orders[0]["status"] == name.upper()
+        assert "order_id" not in orders[0]
+    assert payload["open_orders_complete"] is False
+    assert payload["status"] == "partial"
+
+
+def test_reconciliation_keeps_only_working_orders_in_mixed_history():
+    context, _calls = _read_only_trade_context()
+    context.history_orders = lambda **_kwargs: [
+        SimpleNamespace(
+            order_id=str(index), status=status, symbol="TEST.US", currency="USD",
+            quantity="2", executed_quantity="1",
+        )
+        for index, status in enumerate([
+            OrderStatus.Filled, OrderStatus.New, OrderStatus.PartialFilled,
+            OrderStatus.PendingCancel, OrderStatus.PartialWithdrawal,
+            OrderStatus.Unknown, "FUTURE_STATUS", "OtherEnum.New",
+        ])
+    ]
+
+    observations = reconciliation.collect_read_only_reconciliation_observations(
+        None, context, account_scope="PAPER"
+    )
+
+    assert {order["status"] for order in observations.open_orders} == {
+        "NEW", "PARTIALFILLED", "PENDINGCANCEL",
+    }
+    assert observations.open_orders_complete is False
+    assert observations.account_identity_match is False
 
 
 def test_account_snapshot_preserves_a_known_empty_position_list():
