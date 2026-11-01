@@ -31,7 +31,8 @@ from scripts.verify_deployed_runtime_target_admission import (
     _validate_image_only_source,
 )
 from application.runtime_target_manifest import load_runtime_target_manifest
-from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
+from hk_equity_strategies import get_strategy_definition
+from strategy_registry import LONGBRIDGE_PLATFORM
 
 
 BASE_APPLICATION_SHA = "922f338fea7c46391b50bb8316ac88154596916f"
@@ -486,9 +487,12 @@ def _runtime_target(env: Mapping[str, str], *, service: str) -> Mapping[str, Any
     if not isinstance(profile, str) or not profile or profile.strip() != profile:
         raise _stop("runtime_target_mismatch")
     try:
-        canonical_profile = resolve_strategy_definition(
-            profile, platform_id=LONGBRIDGE_PLATFORM
-        ).profile
+        # Inspect an already-disabled historical target, not a new selection.
+        # The disabled/paper/dry-run and source/configuration gates still apply.
+        definition = get_strategy_definition(profile)
+        if LONGBRIDGE_PLATFORM not in definition.supported_platforms:
+            raise ValueError("Unsupported historical HK profile")
+        canonical_profile = definition.profile
     except (TypeError, ValueError):
         raise _stop("runtime_target_mismatch") from None
     selector = target.get("account_selector")
