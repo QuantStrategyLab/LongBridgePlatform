@@ -47,7 +47,24 @@ _SAFE_CANDIDATE_KEYS = frozenset(
         "evidence",
     }
 )
-_TERMINAL_ORDER_STATUSES = frozenset({"FILLED", "CANCELED", "REJECTED", "EXPIRED"})
+# Working states exposed by the pinned LongPort SDK. Unknown states are not
+# evidence of an open order; the bounded history read remains incomplete.
+_WORKING_ORDER_STATUSES = frozenset(
+    {
+        "NOTREPORTED",
+        "REPLACEDNOTREPORTED",
+        "PROTECTEDNOTREPORTED",
+        "VARIETIESNOTREPORTED",
+        "WAITTONEW",
+        "NEW",
+        "WAITTOREPLACE",
+        "PENDINGREPLACE",
+        "REPLACED",
+        "PARTIALFILLED",
+        "WAITTOCANCEL",
+        "PENDINGCANCEL",
+    }
+)
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -236,7 +253,8 @@ def _normalize_broker_balance(balance: Any) -> dict[str, object]:
 
 def _normalize_order(order: Any) -> dict[str, object]:
     order_id = _text(getattr(order, "order_id", ""))
-    status = _enum_name(getattr(order, "status", ""))
+    # longport 3.0.23 stringifies enum values as "OrderStatus.Filled".
+    status = _enum_name(getattr(order, "status", "")).removeprefix("ORDERSTATUS.")
     symbol = _text(getattr(order, "symbol", "")).upper()
     currency = _text(getattr(order, "currency", "")).upper()
     if not order_id or not status or not symbol or not currency:
@@ -390,7 +408,7 @@ def collect_read_only_reconciliation_observations(
             _normalize_position(position, account_channel=account_channel) for position in raw_positions
         )
     normalized_orders = [_normalize_order(order) for order in orders]
-    open_orders = [order for order in normalized_orders if order["status"] not in _TERMINAL_ORDER_STATUSES]
+    open_orders = [order for order in normalized_orders if order["status"] in _WORKING_ORDER_STATUSES]
     broker_balances = (
         _canonical_records([_normalize_broker_balance(balance) for balance in balances])
         if include_broker_balances
