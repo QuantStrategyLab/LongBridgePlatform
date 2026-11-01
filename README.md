@@ -36,7 +36,11 @@ English | [简体中文](README.zh-CN.md)
 unless `LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED=true` is set exactly. It returns
 currency-specific cash, broker-reported balance rows (`currency`, `net_assets`,
 `total_cash`), quantity-only positions, redacted known non-terminal
-orders from the bounded seven-day read, and a known recent-execution count. The
+orders from the bounded seven-day read, and a known recent-execution count.
+Order statuses are normalized from SDK enums to uppercase names. Only known
+working states (including pending submission, replacement, cancellation and
+partially filled orders) enter `known_non_terminal_orders_7d`; filled, canceled,
+rejected, expired, partially withdrawn and unknown statuses are excluded. The
 response is always partial: the SDK read is non-atomic and does not prove a
 stable broker account ID, a unique account writer, complete open orders or
 executions, fees, market value, or independently reconciled equity. Balance rows
