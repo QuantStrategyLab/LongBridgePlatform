@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 from decimal import Decimal, InvalidOperation
@@ -47,7 +48,24 @@ _SAFE_CANDIDATE_KEYS = frozenset(
         "evidence",
     }
 )
-_TERMINAL_ORDER_STATUSES = frozenset({"FILLED", "CANCELED", "REJECTED", "EXPIRED"})
+# Working states exposed by the pinned LongPort SDK. Unknown states are not
+# evidence of an open order; the bounded history read remains incomplete.
+_WORKING_ORDER_STATUSES = frozenset(
+    {
+        "NOTREPORTED",
+        "REPLACEDNOTREPORTED",
+        "PROTECTEDNOTREPORTED",
+        "VARIETIESNOTREPORTED",
+        "WAITTONEW",
+        "NEW",
+        "WAITTOREPLACE",
+        "PENDINGREPLACE",
+        "REPLACED",
+        "PARTIALFILLED",
+        "WAITTOCANCEL",
+        "PENDINGCANCEL",
+    }
+)
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -236,7 +254,8 @@ def _normalize_broker_balance(balance: Any) -> dict[str, object]:
 
 def _normalize_order(order: Any) -> dict[str, object]:
     order_id = _text(getattr(order, "order_id", ""))
-    status = _enum_name(getattr(order, "status", ""))
+    # longport 3.0.23 stringifies enum values as "OrderStatus.Filled".
+    status = _enum_name(getattr(order, "status", "")).removeprefix("ORDERSTATUS.")
     symbol = _text(getattr(order, "symbol", "")).upper()
     currency = _text(getattr(order, "currency", "")).upper()
     if not order_id or not status or not symbol or not currency:
@@ -293,6 +312,9 @@ class LongBridgeReconciliationObservations:
     broker_reported_balances: tuple[Mapping[str, object], ...] = ()
     # Optional native financing; display/diagnostic only; never enters digests.
     financing: tuple[Mapping[str, object], ...] = ()
+    recent_orders: tuple[Mapping[str, object], ...] = ()
+    orders_query_start: str | None = None
+    orders_query_end: str | None = None
 
 
 @dataclass(frozen=True)
@@ -390,7 +412,7 @@ def collect_read_only_reconciliation_observations(
             _normalize_position(position, account_channel=account_channel) for position in raw_positions
         )
     normalized_orders = [_normalize_order(order) for order in orders]
-    open_orders = [order for order in normalized_orders if order["status"] not in _TERMINAL_ORDER_STATUSES]
+    open_orders = [order for order in normalized_orders if order["status"] in _WORKING_ORDER_STATUSES]
     broker_balances = (
         _canonical_records([_normalize_broker_balance(balance) for balance in balances])
         if include_broker_balances
@@ -428,6 +450,9 @@ def collect_read_only_reconciliation_observations(
         recent_executions_complete=False,
         broker_reported_balances=broker_balances,
         financing=financing,
+        recent_orders=_canonical_records(normalized_orders),
+        orders_query_start=(reference_now - lookback).isoformat(),
+        orders_query_end=reference_now.isoformat(),
     )
 
 
@@ -614,6 +639,7 @@ def run_read_only_account_snapshot(
     build_read_only_contexts: Callable[[], tuple[Any, Any, Mapping[str, object]]],
     collect_evidence: Callable[..., LongBridgeReconciliationObservations] | None,
     now_reader: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    order_digest_salt: str | None = None,
 ) -> tuple[dict[str, object], int]:
     """Return bounded account facts without granting execution or recovery authority."""
 
@@ -710,6 +736,23 @@ def run_read_only_account_snapshot(
         ):
             raise LongBridgeReconciliationReadError("Account snapshot order is invalid.")
 
+        salt = order_digest_salt or os.getenv("OBSERVATION_ORDER_DIGEST_SALT", "")
+        recent_orders = []
+        for order in observations.recent_orders:
+            record = {key: order[key] for key in safe_order_keys}
+            record["side"] = str(record["side"]).removeprefix("ORDERSIDE.")
+            record["order_type"] = str(record["order_type"]).removeprefix("ORDERTYPE.")
+            # SDK naive timestamps represent local time; do not infer an event
+            # date from updated_at, nor expose broker identifiers over HTTP.
+            for key in ("submitted_at", "updated_at"):
+                raw = _text(record[key])
+                record[key] = datetime.fromisoformat(raw).astimezone(timezone.utc).isoformat() if raw else None
+            record["order_digest"] = (
+                hmac.new(salt.encode(), str(order["order_id"]).encode(), hashlib.sha256).hexdigest()
+                if len(salt) >= 32 else None
+            )
+            recent_orders.append(record)
+
         payload: dict[str, object] = {
             "schema_version": "longbridge_account_snapshot.v1",
             "status": "partial",
@@ -721,6 +764,14 @@ def run_read_only_account_snapshot(
             "broker_reported_balances": list(observations.broker_reported_balances),
             "positions": positions,
             "known_non_terminal_orders_7d": known_orders,
+            "recent_orders_7d": recent_orders,
+            "recent_orders_complete": False,
+            "recent_orders_query": {
+                "start_at": observations.orders_query_start,
+                "end_at": observations.orders_query_end,
+                "lookback_days": 7,
+                "paging_complete": False,
+            },
             "known_recent_executions_7d_count": len(observations.recent_executions),
             "positions_complete": True,
             "cash_complete": True,
