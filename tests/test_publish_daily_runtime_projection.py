@@ -97,7 +97,7 @@ def _env(**overrides: str) -> dict[str, str]:
         "RUNTIME_HEARTBEAT_ACCOUNT_SCOPE": "PAPER",
         "RUNTIME_TARGET_JSON": json.dumps(_target()),
         "RUNTIME_HEARTBEAT_GCS_GLOBS": "gs://reports/longbridge/**/2026-09/*.json",
-        "GCP_PROJECT_ID": "longbridgequant",
+        "GCP_PROJECT_ID": "fake-project",
     }
     env.update(overrides)
     return env
@@ -508,7 +508,7 @@ def test_quiet_read_discards_underlying_stderr(monkeypatch, capsys) -> None:
         return None
 
     monkeypatch.setattr(heartbeat, "_cat_gcs_json", cat)
-    assert publisher._quiet_read("gs://reports/unread.json", project="longbridgequant") is None
+    assert publisher._quiet_read("gs://reports/unread.json", project="fake-project") is None
     assert "secret payload" not in capsys.readouterr().err
 
 

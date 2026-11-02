@@ -19,7 +19,6 @@ DEFAULT_MOUNT_ENV_NAMES = (
 )
 DEFAULT_ALLOWED_SIGNAL_PREFIXES = (
     "gs://qsl-runtime-logs-shared/",
-    "gs://qsl-runtime-logs-interactivebrokersquant/",
 )
 
 
@@ -40,7 +39,7 @@ def _mount_env_names() -> list[str]:
 
 def _allowed_signal_prefixes() -> tuple[str, ...]:
     configured = _split_csv(os.environ.get("STRATEGY_PLUGIN_ALLOWED_SIGNAL_PREFIXES"))
-    return tuple(configured or DEFAULT_ALLOWED_SIGNAL_PREFIXES)
+    return tuple(configured or [value for value in DEFAULT_ALLOWED_SIGNAL_PREFIXES if value])
 
 
 def _load_expected_targets(mount_env_names: Iterable[str]) -> list[dict[str, Any]]:

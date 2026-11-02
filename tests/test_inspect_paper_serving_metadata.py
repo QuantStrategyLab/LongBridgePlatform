@@ -164,8 +164,8 @@ def test_workflow_reuses_paper_environment_and_identity_without_write_actions():
     assert "workflow_dispatch:" in workflow and "schedule:" not in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
     assert "environment: longbridge-paper" in workflow
-    assert "longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com" in workflow
-    assert "longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com" in deployment
+    assert "${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in workflow
+    assert "${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in deployment
     assert "Deploy Cloud Run-${{ github.ref_name }}" in workflow
     assert workflow.index("Validate existing PAPER selection") < workflow.index("google-github-actions/auth")
     assert all(token not in workflow for token in ("upload-artifact", "update-traffic", "scheduler", "curl", "secret-access"))

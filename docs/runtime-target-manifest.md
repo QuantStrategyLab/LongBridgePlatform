@@ -145,3 +145,19 @@ uv run --no-sync python scripts/check_runtime_target_manifest_drift.py --target-
 uv run --no-sync python -m pytest -q tests/test_runtime_target_manifest.py tests/test_runtime_target_manifest_drift.py tests/test_runtime_target_matrix.py tests/test_runtime_monitor_workflows.py
 bash tests/test_sync_cloud_run_env_workflow.sh
 ```
+
+## Cloud identity configuration
+
+Cloud workflows read `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, and
+`GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` from their existing GitHub environment
+variables. Workflows that compare runtime or Scheduler identities additionally
+require `GCP_RUNTIME_SERVICE_ACCOUNT` or `GCP_SCHEDULER_SERVICE_ACCOUNT`. Configure
+these values in protected settings before executing a workflow; no resource or
+credential value is stored in this repository. Missing identities must fail
+validation, and configuration alone grants no operational authority.
+
+The HK metadata reader requires an explicit immutable `MetadataResources`
+configuration alongside its injected authorized session. Request-log and HK
+stop-result tools require `GCP_PROJECT_ID` in their process environment.
+`STRATEGY_PLUGIN_ALLOWED_SIGNAL_PREFIXES` supplies any additional approved
+plugin-signal prefixes; no project-specific bucket is a built-in fallback.

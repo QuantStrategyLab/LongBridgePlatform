@@ -7,7 +7,7 @@ from scripts.paper_request_readback import inspect
 
 class ValidationReadbackTests(unittest.TestCase):
     def test_trace_matched_cycle_exposes_only_allowlisted_facts(self):
-        trace = "projects/longbridgequant/traces/" + "a" * 32
+        trace = "projects/fake-project/traces/" + "a" * 32
         revision = "longbridge-quant-paper-service-00001-abc"
         payload = {"schema": "longbridge.validation-cycle-observation.v1", "adapter_instrumented": True,
                    "adapter_submit_attempt_count": 0, "cycle_entered": True, "cycle_returned": True,
@@ -36,7 +36,7 @@ class ValidationReadbackTests(unittest.TestCase):
 
     def test_ambiguous_and_invalid_payloads_remain_unknown(self):
         from scripts.paper_request_readback import _cycle_observation
-        trace = "projects/longbridgequant/traces/" + "a" * 32
+        trace = "projects/fake-project/traces/" + "a" * 32
         revision = "longbridge-quant-paper-service-00001-abc"
         def run(args, **kwargs):
             return subprocess.CompletedProcess(args, 0, json.dumps([{}, {}]), "")

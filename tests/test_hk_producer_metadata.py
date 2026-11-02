@@ -11,6 +11,9 @@ import pytest
 
 from scripts import inspect_hk_producer_metadata as metadata
 
+CONFIG = metadata.MetadataResources("fake-project", "longbridge-platform-runtime@fake-project.iam.gserviceaccount.com")
+OBSERVER = "longbridge-platform-deploy@fake-project.iam.gserviceaccount.com"
+
 REV1 = "longbridge-quant-hk-service-00001-one"
 REV2 = "longbridge-quant-hk-service-00002-two"
 
@@ -38,7 +41,7 @@ def service(revisions=((REV1, 100),)):
         for rev, percent in revisions
     ]
     return {
-        "name": metadata.SERVICE_RESOURCE,
+        "name": CONFIG.service_resource,
         "uid": "opaque-uid",
         "etag": "opaque-etag",
         "generation": "7",
@@ -52,18 +55,18 @@ def service(revisions=((REV1, 100),)):
 
 def revision(name=REV1):
     return {
-        "name": metadata.SERVICE_RESOURCE + "/revisions/" + name,
-        "service": metadata.SERVICE_RESOURCE,
+        "name": CONFIG.service_resource + "/revisions/" + name,
+        "service": CONFIG.service_resource,
         "uid": "revision-uid",
         "etag": "revision-etag",
         "generation": "1",
         "observedGeneration": "1",
         "reconciling": False,
-        "serviceAccount": metadata.RUNTIME_WRITER,
+        "serviceAccount": CONFIG.runtime_writer,
         "containers": [
             {
                 "image": (
-                    "asia-east2-docker.pkg.dev/longbridgequant/"
+                    "asia-east2-docker.pkg.dev/fake-project/"
                     "cloud-run-source-deploy/app@sha256:"
                 )
                 + "a" * 64,
@@ -78,7 +81,7 @@ def revision(name=REV1):
 
 def scheduler():
     return {
-        "name": metadata.SCHEDULER_RESOURCE,
+        "name": CONFIG.scheduler_resource,
         "state": "PAUSED",
         "lastAttemptTime": "2026-10-02T10:00:00Z",
         "status": {"code": 0},
@@ -141,7 +144,7 @@ class Session:
         assert set(query) == {"fields", "prettyPrint"}
         assert query["prettyPrint"] == ["false"]
         self.calls.append((parts.netloc, parts.path, query["fields"][0]))
-        if parts.path == "/v2/" + metadata.SERVICE_RESOURCE:
+        if parts.path == "/v2/" + CONFIG.service_resource:
             body = (
                 self.first
                 if sum(call[1] == parts.path for call in self.calls) == 1
@@ -153,7 +156,7 @@ class Session:
             body = self.revision_overrides.get(name, revision(name))
             assert query["fields"] == [metadata.REVISION_FIELDS]
         else:
-            assert parts.path == "/v1/" + metadata.SCHEDULER_RESOURCE
+            assert parts.path == "/v1/" + CONFIG.scheduler_resource
             body = self.scheduler_value
             assert query["fields"] == [metadata.SCHEDULER_FIELDS]
         response = Response(body, url, status=self.status)
@@ -162,7 +165,7 @@ class Session:
 
 
 def inspect(session, **kwargs):
-    return metadata.inspect_hk_producer_metadata(
+    return metadata.inspect_hk_producer_metadata(config=CONFIG,
         session=session, monotonic=lambda: 0, **kwargs
     )
 
@@ -445,7 +448,7 @@ def test_output_limit_is_fail_closed(monkeypatch):
 def test_unknown_clock_has_zero_requests(value):
     session = Session()
     with pytest.raises(metadata.MetadataRejected, match="metadata_deadline"):
-        metadata.inspect_hk_producer_metadata(session=session, monotonic=lambda: value)
+        metadata.inspect_hk_producer_metadata(config=CONFIG, session=session, monotonic=lambda: value)
     assert session.calls == []
 
 
@@ -453,7 +456,7 @@ def test_total_deadline_after_first_reply_stops_before_revision():
     values = iter([0, 0, 181])
     session = Session()
     with pytest.raises(metadata.MetadataRejected, match="metadata_deadline"):
-        metadata.inspect_hk_producer_metadata(
+        metadata.inspect_hk_producer_metadata(config=CONFIG,
             session=session, monotonic=lambda: next(values)
         )
     assert len(session.calls) == 1
@@ -519,11 +522,11 @@ def test_unexpected_or_duplicate_env_names_are_rejected(kind):
 
 
 def test_request_counter_prevents_a_sixth_call():
-    budget = metadata._Budget(lambda: 0)
+    budget = metadata._Budget(lambda: 0, CONFIG)
     budget.calls = 5
     session = Session()
     with pytest.raises(metadata.MetadataRejected, match="metadata_request_limit"):
-        budget.get(session, metadata.SERVICE_RESOURCE, metadata.SERVICE_FIELDS)
+        budget.get(session, CONFIG.service_resource, metadata.SERVICE_FIELDS)
     assert session.calls == []
 
 
@@ -573,10 +576,10 @@ def preflight_env(tmp_path):
         "GITHUB_WORKFLOW_SHA": "a" * 40,
         "GITHUB_EVENT_PATH": str(event),
         "GCP_WORKLOAD_IDENTITY_PROVIDER": (
-            "projects/252919773759/locations/global/workloadIdentityPools/"
+            "projects/123456789012/locations/global/workloadIdentityPools/"
             "github-actions/providers/github-main"
         ),
-        "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT": metadata.OBSERVER,
+        "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT": OBSERVER,
     }
 
 
@@ -590,7 +593,6 @@ def test_workflow_is_manual_fixed_observer_and_pre_auth_source_gated():
         assert forbidden not in trigger
     for forbidden in (
         "secrets.",
-        "vars.",
         "gcloud",
         "upload-artifact",
         "write-all",
@@ -848,6 +850,9 @@ def test_all_new_files_have_no_default_operations_or_broker_calls():
         )
         for node in ast.walk(tree)
     )
+    assert set(__import__("re").findall(r"vars\.([A-Z_]+)", Path(".github/workflows/inspect-hk-producer-metadata.yml").read_text())) == {
+        "GCP_PROJECT_ID", "GCP_WORKLOAD_IDENTITY_PROVIDER", "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT", "GCP_RUNTIME_SERVICE_ACCOUNT",
+    }
     assert "def main" not in Path("scripts/inspect_hk_producer_metadata.py").read_text()
     text = Path(".github/workflows/inspect-hk-producer-metadata.yml").read_text()
     for forbidden in (
@@ -890,7 +895,7 @@ def test_resource_aliases_remain_rejected_with_fixed_stage_and_shape(
     first, last, rev, job = service(), service(), revision(), scheduler()
 
     def alias(value):
-        return value.replace("projects/longbridgequant/", "projects/123456789/")
+        return value.replace("projects/fake-project/", "projects/123456789/")
 
     if case == "service":
         first["name"] = alias(first["name"])
@@ -1043,7 +1048,7 @@ def test_all_planned_stages_stop_on_denial_without_followup(at, stage):
 def test_second_revision_mismatch_retains_exact_stage_and_no_followup():
     wrong = revision(REV2)
     wrong["name"] = wrong["name"].replace(
-        "projects/longbridgequant/", "projects/123456789/"
+        "projects/fake-project/", "projects/123456789/"
     )
     session = Session(
         first=service(((REV1, 75), (REV2, 25))), revision_overrides={REV2: wrong}
@@ -1057,7 +1062,7 @@ def test_second_revision_mismatch_retains_exact_stage_and_no_followup():
 
 
 @pytest.mark.parametrize(
-    "parent", [metadata.SERVICE_RESOURCE, "longbridge-quant-hk-service"]
+    "parent", [CONFIG.service_resource, "longbridge-quant-hk-service"]
 )
 def test_exact_full_or_observed_short_parent_succeeds_with_full_revision_anchor(parent):
     one, two = revision(REV1), revision(REV2)
@@ -1071,7 +1076,7 @@ def test_exact_full_or_observed_short_parent_succeeds_with_full_revision_anchor(
     assert result["current_health_confirmed"] is False
     assert result["native_identity_confirmed"] is False
     assert all(
-        metadata.SERVICE_RESOURCE in path
+        CONFIG.service_resource in path
         for _, path, _ in session.calls
         if "/revisions/" in path
     )
@@ -1086,9 +1091,9 @@ def test_exact_full_or_observed_short_parent_succeeds_with_full_revision_anchor(
         "longbridge-quant-hk-service ",
         "longbridge-quant-hk-service/",
         "longbridge%2Dquant%2Dhk%2Dservice",
-        metadata.SERVICE_RESOURCE.replace("longbridgequant", "other-project"),
-        metadata.SERVICE_RESOURCE.replace("longbridgequant", "123456789"),
-        metadata.SERVICE_RESOURCE.replace("asia-east2", "asia-east1"),
+        CONFIG.service_resource.replace("fake-project", "other-project"),
+        CONFIG.service_resource.replace("fake-project", "123456789"),
+        CONFIG.service_resource.replace("asia-east2", "asia-east1"),
         None,
         [],
     ],
@@ -1107,11 +1112,11 @@ def test_other_parent_spellings_remain_rejected_without_followup(parent):
 @pytest.mark.parametrize(
     "wrong_name",
     [
-        metadata.SERVICE_RESOURCE + "/revisions/" + REV2,
-        metadata.SERVICE_RESOURCE.replace("longbridgequant", "123456789")
+        CONFIG.service_resource + "/revisions/" + REV2,
+        CONFIG.service_resource.replace("fake-project", "123456789")
         + "/revisions/"
         + REV1,
-        metadata.SERVICE_RESOURCE.replace("longbridgequant", "other-project")
+        CONFIG.service_resource.replace("fake-project", "other-project")
         + "/revisions/"
         + REV1,
         REV1,
@@ -1137,7 +1142,7 @@ def test_short_parent_cannot_bypass_same_fixed_request_boundary():
     def request(*args, **kwargs):
         response = original(*args, **kwargs)
         if "/revisions/" in response.url:
-            response.url = response.url.replace("longbridgequant", "other-project")
+            response.url = response.url.replace("fake-project", "other-project")
         return response
 
     session.request = request
