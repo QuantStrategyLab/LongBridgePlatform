@@ -25,11 +25,11 @@ jobs:
       - uses: actions/checkout@v6
       - uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
-          service_account: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v3
         with:
-          project_id: longbridgequant
+          project_id: ${{ vars.GCP_PROJECT_ID }}
           version: ">= 416.0.0"
       - name: Inspect bounded request logs
         env:

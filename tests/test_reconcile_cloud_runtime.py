@@ -85,7 +85,7 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
 
         with patch.object(reconcile, "_run", side_effect=fake_run):
             reconcile.ensure_latest_traffic(
-                project="longbridgequant",
+                project="fake-project",
                 region="asia-east1",
                 targets=[reconcile.RuntimeTarget(service_name="longbridge-quant-paper-service")],
                 expected_commit="abc123",
@@ -146,7 +146,7 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
         with patch.object(reconcile, "_run", side_effect=fake_run):
             with self.assertRaisesRegex(reconcile.ReconcileError, "No Ready revision"):
                 reconcile.ensure_latest_traffic(
-                    project="longbridgequant",
+                    project="fake-project",
                     region="asia-east1",
                     targets=[reconcile.RuntimeTarget(service_name="longbridge-quant-paper-service")],
                     expected_commit="abc123",
@@ -196,7 +196,7 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
 
         with patch.object(reconcile, "_run", side_effect=fake_run):
             reconcile.ensure_latest_traffic(
-                project="longbridgequant",
+                project="fake-project",
                 region="asia-east1",
                 targets=[reconcile.RuntimeTarget(service_name="longbridge-quant-paper-service")],
                 expected_commit="abc123",
@@ -234,7 +234,7 @@ class ReconcileCloudRuntimeTest(unittest.TestCase):
         ):
             reconcile.delete_legacy_schedulers(
                 platform="longbridge",
-                project="longbridgequant",
+                project="fake-project",
                 region="asia-east1",
                 scheduler_location="asia-east2",
                 targets=[

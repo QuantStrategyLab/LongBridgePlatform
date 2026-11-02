@@ -534,7 +534,7 @@ def _require_sghk_candidate_identity(
     *, target_label: str, service: str, project: str, region: str, service_json: Mapping[str, Any]
 ) -> None:
     expected = {"HK": ("hk", "HK"), "SG": ("sg", "SG")}.get(target_label)
-    if expected is None or project != "longbridgequant":
+    if expected is None or not project or project != os.environ.get("GCP_PROJECT_ID", ""):
         raise AdmissionError("candidate target does not match the approved account", reason='target_identity_invalid')
     target_id, scope = expected
     try:

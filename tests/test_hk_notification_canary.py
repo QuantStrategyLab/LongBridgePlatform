@@ -18,7 +18,7 @@ from scripts import run_hk_notification_canary as canary
 
 
 NOW = datetime(2026, 10, 2, 10, 25, tzinfo=timezone.utc)
-PROJECT = "longbridgequant"
+PROJECT = "fake-project"
 REGION = "asia-east2"
 SERVICE = "longbridge-quant-hk-service"
 OLD = "longbridge-quant-hk-service-old100"

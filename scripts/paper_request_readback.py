@@ -15,7 +15,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
-PROJECT = "longbridgequant"
+PROJECT = os.environ.get("GCP_PROJECT_ID", "")
 REGION = "asia-east1"
 SERVICE = "longbridge-quant-paper-service"
 LIMIT = 20
@@ -59,7 +59,7 @@ def _revision_label(revision, run):
 
 def _cycle_observation(trace, revision, start, end, run):
     unknown = {"status": "unknown", "trace_correlation": "unverified"}
-    if not isinstance(trace, str) or not re.fullmatch(r"projects/longbridgequant/traces/[0-9a-f]{32}", trace):
+    if not isinstance(trace, str) or not re.fullmatch(r"projects/" + re.escape(PROJECT) + r"/traces/[0-9a-f]{32}", trace):
         return unknown
     if not isinstance(revision, str) or not re.fullmatch(re.escape(SERVICE) + r"-[a-z0-9-]{1,30}", revision):
         return unknown
@@ -94,6 +94,8 @@ def _cycle_observation(trace, revision, start, end, run):
 
 
 def inspect(start: str, end: str, *, run=subprocess.run):
+    if re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", PROJECT) is None:
+        raise ValueError("config_invalid")
     begin, finish = validate_window(start, end)
     result = {"schema": "longbridge.paper-request-readback.v1", "status": "unavailable", "matching_count": 0,
               "requests": [], "business_cycle": "unknown", "receipt": "unknown", "submit_count": None,

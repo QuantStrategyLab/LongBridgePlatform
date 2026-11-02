@@ -7,7 +7,9 @@ request receipt, current account health or physical broker identity.
 
 from __future__ import annotations
 
+
 import hashlib
+from dataclasses import dataclass
 import json
 import math
 import re
@@ -16,18 +18,28 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-SERVICE_RESOURCE = (
-    "projects/longbridgequant/locations/asia-east2/services/longbridge-quant-hk-service"
-)
-SCHEDULER_RESOURCE = (
-    "projects/longbridgequant/locations/asia-east2/jobs/"
-    "longbridge-quant-hk-service-probe-scheduler"
-)
-RUNTIME_WRITER = "longbridge-platform-runtime@longbridgequant.iam.gserviceaccount.com"
-SCHEDULER_CALLER = (
-    "longbridge-platform-scheduler@longbridgequant.iam.gserviceaccount.com"
-)
-OBSERVER = "longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com"
+@dataclass(frozen=True)
+class MetadataResources:
+    project_id: str
+    runtime_writer: str
+
+    def __post_init__(self):
+        if (not isinstance(self.project_id, str)
+                or re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", self.project_id) is None
+                or not isinstance(self.runtime_writer, str)
+                or re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]@" + re.escape(self.project_id)
+                                + r"\.iam\.gserviceaccount\.com", self.runtime_writer) is None):
+            raise ValueError("metadata_config_invalid")
+
+    @property
+    def service_resource(self):
+        return f"projects/{self.project_id}/locations/asia-east2/services/longbridge-quant-hk-service"
+
+    @property
+    def scheduler_resource(self):
+        return f"projects/{self.project_id}/locations/asia-east2/jobs/longbridge-quant-hk-service-probe-scheduler"
+
+
 SERVICE_FIELDS = (
     "name,uid,etag,generation,observedGeneration,reconciling,terminalCondition/state,"
     "traffic(type,revision,percent,tag),trafficStatuses(type,revision,percent,tag)"
@@ -107,7 +119,7 @@ def _reject(category: str) -> None:
     raise MetadataRejected(category)
 
 
-def _resource_invalid(value: Any, expected: str, slot: str) -> None:
+def _resource_invalid(value: Any, expected: str, slot: str, config: MetadataResources) -> None:
     """Project shape only; never accept or disclose an unknown resource alias."""
     shape = {
         "configured_project_id_matches": False,
@@ -119,7 +131,7 @@ def _resource_invalid(value: Any, expected: str, slot: str) -> None:
         match = re.fullmatch(r"projects/([a-z][a-z0-9-]{0,62}|[0-9]{1,20})/(.+)", value)
         if match:
             project, suffix = match.groups()
-            shape["configured_project_id_matches"] = project == "longbridgequant"
+            shape["configured_project_id_matches"] = project == config.project_id
             shape["project_segment_is_numeric"] = (
                 re.fullmatch(r"[0-9]+", project) is not None
             )
@@ -169,9 +181,9 @@ def _duplicates(pairs):
     return result
 
 
-def _revision_resource(value: Any, *, slot: str = "traffic_revision") -> str:
+def _revision_resource(value: Any, config: MetadataResources, *, slot: str = "traffic_revision") -> str:
     value = _text(value, 512)
-    prefix = SERVICE_RESOURCE + "/revisions/"
+    prefix = config.service_resource + "/revisions/"
     if value.startswith(prefix):
         name = value[len(prefix) :]
     elif "/" not in value:
@@ -184,17 +196,18 @@ def _revision_resource(value: Any, *, slot: str = "traffic_revision") -> str:
             and re.fullmatch(r"[a-z][a-z0-9-]{0,99}", terminal) is not None
         ):
             expected += terminal
-        _resource_invalid(value, expected, slot)
+        _resource_invalid(value, expected, slot, config)
     if (
         not name.startswith("longbridge-quant-hk-service-")
         or re.fullmatch(r"[a-z][a-z0-9-]{0,99}", name) is None
     ):
-        _resource_invalid(value, prefix, slot)
+        _resource_invalid(value, prefix, slot, config)
     return prefix + name
 
 
 class _Budget:
-    def __init__(self, monotonic: Callable[[], float]):
+    def __init__(self, monotonic: Callable[[], float], config: MetadataResources):
+        self.config = config
         self.monotonic = monotonic
         self.started = self._clock()
         self.deadline = self.started + TOTAL_SECONDS
@@ -227,13 +240,13 @@ class _Budget:
         return remaining
 
     def get(self, session: Any, resource: str, fields: str) -> dict:
-        if resource == SERVICE_RESOURCE:
+        if resource == self.config.service_resource:
             base = "https://run.googleapis.com/v2/" + resource
             expected = SERVICE_FIELDS
-        elif resource == SCHEDULER_RESOURCE:
+        elif resource == self.config.scheduler_resource:
             base = "https://cloudscheduler.googleapis.com/v1/" + resource
             expected = SCHEDULER_FIELDS
-        elif resource == _revision_resource(resource, slot="request_resource"):
+        elif resource == _revision_resource(resource, self.config, slot="request_resource"):
             base = "https://run.googleapis.com/v2/" + resource
             expected = REVISION_FIELDS
         else:
@@ -312,7 +325,7 @@ class _Budget:
                     pass
 
 
-def _traffic(rows: Any, *, observed: bool) -> tuple[list[tuple], dict[str, int]]:
+def _traffic(rows: Any, config: MetadataResources, *, observed: bool) -> tuple[list[tuple], dict[str, int]]:
     if not isinstance(rows, list) or len(rows) > MAX_TRAFFIC_ROWS:
         _reject("metadata_traffic_invalid")
     canonical = []
@@ -335,7 +348,7 @@ def _traffic(rows: Any, *, observed: bool) -> tuple[list[tuple], dict[str, int]]
         if not isinstance(revision, str):
             _reject("metadata_traffic_invalid")
         if revision:
-            revision = _revision_resource(revision)
+            revision = _revision_resource(revision, config)
         elif observed and percent:
             _reject("metadata_traffic_invalid")
         elif kind == "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION" and percent:
@@ -356,7 +369,7 @@ def _traffic(rows: Any, *, observed: bool) -> tuple[list[tuple], dict[str, int]]
     return sorted(canonical), positive
 
 
-def _service(value: dict) -> tuple[tuple, dict[str, int]]:
+def _service(value: dict, config: MetadataResources) -> tuple[tuple, dict[str, int]]:
     allowed = {
         "name",
         "uid",
@@ -369,8 +382,8 @@ def _service(value: dict) -> tuple[tuple, dict[str, int]]:
         "trafficStatuses",
     }
     _keys(value, allowed, allowed - {"traffic", "reconciling"})
-    if value["name"] != SERVICE_RESOURCE:
-        _resource_invalid(value["name"], SERVICE_RESOURCE, "service_name")
+    if value["name"] != config.service_resource:
+        _resource_invalid(value["name"], config.service_resource, "service_name", config)
     generation = _generation(value["generation"])
     if (
         _generation(value["observedGeneration"]) != generation
@@ -380,8 +393,8 @@ def _service(value: dict) -> tuple[tuple, dict[str, int]]:
     _keys(value["terminalCondition"], {"state"}, {"state"})
     if value["terminalCondition"]["state"] != "CONDITION_SUCCEEDED":
         _reject("metadata_service_unstable")
-    wanted, _ = _traffic(value.get("traffic", []), observed=False)
-    observed, revisions = _traffic(value["trafficStatuses"], observed=True)
+    wanted, _ = _traffic(value.get("traffic", []), config, observed=False)
+    observed, revisions = _traffic(value["trafficStatuses"], config, observed=True)
     explicit = {
         row[1]: row[2]
         for row in wanted
@@ -411,7 +424,7 @@ def _service(value: dict) -> tuple[tuple, dict[str, int]]:
     ), revisions
 
 
-def _revision(value: dict, resource: str, percent: int) -> dict:
+def _revision(value: dict, resource: str, percent: int, config: MetadataResources) -> dict:
     allowed = {
         "name",
         "service",
@@ -425,11 +438,11 @@ def _revision(value: dict, resource: str, percent: int) -> dict:
     }
     _keys(value, allowed, allowed - {"reconciling"})
     if value["name"] != resource:
-        _resource_invalid(value["name"], resource, "revision_name")
+        _resource_invalid(value["name"], resource, "revision_name", config)
     # The exact full revision name above anchors project/location/service;
     # accept only the observed short spelling of that same configured parent.
-    if value["service"] not in (SERVICE_RESOURCE, "longbridge-quant-hk-service"):
-        _resource_invalid(value["service"], SERVICE_RESOURCE, "revision_parent")
+    if value["service"] not in (config.service_resource, "longbridge-quant-hk-service"):
+        _resource_invalid(value["service"], config.service_resource, "revision_parent", config)
     _text(value["uid"])
     _text(value["etag"])
     if value.get("reconciling", False) is not False or _generation(
@@ -469,7 +482,7 @@ def _revision(value: dict, resource: str, percent: int) -> dict:
     return {
         "revision": resource.rsplit("/", 1)[-1],
         "traffic_percent": percent,
-        "runtime_writer_matches_configured": writer == RUNTIME_WRITER,
+        "runtime_writer_matches_configured": writer == config.runtime_writer,
         "runtime_writer_identity_sha256": hashlib.sha256(writer.encode()).hexdigest(),
         "containers": projected,
     }
@@ -568,14 +581,14 @@ def _scheduler_schema_profile(value: Any) -> tuple[str, dict[str, bool]]:
     ), profile
 
 
-def _scheduler_validated(value: dict) -> dict:
+def _scheduler_validated(value: dict, config: MetadataResources) -> dict:
     _keys(
         value,
         _SCHEDULER_KEYS,
         {"name", "state"},
     )
-    if value["name"] != SCHEDULER_RESOURCE:
-        _resource_invalid(value["name"], SCHEDULER_RESOURCE, "scheduler_name")
+    if value["name"] != config.scheduler_resource:
+        _resource_invalid(value["name"], config.scheduler_resource, "scheduler_name", config)
     if not _scheduler_state_valid(value["state"]):
         _reject("metadata_schema_invalid")
     status = value.get("status", {})
@@ -603,9 +616,9 @@ def _scheduler_validated(value: dict) -> dict:
     }
 
 
-def _scheduler(value: dict) -> dict:
+def _scheduler(value: dict, config: MetadataResources) -> dict:
     try:
-        return _scheduler_validated(value)
+        return _scheduler_validated(value, config)
     except MetadataRejected as error:
         if error.category == "metadata_schema_invalid":
             error.schema_reason, error.scheduler_schema = _scheduler_schema_profile(
@@ -615,30 +628,30 @@ def _scheduler(value: dict) -> dict:
 
 
 def inspect_hk_producer_metadata(
-    *, session: Any, monotonic: Callable[[], float] = time.monotonic
+    *, session: Any, config: MetadataResources, monotonic: Callable[[], float] = time.monotonic
 ) -> dict:
     """Read current fixed-resource configuration, never invoke a producer."""
-    budget = _Budget(monotonic)
+    budget = _Budget(monotonic, config)
     # This labels the planned operation; native auth can fail before its GET.
     stage = "service_initial"
     try:
         first, revisions = _service(
-            budget.get(session, SERVICE_RESOURCE, SERVICE_FIELDS)
+            budget.get(session, config.service_resource, SERVICE_FIELDS), config
         )
         projected = []
         for index, (resource, percent) in enumerate(sorted(revisions.items()), 1):
             stage = "revision_" + str(index)
             projected.append(
                 _revision(
-                    budget.get(session, resource, REVISION_FIELDS), resource, percent
+                    budget.get(session, resource, REVISION_FIELDS), resource, percent, config
                 )
             )
         stage = "scheduler"
         scheduler = _scheduler(
-            budget.get(session, SCHEDULER_RESOURCE, SCHEDULER_FIELDS)
+            budget.get(session, config.scheduler_resource, SCHEDULER_FIELDS), config
         )
         stage = "service_recheck"
-        last, _ = _service(budget.get(session, SERVICE_RESOURCE, SERVICE_FIELDS))
+        last, _ = _service(budget.get(session, config.service_resource, SERVICE_FIELDS), config)
         if last != first:
             _reject("metadata_service_changed")
     except MetadataRejected as error:

@@ -9,8 +9,8 @@ def test_hk_low_vol_snapshot_artifact_workflow_uses_longbridge_wif_and_snapshot_
 
     assert "Build HK Low-Vol Snapshot Artifacts" in workflow
     assert "environment: longbridge-hk" in workflow
-    assert "GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main" in workflow
-    assert "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com" in workflow
+    assert "GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}" in workflow
+    assert "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in workflow
     assert "SNAPSHOT_REPOSITORY: QuantStrategyLab/HkEquitySnapshotPipelines" in workflow
     assert "data_source_mode" in workflow
     assert "public_yfinance_staging" in workflow

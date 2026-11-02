@@ -26,8 +26,10 @@ jobs:
       contents: read
       id-token: write
     env:
-      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
-      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+      GCP_RUNTIME_SERVICE_ACCOUNT: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
     steps:
       - name: Validate fixed source before checkout
         id: preflight
@@ -49,11 +51,8 @@ jobs:
 
           REPO = "QuantStrategyLab/LongBridgePlatform"
           WORKFLOW = ".github/workflows/inspect-hk-producer-metadata.yml"
-          PROVIDER = (
-              "projects/252919773759/locations/global/workloadIdentityPools/"
-              "github-actions/providers/github-main"
-          )
-          SERVICE_ACCOUNT = "longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com"
+          PROVIDER = os.environ.get("GCP_WORKLOAD_IDENTITY_PROVIDER", "")
+          SERVICE_ACCOUNT = os.environ.get("GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT", "")
           MAIN_PATH = "/repos/QuantStrategyLab/LongBridgePlatform/git/ref/heads/main"
           MAX_REST_BYTES = 65536
           PREFLIGHT_CATEGORIES = frozenset(
@@ -151,6 +150,7 @@ jobs:
                   or env.get("GITHUB_REPOSITORY") != REPO
                   or env.get("GITHUB_REF") != "refs/heads/main"
                   or env.get("GITHUB_WORKFLOW_REF") != REPO + "/" + WORKFLOW + "@refs/heads/main"
+                  or not PROVIDER or not SERVICE_ACCOUNT
                   or env.get("GCP_WORKLOAD_IDENTITY_PROVIDER") != PROVIDER
                   or env.get("GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT") != SERVICE_ACCOUNT
               ):
@@ -281,11 +281,8 @@ jobs:
           from pathlib import Path
           from urllib.parse import parse_qsl, urlsplit
 
-          PROVIDER = (
-              "projects/252919773759/locations/global/workloadIdentityPools/"
-              "github-actions/providers/github-main"
-          )
-          SERVICE_ACCOUNT = "longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com"
+          PROVIDER = os.environ.get("GCP_WORKLOAD_IDENTITY_PROVIDER", "")
+          SERVICE_ACCOUNT = os.environ.get("GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT", "")
 
 
           class MetadataLaunchError(ValueError):
@@ -487,6 +484,7 @@ jobs:
               try:
                   from scripts.inspect_hk_producer_metadata import (
                       MetadataRejected,
+                      MetadataResources,
                       inspect_hk_producer_metadata,
                   )
               except Exception:
@@ -502,7 +500,9 @@ jobs:
                       os.environ, AuthorizedSession, identity_pool.Credentials.from_info
                   )
                   try:
-                      result = inspect_hk_producer_metadata(session=session)
+                      result = inspect_hk_producer_metadata(session=session, config=MetadataResources(
+                          os.environ.get("GCP_PROJECT_ID", ""), os.environ.get("GCP_RUNTIME_SERVICE_ACCOUNT", ""),
+                      ))
                   finally:
                       session.close()
                   raw = json.dumps(result, sort_keys=True, separators=(",", ":"))
