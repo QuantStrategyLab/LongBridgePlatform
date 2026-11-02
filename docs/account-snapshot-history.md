@@ -76,6 +76,39 @@ back by pausing only the two new Schedulers, inspecting their active executions,
 restoring the previous service traffic map and revoking only the added IAM
 bindings. Preserve the archive and t0.
 
+## Private forward reader
+
+`collect_read_only_reconciliation_observations` accepts an optional
+`forward_anchor` and an explicit timezone-aware `now` cutoff. The caller must
+qualify the actual anchor from authentic evidence; the reader neither selects
+nor authenticates an opening. `forward_previous_cutoff`, when supplied, must be
+at or after that anchor. All cutoffs must be at or after November 3, 2026
+00:00 Asia/Hong_Kong (November 2 16:00 UTC), in chronological order.
+History requests start at the previous cutoff or anchor. Execution selection
+uses `(previous_cutoff, current_cutoff]`, including the first interval after the
+anchor. No earlier history is requested to reconstruct an opening or cost basis.
+Out-of-interval executions are excluded; no financial adjustment is inferred.
+
+The sensitive in-memory result retains execution IDs, native aware event time,
+UTC time, and side/currency only when supplied by the source. Missing fields
+remain null. Overlapping executions are compared by canonical UTC time and
+execution facts, including source-provided side/currency. Equivalent timezone
+offsets deduplicate; conflicting facts fail the read. `native_trade_done_at`
+retains the first source timestamp string; `native_trade_done_at_values` retains
+the sorted distinct original strings from all overlapping rows as private
+provenance. A naive execution timestamp fails the forward read rather than
+using the process timezone. Cash available, frozen and settling definitions
+remain separate. Per-component capture intervals have `source_as_of=null`;
+sequential captures do not prove an atomic snapshot or bridge inter-read events.
+The forward report remains `UNRECONCILED`, with explicit opening, account/Paper
+identity, unique-writer, pagination, carry-in-order, timing and native-cash-event
+gaps. Empty, short and full SDK lists cannot prove completeness.
+
+This optional private result is not exposed over HTTP, persisted or connected
+to the observer/CLI, calendar, scheduler or any execution/recovery gate. Existing
+calls retain their seven-day recovery contract. HK daily gap reporting and
+qualification of an authentic opening remain separate unimplemented work.
+
 ## Append existing archived observations
 
 `publish-archived-account-history.yml` is manual only. It reads the existing

@@ -9,7 +9,7 @@ import os
 from decimal import Decimal, InvalidOperation
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -315,6 +315,8 @@ class LongBridgeReconciliationObservations:
     recent_orders: tuple[Mapping[str, object], ...] = ()
     orders_query_start: str | None = None
     orders_query_end: str | None = None
+    component_captures: tuple[Mapping[str, object], ...] = ()
+    forward_report: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -347,58 +349,137 @@ def collect_read_only_reconciliation_observations(
     now: datetime | None = None,
     lookback: timedelta = timedelta(days=7),
     include_broker_balances: bool = False,
+    forward_anchor: datetime | None = None,
+    forward_previous_cutoff: datetime | None = None,
+    capture_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> LongBridgeReconciliationObservations:
     """Read only documented SDK surfaces; never construct or invoke an order port.
 
     LongBridge exposes only partial account-channel evidence and no documented
     all-open-orders query. The resulting candidate records both limitations
     as unmatched, so this reader cannot unlock a frozen baseline.
+
+    Optional forward reporting requires a caller-qualified actual anchor and
+    explicit aware ``now`` cutoff. It never selects or authenticates an anchor.
+    Without these arguments the legacy recovery reader is unchanged. Private
+    component capture intervals are not broker source times; missing native
+    event/paging/identity evidence always leaves this report UNRECONCILED.
     """
 
     scope = _text(account_scope).upper()
     if scope not in SUPPORTED_ACCOUNT_SCOPES or lookback <= timedelta(0):
         raise LongBridgeReconciliationReadError("LongBridge reconciliation scope is invalid.")
+    forward = forward_anchor is not None or forward_previous_cutoff is not None
+    report: dict[str, object] = {}
+    if forward:
+        cutoffs = (forward_anchor, forward_previous_cutoff or forward_anchor, now)
+        if any(not isinstance(t, datetime) or t.utcoffset() is None for t in cutoffs):
+            raise LongBridgeReconciliationReadError("Forward reconciliation requires aware cutoffs.")
+        anchor, lower, upper = (t.astimezone(timezone.utc) for t in cutoffs)
+        start = datetime(2026, 11, 2, 16, tzinfo=timezone.utc)  # November 3 HK
+        if not start <= anchor <= lower <= upper:
+            raise LongBridgeReconciliationReadError("Forward reconciliation cutoffs are invalid.")
+        report = {
+            "status": "UNRECONCILED",
+            "reporting_timezone": "Asia/Hong_Kong",
+            "forward_start": start.isoformat(),
+            "anchor_at": anchor.isoformat(),
+            "previous_cutoff": lower.isoformat(),
+            "current_cutoff": upper.isoformat(),
+            "interval": "(previous_cutoff,current_cutoff]",
+            "snapshot_atomic": False,
+            # An argument is not independent opening/account/source evidence.
+            "gaps": ["opening_snapshot_missing", "account_identity_unproven",
+                     "paper_identity_unproven", "unique_writer_unproven",
+                     "event_pages_unproven", "carry_in_orders_unproven",
+                     "native_cash_events_unproven", "source_as_of_missing",
+                     "timing_bridge_missing"],
+        }
     reference_now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    balances = _read_collection(trade_context, "account_balance")
+    query_start = lower if forward else reference_now - lookback
+    captures: list[Mapping[str, object]] = []
+
+    def capture_time() -> datetime:
+        value = capture_clock()
+        if not isinstance(value, datetime) or value.utcoffset() is None:
+            raise LongBridgeReconciliationReadError("Forward reconciliation capture time is invalid.")
+        value = value.astimezone(timezone.utc)
+        if captures and value < datetime.fromisoformat(str(captures[-1]["observed_finished_at"])):
+            raise LongBridgeReconciliationReadError("Forward reconciliation capture time reversed.")
+        return value
+
+    def read_component(name: str, reader: Callable[[], Any]) -> Any:
+        if not forward:
+            return reader()
+        started = capture_time()
+        value = reader()
+        finished = capture_time()
+        if finished < started:
+            raise LongBridgeReconciliationReadError("Forward reconciliation capture time reversed.")
+        captures.append({"component": name, "observed_started_at": started.isoformat(),
+                         "observed_finished_at": finished.isoformat(), "source_as_of": None})
+        return value
+
+    def read_collection(name: str, **kwargs: object) -> tuple[Any, ...]:
+        return read_component(name, lambda: _read_collection(trade_context, name, **kwargs))
+
+    balances = read_collection("account_balance")
     positions_reader = getattr(trade_context, "stock_positions", None)
     if not callable(positions_reader):
         raise LongBridgeReconciliationReadError("LongBridge reconciliation requires read-only stock_positions support.")
     try:
-        stock_positions = positions_reader()
+        stock_positions = read_component("stock_positions", positions_reader)
     except Exception as exc:
         raise LongBridgeReconciliationReadError("LongBridge reconciliation could not read stock_positions.") from exc
     channels = getattr(stock_positions, "channels", None)
     if not isinstance(channels, (list, tuple)) or not channels:
         raise LongBridgeReconciliationReadError("LongBridge reconciliation received incomplete positions.")
-    orders = _read_collection(
-        trade_context,
+    orders = read_collection(
         "history_orders",
-        start_at=reference_now - lookback,
+        start_at=query_start,
         end_at=reference_now,
     )
-    executions = _read_collection(
-        trade_context,
+    executions = read_collection(
         "history_executions",
-        start_at=reference_now - lookback,
+        start_at=query_start,
         end_at=reference_now,
     )
     # The history endpoint excludes today's trades; the SDK hides has_more.
-    today_executions = _read_collection(trade_context, "today_executions")
+    today_executions = read_collection("today_executions")
     normalized_executions: dict[str, dict[str, object]] = {}
     for execution in (*executions, *today_executions):
         traded_at = getattr(execution, "trade_done_at", None)
         if not isinstance(traded_at, datetime):
             raise LongBridgeReconciliationReadError("LongBridge reconciliation received an invalid execution time.")
+        if forward and traded_at.utcoffset() is None:
+            raise LongBridgeReconciliationReadError("Forward reconciliation has ambiguous execution time.")
+        native_time = traded_at.isoformat()
         # longport 3.0.23 converts Unix timestamps to local naive datetimes.
         traded_at = traded_at.astimezone(timezone.utc)
-        if not reference_now - lookback <= traded_at <= reference_now:
+        if forward:
+            if not query_start < traded_at <= reference_now:
+                continue
+        elif not query_start <= traded_at <= reference_now:
             continue
         record = _normalize_execution(execution)
         record["trade_done_at"] = traded_at.isoformat()
+        if forward:
+            record["side"] = _enum_name(getattr(execution, "side", "")).removeprefix("ORDERSIDE.") or None
+            record["currency"] = _text(getattr(execution, "currency", "")).upper() or None
         trade_id = str(record["trade_id"])
         previous = normalized_executions.get(trade_id)
-        if previous is not None and previous != record:
-            raise LongBridgeReconciliationReadError("LongBridge reconciliation received conflicting executions.")
+        if previous is not None:
+            # Compare canonical execution facts, excluding native-time provenance.
+            if {key: previous[key] for key in record} != record:
+                raise LongBridgeReconciliationReadError("LongBridge reconciliation received conflicting executions.")
+            if forward:
+                previous["native_trade_done_at_values"] = sorted(
+                    {*previous["native_trade_done_at_values"], native_time}
+                )
+            continue
+        if forward:
+            record["native_trade_done_at"] = native_time
+            record["native_trade_done_at_values"] = [native_time]
         normalized_executions[trade_id] = record
     account_channels: list[str] = []
     normalized_positions: list[dict[str, object]] = []
@@ -451,8 +532,10 @@ def collect_read_only_reconciliation_observations(
         broker_reported_balances=broker_balances,
         financing=financing,
         recent_orders=_canonical_records(normalized_orders),
-        orders_query_start=(reference_now - lookback).isoformat(),
+        orders_query_start=query_start.isoformat(),
         orders_query_end=reference_now.isoformat(),
+        component_captures=tuple(captures),
+        forward_report=report,
     )
 
 

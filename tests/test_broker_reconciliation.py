@@ -965,16 +965,56 @@ def test_sdk_local_naive_times_preserve_dst_fold(monkeypatch):
         time.tzset()
 
 
-def test_duplicate_execution_with_different_offset_has_one_utc_identity():
+@pytest.mark.parametrize("forward", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_duplicate_execution_with_different_offset_has_one_utc_identity(forward, reverse):
     context, _calls = _read_only_trade_context()
-    now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
-    context.history_executions = lambda **_kwargs: [_execution("same", now)]
-    context.today_executions = lambda: [_execution("same", now.astimezone(timezone(timedelta(hours=8))))]
+    now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+    times = [now, now.astimezone(timezone(timedelta(hours=8)))]
+    if reverse:
+        times.reverse()
+    context.history_executions = lambda **_kwargs: [_execution("same", times[0])]
+    context.today_executions = lambda: [_execution("same", times[1]), _execution("same", times[0])]
     observations = reconciliation.collect_read_only_reconciliation_observations(
-        object(), context, account_scope="SG", now=now,
+        object(), context, account_scope="PAPER", now=now,
+        **({"forward_anchor": FORWARD_START, "capture_clock": lambda: now,
+            "include_broker_balances": True} if forward else {}),
     )
     assert len(observations.recent_executions) == 1
-    assert observations.recent_executions[0]["trade_done_at"] == now.isoformat()
+    row = observations.recent_executions[0]
+    assert row["trade_done_at"] == now.isoformat()
+    if forward:
+        assert row["native_trade_done_at"] == times[0].isoformat()
+        assert row["native_trade_done_at_values"] == sorted(t.isoformat() for t in times)
+        payload, status = reconciliation.run_read_only_account_snapshot(
+            enabled=True, account_scope="PAPER", build_read_only_contexts=_snapshot_contexts(context),
+            collect_evidence=lambda *a, **kw: observations, now_reader=lambda: now,
+        )
+        assert status == 200
+        assert "native_trade_done_at" not in json.dumps(payload)
+        assert now.astimezone(timezone(timedelta(hours=8))).isoformat() not in json.dumps(payload)
+        assert "recent_executions" not in payload
+
+
+@pytest.mark.parametrize("field,value", [
+    ("quantity", "2"), ("price", "12"), ("order_id", "fake-other-order"),
+    ("symbol", "FAKE.US"), ("side", "Sell"), ("currency", "HKD"),
+    ("trade_done_at", datetime(2026, 11, 3, 11, tzinfo=timezone.utc)),
+])
+def test_forward_equivalent_offsets_do_not_hide_conflicting_facts(field, value):
+    context, _ = _read_only_trade_context()
+    now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+    first = _execution("fake-same", now)
+    equivalent = _execution("fake-same", now.astimezone(timezone(timedelta(hours=8))))
+    first.side = equivalent.side = "Buy"
+    first.currency = equivalent.currency = "USD"
+    context.history_executions = lambda **_kwargs: [first]
+    context.today_executions = lambda: [equivalent]
+    # First prove this is valid overlap; provenance must not cause a conflict.
+    assert len(_forward_read(context, now=now).recent_executions) == 1
+    setattr(equivalent, field, value)
+    with pytest.raises(reconciliation.LongBridgeReconciliationReadError, match="conflicting executions"):
+        _forward_read(context, now=now)
 
 
 def test_recent_orders_include_terminal_rows_without_raw_identifiers():
@@ -1002,3 +1042,113 @@ def test_recent_orders_include_terminal_rows_without_raw_identifiers():
     assert payload["recent_orders_complete"] is False
     assert payload["recent_orders_query"]["start_at"] == (reference-timedelta(days=7)).isoformat()
     assert payload["recent_orders_query"]["end_at"] == reference.isoformat()
+
+
+FORWARD_START = datetime(2026, 11, 2, 16, tzinfo=timezone.utc)
+
+
+def _forward_read(context, anchor=FORWARD_START, previous=None, now=None, clock=None):
+    return reconciliation.collect_read_only_reconciliation_observations(
+        object(), context, account_scope="PAPER", now=now or FORWARD_START + timedelta(days=1),
+        forward_anchor=anchor, forward_previous_cutoff=previous, include_broker_balances=True,
+        capture_clock=clock or (lambda: FORWARD_START + timedelta(days=2)),
+    )
+
+
+def test_forward_excludes_prior_events_and_uses_open_left_intervals():
+    context, _ = _read_only_trade_context()
+    events = [_execution(str(i), FORWARD_START + timedelta(seconds=i)) for i in (-1, 0, 1, 2, 3)]
+    queries = []
+    context.history_executions = lambda **kw: queries.append(kw) or events
+    context.today_executions = lambda: events
+    first = _forward_read(context, now=FORWARD_START + timedelta(seconds=1))
+    second = _forward_read(context, previous=FORWARD_START + timedelta(seconds=1),
+                           now=FORWARD_START + timedelta(seconds=2))
+    assert [r["trade_id"] for r in first.recent_executions] == ["1"]
+    assert [r["trade_id"] for r in second.recent_executions] == ["2"]
+    assert queries[0]["start_at"] == FORWARD_START
+    assert queries[1]["start_at"] == FORWARD_START + timedelta(seconds=1)
+    assert second.forward_report["interval"] == "(previous_cutoff,current_cutoff]"
+
+
+@pytest.mark.parametrize("anchor,previous,now", [
+    (FORWARD_START - timedelta(seconds=1), None, FORWARD_START),
+    (FORWARD_START, FORWARD_START - timedelta(seconds=1), FORWARD_START),
+    (FORWARD_START, None, FORWARD_START - timedelta(seconds=1)),
+    (FORWARD_START.replace(tzinfo=None), None, FORWARD_START),
+    (None, FORWARD_START, FORWARD_START),
+    (FORWARD_START, FORWARD_START + timedelta(seconds=2), FORWARD_START),
+])
+def test_forward_invalid_cutoffs_fail_before_reads(anchor, previous, now):
+    context, calls = _read_only_trade_context()
+    with pytest.raises(reconciliation.LongBridgeReconciliationReadError):
+        _forward_read(context, anchor=anchor, previous=previous, now=now)
+    assert calls == []
+
+
+def test_forward_rejects_ambiguous_native_time_without_local_timezone_guess():
+    context, _ = _read_only_trade_context()
+    context.today_executions = lambda: [_execution("fake-trade", FORWARD_START.replace(tzinfo=None))]
+    with pytest.raises(reconciliation.LongBridgeReconciliationReadError, match="execution time"):
+        _forward_read(context)
+
+
+def test_forward_private_rows_preserve_source_fields_without_public_leak():
+    context, _ = _read_only_trade_context()
+    event = _execution("fake-private-trade", FORWARD_START + timedelta(hours=1))
+    event.side, event.currency = "OrderSide.Buy", "USD"
+    context.today_executions = lambda: [event]
+    result = _forward_read(context)
+    row = result.recent_executions[0]
+    assert row["side"] == "BUY" and row["currency"] == "USD"
+    assert row["native_trade_done_at"] == event.trade_done_at.isoformat()
+    assert row["trade_id"] == "fake-private-trade"
+    assert result.positions[0]["account_channel"] == "cash"
+    assert result.account_identity_match is False
+    payload, status = reconciliation.run_read_only_account_snapshot(
+        enabled=True, account_scope="PAPER", build_read_only_contexts=_snapshot_contexts(context),
+        collect_evidence=lambda *a, **kw: result, now_reader=lambda: FORWARD_START + timedelta(days=1),
+    )
+    assert status == 200
+    assert "fake-private-trade" not in json.dumps(payload)
+    assert "forward_report" not in payload
+
+
+@pytest.mark.parametrize("count", [0, 1, 1000])
+def test_forward_missing_receipts_never_prove_completeness(count):
+    context, _ = _read_only_trade_context()
+    context.today_executions = lambda: [
+        _execution(f"fake-trade-{i}", FORWARD_START + timedelta(hours=1)) for i in range(count)
+    ]
+    result = _forward_read(context, anchor=FORWARD_START + timedelta(minutes=1))
+    assert not result.recent_executions_complete and not result.open_orders_complete
+    assert result.forward_report["status"] == "UNRECONCILED"
+    for gap in ("account_identity_unproven", "paper_identity_unproven", "unique_writer_unproven",
+                "event_pages_unproven", "native_cash_events_unproven", "source_as_of_missing",
+                "timing_bridge_missing", "opening_snapshot_missing"):
+        assert gap in result.forward_report["gaps"]
+    if count:
+        assert result.recent_executions[0]["side"] is None
+        assert result.recent_executions[0]["currency"] is None
+    assert result.cash[0]["cash_infos"][0] == {
+        "currency": "USD", "available_cash": "10", "frozen_cash": "0", "settling_cash": "0",
+    }
+
+
+def test_forward_component_times_are_capture_intervals_not_source_times():
+    context, _ = _read_only_trade_context()
+    ticks = iter(FORWARD_START + timedelta(days=1, seconds=i) for i in range(10))
+    result = _forward_read(context, clock=lambda: next(ticks))
+    assert len(result.component_captures) == 5
+    for i, capture in enumerate(result.component_captures):
+        assert capture["source_as_of"] is None
+        assert capture["observed_started_at"] == (FORWARD_START + timedelta(days=1, seconds=2*i)).isoformat()
+        assert capture["observed_finished_at"] == (FORWARD_START + timedelta(days=1, seconds=2*i+1)).isoformat()
+    assert result.forward_report["snapshot_atomic"] is False
+
+
+def test_forward_reversed_component_clock_fails_closed():
+    context, _ = _read_only_trade_context()
+    ticks = iter([FORWARD_START + timedelta(days=1), FORWARD_START])
+    with pytest.raises(reconciliation.LongBridgeReconciliationReadError, match="capture time"):
+        _forward_read(context, clock=lambda: next(ticks))
