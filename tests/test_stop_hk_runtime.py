@@ -37,7 +37,7 @@ class Cloud:
                         "status": {"url": "https://synthetic.example", "latestReadyRevisionName": "synthetic-old",
                                    "latestCreatedRevisionName": "synthetic-old",
                                    "traffic": [{"revisionName": "synthetic-old", "percent": 100}]}}
-        prefix = "projects/longbridgequant/locations/asia-east2/jobs/"
+        prefix = "projects/fake-project/locations/asia-east2/jobs/"
         self.jobs = [{"name": prefix + "synthetic-main", "state": "ENABLED",
                       "httpTarget": {"uri": "https://synthetic.example/run"}},
                      {"name": prefix + "synthetic-probe", "state": "PAUSED",
@@ -127,7 +127,7 @@ class StopHkRuntimeTests(unittest.TestCase):
             raw = path.read_bytes()
         self.assertTrue(result["platform_applied"])
         self.assertNotIn("乙".encode(), raw)
-        prefix = "projects/longbridgequant/locations/asia-east2/jobs/"
+        prefix = "projects/fake-project/locations/asia-east2/jobs/"
         jobs = [
             {"name": prefix + "synthetic-main", "state": "PAUSED", "uri": "https://synthetic.example/run"},
             {"name": prefix + "synthetic-probe", "state": "PAUSED", "uri": "https://synthetic.example/probe"},

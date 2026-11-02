@@ -4,8 +4,8 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 workflow_file="$repo_dir/.github/workflows/sync-cloud-run-env.yml"
 
-grep -Fq 'GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main' "$workflow_file"
-grep -Fq 'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com' "$workflow_file"
+grep -Fq 'GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}' "$workflow_file"
+grep -Fq 'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}' "$workflow_file"
 grep -Fq 'name: Deploy / Sync ${{ matrix.target.label }} Cloud Run' "$workflow_file"
 grep -Fq 'fail-fast: false' "$workflow_file"
 grep -Fq 'resolve-matrix:' "$workflow_file"
@@ -39,7 +39,7 @@ grep -Fq 'CLOUD_SCHEDULER_MAIN_TIME: ${{ vars.CLOUD_SCHEDULER_MAIN_TIME }}' "$wo
 grep -Fq 'CLOUD_SCHEDULER_PROBE_TIME: ${{ vars.CLOUD_SCHEDULER_PROBE_TIME }}' "$workflow_file"
 grep -Fq 'CLOUD_SCHEDULER_PRECHECK_TIME: ${{ vars.CLOUD_SCHEDULER_PRECHECK_TIME }}' "$workflow_file"
 grep -Fq 'CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}' "$workflow_file"
-grep -Fq 'GCP_SCHEDULER_SERVICE_ACCOUNT: longbridge-platform-scheduler@longbridgequant.iam.gserviceaccount.com' "$workflow_file"
+grep -Fq 'GCP_SCHEDULER_SERVICE_ACCOUNT: ${{ vars.GCP_SCHEDULER_SERVICE_ACCOUNT }}' "$workflow_file"
 grep -Fq 'Skipping Cloud Run commit wait because CLOUD_RUN_ENV_SYNC_WAIT_FOR_COMMIT is disabled.' "$workflow_file"
 grep -Fq 'permissions:' "$workflow_file"
 grep -Fq 'id-token: write' "$workflow_file"
@@ -1014,12 +1014,12 @@ else:
             WORKFLOW_TARGET=label,
             CLOUD_RUN_SERVICE=service,
             CLOUD_RUN_REGION=region,
-            GCP_PROJECT_ID="longbridgequant",
+            GCP_PROJECT_ID="fake-project",
             **target_history,
         )
         assert code == 0, (label, code, calls)
         updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
-        image_repo = f"registry.invalid/longbridgequant/synthetic-images/longbridgeplatform/{service}"
+        image_repo = f"registry.invalid/fake-project/synthetic-images/longbridgeplatform/{service}"
         assert len(updates) == 1
         assert "--no-traffic" in updates[0]
         assert updates[0][-1] == "--revision-suffix=r123"
@@ -1039,7 +1039,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "sg", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK"},
         },
         {
@@ -1047,7 +1047,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "hk", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "SG"},
         },
         {
@@ -1055,7 +1055,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false",
             **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "hk", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK"},
         },
@@ -1064,7 +1064,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true",
             **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "hk", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK"},
         },
@@ -1073,7 +1073,7 @@ else:
             "WORKFLOW_TARGET": "SG",
             "CLOUD_RUN_SERVICE": "longbridge-quant-sg-service",
             "CLOUD_RUN_REGION": "asia-southeast1",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true",
         },
     ):
@@ -1086,7 +1086,7 @@ else:
         WORKFLOW_TARGET="HK",
         CLOUD_RUN_SERVICE="longbridge-quant-hk-service",
         CLOUD_RUN_REGION="asia-east2",
-        GCP_PROJECT_ID="longbridgequant",
+        GCP_PROJECT_ID="fake-project",
         ACCOUNT_SNAPSHOT_ENABLED_INPUT="true",
     )
     assert code == 0, (code, calls)
@@ -1104,12 +1104,12 @@ else:
         WORKFLOW_TARGET="HK",
         CLOUD_RUN_SERVICE="longbridge-quant-hk-service",
         CLOUD_RUN_REGION="asia-east2",
-        GCP_PROJECT_ID="longbridgequant",
+        GCP_PROJECT_ID="fake-project",
     )
     assert code == 0, (code, calls)
     updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
     assert len(updates) == 1
-    image_repo = "registry.invalid/longbridgequant/synthetic-images/longbridgeplatform/longbridge-quant-hk-service"
+    image_repo = "registry.invalid/fake-project/synthetic-images/longbridgeplatform/longbridge-quant-hk-service"
     assert "--no-traffic" in updates[0]
     assert "--update-env-vars=" not in " ".join(updates[0])
     assert updates[0][-1] == "--revision-suffix=r123"
@@ -1134,7 +1134,7 @@ else:
         WORKFLOW_TARGET="HK",
         CLOUD_RUN_SERVICE="longbridge-quant-hk-service",
         CLOUD_RUN_REGION="asia-east2",
-        GCP_PROJECT_ID="longbridgequant",
+        GCP_PROJECT_ID="fake-project",
         TARGET_RUNTIME_ENABLED="true",
     )
     assert code != 0
@@ -1198,11 +1198,11 @@ else:
             WORKFLOW_TARGET=label,
             CLOUD_RUN_SERVICE=service,
             CLOUD_RUN_REGION=region,
-            GCP_PROJECT_ID="longbridgequant",
+            GCP_PROJECT_ID="fake-project",
         )
         assert code == 0, (label, code, calls)
         updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
-        image_repo = f"registry.invalid/longbridgequant/synthetic-images/longbridgeplatform/{service}"
+        image_repo = f"registry.invalid/fake-project/synthetic-images/longbridgeplatform/{service}"
         assert len(updates) == 1
         assert "--no-traffic" in updates[0]
         assert "--update-env-vars=" not in " ".join(updates[0])
@@ -1231,7 +1231,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "hk", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK"},
         },
         {
@@ -1239,7 +1239,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true",
         },
         {"SOURCE_COMMIT": "c" * 40, "WORKFLOW_TARGET": "HK"},
@@ -1253,7 +1253,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             "TARGET_ACCOUNT_SCOPE": "SG",
         },
         {
@@ -1261,7 +1261,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             "BAD_SERVING_LOCK": "1",
         },
     ):

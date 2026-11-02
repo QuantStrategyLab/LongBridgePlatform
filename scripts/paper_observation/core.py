@@ -116,6 +116,40 @@ def fail():
     raise ObservationError("schema_invalid")
 
 
+def _currency(value):
+    return text(value, r"[A-Z]{3}")
+
+
+def _symbol(value):
+    return text(value, r"[A-Z0-9.-]{1,24}\.(US|HK)")
+
+
+_ORDER_FIELDS = {
+    "symbol": _symbol,
+    "currency": _currency,
+    "status": lambda x: text(x, r"[A-Z_]{1,32}"),
+    "side": lambda x: text(x, r"BUY|SELL"),
+    "order_type": lambda x: text(x, r"[A-Z_]{1,32}"),
+    "quantity": amount,
+    "executed_quantity": amount,
+    "submitted_at": lambda x: instant(x).isoformat(),
+    "updated_at": lambda x: instant(x).isoformat() if x else None,
+    "order_digest": lambda x: text(x, r"[a-f0-9]{64}"),
+}
+_ROW_FIELDS = {
+    "cash": {
+        "currency": _currency,
+        **dict.fromkeys(("available_cash", "frozen_cash", "settling_cash"), amount),
+    },
+    "broker_reported_balances": {
+        "currency": _currency, "net_assets": amount, "total_cash": amount,
+    },
+    "positions": {"symbol": _symbol, "currency": _currency, "quantity": amount},
+    "recent_orders_7d": _ORDER_FIELDS,
+    "known_non_terminal_orders_7d": _ORDER_FIELDS,
+}
+
+
 def sanitize(payload, binding, now):
     try:
         return _sanitize(payload, binding, now)
@@ -162,27 +196,11 @@ def _sanitize(payload, binding, now):
     ):
         fail()
 
-    def currency(value):
-        return text(value, r"[A-Z]{3}")
-
-    def symbol(value):
-        return text(value, r"[A-Z0-9.-]{1,24}\.(US|HK)")
-
-    cash = rows(
-        payload.get("cash"),
-        {
-            "currency": currency,
-            **dict.fromkeys(("available_cash", "frozen_cash", "settling_cash"), amount),
-        },
-    )
+    cash = rows(payload.get("cash"), _ROW_FIELDS["cash"])
     balances = rows(
-        payload.get("broker_reported_balances"),
-        {"currency": currency, "net_assets": amount, "total_cash": amount},
+        payload.get("broker_reported_balances"), _ROW_FIELDS["broker_reported_balances"]
     )
-    positions = rows(
-        payload.get("positions"),
-        {"symbol": symbol, "currency": currency, "quantity": amount},
-    )
+    positions = rows(payload.get("positions"), _ROW_FIELDS["positions"])
     query = payload.get("recent_orders_query", {})
     begin, end = instant(query.get("start_at")), instant(query.get("end_at"))
     if (
@@ -194,19 +212,7 @@ def _sanitize(payload, binding, now):
         or not balances
     ):
         fail()
-    order_fields = {
-        "symbol": symbol,
-        "currency": currency,
-        "status": lambda x: text(x, r"[A-Z_]{1,32}"),
-        "side": lambda x: text(x, r"BUY|SELL"),
-        "order_type": lambda x: text(x, r"[A-Z_]{1,32}"),
-        "quantity": amount,
-        "executed_quantity": amount,
-        "submitted_at": lambda x: instant(x).isoformat(),
-        "updated_at": lambda x: instant(x).isoformat() if x else None,
-        "order_digest": lambda x: text(x, r"[a-f0-9]{64}"),
-    }
-    orders = rows(payload.get("recent_orders_7d"), order_fields)
+    orders = rows(payload.get("recent_orders_7d"), _ORDER_FIELDS)
     by_id = {}
     for order in orders:
         submitted = instant(order["submitted_at"])
@@ -238,18 +244,83 @@ def _sanitize(payload, binding, now):
 
 
 def validate_stored(record, day):
+    """Check the immutable normalized contract, without asserting source authenticity."""
+    try:
+        _validate_stored(record, day)
+    except (
+        ObservationError, TypeError, AttributeError, KeyError, ValueError,
+        OverflowError, OSError,
+    ):
+        raise ObservationError("stored_record_invalid") from None
+    return record
+
+
+def _validate_stored(record, day):
+    fixed = {
+        "schema_version": "paper_observation.v1",
+        "trading_date": str(day),
+        "account_scope": "PAPER",
+        "account_id": None,
+        "identity_verification": "source_binding_only",
+        "snapshot_atomic": False,
+        "recent_orders_complete": False,
+        "open_orders_complete": False,
+    }
+    time_fields = {
+        "observed_started_at", "observed_finished_at", "orders_query_start",
+        "orders_query_end", "scheduled_at", "job_started_at", "store_requested_at",
+    }
+    required = fixed.keys() | _ROW_FIELDS.keys() | time_fields | {"lateness_seconds", "timing"}
     if (
         not isinstance(record, dict)
-        or record.get("schema_version") != "paper_observation.v1"
-        or record.get("trading_date") != str(day)
-        or record.get("account_scope") != "PAPER"
+        or record.keys() != required
+        or any(type(record[k]) is not type(v) or record[k] != v for k, v in fixed.items())
     ):
-        raise ObservationError("stored_record_invalid")
-    instant(record.get("observed_started_at"))
-    instant(record.get("observed_finished_at"))
-    if not record.get("cash") or not isinstance(record.get("positions"), list):
-        raise ObservationError("stored_record_invalid")
-    return record
+        fail()
+    for key, fields in _ROW_FIELDS.items():
+        # Persisted rows must already be normalized: never drop unknown fields,
+        # supply missing fields or silently repair a historical observation.
+        if rows(record[key], fields) != record[key]:
+            fail()
+    if not record["cash"] or not record["broker_reported_balances"]:
+        fail()
+    times = {key: instant(record[key]) for key in time_fields}
+    started, finished = times["observed_started_at"], times["observed_finished_at"]
+    job, stored = times["job_started_at"], times["store_requested_at"]
+    begin, end = times["orders_query_start"], times["orders_query_end"]
+    scheduled = times["scheduled_at"]
+    # A sanitize clock must have existed between job start and store request.
+    # Keep its original five-minute age / thirty-second future tolerances;
+    # replay time is irrelevant to this historical record.
+    if (
+        started > finished
+        or job > stored
+        or max(job, finished - timedelta(seconds=30))
+        > min(stored, started + timedelta(minutes=5))
+        or started.astimezone(NY).date() != day
+        or job.astimezone(NY).date() != day
+        or scheduled != Calendar().due(day)
+        or scheduled > job
+        or end != started
+        or end - begin != timedelta(days=7)
+    ):
+        fail()
+    orders = record["recent_orders_7d"]
+    if (
+        len({order["order_digest"] for order in orders}) != len(orders)
+        or any(not begin <= instant(order["submitted_at"]) <= end for order in orders)
+        or record["known_non_terminal_orders_7d"]
+        != [order for order in orders if order["status"] in WORKING_STATUSES]
+    ):
+        fail()
+    lateness = (started - scheduled).total_seconds()
+    if (
+        type(record["lateness_seconds"]) not in (int, float)
+        or record["lateness_seconds"] != lateness
+        or lateness < 0
+        or record["timing"] != ("on_time" if lateness <= 300 else "late_snapshot")
+    ):
+        fail()
 
 
 class Collector:

@@ -36,7 +36,7 @@ def _document():
         "observed_at": "2026-09-28T06:00:00Z",
         "readback": {
             "complete": True,
-            "project": "longbridgequant",
+            "project": "fake-project",
             "region": "asia-east2",
             "revision_name": "synthetic-old",
             "runtime_enabled": False,

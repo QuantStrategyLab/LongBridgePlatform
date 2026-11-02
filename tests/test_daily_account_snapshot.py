@@ -40,7 +40,7 @@ def _env(target_id="paper", **overrides):
         "ACCOUNT_HISTORY_TARGET_ID": target_id,
         "ACCOUNT_HISTORY_EXPECTED_SCOPE": scope,
         "ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID": BINDING,
-        "GOOGLE_CLOUD_PROJECT": "longbridgequant",
+        "GOOGLE_CLOUD_PROJECT": "fake-project",
         "RUNTIME_TARGET_ENABLED": "true",
     }
     result.update(overrides)
@@ -56,13 +56,13 @@ def _job(target_id="paper", *, state="ENABLED", service_url=None, region=None, *
     region = region or {"paper": "asia-east1", "hk": "asia-east2", "sg": "asia-southeast1"}[target_id]
     service_url = service_url or _env(target_id)["ACCOUNT_HISTORY_SERVICE_URL"]
     job = {
-        "name": f"projects/longbridgequant/locations/{region}/jobs/{service}-probe-scheduler",
+        "name": f"projects/fake-project/locations/{region}/jobs/{service}-probe-scheduler",
         "state": state,
         "httpTarget": {
             "httpMethod": "POST",
             "uri": f"{service_url}/probe",
             "oidcToken": {
-                "serviceAccountEmail": "longbridge-platform-scheduler@longbridgequant.iam.gserviceaccount.com",
+                "serviceAccountEmail": "longbridge-platform-scheduler@fake-project.iam.gserviceaccount.com",
                 "audience": service_url,
             },
         },
@@ -463,7 +463,7 @@ def test_sghk_targets_use_exact_manifest_identity_and_publish_matching_history(t
     expected_region = {"hk": "asia-east2", "sg": "asia-southeast1"}[target_id]
     expected_service = {"hk": "longbridge-quant-hk-service", "sg": "longbridge-quant-sg-service"}[target_id]
     assert spies.session.calls[0][1] == (
-        f"https://cloudscheduler.googleapis.com/v1/projects/longbridgequant/locations/"
+        f"https://cloudscheduler.googleapis.com/v1/projects/fake-project/locations/"
         f"{expected_region}/jobs/{expected_service}-probe-scheduler"
     )
     assert spies.session.calls[1][1].endswith(f"/{expected_service}-probe-scheduler:run")
@@ -589,7 +589,7 @@ def test_paused_sg_deadline_includes_storage_initialization(monkeypatch):
     actions = [call[1].rsplit(":", 1)[-1] for call in spies.session.calls if call[0] == "post"]
     assert actions == ["resume", "run", "pause"]
     assert spies.session.job["state"] == "PAUSED"
-    assert spies.open_calls == ["longbridgequant"]
+    assert spies.open_calls == ["fake-project"]
     assert spies.storage.list_calls == []
     assert spies.posts == []
 
@@ -869,7 +869,7 @@ def test_paused_sg_pause_failure_never_publishes(pause_response, pause_applies, 
     )
     assert result.category == expected
     assert [call[0] for call in spies.session.calls] == ["get", "post", "get", "post", "post", "get"]
-    assert spies.open_calls == ["longbridgequant"]
+    assert spies.open_calls == ["fake-project"]
     assert spies.events.index("gcs_list") < spies.events.index("scheduler_pause")
     assert spies.posts == []
 
@@ -1297,7 +1297,7 @@ def test_sg_permission_inspection_returns_only_fixed_project_permission_booleans
     }
     assert len(session.calls) == 1
     url, kwargs = session.calls[0]
-    assert url == "https://cloudresourcemanager.googleapis.com/v1/projects/longbridgequant:testIamPermissions"
+    assert url == "https://cloudresourcemanager.googleapis.com/v1/projects/fake-project:testIamPermissions"
     assert kwargs == {
         "json": {"permissions": list(snapshots._SG_PROBE_REQUIRED_PERMISSIONS)},
         "timeout": snapshots.HTTP_TIMEOUT_SECONDS,
@@ -1377,7 +1377,7 @@ def test_permission_inspection_cli_does_not_call_record_or_publish(capsys):
         "cloudscheduler.jobs.enable": False,
         "cloudscheduler.jobs.pause": False,
     }
-    assert SECRET not in output and "longbridgequant" not in output
+    assert SECRET not in output and "fake-project" not in output
     assert len(session.calls) == 1 and session.closed
 
 
@@ -1403,7 +1403,7 @@ def test_archive_inspection_uses_expected_source_and_same_candidate_validator():
         target="sg",
         triggered_at=T0.isoformat(),
         completed_at=(T0 + timedelta(seconds=4)).isoformat(),
-        open_store=lambda project: storage if project == "longbridgequant" else pytest.fail("wrong project"),
+        open_store=lambda project: storage if project == "fake-project" else pytest.fail("wrong project"),
         now_reader=lambda: T0 + timedelta(seconds=5),
         monotonic=lambda: 0.0,
     )
@@ -1576,7 +1576,7 @@ def test_history_validator_accepts_optional_financing_and_rejects_malformed():
     started = T0 + timedelta(seconds=1)
     finished = T0 + timedelta(seconds=2)
     config = snapshots._Config(
-        "longbridgequant",
+        "fake-project",
         "asia-east1",
         "service",
         SERVICE_URL,

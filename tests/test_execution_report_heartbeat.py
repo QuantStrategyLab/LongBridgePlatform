@@ -383,7 +383,7 @@ def test_scheduler_aware_named_fallback_uses_service_alias(monkeypatch):
 
 def test_main_skips_when_no_scheduler_main_job_is_due(monkeypatch, capsys):
     _clear_runtime_env(monkeypatch)
-    monkeypatch.setenv("GCP_PROJECT_ID", "longbridgequant")
+    monkeypatch.setenv("GCP_PROJECT_ID", "fake-project")
     monkeypatch.setenv("RUNTIME_HEARTBEAT_NAME", "Monthly runtime")
     monkeypatch.setenv("RUNTIME_HEARTBEAT_REPORT_PLATFORM", "longbridge")
     monkeypatch.setenv("CLOUD_RUN_SERVICE", "longbridge-monthly-service")
@@ -597,7 +597,7 @@ def test_main_skips_outside_expected_day_of_month_window(monkeypatch, capsys):
 
 def test_main_skips_outside_expected_window_even_when_scheduler_is_due(monkeypatch, capsys):
     _clear_runtime_env(monkeypatch)
-    monkeypatch.setenv("GCP_PROJECT_ID", "longbridgequant")
+    monkeypatch.setenv("GCP_PROJECT_ID", "fake-project")
     monkeypatch.setenv("RUNTIME_HEARTBEAT_NAME", "Monthly runtime")
     monkeypatch.setenv("RUNTIME_HEARTBEAT_REPORT_PLATFORM", "longbridge")
     monkeypatch.setenv("CLOUD_RUN_SERVICE", "longbridge-monthly-service")
@@ -633,7 +633,7 @@ def test_main_skips_outside_expected_window_even_when_scheduler_is_due(monkeypat
 
 def test_main_checks_reports_inside_expected_day_of_month_window(monkeypatch, capsys):
     _clear_runtime_env(monkeypatch)
-    monkeypatch.setenv("GCP_PROJECT_ID", "longbridgequant")
+    monkeypatch.setenv("GCP_PROJECT_ID", "fake-project")
     monkeypatch.setenv("RUNTIME_HEARTBEAT_NAME", "Monthly runtime")
     monkeypatch.setenv("RUNTIME_HEARTBEAT_REPORT_PLATFORM", "longbridge")
     monkeypatch.setenv("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE", "MONTHLY")
@@ -671,8 +671,8 @@ def test_main_checks_reports_inside_expected_day_of_month_window(monkeypatch, ca
 
     assert result == 0
     assert observed["gcs_glob"] == "gs://bucket/execution-reports/longbridge/**/2026-06/*.json"
-    assert observed["project"] == "longbridgequant"
-    assert observed["cat_project"] == "longbridgequant"
+    assert observed["project"] == "fake-project"
+    assert observed["cat_project"] == "fake-project"
     assert observed["cat_uri"].endswith("/report.json")
     output = capsys.readouterr().out
     assert "Execution report heartbeat OK for Monthly runtime" in output
@@ -701,7 +701,7 @@ def test_telegram_token_falls_back_to_secret_manager(monkeypatch):
     monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
     monkeypatch.delenv("TG_TOKEN", raising=False)
     monkeypatch.setenv("TELEGRAM_TOKEN_SECRET_NAME", "platform-telegram-token")
-    monkeypatch.setenv("GCP_PROJECT_ID", "longbridgequant")
+    monkeypatch.setenv("GCP_PROJECT_ID", "fake-project")
     observed = {}
 
     def fake_run_gcloud(command):
@@ -720,7 +720,7 @@ def test_telegram_token_falls_back_to_secret_manager(monkeypatch):
         "--secret",
         "platform-telegram-token",
         "--project",
-        "longbridgequant",
+        "fake-project",
     ]
 
 

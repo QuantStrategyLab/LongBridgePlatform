@@ -82,11 +82,11 @@ def env():
         "GITHUB_SHA": SHA,
         "GITHUB_WORKFLOW_SHA": SHA,
         "GCP_WORKLOAD_IDENTITY_PROVIDER": (
-            "projects/252919773759/locations/global/workloadIdentityPools/"
+            "projects/123456789012/locations/global/workloadIdentityPools/"
             "github-actions/providers/github-main"
         ),
         "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT": (
-            "longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com"
+            "longbridge-platform-deploy@fake-project.iam.gserviceaccount.com"
         ),
         "HK_CHECKED_OUT_SHA": SHA,
     }
@@ -612,9 +612,9 @@ def wif_info():
         "audience": "//iam.googleapis.com/" + env()["GCP_WORKLOAD_IDENTITY_PROVIDER"],
         "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
         "token_url": "https://sts.googleapis.com/v1/token",
-        "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com:generateAccessToken",
+        "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/longbridge-platform-deploy@fake-project.iam.gserviceaccount.com:generateAccessToken",
         "credential_source": {
-            "url": "https://token.actions.githubusercontent.com/oidc?api-version=2.0&audience=https%3A%2F%2Fiam.googleapis.com%2Fprojects%2F252919773759%2Flocations%2Fglobal%2FworkloadIdentityPools%2Fgithub-actions%2Fproviders%2Fgithub-main",
+            "url": "https://token.actions.githubusercontent.com/oidc?api-version=2.0&audience=https%3A%2F%2Fiam.googleapis.com%2Fprojects%2F123456789012%2Flocations%2Fglobal%2FworkloadIdentityPools%2Fgithub-actions%2Fproviders%2Fgithub-main",
             "headers": {"Authorization": "Bearer synthetic-not-real"},
             "format": {"type": "json", "subject_token_field_name": "value"},
         },
@@ -650,7 +650,7 @@ def test_storage_factory_constructs_only_validated_wif_info_readonly_scope(tmp_p
     assert p["make_storage_client"](wif_env(tmp_path), factory, constructor) is client
     assert calls == [
         ("construct", ["https://www.googleapis.com/auth/devstorage.read_only"]),
-        ("client", {"project": "longbridgequant", "credentials": credential}),
+        ("client", {"project": "fake-project", "credentials": credential}),
     ]
     assert "load_credentials_from_file" not in block("INVENTORY")
     assert "google.auth.default" not in block("INVENTORY")
@@ -779,7 +779,7 @@ def test_real_locked_constructor_and_explicit_project_never_refresh_or_discover(
     client = p["make_storage_client"](
         wif_env(tmp_path), storage.Client, identity_pool.Credentials.from_info
     )
-    assert client.project == "longbridgequant"
+    assert client.project == "fake-project"
     assert isinstance(client._credentials, identity_pool.Credentials)
     assert client._credentials.token is None
     assert client._credentials._impersonated_credentials is None
@@ -1039,7 +1039,7 @@ def test_native_regional_security_endpoint_and_headers_remain_intact(tmp_path):
     impersonated = credential._initialize_impersonated_credentials()
     assert impersonated._build_regional_access_boundary_lookup_url() == (
         "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/"
-        "longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com/allowedLocations"
+        "longbridge-platform-deploy@fake-project.iam.gserviceaccount.com/allowedLocations"
     )
     assert impersonated._is_regional_access_boundary_lookup_required() is True
     expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1)

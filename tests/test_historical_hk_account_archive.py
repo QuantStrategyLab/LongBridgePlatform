@@ -680,7 +680,7 @@ def native_client(transport):
     assert core.__version__ == "2.31.0"
     assert storage.__version__ == "3.12.0"
     return storage.Client(
-        project="longbridgequant", credentials=AnonymousCredentials(), _http=transport
+        project="fake-project", credentials=AnonymousCredentials(), _http=transport
     )
 
 
