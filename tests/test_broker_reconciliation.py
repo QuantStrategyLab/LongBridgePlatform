@@ -965,16 +965,56 @@ def test_sdk_local_naive_times_preserve_dst_fold(monkeypatch):
         time.tzset()
 
 
-def test_duplicate_execution_with_different_offset_has_one_utc_identity():
+@pytest.mark.parametrize("forward", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_duplicate_execution_with_different_offset_has_one_utc_identity(forward, reverse):
     context, _calls = _read_only_trade_context()
-    now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
-    context.history_executions = lambda **_kwargs: [_execution("same", now)]
-    context.today_executions = lambda: [_execution("same", now.astimezone(timezone(timedelta(hours=8))))]
+    now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+    times = [now, now.astimezone(timezone(timedelta(hours=8)))]
+    if reverse:
+        times.reverse()
+    context.history_executions = lambda **_kwargs: [_execution("same", times[0])]
+    context.today_executions = lambda: [_execution("same", times[1]), _execution("same", times[0])]
     observations = reconciliation.collect_read_only_reconciliation_observations(
-        object(), context, account_scope="SG", now=now,
+        object(), context, account_scope="PAPER", now=now,
+        **({"forward_anchor": FORWARD_START, "capture_clock": lambda: now,
+            "include_broker_balances": True} if forward else {}),
     )
     assert len(observations.recent_executions) == 1
-    assert observations.recent_executions[0]["trade_done_at"] == now.isoformat()
+    row = observations.recent_executions[0]
+    assert row["trade_done_at"] == now.isoformat()
+    if forward:
+        assert row["native_trade_done_at"] == times[0].isoformat()
+        assert row["native_trade_done_at_values"] == sorted(t.isoformat() for t in times)
+        payload, status = reconciliation.run_read_only_account_snapshot(
+            enabled=True, account_scope="PAPER", build_read_only_contexts=_snapshot_contexts(context),
+            collect_evidence=lambda *a, **kw: observations, now_reader=lambda: now,
+        )
+        assert status == 200
+        assert "native_trade_done_at" not in json.dumps(payload)
+        assert now.astimezone(timezone(timedelta(hours=8))).isoformat() not in json.dumps(payload)
+        assert "recent_executions" not in payload
+
+
+@pytest.mark.parametrize("field,value", [
+    ("quantity", "2"), ("price", "12"), ("order_id", "fake-other-order"),
+    ("symbol", "FAKE.US"), ("side", "Sell"), ("currency", "HKD"),
+    ("trade_done_at", datetime(2026, 11, 3, 11, tzinfo=timezone.utc)),
+])
+def test_forward_equivalent_offsets_do_not_hide_conflicting_facts(field, value):
+    context, _ = _read_only_trade_context()
+    now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+    first = _execution("fake-same", now)
+    equivalent = _execution("fake-same", now.astimezone(timezone(timedelta(hours=8))))
+    first.side = equivalent.side = "Buy"
+    first.currency = equivalent.currency = "USD"
+    context.history_executions = lambda **_kwargs: [first]
+    context.today_executions = lambda: [equivalent]
+    # First prove this is valid overlap; provenance must not cause a conflict.
+    assert len(_forward_read(context, now=now).recent_executions) == 1
+    setattr(equivalent, field, value)
+    with pytest.raises(reconciliation.LongBridgeReconciliationReadError, match="conflicting executions"):
+        _forward_read(context, now=now)
 
 
 def test_recent_orders_include_terminal_rows_without_raw_identifiers():

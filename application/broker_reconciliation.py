@@ -464,13 +464,22 @@ def collect_read_only_reconciliation_observations(
         record = _normalize_execution(execution)
         record["trade_done_at"] = traded_at.isoformat()
         if forward:
-            record["native_trade_done_at"] = native_time
             record["side"] = _enum_name(getattr(execution, "side", "")).removeprefix("ORDERSIDE.") or None
             record["currency"] = _text(getattr(execution, "currency", "")).upper() or None
         trade_id = str(record["trade_id"])
         previous = normalized_executions.get(trade_id)
-        if previous is not None and previous != record:
-            raise LongBridgeReconciliationReadError("LongBridge reconciliation received conflicting executions.")
+        if previous is not None:
+            # Compare canonical execution facts, excluding native-time provenance.
+            if {key: previous[key] for key in record} != record:
+                raise LongBridgeReconciliationReadError("LongBridge reconciliation received conflicting executions.")
+            if forward:
+                previous["native_trade_done_at_values"] = sorted(
+                    {*previous["native_trade_done_at_values"], native_time}
+                )
+            continue
+        if forward:
+            record["native_trade_done_at"] = native_time
+            record["native_trade_done_at_values"] = [native_time]
         normalized_executions[trade_id] = record
     account_channels: list[str] = []
     normalized_positions: list[dict[str, object]] = []

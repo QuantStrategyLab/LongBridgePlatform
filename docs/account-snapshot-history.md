@@ -91,7 +91,12 @@ Out-of-interval executions are excluded; no financial adjustment is inferred.
 
 The sensitive in-memory result retains execution IDs, native aware event time,
 UTC time, and side/currency only when supplied by the source. Missing fields
-remain null. A naive execution timestamp fails the forward read rather than
+remain null. Overlapping executions are compared by canonical UTC time and
+execution facts, including source-provided side/currency. Equivalent timezone
+offsets deduplicate; conflicting facts fail the read. `native_trade_done_at`
+retains the first source timestamp string; `native_trade_done_at_values` retains
+the sorted distinct original strings from all overlapping rows as private
+provenance. A naive execution timestamp fails the forward read rather than
 using the process timezone. Cash available, frozen and settling definitions
 remain separate. Per-component capture intervals have `source_as_of=null`;
 sequential captures do not prove an atomic snapshot or bridge inter-read events.
