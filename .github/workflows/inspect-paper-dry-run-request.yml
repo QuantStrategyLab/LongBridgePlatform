@@ -33,6 +33,7 @@ jobs:
           version: ">= 416.0.0"
       - name: Inspect bounded request logs
         env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           READBACK_START_UTC: ${{ inputs.start_utc }}
           READBACK_END_UTC: ${{ inputs.end_utc }}
         run: python scripts/paper_request_readback.py
