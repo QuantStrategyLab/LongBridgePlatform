@@ -30,26 +30,40 @@ jobs:
       contents: read
       id-token: write
     env:
-      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
       WORKFLOW_TARGET: PAPER
       INSPECTION_MODE: ${{ inputs.mode }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
       EXPECTED_RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
     steps:
+      - name: Mask WIF identity components
+        env:
+          GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          account="$GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"
+          [[ "$account" =~ ^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$ ]] || exit 1
+          account_name="${account%%@*}"
+          project="${account#*@}"
+          project="${project%.iam.gserviceaccount.com}"
+          printf '::add-mask::%s\n' "$account_name"
+          printf '::add-mask::%s\n' "$project"
+          printf 'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT=%s\n' "$account" >> "$GITHUB_ENV"
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Validate existing PAPER selection before cloud authentication
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_REPOSITORY" = QuantStrategyLab/LongBridgePlatform
           test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          printf 'GCP_PROJECT_ID=%s\n' "$GCP_PROJECT_ID" >> "$GITHUB_ENV"
           test -n "$CLOUD_RUN_REGION"
           test -n "$CLOUD_RUN_SERVICE"
           if [ "$INSPECTION_MODE" = target-config ]; then
@@ -65,7 +79,7 @@ jobs:
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          service_account: ${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ vars.GCP_PROJECT_ID }}

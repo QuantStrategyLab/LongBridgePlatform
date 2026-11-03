@@ -164,11 +164,47 @@ def test_workflow_reuses_paper_environment_and_identity_without_write_actions():
     assert "workflow_dispatch:" in workflow and "schedule:" not in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
     assert "environment: longbridge-paper" in workflow
-    assert "${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in workflow
+    assert "${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in workflow
     assert "${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in deployment
     assert "Deploy Cloud Run-${{ github.ref_name }}" in workflow
     assert workflow.index("Validate existing PAPER selection") < workflow.index("google-github-actions/auth")
     assert all(token not in workflow for token in ("upload-artifact", "update-traffic", "scheduler", "curl", "secret-access"))
+
+
+def test_workflow_wif_identity_is_not_in_job_environment():
+    workflow = Path(".github/workflows/inspect-paper-serving-metadata.yml").read_text()
+    job_config = workflow.split("    steps:", 1)[0]
+    assert "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT:" not in job_config
+
+    assert "${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in workflow
+    assert "vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT" not in workflow
+    first_step = workflow.split("    steps:\n", 1)[1].split("      - uses:", 1)[0]
+    assert "name: Mask WIF identity components" in first_step
+    assert '::add-mask::' in first_step
+    assert first_step.index('::add-mask::') < first_step.index('>> "$GITHUB_ENV"')
+    assert workflow.index('::add-mask::') < workflow.index('actions/checkout@')
+    assert "GCP_PROJECT_ID:" not in job_config
+
+
+@pytest.mark.parametrize("identity", ["", "invalid", "synthetic-agent@synthetic-project.iam.gserviceaccount.com"])
+def test_workflow_identity_masking_precedes_exports_and_rejects_missing_identity(tmp_path, identity):
+    workflow = Path(".github/workflows/inspect-paper-serving-metadata.yml").read_text()
+    first_step = workflow.split("    steps:\n", 1)[1].split("      - uses:", 1)[0]
+    script = first_step.split("        run: |\n", 1)[1]
+    script = "\n".join(line[10:] for line in script.splitlines())
+    env_file = tmp_path / "env"
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True,
+                            env={"GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT": identity, "GITHUB_ENV": str(env_file)},
+                            check=False)
+    if identity in ("", "invalid"):
+        assert result.returncode != 0
+        assert not env_file.exists()
+    else:
+        assert result.returncode == 0
+        lines = result.stdout.splitlines()
+        assert lines == ["::add-mask::synthetic-agent", "::add-mask::synthetic-project"]
+        assert env_file.read_text() == f"GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT={identity}\n"
+    assert not result.stderr
 
 
 def source_chain_io(*, registry_error=None, audit_error=None, changed=False, audit_rows=None):
