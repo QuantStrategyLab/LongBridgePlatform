@@ -5,6 +5,14 @@ import pytest
 
 
 _network = pytest.MonkeyPatch()
+for _key, _value in {
+    "GCP_PROJECT_ID": "fake-project",
+    "GCP_WORKLOAD_IDENTITY_PROVIDER": "projects/123456789012/locations/global/workloadIdentityPools/github-actions/providers/github-main",
+    "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT": "longbridge-platform-deploy@fake-project.iam.gserviceaccount.com",
+    "GCP_RUNTIME_SERVICE_ACCOUNT": "longbridge-platform-runtime@fake-project.iam.gserviceaccount.com",
+    "GCP_SCHEDULER_SERVICE_ACCOUNT": "longbridge-platform-scheduler@fake-project.iam.gserviceaccount.com",
+}.items():
+    _network.setenv(_key, _value)
 
 
 def _offline(*args, **kwargs):

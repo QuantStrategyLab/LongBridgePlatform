@@ -170,6 +170,8 @@ def _checked_result(data, run):
         raise
     except (UnicodeError, json.JSONDecodeError, KeyError, TypeError):
         raise PublishError("stop_result_rejected") from None
+    if re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", os.environ.get("GCP_PROJECT_ID", "")) is None:
+        raise PublishError("stop_result_rejected")
     expected_producer = {
         "repository": REPOSITORY,
         "workflow_path": WORKFLOW_PATH,
@@ -189,7 +191,7 @@ def _checked_result(data, run):
             or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", str(result["observed_at"]))
             or result["no_order"] is not True or result["in_flight_state"] != "unknown"
             or result["retirement_complete"] is not False
-            or readback["project"] != "longbridgequant" or readback["region"] != "asia-east2"
+            or readback["project"] != os.environ.get("GCP_PROJECT_ID", "") or readback["region"] != "asia-east2"
             or readback["service"] != "longbridge-quant-hk-service"
             or not re.fullmatch(r"[a-z][a-z0-9-]*", str(readback["revision_name"]))
             or readback["runtime_enabled"] is not False or readback["scheduler_state"] != "paused"

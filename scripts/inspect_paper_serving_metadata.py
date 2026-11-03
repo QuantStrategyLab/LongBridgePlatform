@@ -368,17 +368,82 @@ def observe(*, env=os.environ, run=command, load=read_json):
     return result
 
 
+def observe_target_config(*, env=os.environ, load=read_json):
+    """Attest only configured PAPER Russell identity, without executing an image.
+
+    The account is the same protected variable consumed by the existing WIF
+    authentication step, never a dispatch input. No secret values are read.
+    """
+    account = env.get("GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT", "")
+    project, region, service = (env.get(k, "") for k in (
+        "GCP_PROJECT_ID", "CLOUD_RUN_REGION", "CLOUD_RUN_SERVICE"))
+    if (not re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,61}[a-z0-9]\.iam\.gserviceaccount\.com", account)
+            or env.get("WORKFLOW_TARGET") != "PAPER"
+            or not all(re.fullmatch(r"[a-z][a-z0-9-]{0,62}", x) for x in (project, region, service))):
+        raise ObservationError("configuration_unavailable")
+    flags = ["--account=" + account, "--project=" + project,
+             "--region=" + region, "--format=json"]
+
+    def require_target(payload):
+        try:
+            _require_paper_target_identity(service=service, service_json=payload)
+            policy = verify_service(service=service, service_json=payload)
+            values = _container_env(payload)
+            targets = [json.loads(values[key]) for key in (
+                "RUNTIME_TARGET_JSON", "QSL_RUNTIME_TARGET_JSON") if key in values]
+            if (not targets or any(target != targets[0] for target in targets)
+                    or targets[0].get("execution_environment") != "paper"
+                    or policy["profile"] != "russell_top50_leader_rotation"):
+                raise ValueError
+        except Exception:
+            # Never print exception text containing protected target values.
+            raise ObservationError("target_config_unproven") from None
+
+    started = datetime.now(timezone.utc).isoformat()
+    service_cmd = ["gcloud", "run", "services", "describe", service, *flags]
+    before = load(service_cmd)
+    if before.get("metadata", {}).get("name") != service:
+        raise ObservationError("service_identity_invalid")
+    require_target(before)
+    rows = traffic_rows(before)
+    for name, _ in rows:
+        if not name.startswith(service + "-"):
+            raise ObservationError("revision_identity_invalid")
+        revision_cmd = ["gcloud", "run", "revisions", "describe", name, *flags]
+        revision = load(revision_cmd)
+        if revision.get("metadata", {}).get("name") != name:
+            raise ObservationError("revision_identity_invalid")
+        require_target({"spec": {"template": {"spec": revision.get("spec", {})}}})
+        if load(revision_cmd) != revision:
+            raise ObservationError("revision_changed_during_observation")
+    if load(service_cmd) != before:
+        raise ObservationError("service_changed_during_observation")
+    return {"schema": SCHEMA, "mode": "target-config", "status": "observed",
+            "workflow_sha": sha(env.get("GITHUB_SHA")),
+            "observed_started_at": started,
+            "observed_finished_at": datetime.now(timezone.utc).isoformat(),
+            "broker_environment": "paper", "strategy_profile": "russell_top50_leader_rotation",
+            "positive_traffic_revision_count": len(rows), "service_stable": True,
+            "explicit_wif_account_used": True, "resource_identifiers_disclosed": False,
+            "image_execution_performed": False, "service_invoked": False,
+            "broker_invoked": False, "business_writes": False,
+            "broker_identity_independently_verified": False}
+
+
 def main(argv=None):
     try:
         args = list(sys.argv[1:] if argv is None else argv)
-        if args not in ([], ["--source-chain"]):
+        if args not in ([], ["--source-chain"], ["--target-config"]):
             raise ObservationError("arguments_invalid")
-        result = observe_source_chain() if args else observe()
+        if args == ["--target-config"]:
+            result = observe_target_config()
+        else:
+            result = observe_source_chain() if args else observe()
     except Exception as exc:
         reasons = {"configuration_unavailable", "traffic_unavailable", "service_identity_invalid", "revision_identity_invalid",
                    "image_identity_invalid", "immutable_image_unavailable", "image_readback_mismatch", "image_probe_invalid",
                    "external_read_unavailable", "external_read_denied", "service_changed_during_observation", "revision_changed_during_observation",
-                   "arguments_invalid", "registry_metadata_invalid", "audit_metadata_invalid"}
+                   "arguments_invalid", "registry_metadata_invalid", "audit_metadata_invalid", "target_config_unproven"}
         result = {"schema": SCHEMA, "status": "unknown", "reason": str(exc) if isinstance(exc, ObservationError) and str(exc) in reasons else "observation_unavailable"}
     print(json.dumps(result, sort_keys=True))
     return 0 if result["status"] == "observed" else 1

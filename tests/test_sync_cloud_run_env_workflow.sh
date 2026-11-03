@@ -4,8 +4,8 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 workflow_file="$repo_dir/.github/workflows/sync-cloud-run-env.yml"
 
-grep -Fq 'GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main' "$workflow_file"
-grep -Fq 'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com' "$workflow_file"
+grep -Fq 'GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}' "$workflow_file"
+grep -Fq 'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}' "$workflow_file"
 grep -Fq 'name: Deploy / Sync ${{ matrix.target.label }} Cloud Run' "$workflow_file"
 grep -Fq 'fail-fast: false' "$workflow_file"
 grep -Fq 'resolve-matrix:' "$workflow_file"
@@ -39,7 +39,7 @@ grep -Fq 'CLOUD_SCHEDULER_MAIN_TIME: ${{ vars.CLOUD_SCHEDULER_MAIN_TIME }}' "$wo
 grep -Fq 'CLOUD_SCHEDULER_PROBE_TIME: ${{ vars.CLOUD_SCHEDULER_PROBE_TIME }}' "$workflow_file"
 grep -Fq 'CLOUD_SCHEDULER_PRECHECK_TIME: ${{ vars.CLOUD_SCHEDULER_PRECHECK_TIME }}' "$workflow_file"
 grep -Fq 'CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}' "$workflow_file"
-grep -Fq 'GCP_SCHEDULER_SERVICE_ACCOUNT: longbridge-platform-scheduler@longbridgequant.iam.gserviceaccount.com' "$workflow_file"
+grep -Fq 'GCP_SCHEDULER_SERVICE_ACCOUNT: ${{ vars.GCP_SCHEDULER_SERVICE_ACCOUNT }}' "$workflow_file"
 grep -Fq 'Skipping Cloud Run commit wait because CLOUD_RUN_ENV_SYNC_WAIT_FOR_COMMIT is disabled.' "$workflow_file"
 grep -Fq 'permissions:' "$workflow_file"
 grep -Fq 'id-token: write' "$workflow_file"
@@ -443,11 +443,12 @@ for section in (legacy, cleanup):
 assert "needs: resolve-matrix" in legacy.split("    steps:", 1)[0]
 assert job.index("name: Validate image-only dispatch") < job.index("uses: google-github-actions/auth@")
 assert job.index("name: Verify exact image-only source") < job.index("uses: google-github-actions/auth@")
-# Only the service selector and immutable overlay provenance inputs are allowed;
+# Only the service selector, protected WIF identity and immutable overlay inputs are allowed;
 # broker and runtime credentials remain outside this isolated job.
 assert re.findall(r"secrets\.([A-Z_]+)", job) == [
     "NOTIFICATION_OVERLAY_BASE_DIGEST", "NOTIFICATION_OVERLAY_IMAGE_DIGEST",
     "NOTIFICATION_OVERLAY_BUILD_ID", "NOTIFICATION_OVERLAY_PAYLOAD_DIGEST", "CLOUD_RUN_SERVICE",
+    "GCP_WORKLOAD_IDENTITY_PROVIDER", "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT",
 ]
 assert "scripts/verify_deployed_runtime_target_admission.py" in job
 assert "record_daily_account_snapshot" not in job
@@ -466,8 +467,11 @@ assert "approved_paper_stock_inventory_candidate=822037aae994c26a38586a46397f941
 assert 'image_mode=probe-financing' in job
 assert '[ "${GITHUB_REPOSITORY:-}" != "QuantStrategyLab/LongBridgePlatform" ]' in job
 assert '[ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] || [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]' not in job
+# A blank first-step override suppresses inherited Scheduler identity disclosure;
+# it adds no Scheduler configuration or operation to image-only staging.
+job_operations = job.replace('          GCP_SCHEDULER_SERVICE_ACCOUNT: ""\n', "")
 for forbidden in ("sync_plan", "scheduler", "cleanup", "retire"):
-    assert forbidden not in job.lower(), forbidden
+    assert forbidden not in job_operations.lower(), forbidden
 assert "hk-account-snapshot" in job
 assert "update-traffic" in job.lower()
 assert 'if [ "${image_mode}" = "hk-account-snapshot" ]; then' in job
@@ -1014,12 +1018,12 @@ else:
             WORKFLOW_TARGET=label,
             CLOUD_RUN_SERVICE=service,
             CLOUD_RUN_REGION=region,
-            GCP_PROJECT_ID="longbridgequant",
+            GCP_PROJECT_ID="fake-project",
             **target_history,
         )
         assert code == 0, (label, code, calls)
         updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
-        image_repo = f"registry.invalid/longbridgequant/synthetic-images/longbridgeplatform/{service}"
+        image_repo = f"registry.invalid/fake-project/synthetic-images/longbridgeplatform/{service}"
         assert len(updates) == 1
         assert "--no-traffic" in updates[0]
         assert updates[0][-1] == "--revision-suffix=r123"
@@ -1039,7 +1043,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "sg", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK"},
         },
         {
@@ -1047,7 +1051,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "hk", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "SG"},
         },
         {
@@ -1055,7 +1059,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false",
             **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "hk", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK"},
         },
@@ -1064,7 +1068,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true",
             **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "hk", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK"},
         },
@@ -1073,7 +1077,7 @@ else:
             "WORKFLOW_TARGET": "SG",
             "CLOUD_RUN_SERVICE": "longbridge-quant-sg-service",
             "CLOUD_RUN_REGION": "asia-southeast1",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true",
         },
     ):
@@ -1086,7 +1090,7 @@ else:
         WORKFLOW_TARGET="HK",
         CLOUD_RUN_SERVICE="longbridge-quant-hk-service",
         CLOUD_RUN_REGION="asia-east2",
-        GCP_PROJECT_ID="longbridgequant",
+        GCP_PROJECT_ID="fake-project",
         ACCOUNT_SNAPSHOT_ENABLED_INPUT="true",
     )
     assert code == 0, (code, calls)
@@ -1104,12 +1108,12 @@ else:
         WORKFLOW_TARGET="HK",
         CLOUD_RUN_SERVICE="longbridge-quant-hk-service",
         CLOUD_RUN_REGION="asia-east2",
-        GCP_PROJECT_ID="longbridgequant",
+        GCP_PROJECT_ID="fake-project",
     )
     assert code == 0, (code, calls)
     updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
     assert len(updates) == 1
-    image_repo = "registry.invalid/longbridgequant/synthetic-images/longbridgeplatform/longbridge-quant-hk-service"
+    image_repo = "registry.invalid/fake-project/synthetic-images/longbridgeplatform/longbridge-quant-hk-service"
     assert "--no-traffic" in updates[0]
     assert "--update-env-vars=" not in " ".join(updates[0])
     assert updates[0][-1] == "--revision-suffix=r123"
@@ -1134,7 +1138,7 @@ else:
         WORKFLOW_TARGET="HK",
         CLOUD_RUN_SERVICE="longbridge-quant-hk-service",
         CLOUD_RUN_REGION="asia-east2",
-        GCP_PROJECT_ID="longbridgequant",
+        GCP_PROJECT_ID="fake-project",
         TARGET_RUNTIME_ENABLED="true",
     )
     assert code != 0
@@ -1198,11 +1202,11 @@ else:
             WORKFLOW_TARGET=label,
             CLOUD_RUN_SERVICE=service,
             CLOUD_RUN_REGION=region,
-            GCP_PROJECT_ID="longbridgequant",
+            GCP_PROJECT_ID="fake-project",
         )
         assert code == 0, (label, code, calls)
         updates = [call for call in calls if call[:4] == ["gcloud", "run", "services", "update"]]
-        image_repo = f"registry.invalid/longbridgequant/synthetic-images/longbridgeplatform/{service}"
+        image_repo = f"registry.invalid/fake-project/synthetic-images/longbridgeplatform/{service}"
         assert len(updates) == 1
         assert "--no-traffic" in updates[0]
         assert "--update-env-vars=" not in " ".join(updates[0])
@@ -1231,7 +1235,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             **{**sghk_history, "ACCOUNT_HISTORY_TARGET_ID": "hk", "ACCOUNT_HISTORY_EXPECTED_SCOPE": "HK"},
         },
         {
@@ -1239,7 +1243,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true",
         },
         {"SOURCE_COMMIT": "c" * 40, "WORKFLOW_TARGET": "HK"},
@@ -1253,7 +1257,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             "TARGET_ACCOUNT_SCOPE": "SG",
         },
         {
@@ -1261,7 +1265,7 @@ else:
             "WORKFLOW_TARGET": "HK",
             "CLOUD_RUN_SERVICE": "longbridge-quant-hk-service",
             "CLOUD_RUN_REGION": "asia-east2",
-            "GCP_PROJECT_ID": "longbridgequant",
+            "GCP_PROJECT_ID": "fake-project",
             "BAD_SERVING_LOCK": "1",
         },
     ):

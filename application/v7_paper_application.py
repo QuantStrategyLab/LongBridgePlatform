@@ -33,7 +33,9 @@ V7_PAPER_PLATFORM = "longbridge"
 # The research contract's frozen source is 07b164..., while the package that
 # is actually approved for the disabled account process tracks the platform UES pin.
 # Keep research source_commit separate from approved_ues_revision.
-V7_APPROVED_UES_REVISION = "8412d8338879f335ef8830678c2733e02e53e7c7"
+# UES #715 fixes the Russell Top50 cash_reserve_ratio TypeError.
+# Keep the controlled PAPER revision equal to the reviewed dependency pin.
+V7_APPROVED_UES_REVISION = "c16c81bdf21824615f7280554559adc6c721917c"
 
 _COMMIT_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 _TICKET_PATTERN = re.compile(r"^rpt_[0-9a-fA-F]{64}$")

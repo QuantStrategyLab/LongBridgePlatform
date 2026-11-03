@@ -28,7 +28,7 @@ SOURCE_KIND = "deployment_scope_token_version"
 ACCOUNT_FACTS_SYNC_PATH = "/api/account-facts/sync"
 _EXPECTED_TARGETS = {"paper": ("PAPER", "paper"), "hk": ("HK", "live"), "sg": ("SG", "live")}
 _EXPECTED_GCS_PREFIX = "gs://qsl-runtime-logs-shared/longbridge/account_snapshots"
-SCHEDULER_SERVICE_ACCOUNT = "longbridge-platform-scheduler@longbridgequant.iam.gserviceaccount.com"
+SCHEDULER_SERVICE_ACCOUNT = os.environ.get("GCP_SCHEDULER_SERVICE_ACCOUNT", "")
 OBSERVATION_WINDOW = timedelta(minutes=15)
 WAIT_SECONDS = 180.0
 POLL_SECONDS = 5.0
@@ -737,7 +737,7 @@ def _config(env: Mapping[str, str]) -> _Config:
     target_contract = _EXPECTED_TARGETS.get(target_id)
     if (
         _PROJECT_ID.fullmatch(project_id) is None
-        or project_id != "longbridgequant"
+        or project_id != os.environ.get("GCP_PROJECT_ID", "")
         or target_contract is None
         or _TARGET_ID.fullmatch(target_id) is None
         or expected_scope != target_contract[0]
@@ -868,7 +868,7 @@ def inspect_sg_probe_permissions(
     """Read fixed project-level IAM permissions for the SG probe path only."""
     target_id = str(env.get("ACCOUNT_HISTORY_TARGET_ID") or "").strip()
     project_id = str(env.get("GOOGLE_CLOUD_PROJECT") or "").strip()
-    if target_id != "sg" or project_id != "longbridgequant":
+    if target_id != "sg" or project_id != os.environ.get("GCP_PROJECT_ID", ""):
         raise _Rejected("permission_inspection_target_invalid")
     session = None
     response = None
