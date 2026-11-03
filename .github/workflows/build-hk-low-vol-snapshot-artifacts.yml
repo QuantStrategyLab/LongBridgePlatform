@@ -72,7 +72,6 @@ on:
       longbridge_secret_project_id:
         description: "GCP project that stores LongBridge HK Secret Manager secrets."
         required: false
-        default: longbridgequant
         type: string
       longbridge_app_key_secret_name:
         description: "Secret Manager secret name for LongBridge app key."
@@ -95,9 +94,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GCP_PROJECT_ID: longbridgequant
-  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
-  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
   SNAPSHOT_REPOSITORY: QuantStrategyLab/HkEquitySnapshotPipelines
   SNAPSHOT_REPO_DIR: external/HkEquitySnapshotPipelines
   PROFILE: ${{ inputs.profile }}
@@ -112,7 +111,7 @@ env:
   EXECUTE_PUBLISH: ${{ inputs.execute_publish }}
   MIN_ADV20_HKD: ${{ inputs.min_adv20_hkd }}
   MIN_MARKET_CAP_HKD: ${{ inputs.min_market_cap_hkd }}
-  LONGBRIDGE_SECRET_PROJECT_ID: ${{ inputs.longbridge_secret_project_id }}
+  LONGBRIDGE_SECRET_PROJECT_ID: ${{ inputs.longbridge_secret_project_id || vars.GCP_PROJECT_ID }}
   LONGBRIDGE_APP_KEY_SECRET_NAME: ${{ inputs.longbridge_app_key_secret_name }}
   LONGBRIDGE_APP_SECRET_SECRET_NAME: ${{ inputs.longbridge_app_secret_secret_name }}
   LONGBRIDGE_ACCESS_TOKEN_SECRET_NAME: ${{ inputs.longbridge_access_token_secret_name }}

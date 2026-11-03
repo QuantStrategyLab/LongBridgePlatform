@@ -65,14 +65,10 @@ BASE_LONGBRIDGE_PROFILES = frozenset(
     }
 )
 OPTIONAL_LONGBRIDGE_PROFILES = frozenset({"global_etf_confidence_vol_gate"})
-HK_RUNTIME_ENABLED_PROFILES = frozenset(
+HK_DISABLED_PROFILES = frozenset(
     {
         "hk_global_etf_tactical_rotation",
         "hk_low_vol_dividend_quality_snapshot",
-    }
-)
-HK_DISABLED_PROFILES = frozenset(
-    {
         "hk_dividend_gold_defensive_rotation",
         "hk_blue_chip_leader_rotation",
         "hk_index_mean_reversion",
@@ -83,7 +79,7 @@ HK_DISABLED_PROFILES = frozenset(
 
 def expected_longbridge_enabled_profiles(actual_profiles) -> frozenset[str]:
     actual = frozenset(actual_profiles)
-    return BASE_LONGBRIDGE_PROFILES | HK_RUNTIME_ENABLED_PROFILES | (OPTIONAL_LONGBRIDGE_PROFILES & actual)
+    return BASE_LONGBRIDGE_PROFILES | (OPTIONAL_LONGBRIDGE_PROFILES & actual)
 
 
 def expected_longbridge_profiles(actual_profiles) -> frozenset[str]:
@@ -599,20 +595,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertTrue(settings.ibit_zscore_exit_enabled)
         self.assertEqual(settings.ibit_zscore_exit_mode, "live")
 
-    def test_tech_runtime_execution_window_override_rejects_research_only_profile(self):
-        with patch.dict(
-            os.environ,
-            {
-                "RUNTIME_TARGET_JSON": runtime_target_json(
-                    "tech_communication_pullback_enhancement"
-                ),
-                "LONGBRIDGE_TECH_RUNTIME_EXECUTION_WINDOW_TRADING_DAYS": "31",
-            },
-            clear=True,
-        ):
-            with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
-                load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
-
     def test_rejects_invalid_qqqi_income_ratio(self):
         with patch.dict(
             os.environ,
@@ -772,18 +754,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             by_profile["russell_top50_leader_rotation"]["display_name"],
             "Russell Top50 Leader Rotation",
         )
-        self.assertEqual(
-            by_profile["hk_global_etf_tactical_rotation"],
-            {
-                "canonical_profile": "hk_global_etf_tactical_rotation",
-                "display_name": "HK Global ETF Tactical Rotation",
-                "display_name_zh": "港股ETF战术轮动",
-                "domain": "hk_equity",
-                "eligible": True,
-                "enabled": True,
-                "platform": "longbridge",
-            },
-        )
         for profile in HK_DISABLED_PROFILES:
             self.assertNotIn(profile, by_profile)
 
@@ -819,31 +789,15 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
                         load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
-    def test_accepts_runtime_enabled_hk_profiles(self):
-        expected_names = {
-            "hk_global_etf_tactical_rotation": "HK Global ETF Tactical Rotation",
-        }
-        for profile, display_name in expected_names.items():
+    def test_rejects_retired_hk_profiles_without_snapshot_inputs(self):
+        for profile in ("hk_global_etf_tactical_rotation", "hk_low_vol_dividend_quality_snapshot"):
             with self.subTest(profile=profile):
-                with patch.dict(
-                    os.environ,
-                    {
-                        "RUNTIME_TARGET_JSON": runtime_target_json(profile),
-                        "ACCOUNT_REGION": "HK",
-                    },
-                    clear=True,
-                ):
-                    settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
-
-                self.assertEqual(settings.strategy_profile, profile)
-                self.assertEqual(settings.strategy_display_name, display_name)
-                self.assertEqual(settings.strategy_domain, "hk_equity")
-                self.assertIsNotNone(settings.strategy_metadata)
-                self.assertEqual(settings.market, HK_MARKET)
-                self.assertEqual(settings.market_calendar, HK_MARKET_CALENDAR)
-                self.assertEqual(settings.market_timezone, HK_MARKET_TIMEZONE)
-                self.assertEqual(settings.symbol_suffix, HK_SYMBOL_SUFFIX)
-                self.assertEqual(settings.trading_currency, HK_TRADING_CURRENCY)
+                with patch.dict(os.environ, {
+                    "RUNTIME_TARGET_JSON": runtime_target_json(profile),
+                    "ACCOUNT_REGION": "HK",
+                }, clear=True):
+                    with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
+                        load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
     def test_derives_feature_snapshot_paths_from_artifact_root(self):
         with TemporaryDirectory() as tmp_dir:
@@ -919,17 +873,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             "hk_dividend_gold_defensive_rotation",
         ):
             self.assertNotIn(profile, by_profile)
-        for profile in HK_RUNTIME_ENABLED_PROFILES - {"hk_low_vol_dividend_quality_snapshot"}:
-            self.assertEqual(by_profile[profile]["profile_group"], "direct_runtime_inputs")
-            self.assertEqual(by_profile[profile]["input_mode"], "market_history")
-            self.assertFalse(by_profile[profile]["requires_snapshot_artifacts"])
-            self.assertFalse(by_profile[profile]["requires_snapshot_manifest_path"])
-            self.assertFalse(by_profile[profile]["requires_strategy_config_path"])
-        self.assertEqual(by_profile["hk_low_vol_dividend_quality_snapshot"]["profile_group"], "snapshot_backed")
-        self.assertEqual(by_profile["hk_low_vol_dividend_quality_snapshot"]["input_mode"], "feature_snapshot")
-        self.assertTrue(by_profile["hk_low_vol_dividend_quality_snapshot"]["requires_snapshot_artifacts"])
-        self.assertTrue(by_profile["hk_low_vol_dividend_quality_snapshot"]["requires_snapshot_manifest_path"])
-        self.assertFalse(by_profile["hk_low_vol_dividend_quality_snapshot"]["requires_strategy_config_path"])
+        for profile in HK_DISABLED_PROFILES:
+            self.assertNotIn(profile, by_profile)
 
     def test_print_strategy_profile_status_table_contains_expected_headers(self):
         result = subprocess.run(
@@ -947,10 +892,10 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("requires_snapshot_artifacts", result.stdout)
         self.assertIn("soxl_soxx_trend_income", result.stdout)
         self.assertIn("global_etf_rotation", result.stdout)
-        self.assertIn("hk_global_etf_tactical_rotation", result.stdout)
+        self.assertNotIn("hk_global_etf_tactical_rotation", result.stdout)
         self.assertNotIn("hk_dividend_gold_defensive_rotation", result.stdout)
         self.assertIn("Global ETF Rotation", result.stdout)
-        self.assertIn("HK Global ETF Tactical Rotation", result.stdout)
+        self.assertNotIn("HK Global ETF Tactical Rotation", result.stdout)
         self.assertNotIn("HK Dividend-Gold Defensive Rotation", result.stdout)
         self.assertIn("Russell Top50 Leader Rotation", result.stdout)
         self.assertIn("罗素Top50领涨", result.stdout)
@@ -1018,78 +963,14 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("LONGBRIDGE_TRADING_CURRENCY", plan["optional_env"])
         self.assertNotIn("LONGBRIDGE_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
 
-    def test_print_strategy_switch_env_plan_for_hk_global_etf_dry_run(self):
+    def test_print_strategy_switch_env_plan_rejects_retired_hk_global_etf_dry_run(self):
         result = subprocess.run(
-            [
-                sys.executable,
-                str(SWITCH_PLAN_SCRIPT_PATH),
-                "--profile",
-                "hk_global_etf_tactical_rotation",
-                "--account-region",
-                "hk",
-                "--dry-run-only",
-                "--deployment-selector",
-                "hk-verify",
-                "--account-scope",
-                "hk-verify",
-                "--service-name",
-                "longbridge-quant-hk-verify-service",
-                "--json",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
+            [sys.executable, str(SWITCH_PLAN_SCRIPT_PATH), "--profile",
+             "hk_global_etf_tactical_rotation", "--dry-run-only", "--json"],
+            check=False, capture_output=True, text=True,
         )
-
-        plan = json.loads(result.stdout)
-        self.assertEqual(plan["platform"], "longbridge")
-        self.assertEqual(plan["canonical_profile"], "hk_global_etf_tactical_rotation")
-        self.assertEqual(plan["domain"], HK_EQUITY_DOMAIN)
-        self.assertEqual(plan["set_env"]["ACCOUNT_REGION"], "HK")
-        self.assertEqual(plan["set_env"]["ACCOUNT_PREFIX"], "HK")
-        self.assertEqual(plan["set_env"]["LONGBRIDGE_DRY_RUN_ONLY"], "true")
-        self.assertEqual(plan["set_env"]["LONGBRIDGE_MARKET"], HK_MARKET)
-        self.assertEqual(plan["set_env"]["LONGBRIDGE_MARKET_CALENDAR"], HK_MARKET_CALENDAR)
-        self.assertEqual(plan["set_env"]["LONGBRIDGE_MARKET_TIMEZONE"], HK_MARKET_TIMEZONE)
-        self.assertEqual(plan["set_env"]["LONGBRIDGE_SYMBOL_SUFFIX"], HK_SYMBOL_SUFFIX)
-        self.assertEqual(plan["set_env"]["LONGBRIDGE_TRADING_CURRENCY"], HK_TRADING_CURRENCY)
-        self.assertTrue(plan["runtime_target"]["dry_run_only"])
-        self.assertEqual(plan["runtime_target"]["execution_mode"], "paper")
-        self.assertEqual(plan["runtime_target"]["deployment_selector"], "hk-verify")
-        self.assertEqual(plan["runtime_target"]["account_scope"], "hk-verify")
-        self.assertEqual(plan["runtime_target"]["service_name"], "longbridge-quant-hk-verify-service")
-        runtime_target_env = json.loads(plan["set_env"]["RUNTIME_TARGET_JSON"])
-        self.assertTrue(runtime_target_env["dry_run_only"])
-        self.assertEqual(runtime_target_env["execution_mode"], "paper")
-        self.assertEqual(plan["profile_group"], "direct_runtime_inputs")
-        self.assertEqual(plan["input_mode"], "market_history")
-        self.assertFalse(plan["requires_snapshot_artifacts"])
-        self.assertIn("LONGBRIDGE_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
-        self.assertTrue(plan["dry_run_plan"]["dry_run_only"])
-        self.assertTrue(plan["dry_run_plan"]["verify_only"])
-        self.assertEqual(
-            plan["dry_run_plan"]["workflow_dispatch"],
-            {
-                "workflow": "sync-cloud-run-env.yml",
-                "target": "hk-verify",
-                "cloud_run_service": "longbridge-quant-hk-verify-service",
-                "deploy_image": True,
-                "sync_env": True,
-            },
-        )
-        self.assertTrue(any("lot-size" in check for check in plan["dry_run_plan"]["checks"]))
-        self.assertFalse(
-            any(
-                "Cloud Run" in action and "deploy" in action
-                for action in plan["dry_run_plan"]["blocked_actions"]
-            )
-        )
-        self.assertTrue(
-            any(
-                "live" in action and "orders" in action
-                for action in plan["dry_run_plan"]["blocked_actions"]
-            )
-        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unsupported STRATEGY_PROFILE", result.stderr)
 
     def test_print_strategy_switch_env_plan_rejects_retired_russell_defensive(self):
         result = subprocess.run(
@@ -1159,40 +1040,14 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             "russell_top50_leader_rotation_feature_snapshot_latest.csv",
         )
 
-    def test_print_strategy_switch_env_plan_for_hk_low_vol_dividend_quality_snapshot(self):
+    def test_print_strategy_switch_env_plan_rejects_retired_hk_low_vol_dividend_quality_snapshot(self):
         result = subprocess.run(
-            [
-                sys.executable,
-                str(SWITCH_PLAN_SCRIPT_PATH),
-                "--profile",
-                "hk_low_vol_dividend_quality_snapshot",
-                "--account-region",
-                "hk",
-                "--dry-run-only",
-                "--json",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
+            [sys.executable, str(SWITCH_PLAN_SCRIPT_PATH), "--profile",
+             "hk_low_vol_dividend_quality_snapshot", "--dry-run-only", "--json"],
+            check=False, capture_output=True, text=True,
         )
-
-        plan = json.loads(result.stdout)
-        self.assertEqual(plan["canonical_profile"], "hk_low_vol_dividend_quality_snapshot")
-        self.assertTrue(plan["enabled"])
-        self.assertEqual(plan["profile_group"], "snapshot_backed")
-        self.assertEqual(plan["input_mode"], "feature_snapshot")
-        self.assertEqual(plan["snapshot_contract_version"], "hk_low_vol_dividend_quality_snapshot.factor_snapshot.v1")
-        self.assertEqual(plan["set_env"]["LONGBRIDGE_DRY_RUN_ONLY"], "true")
-        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_PATH"], "<required>")
-        self.assertEqual(plan["set_env"]["LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH"], "<required>")
-        self.assertEqual(
-            plan["hints"]["feature_snapshot_filename"],
-            "hk_low_vol_dividend_quality_snapshot_factor_snapshot_latest.csv",
-        )
-        self.assertEqual(
-            plan["hints"]["feature_snapshot_manifest_filename"],
-            "hk_low_vol_dividend_quality_snapshot_factor_snapshot_latest.csv.manifest.json",
-        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unsupported STRATEGY_PROFILE", result.stderr)
 
     def test_print_strategy_switch_env_plan_rejects_hk_disabled_profiles(self):
         for profile in sorted(HK_DISABLED_PROFILES):

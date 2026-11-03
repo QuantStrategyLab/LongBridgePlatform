@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from quant_platform_kit.common.feature_snapshot import load_feature_snapshot_guarded
@@ -33,6 +35,7 @@ from strategy_loader import (
     load_strategy_entrypoint_for_profile,
     load_strategy_runtime_adapter_for_profile,
 )
+from strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
 
 
 _FEATURE_SNAPSHOT_INPUT = "feature_snapshot"
@@ -302,7 +305,7 @@ class LoadedStrategyRuntime:
         return capability_payload, "verified:runtime_risk_limits"
 
     def _build_feature_snapshot_context(self, request):
-        return build_strategy_context_from_available_inputs(
+        context = build_strategy_context_from_available_inputs(
             entrypoint=request.entrypoint,
             runtime_adapter=request.runtime_adapter,
             as_of=request.as_of,
@@ -310,6 +313,23 @@ class LoadedStrategyRuntime:
             runtime_config=request.runtime_config,
             capabilities=self._build_capital_base_capabilities(request.available_inputs),
         )
+        if self.profile != "russell_top50_leader_rotation" or not self.runtime_settings.strategy_config_path:
+            return context
+        # The platform configuration supplies an independent expected binding.
+        # Never derive it from the signal or cache it across evaluations.
+        try:
+            config = json.loads(Path(self.runtime_settings.strategy_config_path).read_text(encoding="utf-8"))
+            if not isinstance(config, Mapping):
+                raise ValueError
+        except (OSError, ValueError, TypeError):
+            raise ValueError("Invalid Russell regime configuration") from None
+        runtime_config = dict(context.runtime_config)
+        if "market_regime_control_expected" in config:
+            runtime_config["market_regime_control_expected"] = config["market_regime_control_expected"]
+        artifacts = dict(context.artifacts)
+        if "market_regime_control" in config:
+            artifacts["market_regime_control"] = config["market_regime_control"]
+        return replace(context, runtime_config=runtime_config, artifacts=artifacts)
 
     def evaluate(
         self,
@@ -472,11 +492,6 @@ def _build_runtime_overrides(profile: str, runtime_settings: PlatformRuntimeSett
             overrides["income_threshold_usd"] = runtime_settings.income_threshold_usd
         if runtime_settings.qqqi_income_ratio is not None:
             overrides["qqqi_income_ratio"] = runtime_settings.qqqi_income_ratio
-    if profile == "tech_communication_pullback_enhancement":
-        if runtime_settings.runtime_execution_window_trading_days is not None:
-            overrides["runtime_execution_window_trading_days"] = (
-                runtime_settings.runtime_execution_window_trading_days
-            )
     return overrides
 
 
@@ -535,7 +550,7 @@ def load_strategy_runtime(
         entrypoint.manifest.display_name,
     )
     resolved_execution_materials = dict(execution_materials or {})
-    if not resolved_execution_materials and entrypoint.manifest.profile == "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve":
+    if not resolved_execution_materials and entrypoint.manifest.profile == V7_LONGTERM_COMPOUNDING_PROFILE:
         try:
             from application.v7_paper_application import load_v7_paper_application_binding
 
@@ -548,7 +563,7 @@ def load_strategy_runtime(
     if (
         resolved_execution_entrypoint is None
         and resolved_execution_materials
-        and entrypoint.manifest.profile == "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+        and entrypoint.manifest.profile == V7_LONGTERM_COMPOUNDING_PROFILE
         and bool(getattr(resolved_runtime_settings, "runtime_target_enabled", False))
         and getattr(getattr(resolved_runtime_settings, "runtime_target", None), "strategy_release", None) is not None
     ):

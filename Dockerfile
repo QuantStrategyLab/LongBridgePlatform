@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -22,7 +22,8 @@ RUN apt-get update \
 
 COPY . .
 RUN python -m pip install --upgrade pip uv \
-    && uv sync --frozen --no-dev
+    && uv sync --frozen --no-dev \
+    && uv run --no-sync python -m scripts.check_ues_revision
 
 # Keep the application timeout below Cloud Run/Scheduler's 600-second ceiling so
 # Gunicorn can return a controlled failure instead of being killed at the edge.

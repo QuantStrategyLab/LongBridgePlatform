@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
 from quant_platform_kit.common import build_runtime_target  # noqa: E402
 from application import runtime_composer as runtime_composer_module
 from application.runtime_composer import LongBridgeRuntimeComposer
+from strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
 
 
 def _build_live_command_test_composer(*, dry_run_only, dry_run_only_override=None):
@@ -241,7 +242,7 @@ def test_validation_override_disables_all_external_execution_writers():
     object.__setattr__(
         composer,
         "strategy_profile",
-        "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve",
+        V7_LONGTERM_COMPOUNDING_PROFILE,
     )
 
     config = composer.build_rebalance_config()
@@ -262,7 +263,7 @@ def test_v7_validation_runtime_suppresses_issue_notifications():
     object.__setattr__(
         composer,
         "strategy_profile",
-        "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve",
+        V7_LONGTERM_COMPOUNDING_PROFILE,
     )
     runtime = composer.build_rebalance_runtime(silent_cycle_notifications=True)
 

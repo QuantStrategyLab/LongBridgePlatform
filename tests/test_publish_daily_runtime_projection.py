@@ -97,7 +97,7 @@ def _env(**overrides: str) -> dict[str, str]:
         "RUNTIME_HEARTBEAT_ACCOUNT_SCOPE": "PAPER",
         "RUNTIME_TARGET_JSON": json.dumps(_target()),
         "RUNTIME_HEARTBEAT_GCS_GLOBS": "gs://reports/longbridge/**/2026-09/*.json",
-        "GCP_PROJECT_ID": "longbridgequant",
+        "GCP_PROJECT_ID": "fake-project",
     }
     env.update(overrides)
     return env
@@ -508,7 +508,7 @@ def test_quiet_read_discards_underlying_stderr(monkeypatch, capsys) -> None:
         return None
 
     monkeypatch.setattr(heartbeat, "_cat_gcs_json", cat)
-    assert publisher._quiet_read("gs://reports/unread.json", project="longbridgequant") is None
+    assert publisher._quiet_read("gs://reports/unread.json", project="fake-project") is None
     assert "secret payload" not in capsys.readouterr().err
 
 
@@ -1332,7 +1332,7 @@ def test_workflow_adds_a_paper_projection_after_auth_with_existing_sync_token() 
     heartbeat_step = workflow.index("name: Check recent execution report")
     projection = workflow.index("name: Publish daily runtime projection")
     assert heartbeat_step < projection
-    assert "uv run --no-sync python scripts/execution_report_heartbeat.py" in workflow
+    assert "uv run --no-sync python scripts/with_heartbeat_digest_binding.py heartbeat" in workflow
     assert "uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-paper" in workflow
     step = workflow.split("name: Publish daily runtime projection", 1)[1].split("\n      - ", 1)[0]
     assert "matrix.target.label == 'PAPER'" in step

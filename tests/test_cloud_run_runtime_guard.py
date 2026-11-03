@@ -90,7 +90,7 @@ def test_telegram_token_falls_back_to_secret_manager(monkeypatch):
     monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
     monkeypatch.delenv("TG_TOKEN", raising=False)
     monkeypatch.setenv("TELEGRAM_TOKEN_SECRET_NAME", "platform-telegram-token")
-    monkeypatch.setenv("GCP_PROJECT_ID", "longbridgequant")
+    monkeypatch.setenv("GCP_PROJECT_ID", "fake-project")
     observed = {}
 
     def fake_run_gcloud(command):
@@ -109,7 +109,7 @@ def test_telegram_token_falls_back_to_secret_manager(monkeypatch):
         "--secret",
         "platform-telegram-token",
         "--project",
-        "longbridgequant",
+        "fake-project",
     ]
 
 
@@ -193,7 +193,7 @@ def test_cloud_run_log_since_uses_latest_ready_revision(monkeypatch):
     monkeypatch.setattr(guard, "_run_gcloud", fake_run_gcloud)
 
     fallback = dt.datetime(2026, 7, 1, 6, 0, tzinfo=dt.timezone.utc)
-    result = guard._cloud_run_log_since("longbridgequant", "longbridge-quant-hk-service", fallback)
+    result = guard._cloud_run_log_since("fake-project", "longbridge-quant-hk-service", fallback)
 
     assert result == dt.datetime(2026, 7, 1, 6, 50, 4, 123000, tzinfo=dt.timezone.utc)
     assert observed[0] == [
@@ -203,7 +203,7 @@ def test_cloud_run_log_since_uses_latest_ready_revision(monkeypatch):
         "describe",
         "longbridge-quant-hk-service",
         "--project",
-        "longbridgequant",
+        "fake-project",
         "--region",
         "us-central1",
         "--format=json",

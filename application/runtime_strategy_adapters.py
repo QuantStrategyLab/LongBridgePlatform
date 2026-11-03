@@ -23,8 +23,7 @@ from quant_platform_kit.risk.gate import (
 )
 from quant_platform_kit.risk.portfolio_diagnostics import extract_portfolio_risk_diagnostics
 
-
-_V7_PROFILE_NAME = "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+from strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
 
 
 def _completed_xnys_session_date(now: datetime | None = None) -> str:
@@ -224,7 +223,7 @@ class LongBridgeRuntimeStrategyAdapters:
         }
 
     def _apply_v7_validation_risk_gate(self, decision, *, snapshot):
-        if self.strategy_profile != _V7_PROFILE_NAME:
+        if self.strategy_profile != V7_LONGTERM_COMPOUNDING_PROFILE:
             return decision
         if getattr(self.strategy_runtime, "uses_evidence_execution", False):
             return decision

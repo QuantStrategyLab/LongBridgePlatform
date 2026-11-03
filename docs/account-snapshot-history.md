@@ -1,5 +1,114 @@
 # 日频账户资产记录
 
+## Cloud observation jobs
+
+`python -m scripts.paper_observation collect` reads only authenticated
+`GET /account-snapshot` from a protected `PAPER_SERVICE_URL`. The collector
+requires a reviewed `EXPECTED_SOURCE_BINDING`, `OBSERVATION_BUCKET` and
+`OBSERVATION_START`. The runtime's `OBSERVATION_ORDER_DIGEST_SALT` must be a
+fixed random configuration value of at least 32 characters. Keep it unchanged
+across releases so private order digests remain comparable. Do not commit any
+of these bindings. The collector never imports the broker SDK or calls a
+trading route.
+
+The manual `verify` subcommand validates the same response and writes only a
+nonfinancial `health/verification/` receipt. It never creates a daily snapshot
+or t0. For internal no-traffic candidate validation, `PAPER_TOKEN_AUDIENCE` may
+provide the canonical service audience while `PAPER_SERVICE_URL` selects its
+protected candidate tag URL. Restore the normal service URL and `collect`
+subcommand before activating the Scheduler.
+
+The response adds `recent_orders_7d` using the existing bounded history query,
+including terminal orders, UTC event times and query bounds. Original order
+identifiers are replaced with a keyed SHA256 digest when the salt is configured;
+otherwise the digest is null. Paging and long-lived open-order coverage remain
+unproven. This extension grants no execution or reconciliation authority.
+
+The checked-in NYSE regular-equity calendar covers 2026 through 2028. It
+includes holidays and early closes, its source URL, generation time and content
+checksum. Review exceptional closures before changing it. Unknown dates stop
+collection. A quarterly-hour Scheduler tick evaluates the calendar; three
+ordinary attempts occur at close plus 30, 45 and 60 minutes. At most one extra
+recovery GET is claimed per UTC day after the ordinary window. Each GET has a
+20-second deadline, no redirects or HTTP retries and a 1 MiB response limit.
+
+All storage writes use generation zero preconditions. Each trading date has
+one immutable `snapshots/US/<date>.json`, with actual observation timestamps,
+scheduled time and lateness. Data precedes the health marker; a later tick can
+repair that marker without another account read. `t0.json` is also create-only.
+Old cash and position gaps remain null; only genuine submitted-at order evidence
+within seven days can be associated with past dates. Late observations retain
+their late status and do not become punctual historical observations.
+
+`python -m scripts.paper_observation watchdog` requires the same calendar,
+bucket/start date, `OBSERVATION_ACTIVATED_AT`, and the existing notification
+token/recipient supplied through protected configuration. It reads only health
+and alert records, detects missing snapshots and collector heartbeats, and
+writes its own heartbeat for the existing central monitor. Alert claims are
+per 15-minute slot; an acknowledged incident and recovery are recorded once.
+An ambiguous Telegram acknowledgment can duplicate a later delivery. Sender ACK
+does not prove receiver receipt. Storage failure uses one bounded direct alert
+per execution because persistent deduplication is then unavailable.
+
+For pre-activation notification testing only, set
+`OBSERVATION_VERIFY_NOTIFICATIONS=true`. Messages carry a verification label and
+incident state uses `alerts/verification/`, preserving normal incident keys.
+Remove this setting before enabling the watchdog Scheduler. These test sends
+remain real external notifications and require the same existing-channel
+authorization as production notifications.
+
+Run both jobs with one task, parallelism one, platform retries disabled and a
+180-second timeout. Collector ticks are every 15 minutes; watchdog ticks are at
+minutes 7, 22, 37 and 52. Give only the collector service-level invoker on the
+internal PAPER service and Direct VPC egress through Private Google Access.
+Service-level invoker is not GET-only authorization. Give only the watchdog
+access to the notification Secret. Bucket IAM must restrict the collector to
+its financial and health prefixes, the watchdog to health-read/alerts-append,
+and the existing central monitor to watchdog-heartbeat-read. No object delete,
+update or list permission is required. Configure and test the central monitor
+before enabling the two new Schedulers. Preserve existing trading schedulers.
+
+The rollout requires internal authenticated GET validation, synthetic failure
+and recovery notifications, collector and watchdog non-start checks, and a
+natural post-close object with cloud Scheduler execution evidence. A manual Job
+execution or green CI alone does not satisfy natural-cycle acceptance. Roll
+back by pausing only the two new Schedulers, inspecting their active executions,
+restoring the previous service traffic map and revoking only the added IAM
+bindings. Preserve the archive and t0.
+
+## Private forward reader
+
+`collect_read_only_reconciliation_observations` accepts an optional
+`forward_anchor` and an explicit timezone-aware `now` cutoff. The caller must
+qualify the actual anchor from authentic evidence; the reader neither selects
+nor authenticates an opening. `forward_previous_cutoff`, when supplied, must be
+at or after that anchor. All cutoffs must be at or after November 3, 2026
+00:00 Asia/Hong_Kong (November 2 16:00 UTC), in chronological order.
+History requests start at the previous cutoff or anchor. Execution selection
+uses `(previous_cutoff, current_cutoff]`, including the first interval after the
+anchor. No earlier history is requested to reconstruct an opening or cost basis.
+Out-of-interval executions are excluded; no financial adjustment is inferred.
+
+The sensitive in-memory result retains execution IDs, native aware event time,
+UTC time, and side/currency only when supplied by the source. Missing fields
+remain null. Overlapping executions are compared by canonical UTC time and
+execution facts, including source-provided side/currency. Equivalent timezone
+offsets deduplicate; conflicting facts fail the read. `native_trade_done_at`
+retains the first source timestamp string; `native_trade_done_at_values` retains
+the sorted distinct original strings from all overlapping rows as private
+provenance. A naive execution timestamp fails the forward read rather than
+using the process timezone. Cash available, frozen and settling definitions
+remain separate. Per-component capture intervals have `source_as_of=null`;
+sequential captures do not prove an atomic snapshot or bridge inter-read events.
+The forward report remains `UNRECONCILED`, with explicit opening, account/Paper
+identity, unique-writer, pagination, carry-in-order, timing and native-cash-event
+gaps. Empty, short and full SDK lists cannot prove completeness.
+
+This optional private result is not exposed over HTTP, persisted or connected
+to the observer/CLI, calendar, scheduler or any execution/recovery gate. Existing
+calls retain their seven-day recovery contract. HK daily gap reporting and
+qualification of an authentic opening remain separate unimplemented work.
+
 ## Append existing archived observations
 
 `publish-archived-account-history.yml` is manual only. It reads the existing

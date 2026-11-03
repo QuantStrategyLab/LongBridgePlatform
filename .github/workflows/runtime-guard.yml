@@ -28,9 +28,9 @@ on:
     - cron: "29,59 * * * *"
 
 env:
-  GCP_PROJECT_ID: longbridgequant
-  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/252919773759/locations/global/workloadIdentityPools/github-actions/providers/github-main
-  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: longbridge-platform-deploy@longbridgequant.iam.gserviceaccount.com
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -93,6 +93,18 @@ jobs:
         run: |
           set -euo pipefail
           uv sync --frozen --no-dev
+
+      # The public manifest duplicates RUNTIME_TARGET_JSON.strategy_profile and
+      # friends; nothing else consumes strategy_profile, so only this explicit
+      # comparison can catch a wrong-but-valid manifest value.
+      - name: Verify public manifest matches Environment runtime target
+        env:
+          MANIFEST_TARGET_ID: ${{ matrix.target.id }}
+          RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+          STRATEGY_PROFILE: ${{ vars.STRATEGY_PROFILE }}
+        run: |
+          set -euo pipefail
+          uv run --no-sync python scripts/check_runtime_target_manifest_drift.py --target-id "${MANIFEST_TARGET_ID}"
 
       - name: Authenticate to Google Cloud
         id: gcp_auth_primary

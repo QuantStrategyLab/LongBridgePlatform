@@ -15,7 +15,7 @@ import subprocess
 import uuid
 from urllib.parse import urlsplit
 
-PROJECT = "longbridgequant"
+PROJECT = os.environ.get("GCP_PROJECT_ID", "")
 REGION = "asia-east2"
 SERVICE = "longbridge-quant-hk-service"
 IDENTITY_FIELDS = {"platform_id", "deployment_selector", "account_selector", "account_scope", "service_name"}
@@ -119,6 +119,8 @@ def _write_result(path, payload):
 
 
 def execute_stop(request, environment, *, run=subprocess.run, result_path=None, now=None):
+    if re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", PROJECT) is None:
+        raise StopError("stop_request_rejected")
     identity, correlation = _identity(request, environment)
     producer = None
     if correlation is not None:

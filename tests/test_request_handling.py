@@ -188,6 +188,9 @@ def install_stub_modules(*, notify_lang="en"):
 
     strategy_registry_module = types.ModuleType("strategy_registry")
     strategy_registry_module.LONGBRIDGE_PLATFORM = "longbridge"
+    strategy_registry_module.V7_LONGTERM_COMPOUNDING_PROFILE = (
+        "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+    )
     strategy_registry_module.PLATFORM_CAPABILITY_MATRIX = types.SimpleNamespace(
         supported_capabilities=frozenset()
     )

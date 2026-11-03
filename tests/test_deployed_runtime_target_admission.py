@@ -366,7 +366,7 @@ def _sghk_history(target_label: str) -> dict[str, str]:
     }
 
 
-def _prepare_sghk(target_label: str, *, target_overrides=None, history_overrides=None, project="longbridgequant", region=None):
+def _prepare_sghk(target_label: str, *, target_overrides=None, history_overrides=None, project="fake-project", region=None):
     target = _sghk_target(target_label)
     target.update(target_overrides or {})
     service = target["service_name"]
@@ -438,7 +438,7 @@ def test_hk_sghk_candidate_admits_snapshot_enable_with_retained_history():
 
     plan = admission.prepare_image_only_staging(
         service=service,
-        project="longbridgequant",
+        project="fake-project",
         region="asia-east2",
         service_json=service_json,
         env={"WORKFLOW_TARGET": "HK", "ACCOUNT_SNAPSHOT_ENABLED_INPUT": "true"},
@@ -477,15 +477,15 @@ def test_sghk_snapshot_candidate_requires_exact_target_and_history_quartet(targe
 @pytest.mark.parametrize(
     ("target_label", "history_overrides", "target_overrides", "project", "region"),
     [
-        ("HK", {"ACCOUNT_HISTORY_TARGET_ID": "sg"}, None, "longbridgequant", "asia-east2"),
-        ("HK", {"ACCOUNT_HISTORY_EXPECTED_SCOPE": "SG"}, None, "longbridgequant", "asia-east2"),
-        ("HK", {"ACCOUNT_HISTORY_GCS_PREFIX": "gs://other-bucket/longbridge/account_snapshots"}, None, "longbridgequant", "asia-east2"),
-        ("SG", {"ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false"}, None, "longbridgequant", "asia-southeast1"),
-        ("HK", None, {"account_scope": "SG"}, "longbridgequant", "asia-east2"),
-        ("HK", None, {"account_selector": "hk"}, "longbridgequant", "asia-east2"),
-        ("SG", None, {"deployment_selector": "sg"}, "longbridgequant", "asia-southeast1"),
+        ("HK", {"ACCOUNT_HISTORY_TARGET_ID": "sg"}, None, "fake-project", "asia-east2"),
+        ("HK", {"ACCOUNT_HISTORY_EXPECTED_SCOPE": "SG"}, None, "fake-project", "asia-east2"),
+        ("HK", {"ACCOUNT_HISTORY_GCS_PREFIX": "gs://other-bucket/longbridge/account_snapshots"}, None, "fake-project", "asia-east2"),
+        ("SG", {"ACCOUNT_SNAPSHOT_ENABLED_INPUT": "false"}, None, "fake-project", "asia-southeast1"),
+        ("HK", None, {"account_scope": "SG"}, "fake-project", "asia-east2"),
+        ("HK", None, {"account_selector": "hk"}, "fake-project", "asia-east2"),
+        ("SG", None, {"deployment_selector": "sg"}, "fake-project", "asia-southeast1"),
         ("SG", None, None, "other-project", "asia-southeast1"),
-        ("HK", None, None, "longbridgequant", "asia-east1"),
+        ("HK", None, None, "fake-project", "asia-east1"),
     ],
 )
 def test_sghk_candidate_rejects_wrong_scope_selector_or_environment(
@@ -504,7 +504,7 @@ def test_sghk_candidate_rejects_wrong_scope_selector_or_environment(
 def test_sghk_candidate_rejects_arbitrary_sha_and_template_drift():
     env = _sghk_history("HK")
     with pytest.raises(admission.AdmissionError):
-        admission._validate_image_only_source(image_commit="b" * 40, env=env, project="longbridgequant")
+        admission._validate_image_only_source(image_commit="b" * 40, env=env, project="fake-project")
 
     target = _sghk_target("HK")
     service_json = {
@@ -531,7 +531,7 @@ def test_sghk_candidate_rejects_arbitrary_sha_and_template_drift():
 
     with pytest.raises(admission.AdmissionError, match="template does not match"):
         admission.prepare_image_only_staging(
-            service=target["service_name"], project="longbridgequant", region="asia-east2",
+            service=target["service_name"], project="fake-project", region="asia-east2",
             service_json=service_json, env=env, image_commit=SGHK_SNAPSHOT_CANDIDATE, run=run,
         )
 
@@ -563,7 +563,7 @@ def _prepare_hk_probe_diagnostics(*, target_label="HK", enabled="false", extra_e
 
     return admission.prepare_image_only_staging(
         service=target["service_name"],
-        project="longbridgequant",
+        project="fake-project",
         region="asia-east2",
         service_json=service,
         env={"WORKFLOW_TARGET": "HK", "SOURCE_COMMIT": HK_PROBE_DIAGNOSTICS_CANDIDATE, **(input_overrides or {})},
@@ -609,7 +609,7 @@ def test_hk_probe_diagnostics_candidate_does_not_admit_arbitrary_sha():
         admission._validate_image_only_source(
             image_commit="c" * 40,
             env={"WORKFLOW_TARGET": "HK"},
-            project="longbridgequant",
+            project="fake-project",
         )
 
 
@@ -1318,7 +1318,7 @@ def _prepare_stock_inventory(
     *,
     target_overrides=None,
     env_overrides=None,
-    project: str = "longbridgequant",
+    project: str = "fake-project",
     region: str | None = None,
     serving_extra_env=None,
     serving_pin: str = UES,
@@ -1377,7 +1377,7 @@ def test_stock_inventory_candidate_admits_exact_sghk_identity_without_updates(ta
     assert admission._validate_image_only_source(
         image_commit=STOCK_INVENTORY_CANDIDATE,
         env={"WORKFLOW_TARGET": target_label},
-        project="longbridgequant",
+        project="fake-project",
     ) == (None, None)
     assert not any(
         command[:3] == ["gcloud", "run", "services"] and "update" in command for command in calls
@@ -1401,7 +1401,7 @@ def test_stock_inventory_source_rejects_paper_history_or_snapshot(env):
         admission._validate_image_only_source(
             image_commit=STOCK_INVENTORY_CANDIDATE,
             env=env,
-            project="longbridgequant",
+            project="fake-project",
         )
 
 
@@ -1410,7 +1410,7 @@ def test_stock_inventory_candidate_does_not_admit_arbitrary_sha():
         admission._validate_image_only_source(
             image_commit="b" * 40,
             env={"WORKFLOW_TARGET": "HK"},
-            project="longbridgequant",
+            project="fake-project",
         )
 
 
@@ -1431,7 +1431,7 @@ def test_stock_inventory_rejects_unapproved_dispatch_before_cloud_reads(
     with pytest.raises(admission.AdmissionError):
         admission.prepare_image_only_staging(
             service="longbridge-quant-hk-service",
-            project="longbridgequant",
+            project="fake-project",
             region="asia-east2",
             service_json={},
             env=env,
@@ -1444,11 +1444,11 @@ def test_stock_inventory_rejects_unapproved_dispatch_before_cloud_reads(
 @pytest.mark.parametrize(
     ("target_label", "target_overrides", "project", "region"),
     [
-        ("HK", {"account_scope": "SG"}, "longbridgequant", "asia-east2"),
-        ("HK", {"account_selector": "hk"}, "longbridgequant", "asia-east2"),
-        ("SG", {"deployment_selector": "sg"}, "longbridgequant", "asia-southeast1"),
+        ("HK", {"account_scope": "SG"}, "fake-project", "asia-east2"),
+        ("HK", {"account_selector": "hk"}, "fake-project", "asia-east2"),
+        ("SG", {"deployment_selector": "sg"}, "fake-project", "asia-southeast1"),
         ("SG", None, "other-project", "asia-southeast1"),
-        ("HK", None, "longbridgequant", "asia-east1"),
+        ("HK", None, "fake-project", "asia-east1"),
     ],
 )
 def test_stock_inventory_candidate_rejects_identity_mismatch(
@@ -1503,7 +1503,7 @@ def test_stock_inventory_readback_requires_unchanged_configuration():
 
         admission.confirm_image_only_readback(
             service="longbridge-quant-hk-service",
-            project="longbridgequant",
+            project="fake-project",
             region="asia-east2",
             plan=plan,
             expected_image=image,
@@ -1588,4 +1588,48 @@ def test_notification_overlay_readback_requires_immutable_image_labels_and_full_
     plan["overlay_patch_sha256"] = "0" * 64
     with pytest.raises(admission.AdmissionError, match="overlay readback"):
         confirm(revision)
+
+
+def _ues_pin_service_payload(target: dict) -> dict:
+    return {"spec": {"template": {"spec": {"containers": [{"env": [
+        {"name": "RUNTIME_TARGET_JSON", "value": json.dumps(target)},
+    ]}]}}}}
+
+
+def test_ues_pin_policy_rejects_enabled_profile_without_reviewed_policy():
+    with pytest.raises(admission.AdmissionError) as exc:
+        admission.verify_ues_image_pin(
+            service="hk-service", project="synthetic-project", region="synthetic-region",
+            service_json=_ues_pin_service_payload({}),
+            admission={"enabled": True, "profile": "tqqq_growth_income"},
+        )
+    assert exc.value.diagnostic_reason == "target_policy_invalid"
+
+
+def test_ues_pin_policy_skips_disabled_profile_without_reviewed_policy():
+    admission.verify_ues_image_pin(
+        service="hk-service", project="synthetic-project", region="synthetic-region",
+        service_json=_ues_pin_service_payload({}),
+        admission={"enabled": False, "profile": "tqqq_growth_income"},
+    )
+
+
+def test_ues_pin_policy_accepts_listed_profile_with_matching_binding(monkeypatch):
+    candidate = "a" * 40
+    monkeypatch.setattr(admission, "_candidate_ues_revision", lambda: candidate)
+    admission.verify_ues_image_pin(
+        service="paper-service", project="synthetic-project", region="synthetic-region",
+        service_json=_ues_pin_service_payload({"strategy_release": {"strategy_revision": candidate}}),
+        admission={"enabled": True, "profile": "russell_top50_leader_rotation"},
+    )
+
+
+def test_ues_pin_policy_rejects_listed_profile_with_diverging_binding(monkeypatch):
+    monkeypatch.setattr(admission, "_candidate_ues_revision", lambda: "a" * 40)
+    with pytest.raises(admission.AdmissionError, match="does not match approved target binding"):
+        admission.verify_ues_image_pin(
+            service="paper-service", project="synthetic-project", region="synthetic-region",
+            service_json=_ues_pin_service_payload({"strategy_release": {"strategy_revision": "b" * 40}}),
+            admission={"enabled": True, "profile": "russell_top50_leader_rotation"},
+        )
 

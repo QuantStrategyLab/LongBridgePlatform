@@ -13,9 +13,13 @@ from quant_platform_kit.common.strategy_contracts import (
 )
 from us_equity_strategies import get_strategy_entrypoint
 
-from strategy_registry import LONGBRIDGE_PLATFORM as PLATFORM, PLATFORM_POLICY, STRATEGY_CATALOG, get_platform_runtime_adapter
-
-_V7_PROFILE_NAME = "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+from strategy_registry import (
+    LONGBRIDGE_PLATFORM as PLATFORM,
+    PLATFORM_POLICY,
+    STRATEGY_CATALOG,
+    V7_LONGTERM_COMPOUNDING_PROFILE,
+    get_platform_runtime_adapter,
+)
 
 def _bound_v7_application(raw_profile: str | None) -> bool:
     """Return true only for the exact paused V7 application binding.
@@ -25,7 +29,7 @@ def _bound_v7_application(raw_profile: str | None) -> bool:
     it never grants an execution route or changes the global allowlist.
     """
 
-    if str(raw_profile or "").strip() != _V7_PROFILE_NAME:
+    if str(raw_profile or "").strip() != V7_LONGTERM_COMPOUNDING_PROFILE:
         return False
     from application.v7_paper_application import load_v7_paper_application_binding
 
@@ -66,7 +70,7 @@ def load_strategy_execution_entrypoint_for_profile(
     The ordinary loader remains research-only for V7.  Execution selection is
     explicit and requires a validated PAPER mandate and release material.
     """
-    if str(raw_profile or "").strip() != _V7_PROFILE_NAME:
+    if str(raw_profile or "").strip() != V7_LONGTERM_COMPOUNDING_PROFILE:
         raise ValueError("V7 execution entrypoint requires the exact V7 profile")
     if not _bound_v7_application(raw_profile):
         raise ValueError("V7 execution entrypoint requires the protected binding")

@@ -8,6 +8,9 @@ from us_equity_strategies import (
 from us_equity_strategies.runtime_adapters import (
     describe_platform_runtime_requirements as describe_us_platform_runtime_requirements,
 )
+from us_equity_strategies.v7_soxl_profile import (
+    SOXL_SOXX_CORE_ONLY_P2_V7_PROFILE as V7_LONGTERM_COMPOUNDING_PROFILE,
+)
 from hk_equity_strategies import (
     get_platform_runtime_adapter as get_hk_platform_runtime_adapter,
     get_runtime_enabled_profiles as get_hk_runtime_enabled_profiles,
@@ -35,8 +38,6 @@ from quant_platform_kit.common.strategies import (
 
 LONGBRIDGE_PLATFORM = "longbridge"
 HK_EQUITY_DOMAIN = "hk_equity"
-TECH_COMMUNICATION_PULLBACK_PROFILE = "tech_communication_pullback_enhancement"
-HK_DIVIDEND_GOLD_DEFENSIVE_ROTATION_PROFILE = "hk_dividend_gold_defensive_rotation"
 
 PLATFORM_SUPPORTED_DOMAINS: dict[str, frozenset[str]] = {
     LONGBRIDGE_PLATFORM: frozenset({US_EQUITY_DOMAIN, HK_EQUITY_DOMAIN}),
@@ -97,15 +98,7 @@ HK_STRATEGY_CATALOG = get_hk_strategy_catalog()
 STRATEGY_CATALOG = _merge_strategy_catalogs(US_STRATEGY_CATALOG, HK_STRATEGY_CATALOG)
 US_STRATEGY_PROFILES = frozenset(US_STRATEGY_CATALOG.definitions)
 HK_STRATEGY_PROFILES = frozenset(HK_STRATEGY_CATALOG.definitions)
-LONGBRIDGE_EXCLUDED_LIVE_PROFILES = frozenset(
-    {
-        HK_DIVIDEND_GOLD_DEFENSIVE_ROTATION_PROFILE,
-        TECH_COMMUNICATION_PULLBACK_PROFILE,
-    }
-)
-LONGBRIDGE_ROLLOUT_ALLOWLIST = (
-    get_us_runtime_enabled_profiles() | get_hk_runtime_enabled_profiles()
-) - LONGBRIDGE_EXCLUDED_LIVE_PROFILES
+LONGBRIDGE_ROLLOUT_ALLOWLIST = get_us_runtime_enabled_profiles() | get_hk_runtime_enabled_profiles()
 PLATFORM_CAPABILITY_MATRIX = PlatformCapabilityMatrix(
     platform_id=LONGBRIDGE_PLATFORM,
     supported_domains=PLATFORM_SUPPORTED_DOMAINS[LONGBRIDGE_PLATFORM],
@@ -140,7 +133,7 @@ _STRUCTURALLY_ELIGIBLE_STRATEGY_PROFILES = derive_eligible_profiles_for_platform
         profile,
         platform_id=LONGBRIDGE_PLATFORM,
     ),
-) - LONGBRIDGE_EXCLUDED_LIVE_PROFILES
+)
 # Keep research-only and snapshot-scaffold HK profiles out of platform switch/status output.
 ELIGIBLE_STRATEGY_PROFILES = _STRUCTURALLY_ELIGIBLE_STRATEGY_PROFILES & LONGBRIDGE_ROLLOUT_ALLOWLIST
 LONGBRIDGE_ENABLED_PROFILES = derive_enabled_profiles_for_platform(

@@ -16,9 +16,11 @@ from quant_platform_kit.common.execution_translation import (
     resolve_decision_target_mode,
     translate_decision_to_target_mode,
 )
-from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
-
-_V7_PROFILE_NAME = "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+from strategy_registry import (
+    LONGBRIDGE_PLATFORM,
+    V7_LONGTERM_COMPOUNDING_PROFILE,
+    resolve_strategy_definition,
+)
 
 _SAFE_HAVEN_SYMBOLS = frozenset({"BOXX", "BIL"})
 _HK_SAFE_HAVEN_SYMBOLS = frozenset({"02800", "82800"})  # TraHK (HKD + RMB counters)
@@ -208,7 +210,7 @@ def _symbol_role(symbol: str) -> str | None:
 
 
 def _resolve_canonical_profile(strategy_profile: str) -> str:
-    if str(strategy_profile or "").strip() == _V7_PROFILE_NAME:
+    if str(strategy_profile or "").strip() == V7_LONGTERM_COMPOUNDING_PROFILE:
         # Keep the normal LongBridge allowlist closed; the loader only resolves
         # V7 when its exact paused application binding is present.
         from strategy_loader import load_strategy_definition
@@ -618,46 +620,6 @@ def _resolve_layout(strategy_profile: str) -> tuple[str, tuple[str, ...], tuple[
         return (
             "risk_safe_income",
             ("risk_safe", "income"),
-            (
-                "trade_threshold_value",
-                "reserved_cash",
-                "signal_display",
-                "status_display",
-                "dashboard_text",
-                "signal_date",
-                "effective_date",
-                "execution_timing_contract",
-                "execution_calendar_source",
-                "signal_effective_after_trading_days",
-                "benchmark_symbol",
-                "benchmark_price",
-                "long_trend_value",
-                "exit_line",
-                "current_min_trade",
-                "investable_cash",
-            ),
-            {
-                "reserved_cash": 0.0,
-                "signal_display": "",
-                "status_display": "",
-                "dashboard_text": "",
-                "signal_date": "",
-                "effective_date": "",
-                "execution_timing_contract": "",
-                "execution_calendar_source": "",
-                "signal_effective_after_trading_days": None,
-                "benchmark_symbol": "QQQ",
-                "benchmark_price": 0.0,
-                "long_trend_value": 0.0,
-                "exit_line": 0.0,
-                "current_min_trade": 0.0,
-                "investable_cash": 0.0,
-            },
-        )
-    if strategy_profile in {"tech_communication_pullback_enhancement", "qqq_tech_enhancement"}:
-        return (
-            "risk_safe_income",
-            ("risk_safe",),
             (
                 "trade_threshold_value",
                 "reserved_cash",

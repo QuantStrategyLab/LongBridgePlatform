@@ -12,7 +12,7 @@ from application import validation_cycle_observation as observer
 class ValidationCycleObservationTests(unittest.TestCase):
     def test_guard_counts_attempt_and_never_forwards_arguments(self):
         output = io.StringIO()
-        with contextlib.redirect_stdout(output), observer.observe("a" * 32 + "/1;o=1", "longbridgequant") as receipt:
+        with contextlib.redirect_stdout(output), observer.observe("a" * 32 + "/1;o=1", "fake-project") as receipt:
             receipt.adapter_instrumented = True
             receipt.cycle_entered = True
             with self.assertRaises(observer.ValidationSubmitBlocked):
@@ -22,13 +22,13 @@ class ValidationCycleObservationTests(unittest.TestCase):
         self.assertEqual(payload["adapter_submit_attempt_count"], 1)
         self.assertIsNone(payload["broker_submit_count"])
         self.assertEqual(payload["trace_correlation"], "unverified")
-        self.assertEqual(payload["logging.googleapis.com/trace"], "projects/longbridgequant/traces/" + "a" * 32)
+        self.assertEqual(payload["logging.googleapis.com/trace"], "projects/fake-project/traces/" + "a" * 32)
         self.assertNotIn("private", output.getvalue())
         self.assertIsNone(observer.current())
 
     def test_uninstrumented_scope_never_claims_zero_and_bad_trace_is_omitted(self):
         output = io.StringIO()
-        with contextlib.redirect_stdout(output), observer.observe("bad secret", "longbridgequant"):
+        with contextlib.redirect_stdout(output), observer.observe("bad secret", "fake-project"):
             pass
         payload = json.loads(output.getvalue())
         self.assertIsNone(payload["adapter_submit_attempt_count"])

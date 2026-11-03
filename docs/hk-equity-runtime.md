@@ -14,7 +14,13 @@ QuantStrategyLab 现有平台仓库里，能做港股股票交易运行时接入
 
 ## 运行时设计
 
-平台运行时已具备港股市场维度，并接入 `HkEquityStrategies` 的港股 profile 元数据。当前平台可选港股 profile 只暴露 `runtime_enabled` 的 `hk_global_etf_tactical_rotation`；`hk_blue_chip_leader_rotation` 是 snapshot 架构占位，`hk_index_mean_reversion`、`hk_etf_regime_rotation` 是 `market_history` 研究候选，均留在研究/快照仓库，不进入平台可选列表。Cloud Run 通过 `RUNTIME_TARGET_JSON` / `STRATEGY_PROFILE` 选择当前运行策略。整体仍沿用美股策略的分层方式：
+平台运行时已具备港股市场维度，并接入 `HkEquityStrategies` 的港股 profile 元数据。平台可选的港股 profile 由 `strategy_registry.get_platform_profile_status_matrix()` 从当前策略目录生成，**不要在文档或代码里手写清单**：
+
+```bash
+uv run --no-sync python scripts/print_strategy_profile_status.py
+```
+
+Cloud Run 通过 `RUNTIME_TARGET_JSON` / `STRATEGY_PROFILE` 选择当前运行策略。整体仍沿用美股策略的分层方式：
 
 1. [`HkEquityStrategies`](https://github.com/QuantStrategyLab/HkEquityStrategies) 提供非 snapshot `hk_equity` 策略定义、运行入口和 LongBridge runtime adapter。
 2. [`HkEquitySnapshotPipelines`](https://github.com/QuantStrategyLab/HkEquitySnapshotPipelines) 产出 snapshot-backed profile 的特征快照、manifest、ranking 和 release summary。
@@ -26,22 +32,17 @@ QuantStrategyLab 现有平台仓库里，能做港股股票交易运行时接入
 
 ## 港股 profile 当前状态
 
-| Profile | Domain | Inputs | Target mode | Snapshot manifest | Status |
-| --- | --- | --- | --- | --- | --- |
-| `hk_global_etf_tactical_rotation` | `hk_equity` | `market_history` | `weight` | not required | runtime-enabled; platform-selectable |
-| `hk_blue_chip_leader_rotation` | `hk_equity` | `feature_snapshot` | `weight` | required | snapshot scaffold; not platform-selectable |
-| `hk_index_mean_reversion` | `hk_equity` | `market_history` | `weight` | not required | research/backtest only; not platform-selectable |
-| `hk_etf_regime_rotation` | `hk_equity` | `market_history` | `weight` | not required | research/backtest only; not platform-selectable |
+以 `scripts/print_strategy_profile_status.py` 的实时输出为准；当前 runtime-enabled 的港股 profile 是 `hk_global_etf_tactical_rotation`（`market_history`）和 `hk_low_vol_dividend_quality_snapshot`（snapshot-backed）。历史文档提过的 `hk_blue_chip_leader_rotation`、`hk_index_mean_reversion`、`hk_etf_regime_rotation` 已不在当前策略目录中，不再作为可选或占位 profile 引用。
 
-`scripts/print_strategy_profile_status.py` 只显示平台可选 profile，因此只会列出 `hk_global_etf_tactical_rotation` 这一条港股 profile。其他港股候选继续保留在研究文档和 snapshot pipeline，不应该出现在 Cloud Run switch plan 里。
+注意：`longbridge-quant-hk-service` 的生产运行目标当前使用 `strategy_profile=tqqq_growth_income`、`dry_run_only=true`、`execution_mode=paper`、`RUNTIME_TARGET_ENABLED=false`（2026-10-26 revision）。本页后文出现的 `hk-verify` 服务与港股 profile 示例是另一套验证配置，不要混用。
 
-未来启用 snapshot-backed profile 后的最小策略配置示例；这些 profile 晋级为 `runtime_enabled` 前不会出现在平台可选列表：
+snapshot-backed profile 的最小策略配置示例（以当前目录中的 `hk_low_vol_dividend_quality_snapshot` 为例；发布 snapshot artifact 的完整步骤见下文）：
 
 ```bash
-STRATEGY_PROFILE=hk_blue_chip_leader_rotation
-RUNTIME_TARGET_JSON={"platform_id":"longbridge","strategy_profile":"hk_blue_chip_leader_rotation","deployment_selector":"HK","account_scope":"HK","execution_mode":"live"}
-LONGBRIDGE_FEATURE_SNAPSHOT_PATH=gs://<bucket>/hk_blue_chip_leader_rotation_feature_snapshot_latest.csv
-LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=gs://<bucket>/hk_blue_chip_leader_rotation_feature_snapshot_latest.csv.manifest.json
+STRATEGY_PROFILE=hk_low_vol_dividend_quality_snapshot
+RUNTIME_TARGET_JSON={"platform_id":"longbridge","strategy_profile":"hk_low_vol_dividend_quality_snapshot","deployment_selector":"HK","account_scope":"HK","execution_mode":"paper","dry_run_only":true}
+LONGBRIDGE_FEATURE_SNAPSHOT_PATH=gs://<bucket>/hk_low_vol_dividend_quality_snapshot_feature_snapshot_latest.csv
+LONGBRIDGE_FEATURE_SNAPSHOT_MANIFEST_PATH=gs://<bucket>/hk_low_vol_dividend_quality_snapshot_feature_snapshot_latest.csv.manifest.json
 ```
 
 ## 配置项
@@ -177,6 +178,6 @@ gh workflow run sync-cloud-run-env.yml \
 ## 风险和注意事项
 
 - `XHKG` 是否可用取决于部署环境里的 `pandas_market_calendars` 版本；如不可用，可用 `LONGBRIDGE_MARKET_CALENDAR` 临时覆盖。
-- `hk_global_etf_tactical_rotation` 已在策略包 `runtime_enabled`，可由 LongBridge HK Cloud Run 通过运行时环境选择；`hk_blue_chip_leader_rotation`、`hk_index_mean_reversion`、`hk_etf_regime_rotation` 仍不进入平台可选列表。
+- 港股可选 profile 以 `scripts/print_strategy_profile_status.py` 输出为准；当前为 `hk_global_etf_tactical_rotation` 和 snapshot-backed 的 `hk_low_vol_dividend_quality_snapshot`。已移除的历史 profile 名称不要再写回文档、workflow 或配置。
 - 港股 `market_history` profile 运行后，需要持续用 LongBridge HK 行情 feed 对 `02800`、`03033`、`02822`、`02840`、`03110`、`03188`、`02834`、`03175` 做行情、价差、lot-size 和订单预览/执行结果复核。
 - LongBridge 下单仍保持整数股规则；如果未来港股策略涉及碎股或特殊交易单位，需要在策略层明确 lot-size 约束后再扩展。

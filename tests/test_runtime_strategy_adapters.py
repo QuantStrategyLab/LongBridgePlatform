@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from quant_platform_kit.common.runtime_target import build_runtime_target
 from runtime_config_support import PlatformRuntimeSettings
+from strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
 from strategy_runtime import LoadedStrategyRuntime
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +20,7 @@ if str(HK_STRATEGIES_SRC) not in sys.path:
 from application.runtime_strategy_adapters import build_runtime_strategy_adapters
 
 
-V7_PROFILE = "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
+V7_PROFILE = V7_LONGTERM_COMPOUNDING_PROFILE
 
 
 def test_runtime_strategy_adapters_build_market_history_inputs():

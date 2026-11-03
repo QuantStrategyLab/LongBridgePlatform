@@ -54,6 +54,7 @@ from scripts.record_daily_account_snapshot import record_projected_daily_account
 from entrypoints.cloud_run import is_market_open_now
 from runtime_execution_policy import dca_execution_unsupported_reason
 from runtime_config_support import load_platform_runtime_settings
+from strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
 from notifications.telegram import build_signal_text, build_strategy_display_name, build_translator
 from notifications import unified as unified_notifications
 from quant_platform_kit.common.runtime_reports import (
@@ -197,7 +198,7 @@ BENCHMARK_SYMBOL = str(STRATEGY_RUNTIME_CONFIG.get("benchmark_symbol", "QQQ"))
 def _emit_v7_loaded_version_log() -> None:
     """Emit one safe startup receipt for the disabled candidate revision."""
 
-    if STRATEGY_PROFILE != "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve":
+    if STRATEGY_PROFILE != V7_LONGTERM_COMPOUNDING_PROFILE:
         return
     from application.v7_paper_application import (
         V7PaperApplicationError,
@@ -1519,7 +1520,7 @@ def handle_v7_paper_application_loaded():
 def _v7_application_candidate_bound() -> bool:
     """Keep the exact V7 binding paused even when a route bypasses the flag."""
 
-    if STRATEGY_PROFILE != "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve":
+    if STRATEGY_PROFILE != V7_LONGTERM_COMPOUNDING_PROFILE:
         return False
     from application.v7_paper_application import load_v7_paper_application_binding
 
