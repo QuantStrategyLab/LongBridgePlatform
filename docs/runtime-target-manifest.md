@@ -152,13 +152,15 @@ Cloud workflows read `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, and
 `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` from their existing GitHub environment
 variables. PAPER jobs in `sync-cloud-run-env.yml` and the PAPER inspection workflow
 read the WIF service account from the protected `longbridge-paper` Environment
-Secret `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` instead. Their first step validates
-the Secret and masks its derived account and project identifiers before exporting
-the identity for later authentication. The deployment masking step blanks inherited
-cloud identity fields so the runner cannot print them before the component masks
-are registered; later steps retain their configured values. Missing or malformed
-Secrets fail closed
-without falling back to the variable. Other deployment targets keep their
+Secret `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` instead. Before exporting the
+identity for later authentication, they validate the Secret and mask its derived
+account and project identifiers. Legacy deployment first selects the target and
+checks automation enablement with inherited cloud identity fields blanked and
+without reading PAPER WIF Secrets. Only a selected, enabled PAPER deployment runs
+the masking step, which also blanks inherited cloud identity fields. This prevents
+the runner from printing them before the component masks are registered; later
+steps retain their configured values. Missing or malformed Secrets for an enabled
+PAPER deployment fail closed without falling back to the variable. Other deployment targets keep their
 existing variable source. Workflows that compare runtime or Scheduler identities
 additionally
 require `GCP_RUNTIME_SERVICE_ACCOUNT` or `GCP_SCHEDULER_SERVICE_ACCOUNT`. Configure

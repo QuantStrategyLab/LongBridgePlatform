@@ -12,6 +12,11 @@ ACCOUNT = "fake-agent@fake-project.iam.gserviceaccount.com"
 PROVIDER_MASKS = ["123456789012", "fake-pool", "fake-provider", PROVIDER]
 
 
+def mask_step(job):
+    return next(step for step in job_section(job).split("    steps:\n", 1)[1].split("\n      - ")
+                if "name: Mask WIF identity components" in step)
+
+
 def masked(text, masks):
     for value in sorted(masks, key=len, reverse=True):
         text = text.replace(value, "***")
@@ -33,7 +38,9 @@ def test_paper_binding_never_expands_variable_identity_before_masks(job, conditi
     config, steps = section.split("    steps:\n", 1)
     inverse = condition.replace(" == ", " != ")
     assert f"GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{{{ {inverse} && vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT || '' }}}}" in config
-    first = steps.split("\n      - ", 1)[0]
+    first = mask_step(job)
+    if job == "image-only-no-traffic":
+        assert steps.split("\n      - ", 1)[0] == first
     assert "name: Mask WIF identity components" in first
     assert f"if: {condition}" in first
     assert "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in first
@@ -57,7 +64,7 @@ def test_paper_binding_never_expands_variable_identity_before_masks(job, conditi
     pytest.param("fake-agent@fake-project.iam.gserviceaccount.com", id="valid"),
 ])
 def test_paper_mask_step_blocks_invalid_secret_and_masks_before_export(tmp_path, job, identity):
-    first = job_section(job).split("    steps:\n", 1)[1].split("\n      - ", 1)[0]
+    first = mask_step(job)
     assert "name: Mask WIF identity components" in first
     script = textwrap.dedent(first.split("        run: |\n", 1)[1])
     exported = tmp_path / "env"
@@ -88,7 +95,7 @@ def test_paper_mask_step_blocks_invalid_secret_and_masks_before_export(tmp_path,
 @pytest.mark.parametrize("job", ["image-only-no-traffic", "sync"])
 def test_next_step_environment_and_auth_input_mask_provider_components(tmp_path, job):
     deployment = job_section(job)
-    first = deployment.split("    steps:\n", 1)[1].split("\n      - ", 1)[0]
+    first = mask_step(job)
     script = textwrap.dedent(first.split("        run: |\n", 1)[1])
     exported = tmp_path / "env"
     # Automatic masks exist only for values actually bound through secrets.*.
@@ -142,7 +149,7 @@ def test_next_step_environment_and_auth_input_mask_provider_components(tmp_path,
     pytest.param(PROVIDER + "\rvalue", id="carriage-return"),
 ])
 def test_invalid_provider_blocks_export_and_next_step(tmp_path, job, provider):
-    first = job_section(job).split("    steps:\n", 1)[1].split("\n      - ", 1)[0]
+    first = mask_step(job)
     script = textwrap.dedent(first.split("        run: |\n", 1)[1])
     exported = tmp_path / "env"
     marker = tmp_path / "next-step"
@@ -158,3 +165,77 @@ def test_invalid_provider_blocks_export_and_next_step(tmp_path, job, provider):
     assert result.stdout == "::error::Required Secret GCP_WORKLOAD_IDENTITY_PROVIDER is missing or malformed\n"
     assert not exported.exists()
     assert not marker.exists()
+
+
+IDENTITY_KEYS = ("GCP_PROJECT_ID", "GCP_RUNTIME_SERVICE_ACCOUNT",
+                 "GCP_SCHEDULER_SERVICE_ACCOUNT", "GCP_WORKLOAD_IDENTITY_PROVIDER",
+                 "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT")
+
+
+def test_selection_precedes_secret_access_without_identity_disclosure():
+    section = job_section("sync")
+    first, second, *_ = section.split("    steps:\n", 1)[1].split("\n      - ")
+    assert "name: Check whether Cloud Run automation is enabled" in first
+    assert "secrets." not in first
+    for key in IDENTITY_KEYS:
+        assert f'          {key}: ""' in first
+    assert "name: Mask WIF identity components" in second
+    assert "if: matrix.target.environment == 'longbridge-paper' && steps.config.outputs.enabled == 'true'" in second
+    assert section.index("name: Mask WIF identity components") < section.index("name: Checkout repository")
+
+
+@pytest.mark.parametrize("target,deploy,sync,identity,provider,expected_enabled,expected_code", [
+    pytest.param("hk-verify", "true", "true", "", "", False, 0, id="hk-only-missing"),
+    pytest.param("hk-verify", "true", "true", "malformed", "malformed", False, 0, id="excluded-malformed"),
+    pytest.param("configured", "false", "false", "", "", False, 0, id="disabled-missing"),
+    pytest.param("paper-command-verify", "false", "false", "malformed", "malformed", False, 0, id="disabled-malformed"),
+    pytest.param("paper-command-verify", "true", "true", "", PROVIDER, True, 1, id="paper-missing-account"),
+    pytest.param("paper-command-verify", "true", "true", "malformed", PROVIDER, True, 1, id="paper-malformed-account"),
+    pytest.param("paper-command-verify", "true", "true", ACCOUNT, "", True, 1, id="paper-missing-provider"),
+    pytest.param("paper-command-verify", "true", "true", ACCOUNT, "malformed", True, 1, id="paper-malformed-provider"),
+    pytest.param("paper-command-verify", "true", "true", ACCOUNT, PROVIDER, True, 0, id="paper-valid"),
+])
+def test_paper_selection_and_validation_sequence(tmp_path, target, deploy, sync,
+                                                identity, provider, expected_enabled,
+                                                expected_code):
+    # Execute the actual first two workflow scripts in runner order. Resolve
+    # Secret bindings only when their step condition selects this PAPER row.
+    output = tmp_path / "output"
+    exported = tmp_path / "env"
+    environment = {
+        **os.environ, "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "WORKFLOW_TARGET": target, "DEPLOYMENT_LABEL": "PAPER",
+        "ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION": "false",
+        "QSL_ENABLE_CLOUD_RUN_AUTOMATION": "false",
+        "ENABLE_GITHUB_CLOUD_RUN_DEPLOY": deploy,
+        "ENABLE_GITHUB_ENV_SYNC": sync, "INPUT_DEPLOY_IMAGE": deploy,
+        "INPUT_SYNC_ENV": sync, "INPUT_SHIFT_TRAFFIC_TO_COMMIT": "false",
+        "INPUT_SCHEDULER_ENABLED_ACTION": "preserve",
+        "GITHUB_OUTPUT": str(output), "GITHUB_ENV": str(exported),
+    }
+    outputs = {}
+    secret_reads = 0
+    returncode = 0
+    for step in job_section("sync").split("    steps:\n", 1)[1].split("\n      - ")[:2]:
+        if "name: Mask WIF identity components" in step:
+            condition = step.split("        if: ", 1)[1].splitlines()[0]
+            condition = condition.replace("matrix.target.environment", repr("longbridge-paper"))
+            condition = condition.replace("steps.config.outputs.enabled", repr(outputs.get("enabled", "")))
+            if not eval(condition.replace("&&", "and"), {"__builtins__": {}}, {}):
+                continue
+            secret_reads += 1
+            environment.update(GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT=identity,
+                               GCP_WORKLOAD_IDENTITY_PROVIDER=provider)
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        result = subprocess.run(["bash", "-c", script], env=environment,
+                                capture_output=True, text=True, timeout=10, check=False)
+        returncode = result.returncode
+        if returncode:
+            assert "::error::Required Secret" in result.stdout
+            break
+        if output.exists():
+            outputs.update(line.split("=", 1) for line in output.read_text().splitlines())
+    assert returncode == expected_code
+    assert secret_reads == int(expected_enabled)
+    assert outputs.get("enabled") == str(expected_enabled).lower()
+    assert exported.exists() == (expected_enabled and expected_code == 0)
