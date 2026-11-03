@@ -207,6 +207,40 @@ def test_workflow_identity_masking_precedes_exports_and_rejects_missing_identity
     assert not result.stderr
 
 
+@pytest.mark.parametrize("identity", [
+    pytest.param("", id="missing-or-empty"),
+    pytest.param("synthetic-agent@synthetic-project.iam.gserviceaccount.com.invalid", id="malformed"),
+    pytest.param("synthetic-agent@synthetic-project.iam.gserviceaccount.com\n", id="newline"),
+])
+def test_workflow_invalid_wif_secret_reports_fixed_error_before_cloud_auth(tmp_path, identity):
+    workflow = Path(".github/workflows/inspect-paper-serving-metadata.yml").read_text()
+    first_step = workflow.split("    steps:\n", 1)[1].split("      - uses:", 1)[0]
+    assert "${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in first_step
+    assert "vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT" not in workflow
+    assert workflow.index(first_step) < workflow.index("google-github-actions/auth@")
+    script = first_step.split("        run: |\n", 1)[1]
+    script = "\n".join(line[10:] for line in script.splitlines())
+    env_file = tmp_path / "env"
+    auth_marker = tmp_path / "cloud-auth-reached"
+    result = subprocess.run(
+        ["bash", "-c", script + '\nprintf reached > "$AUTH_MARKER"'],
+        capture_output=True, text=True, timeout=10, check=False,
+        env={"GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT": identity,
+             "GITHUB_ENV": str(env_file), "AUTH_MARKER": str(auth_marker)},
+    )
+    assert result.returncode != 0
+    assert not env_file.exists()
+    assert not auth_marker.exists()
+    output = result.stdout + result.stderr
+    assert all(value not in output for value in ("synthetic-agent", "synthetic-project"))
+    if identity:
+        assert identity not in output
+    assert result.stdout == (
+        "::error::Required Secret GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT is missing or malformed\n"
+    )
+    assert not result.stderr
+
+
 def source_chain_io(*, registry_error=None, audit_error=None, changed=False, audit_rows=None):
     env, service, revision, image, _ = fixtures()
     revision["metadata"].update(creationTimestamp="2026-10-30T12:00:00Z")

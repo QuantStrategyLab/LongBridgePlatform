@@ -42,7 +42,10 @@ jobs:
         run: |
           set -euo pipefail
           account="$GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"
-          [[ "$account" =~ ^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$ ]] || exit 1
+          if ! [[ "$account" =~ ^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$ ]]; then
+            printf '%s\n' '::error::Required Secret GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT is missing or malformed'
+            exit 1
+          fi
           account_name="${account%%@*}"
           project="${account#*@}"
           project="${project%.iam.gserviceaccount.com}"
