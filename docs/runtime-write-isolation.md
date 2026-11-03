@@ -56,6 +56,19 @@ the log guard passes. These log checks do not authorize production recovery.
 
 ## Inspect a PAPER dry-run request
 
+Choose `target-config` in **Inspect PAPER Serving Metadata** for a configuration-only
+PAPER Russell check. This mode uses the existing `longbridge-paper` Environment
+and WIF service-account variable, passes that account explicitly to every gcloud
+call, and reads only the selected service and its positive-traffic revisions.
+It requires PAPER account selectors, an explicit `execution_environment=paper`,
+and the canonical `russell_top50_leader_rotation` profile in both the service
+template and every serving revision. Missing, conflicting or changing configuration
+fails the observation. No image, secret value, broker endpoint or service endpoint
+is accessed. Output contains fixed conclusions and counts, with no resource or
+account identifiers. This proves declared configuration only; it does not
+independently attest the broker account, approve deployment, or establish the
+installed UES revision. The existing image and source-chain modes remain separate.
+
 The manual **Inspect PAPER Serving Metadata** workflow first observes the current
 service and every positive-traffic revision using the existing PAPER environment
 and cloud identity. It reads each immutable serving image in a container with no

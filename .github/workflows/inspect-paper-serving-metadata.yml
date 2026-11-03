@@ -4,13 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Read image installation metadata, or only existing source-chain records without executing an image.
+        description: Read serving images, existing source-chain records, or only PAPER Russell configuration.
         required: true
         type: choice
         default: serving-image
         options:
           - serving-image
           - source-chain
+          - target-config
 
 permissions:
   contents: read
@@ -30,6 +31,7 @@ jobs:
       id-token: write
     env:
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
       WORKFLOW_TARGET: PAPER
       INSPECTION_MODE: ${{ inputs.mode }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
@@ -50,6 +52,9 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -n "$CLOUD_RUN_REGION"
           test -n "$CLOUD_RUN_SERVICE"
+          if [ "$INSPECTION_MODE" = target-config ]; then
+            test -n "$GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"
+          fi
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -70,5 +75,6 @@ jobs:
           case "$INSPECTION_MODE" in
             serving-image) uv run --no-sync python -m scripts.inspect_paper_serving_metadata ;;
             source-chain) uv run --no-sync python -m scripts.inspect_paper_serving_metadata --source-chain ;;
+            target-config) uv run --no-sync python -m scripts.inspect_paper_serving_metadata --target-config ;;
             *) exit 2 ;;
           esac
