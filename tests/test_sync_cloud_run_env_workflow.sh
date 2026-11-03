@@ -448,7 +448,7 @@ assert job.index("name: Verify exact image-only source") < job.index("uses: goog
 assert re.findall(r"secrets\.([A-Z_]+)", job) == [
     "NOTIFICATION_OVERLAY_BASE_DIGEST", "NOTIFICATION_OVERLAY_IMAGE_DIGEST",
     "NOTIFICATION_OVERLAY_BUILD_ID", "NOTIFICATION_OVERLAY_PAYLOAD_DIGEST", "CLOUD_RUN_SERVICE",
-    "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT",
+    "GCP_WORKLOAD_IDENTITY_PROVIDER", "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT",
 ]
 assert "scripts/verify_deployed_runtime_target_admission.py" in job
 assert "record_daily_account_snapshot" not in job
