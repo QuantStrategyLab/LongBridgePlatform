@@ -150,7 +150,17 @@ bash tests/test_sync_cloud_run_env_workflow.sh
 
 Cloud workflows read `GCP_PROJECT_ID`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, and
 `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` from their existing GitHub environment
-variables. Workflows that compare runtime or Scheduler identities additionally
+variables. PAPER jobs in `sync-cloud-run-env.yml` and the PAPER inspection workflow
+read the WIF service account from the protected `longbridge-paper` Environment
+Secret `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` instead. Their first step validates
+the Secret and masks its derived account and project identifiers before exporting
+the identity for later authentication. The deployment masking step blanks inherited
+cloud identity fields so the runner cannot print them before the component masks
+are registered; later steps retain their configured values. Missing or malformed
+Secrets fail closed
+without falling back to the variable. Other deployment targets keep their
+existing variable source. Workflows that compare runtime or Scheduler identities
+additionally
 require `GCP_RUNTIME_SERVICE_ACCOUNT` or `GCP_SCHEDULER_SERVICE_ACCOUNT`. Configure
 these values in protected settings before executing a workflow; no resource or
 credential value is stored in this repository. Missing identities must fail

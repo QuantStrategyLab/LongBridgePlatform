@@ -443,11 +443,12 @@ for section in (legacy, cleanup):
 assert "needs: resolve-matrix" in legacy.split("    steps:", 1)[0]
 assert job.index("name: Validate image-only dispatch") < job.index("uses: google-github-actions/auth@")
 assert job.index("name: Verify exact image-only source") < job.index("uses: google-github-actions/auth@")
-# Only the service selector and immutable overlay provenance inputs are allowed;
+# Only the service selector, protected WIF identity and immutable overlay inputs are allowed;
 # broker and runtime credentials remain outside this isolated job.
 assert re.findall(r"secrets\.([A-Z_]+)", job) == [
     "NOTIFICATION_OVERLAY_BASE_DIGEST", "NOTIFICATION_OVERLAY_IMAGE_DIGEST",
     "NOTIFICATION_OVERLAY_BUILD_ID", "NOTIFICATION_OVERLAY_PAYLOAD_DIGEST", "CLOUD_RUN_SERVICE",
+    "GCP_WORKLOAD_IDENTITY_PROVIDER", "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT",
 ]
 assert "scripts/verify_deployed_runtime_target_admission.py" in job
 assert "record_daily_account_snapshot" not in job
@@ -466,8 +467,11 @@ assert "approved_paper_stock_inventory_candidate=822037aae994c26a38586a46397f941
 assert 'image_mode=probe-financing' in job
 assert '[ "${GITHUB_REPOSITORY:-}" != "QuantStrategyLab/LongBridgePlatform" ]' in job
 assert '[ "${SOURCE_COMMIT}" = "${GITHUB_SHA}" ] || [ "${SOURCE_COMMIT}" = "${approved_candidate}" ]' not in job
+# A blank first-step override suppresses inherited Scheduler identity disclosure;
+# it adds no Scheduler configuration or operation to image-only staging.
+job_operations = job.replace('          GCP_SCHEDULER_SERVICE_ACCOUNT: ""\n', "")
 for forbidden in ("sync_plan", "scheduler", "cleanup", "retire"):
-    assert forbidden not in job.lower(), forbidden
+    assert forbidden not in job_operations.lower(), forbidden
 assert "hk-account-snapshot" in job
 assert "update-traffic" in job.lower()
 assert 'if [ "${image_mode}" = "hk-account-snapshot" ]; then' in job
