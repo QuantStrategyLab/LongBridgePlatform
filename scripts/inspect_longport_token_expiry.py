@@ -7,7 +7,7 @@ Never prints secret values, never calls /v1/token/refresh, never adds SM version
 Usage (ADC or GHA WIF already authenticated):
 
   python scripts/inspect_longport_token_expiry.py \\
-    --project longbridgequant \\
+    --project "$GCP_PROJECT_ID" \\
     --secret longport_token_paper \\
     --warn-days 30
 """

@@ -382,7 +382,7 @@ def test_qsl_application_origin_is_fixed() -> None:
         _endpoint("https://attacker.example", str(uuid.uuid4()))
 
 
-def test_loaded_version_readback_uses_process_identity_and_stays_paused(monkeypatch) -> None:
+def _loaded_v7_readback(monkeypatch):
     from quant_platform_kit.common.runtime_target import build_runtime_target
     from strategy_loader import load_strategy_entrypoint_for_profile, load_strategy_runtime_adapter_for_profile
     from us_equity_strategies import get_strategy_entrypoint
@@ -409,11 +409,32 @@ def test_loaded_version_readback_uses_process_identity_and_stays_paused(monkeypa
         strategy_runtime=runtime,
         runtime_env={"V7_PAPER_SOURCE_COMMIT": "a" * 40, "K_REVISION": "paper-v7-00001"},
     )
+    return readback
+
+
+def test_loaded_version_readback_uses_process_identity_and_stays_paused(monkeypatch) -> None:
+    readback = _loaded_v7_readback(monkeypatch)
     assert readback["activation_state"] == "applied_paused"
     assert readback["runtime_target_enabled"] is False
+    assert readback["ues_revision"] == "c16c81bdf21824615f7280554559adc6c721917c"
     assert readback["ues_revision"] == V7_APPROVED_UES_REVISION
     assert readback["revision_name"] == "paper-v7-00001"
     assert readback["runtime_loaded_receipt"]["schema_version"] == "runtime_loaded_receipt.v1"
+
+
+@pytest.mark.parametrize("observed_revision", [
+    "8412d8338879f335ef8830678c2733e02e53e7c7", "a" * 40, "", None,
+])
+def test_loaded_version_readback_rejects_unapproved_ues(monkeypatch, observed_revision) -> None:
+    from application import v7_paper_application
+
+    original = v7_paper_application._installed_revision
+    monkeypatch.setattr(
+        v7_paper_application, "_installed_revision",
+        lambda name: observed_revision if name == "us-equity-strategies" else original(name),
+    )
+    with pytest.raises(V7PaperApplicationError, match="loaded UES revision"):
+        _loaded_v7_readback(monkeypatch)
 
 
 def test_bound_v7_loader_is_opt_in_and_normal_loader_stays_fail_closed(monkeypatch) -> None:
