@@ -11,10 +11,8 @@ from notifications.events import NotificationPublisher, RenderedNotification
 from notifications.order_alerts import (
     OrderLifecycleEvent,
     monitor_submitted_order_status,
-    publish_order_lifecycle_event,
-    is_filled_status, is_partial_filled_status, is_terminal_error_status,
+    is_filled_status, is_verified_partial_fill, is_terminal_error_status,
 )
-from notifications.telegram import build_issue_notifier
 from quant_platform_kit.common.quantity import format_quantity
 from quant_platform_kit.common.port_adapters import CallableNotificationPort
 from quant_platform_kit.common.ports import NotificationPort
@@ -90,10 +88,10 @@ def build_runtime_notification_adapters(
         log_message=log_message or (lambda message: print(with_prefix(message), flush=True)),
         send_message=send_recorded_message,
     )
-    legacy_notify_issue = build_issue_notifier(
-        with_prefix_fn=with_prefix,
-        send_tg_message_fn=send_recorded_message,
-    )
+    def legacy_notify_issue(title, detail):
+        from notifications.renderers import render_runtime_error
+        # Raw broker detail belongs to controlled diagnostics, never the body.
+        return send_recorded_message(render_runtime_error(kind="real_error"))
 
     def issue_with_ack(title, detail):
         before = len(recorded_delivery_events)
@@ -119,20 +117,22 @@ def build_runtime_notification_adapters(
         from notifications import unified
         def publish():
             before = len(recorded_delivery_events)
-            outcome = publish_order_lifecycle_event(event, translator=translator, publisher=order_event_publisher)
+            from notifications.renderers import render_runtime_error
+            outcome = order_event_publisher.publish(RenderedNotification(
+                detailed_text="", compact_text=render_runtime_error(kind="order_status_unknown")))
             if not unified.enabled():
                 return outcome
             events = recorded_delivery_events[before:]
             return bool(events) and all(item.get("transport_acknowledged") is True for item in events)
-        if unified.enabled() and not (is_filled_status(event.status) or is_partial_filled_status(event.status)):
-            from notifications.digest_snapshot.unified_contract import order_identity_digest
-            unified.dispatch_immediate(publish, kind="order_status_unknown",
-                incident=f"order_status:{order_identity_digest(event.order_id)}", state=event.status,
-                severity=2 if is_terminal_error_status(event.status) else 1)
-        else:
-            if unified.enabled() and is_filled_status(event.status):
-                unified.record_order_resolution(event)
-            publish()
+        if is_filled_status(event.status) or is_verified_partial_fill(event):
+            # P10 applies in either flag state. Persist before suppressing send.
+            if not unified.record_order_resolution(event):
+                notify_issue("Order notification evidence unavailable", "Candidate persistence is unconfirmed.")
+            return
+        from notifications.digest_snapshot.unified_contract import order_identity_digest
+        unified.dispatch_immediate(publish, kind="order_status_unknown",
+            incident=f"order_status:{order_identity_digest(event.order_id)}", state=event.status,
+            severity=2 if is_terminal_error_status(event.status) else 1)
 
     def post_submit_order(trade_context, order_intent, report) -> None:
         from notifications import unified

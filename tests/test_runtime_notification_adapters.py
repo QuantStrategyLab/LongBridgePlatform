@@ -27,7 +27,10 @@ def test_runtime_notification_adapters_publish_cycle_notification_uses_log_and_s
     assert messages == ["compact line"]
 
 
-def test_runtime_notification_adapters_post_submit_order_publishes_order_events():
+def test_runtime_notification_adapters_post_submit_order_publishes_order_events(monkeypatch):
+    from notifications import unified
+    facts = []
+    monkeypatch.setattr(unified, "record_order_resolution", lambda event: facts.append(event) or True)
     messages = []
     adapters = build_runtime_notification_adapters(
         with_prefix=lambda message: f"[HK] {message}",
@@ -51,7 +54,8 @@ def test_runtime_notification_adapters_post_submit_order_publishes_order_events(
         SimpleNamespace(broker_order_id="order-1"),
     )
 
-    assert messages == ["✅ Order Filled | SOXL Buy 10 shares avg $123.45 (ID: order-1)"]
+    assert messages == []
+    assert len(facts) == 1 and facts[0].status == "Filled"
 
 
 def test_runtime_notification_adapter_records_negative_ack_as_failed():
