@@ -26,6 +26,7 @@ from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from scripts import record_daily_account_snapshot as snapshot
+from scripts.vendor import cloud_run_tags as tags
 from scripts.verify_deployed_runtime_target_admission import (
     APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE,
     _validate_image_only_source,
@@ -38,7 +39,7 @@ from strategy_registry import LONGBRIDGE_PLATFORM
 BASE_APPLICATION_SHA = "922f338fea7c46391b50bb8316ac88154596916f"
 PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 SERVICE_NAME = re.compile(r"^[a-z][a-z0-9-]{0,61}[a-z0-9]$")
-TAG_NAME = re.compile(r"^[a-z][a-z0-9-]{0,48}[a-z0-9]$")
+TAG_NAME = re.compile(r"^[a-z](?:[a-z0-9-]*[a-z0-9])?$")
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 MAX_CLOUD_BODY_BYTES = 1_000_000
 MAX_LOG_BODY_BYTES = 256_000
@@ -313,9 +314,10 @@ def _open_directory_nofollow(path: Path) -> int:
         raise
 
 
-def _create_backup_file(path: Path, body: bytes, *, root: Path) -> None:
+def _create_backup_file(path: Path, body: bytes, *, root: Path) -> tuple[int, int]:
+    relative_path = path.relative_to(root) if path.is_relative_to(root) else None
     if (
-        path != root / BACKUP_RELATIVE_PATH
+        relative_path not in {BACKUP_RELATIVE_PATH, BACKUP_RELATIVE_PATH.with_suffix(".operation.json")}
         or len(body) > MAX_CLOUD_BODY_BYTES
         or not body
     ):
@@ -331,7 +333,7 @@ def _create_backup_file(path: Path, body: bytes, *, root: Path) -> None:
         directory_flags = (
             os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
         )
-        for component in BACKUP_RELATIVE_PATH.parts[:-1]:
+        for component in relative_path.parts[:-1]:
             created = False
             try:
                 os.mkdir(component, mode=0o700, dir_fd=directory_descriptor)
@@ -351,7 +353,7 @@ def _create_backup_file(path: Path, body: bytes, *, root: Path) -> None:
 
         file_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
         file_descriptor = os.open(
-            BACKUP_RELATIVE_PATH.name,
+            relative_path.name,
             file_flags,
             0o600,
             dir_fd=directory_descriptor,
@@ -370,7 +372,7 @@ def _create_backup_file(path: Path, body: bytes, *, root: Path) -> None:
         file_descriptor = -1
 
         read_descriptor = os.open(
-            BACKUP_RELATIVE_PATH.name,
+            relative_path.name,
             os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
             dir_fd=directory_descriptor,
         )
@@ -384,6 +386,7 @@ def _create_backup_file(path: Path, body: bytes, *, root: Path) -> None:
             if backup_file.read(MAX_CLOUD_BODY_BYTES + 1) != body:
                 raise _stop("backup_readback_mismatch")
         os.fsync(directory_descriptor)
+        return read_stat.st_dev, read_stat.st_ino
     except CanaryError:
         raise
     except Exception:
@@ -1000,12 +1003,61 @@ def _create_backup(
     _create_backup_file(BACKUP_PATH, _canonical(payload), root=BACKUP_ROOT)
 
 
-def _canary_tag(service: str) -> str:
-    # Cloud Run limits the combined service and traffic-tag length to 46.
-    suffix_length = min(12, 46 - len(service) - len("hk-"))
-    if suffix_length < 6:
-        raise _stop("service_tag_name_budget_invalid")
-    return "hk-" + uuid.uuid4().hex[:suffix_length]
+def _create_operation_claim(body: bytes) -> tuple[int, int]:
+    """Create once before writes; never clear after an uncertain result or restart."""
+    return _create_backup_file(BACKUP_PATH.with_suffix(".operation.json"), body, root=BACKUP_ROOT)
+
+
+def _require_operation_claim(body: bytes, identity: tuple[int, int]) -> None:
+    """Re-read private ownership before each write, including cleanup."""
+    parent = descriptor = -1
+    try:
+        parent = _open_directory_nofollow(BACKUP_PATH.parent)
+        descriptor = os.open(
+            BACKUP_PATH.with_suffix(".operation.json").name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent,
+        )
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_nlink != 1 or (info.st_dev, info.st_ino) != identity
+        ):
+            raise ValueError("invalid claim")
+        with os.fdopen(os.dup(descriptor), "rb") as source:
+            if source.read(MAX_CLOUD_BODY_BYTES + 1) != body:
+                raise ValueError("changed claim")
+    except Exception:
+        raise _stop("operation_ownership_lost") from None
+    finally:
+        for fd in (descriptor, parent):
+            if fd >= 0:
+                os.close(fd)
+
+
+
+def _canary_tag(service: str, *, operation_id: str, existing_tags: Mapping[str, str | None],
+                project: str, region: str, candidate_id: str, state_path: Path) -> str:
+    result = tags.allocate_tag(
+        service, "hk-canary", existing_tags=existing_tags, operation_id=operation_id,
+        project=project, region=region, candidate_id=candidate_id, state_path=state_path,
+    )
+    if isinstance(result, tags.Refusal):
+        raise _stop("tag_allocation_refused")
+    return result.tag
+
+
+def _tag_inventory(service: Mapping[str, Any]) -> dict[str, str | None]:
+    inventory: dict[str, str | None] = {}
+    # Include configured AND observed entries, including zero-percent tags.
+    for row in _configured_traffic(service) + _traffic_rows(service):
+        tag = row.get("tag")
+        if not tag:
+            continue
+        revision = row["revision"]
+        if tag in inventory and inventory[tag] != revision:
+            raise _stop("tag_inventory_conflict")
+        inventory[tag] = revision
+    return inventory
 
 
 def _job_run_status(job: Mapping[str, Any], *, started_at: datetime) -> int | None:
@@ -1369,6 +1421,10 @@ def run_hk_notification_canary(
     ) or not GIT_SHA.fullmatch(BASE_APPLICATION_SHA):
         raise _stop("source_pin_invalid")
 
+    if tags.headroom(service_name) <= 0:
+        # This canary never opts into a micro-split, even if a flag is present.
+        raise _stop("tag_allocation_refused")
+    operation_id = uuid.uuid4().hex
     session = session_factory()
     service_resource = _service_resource(project, region, service_name)
     probe_resource = ""
@@ -1377,7 +1433,7 @@ def run_hk_notification_canary(
     candidate_revision: Mapping[str, Any] | None = None
     selected_jobs: dict[str, Mapping[str, Any]] = {}
     traffic_before: list[dict[str, Any]] = []
-    tag = _canary_tag(service_name)
+    claim_body = b""
     probe_resumed = False
     pause_attempted = False
     try:
@@ -1437,8 +1493,6 @@ def run_hk_notification_canary(
             env={"WORKFLOW_TARGET": "HK"},
             project=project,
         )
-        if not TAG_NAME.fullmatch(tag):
-            raise _stop("tag_invalid")
 
         # Detect state drift since the preflight read before starting writes.
         service_recheck = _service_get(session, service_resource)
@@ -1488,12 +1542,23 @@ def run_hk_notification_canary(
         )
 
         candidate_revision_name = _revision_name(candidate_revision)
+        tag = _canary_tag(
+            service_name, operation_id=operation_id, existing_tags=_tag_inventory(service_recheck),
+            project=project, region=region, candidate_id=candidate_revision_name,
+            state_path=BACKUP_PATH.with_suffix(".tags.json"),
+        )
+        claim_body = _canonical({
+            "contract_version": tags.CONTRACT_VERSION, "operation_id": operation_id,
+            "target": service_resource, "candidate": candidate_revision_name, "tag": tag,
+        })
+        claim_identity = _create_operation_claim(claim_body)
         traffic_with_tag = _tagged_traffic(
             traffic_before, revision=candidate_revision_name, tag=tag
         )
         etag = str(original_service.get("etag") or "")
         if not etag:
             raise _stop("service_etag_missing")
+        _require_operation_claim(claim_body, claim_identity)
         try:
             _service_patch_traffic(
                 session, service_resource, etag=etag, traffic=traffic_with_tag
@@ -1521,6 +1586,7 @@ def run_hk_notification_canary(
             original_job, resource=probe_resource, base_uri=contract["base_uri"]
         )
         temporary_probe_uri = f"{tagged_url}/probe"
+        _require_operation_claim(claim_body, claim_identity)
         try:
             _scheduler_patch_uri(session, probe_resource, temporary_probe_uri)
         except Exception:
@@ -1538,6 +1604,7 @@ def run_hk_notification_canary(
             if pause_attempted:
                 return
             pause_attempted = True
+            _require_operation_claim(claim_body, claim_identity)
             try:
                 snapshot._scheduler_action(session, job_config, "pause")
             except Exception:
@@ -1556,6 +1623,7 @@ def run_hk_notification_canary(
             raise _stop("probe_job_temporary_readback_failed")
 
         original_last_attempt = original_job.get("lastAttemptTime")
+        _require_operation_claim(claim_body, claim_identity)
         try:
             snapshot._scheduler_action(
                 session,
@@ -1594,6 +1662,7 @@ def run_hk_notification_canary(
         ):
             pause_once()
             raise _stop("scheduler_natural_window")
+        _require_operation_claim(claim_body, claim_identity)
         try:
             snapshot._scheduler_run(session, job_config)
         except Exception:
@@ -1633,6 +1702,7 @@ def run_hk_notification_canary(
         del request_status
 
         # Restore only our modified URI, then remove only our unique tag.
+        _require_operation_claim(claim_body, claim_identity)
         try:
             _scheduler_patch_uri(session, probe_resource, base_probe_uri)
         except Exception:
@@ -1657,6 +1727,7 @@ def run_hk_notification_canary(
         final_traffic = _remove_owned_tag(
             current_service, revision=candidate_revision_name, tag=tag
         )
+        _require_operation_claim(claim_body, claim_identity)
         try:
             _service_patch_traffic(
                 session,

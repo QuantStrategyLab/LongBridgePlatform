@@ -863,14 +863,20 @@ def test_service_config_ignores_only_output_modifier_and_keeps_config_changes():
     assert canary._service_config_view(current) != canary._service_config_view(original)
 
 
-def test_canary_tag_respects_provider_combined_name_limit():
-    for length in (20, 31, 36, 37):
+def test_canary_tag_respects_provider_combined_name_limit(tmp_path):
+    for length in (20, 31, 36, 37, 38, 45):
         name = "s" * length
-        tag = canary._canary_tag(name)
+        tag = canary._canary_tag(
+            name, operation_id="fake-run", existing_tags={}, project="fake-project",
+            region="fake-region", candidate_id="fake-candidate", state_path=tmp_path / "tags.json",
+        )
         assert len(name) + len(tag) <= 46
-        assert tag.startswith("hk-") and len(tag) >= 9
-    with pytest.raises(canary.CanaryError, match="service_tag_name_budget_invalid"):
-        canary._canary_tag("s" * 38)
+        assert canary.TAG_NAME.fullmatch(tag)
+    with pytest.raises(canary.CanaryError, match="tag_allocation_refused"):
+        canary._canary_tag(
+            "s" * 46, operation_id="fake-run", existing_tags={}, project="fake-project",
+            region="fake-region", candidate_id="fake-candidate", state_path=tmp_path / "tags.json",
+        )
 
 
 def test_backup_reuse_is_read_only_and_requires_exact_original_snapshot(
@@ -1140,3 +1146,40 @@ def test_retired_target_inspection_preserves_disabled_paper_guards(profile, unsa
     env["RUNTIME_TARGET_JSON"] = json.dumps(target)
     with pytest.raises(canary.CanaryError, match="runtime_target_mismatch"):
         canary._runtime_target(env, service=SERVICE)
+
+
+def test_canary_lost_claim_blocks_first_cloud_write(monkeypatch, tmp_path):
+    run, state = _run_synthetic_canary_with_delayed_dispatch(monkeypatch, tmp_path)
+    create = canary._create_operation_claim
+
+    def steal(body):
+        identity = create(body)
+        canary.BACKUP_PATH.with_suffix(".operation.json").write_bytes(b"{}")
+        return identity
+
+    monkeypatch.setattr(canary, "_create_operation_claim", steal)
+    with pytest.raises(canary.CanaryError, match="operation_ownership_lost"):
+        run()
+    assert state["events"] == []
+
+
+def test_canary_claim_survives_success_and_blocks_restart(monkeypatch, tmp_path):
+    run, state = _run_synthetic_canary_with_delayed_dispatch(monkeypatch, tmp_path)
+    assert run() == "completed"
+    events_before = list(state["events"])
+    claim = json.loads(canary.BACKUP_PATH.with_suffix(".operation.json").read_bytes())
+    assert claim["contract_version"] == "cloud-run-tags/v1"
+    assert claim["candidate"] == CANDIDATE
+    with pytest.raises(canary.CanaryError):
+        run()
+    assert state["events"] == events_before
+
+
+def test_tag_inventory_preserves_zero_percent_and_rejects_new_conflict():
+    service = _service()
+    service["traffic"].append({"revision": "fake-old", "tag": "fake-zero", "percent": 0})
+    service["trafficStatuses"].append({"revision": "fake-old", "tag": "fake-zero", "percent": 0})
+    assert canary._tag_inventory(service) == {"fake-zero": "fake-old"}
+    service["trafficStatuses"][-1]["revision"] = "fake-foreign"
+    with pytest.raises(canary.CanaryError, match="tag_inventory_conflict"):
+        canary._tag_inventory(service)

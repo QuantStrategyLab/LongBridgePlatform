@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -45,6 +46,9 @@ for candidate in (ROOT, QPK_SRC, UES_SRC, HES_SRC):
     candidate_str = str(candidate)
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
+
+from scripts.vendor.cloud_run_tags import CONTRACT_VERSION, headroom  # noqa: E402
+
 
 from strategy_registry import (  # noqa: E402
     LONGBRIDGE_PLATFORM,
@@ -352,11 +356,19 @@ def _build_target_plan(
     )
     runtime_target = _resolve_runtime_target(target, defaults, env, per_service_mode)
     if not service_name:
-        service_name = str(runtime_target.get("service_name") or "").strip()
+        service_name = runtime_target.get("service_name") or ""
     if not service_name:
         raise ValueError("Each Cloud Run sync target requires service/service_name")
 
-    runtime_target_service = str(runtime_target.get("service_name") or "").strip()
+    # Validate original values; never shorten, trim or otherwise rename a target.
+    if not isinstance(service_name, str) or not re.fullmatch(r"[a-z](?:[a-z0-9-]{0,47}[a-z0-9])?", service_name):
+        raise ValueError("Cloud Run exact service name is invalid")
+    runtime_target_service = runtime_target.get("service_name") or ""
+    if runtime_target_service and (
+        not isinstance(runtime_target_service, str)
+        or not re.fullmatch(r"[a-z](?:[a-z0-9-]{0,47}[a-z0-9])?", runtime_target_service)
+    ):
+        raise ValueError("Cloud Run exact runtime service name is invalid")
     if runtime_target_service and runtime_target_service != service_name:
         raise ValueError(
             f"Target {service_name} runtime_target.service_name={runtime_target_service!r} does not match"
@@ -494,6 +506,12 @@ def _build_target_plan(
 
     return {
         "service_name": service_name,
+        "tag_preflight": {
+            "contract_version": CONTRACT_VERSION,
+            "headroom": headroom(service_name),
+            "tag_status": "AVAILABLE" if headroom(service_name) > 0 else "TAG_IMPOSSIBLE",
+            "traffic_authority": False,
+        },
         "strategy_profile": canonical_profile,
         "env": env_values,
         "scheduler": _build_scheduler_plan(
