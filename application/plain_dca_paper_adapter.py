@@ -45,6 +45,8 @@ def _paper_account_from_readback(readback: object, *, now: datetime) -> str:
         manifest = load_runtime_target_manifest()
         entries = [entry for entry in manifest.targets if entry.id == "paper"]
         target = json.loads(env.get("RUNTIME_TARGET_JSON", ""))
+        if "QSL_RUNTIME_TARGET_JSON" in env and json.loads(env["QSL_RUNTIME_TARGET_JSON"]) != target:
+            raise ValueError
     except Exception:
         raise PlainDcaPaperError("paper_target_readback_invalid") from None
     if (len(entries) != 1 or entries[0].environment != PAPER_ENVIRONMENT
@@ -63,7 +65,9 @@ def _paper_account_from_readback(readback: object, *, now: datetime) -> str:
     # False means broker PAPER rather than local dry-run in the shared contract.
     # Phase 1 remains disabled and this module has no order writer in either case.
     if (env.get("LONGBRIDGE_DRY_RUN_ONLY") != "false"
-            or env.get("RUNTIME_TARGET_ENABLED") != "false"):
+            or env.get("RUNTIME_TARGET_ENABLED") != "false"
+            or any(env.get("QSL_" + key, "false") != "false" for key in (
+                "RUNTIME_TARGET_ENABLED", "LONGBRIDGE_DRY_RUN_ONLY"))):
         raise PlainDcaPaperError("paper_disabled_binding_required")
     account = env.get("LONGBRIDGE_PHYSICAL_ACCOUNT_ID")
     if (not isinstance(account, str) or not account.strip() or account != account.strip()

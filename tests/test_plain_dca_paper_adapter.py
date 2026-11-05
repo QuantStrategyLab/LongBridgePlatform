@@ -88,6 +88,28 @@ def test_exact_paper_binding_passes():
     assert check_plain_dca_paper_binding(readback(), now=NOW) is None
 
 
+@pytest.mark.parametrize("name", ["QSL_RUNTIME_TARGET_ENABLED", "QSL_LONGBRIDGE_DRY_RUN_ONLY"])
+@pytest.mark.parametrize("value", ["true", None, "", 0])
+def test_conflicting_or_unresolved_runtime_alias_blocks(name, value):
+    binding = readback()
+    binding["protected_env"][name] = value
+    with pytest.raises(PlainDcaPaperError):
+        check_plain_dca_paper_binding(binding, now=NOW)
+
+
+def test_identical_aliases_pass_and_conflicting_target_alias_blocks():
+    binding = readback()
+    env = binding["protected_env"]
+    env.update(QSL_RUNTIME_TARGET_ENABLED="false", QSL_LONGBRIDGE_DRY_RUN_ONLY="false",
+               QSL_RUNTIME_TARGET_JSON=env["RUNTIME_TARGET_JSON"])
+    assert check_plain_dca_paper_binding(binding, now=NOW) is None
+    target = json.loads(env["RUNTIME_TARGET_JSON"])
+    target["execution_environment"] = "live"
+    env["QSL_RUNTIME_TARGET_JSON"] = json.dumps(target)
+    with pytest.raises(PlainDcaPaperError):
+        check_plain_dca_paper_binding(binding, now=NOW)
+
+
 @pytest.mark.parametrize("field", ["live_enabled", "kelly_enabled", "stop_loss_enabled"])
 @pytest.mark.parametrize("state", [True, None, "false", 0])
 def test_unknown_or_enabled_safety_blocks(field, state):
