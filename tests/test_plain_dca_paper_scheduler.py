@@ -10,7 +10,8 @@ import pytest
 from application.plain_dca_paper_adapter import PlainDcaPaperError
 from application.plain_dca_paper_scheduler import scheduled_plain_dca_preview
 from application.runtime_target_manifest import load_runtime_target_manifest
-from test_plain_dca_dependency import installed_dca_case
+
+pytest_plugins = ("test_plain_dca_dependency",)
 
 NOW = datetime(2026, 11, 5, tzinfo=timezone.utc)
 
