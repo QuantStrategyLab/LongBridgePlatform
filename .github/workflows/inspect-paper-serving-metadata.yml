@@ -12,6 +12,7 @@ on:
           - serving-image
           - source-chain
           - target-config
+          - plain-dca
 
 permissions:
   contents: read
@@ -35,6 +36,10 @@ jobs:
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
       EXPECTED_RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+      WORKFLOW_ENVIRONMENT: longbridge-paper
+      EXPECTED_PHYSICAL_ACCOUNT_ID: ${{ vars.LONGBRIDGE_PHYSICAL_ACCOUNT_ID || secrets.LONGBRIDGE_PHYSICAL_ACCOUNT_ID }}
+      EXPECTED_RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED || secrets.RUNTIME_TARGET_ENABLED }}
+      EXPECTED_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY || secrets.LONGBRIDGE_DRY_RUN_ONLY }}
     steps:
       - name: Mask WIF identity components
         env:
@@ -79,6 +84,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           uv sync --frozen --no-dev
+      - name: Validate plain-DCA protected identity before cloud authentication
+        if: inputs.mode == 'plain-dca'
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        run: uv run --no-sync python -m scripts.inspect_plain_dca_paper --validate-config
       - uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -93,5 +103,6 @@ jobs:
             serving-image) uv run --no-sync python -m scripts.inspect_paper_serving_metadata ;;
             source-chain) uv run --no-sync python -m scripts.inspect_paper_serving_metadata --source-chain ;;
             target-config) uv run --no-sync python -m scripts.inspect_paper_serving_metadata --target-config ;;
+            plain-dca) uv run --no-sync python -m scripts.inspect_plain_dca_paper ;;
             *) exit 2 ;;
           esac

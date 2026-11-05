@@ -194,6 +194,8 @@ current protected configuration on every attempt. Its readback contains:
 - `protected_env`: current `CLOUD_RUN_SERVICE`, `RUNTIME_TARGET_JSON`,
   `RUNTIME_TARGET_ENABLED`, `LONGBRIDGE_DRY_RUN_ONLY` and
   `LONGBRIDGE_PHYSICAL_ACCOUNT_ID`, kept in restricted process memory only.
+  Include applicable `QSL_` overrides when present: conflicting or unresolved
+  target, enablement and dry-run aliases are rejected, not silently discarded.
 
 `check_plain_dca_paper_binding(readback, now=now)` checks this contract. It rejects
 `longbridge-sg`, `longbridge-hk`, other target ids, service disagreement with the
@@ -239,3 +241,25 @@ facts are provided. Wiring and activation of a deployed trigger, durable order
 execution and any PAPER start require the separate owner card. Keep the hook
 disabled until that work is explicitly authorized. Repeat ticks are disposable
 previews, not an exactly-once execution guarantee.
+
+### Protected plain-DCA observation
+
+The existing PAPER metadata workflow has a `plain-dca` mode. It uses only the
+fixed `longbridge-paper` Environment and existing protected bindings. Before
+cloud authentication it checks the manifest service/region, explicit PAPER
+selectors, physical-account binding and disabled target. It reads the service
+template and every positive-traffic revision twice, rejecting conflicting
+aliases, duplicate environment keys, missing values and configuration drift.
+It never resolves Secret Manager references, invokes the service or broker, or
+changes cloud configuration. Only fixed diagnostics and comparison results leave
+process memory; the packet is not an adapter admission token.
+
+This is a configuration observation, not independent broker identity proof.
+No authoritative Kelly/all-stop-loss source is implemented in this runtime, so
+those values remain `null`, even if an unrelated flag has a similar name. The
+existing durable live-command switch is reported OFF only when explicitly false
+in both the template and all serving revisions. A disabled PAPER configuration
+does not prove all deployed safety controls. Partial/unknown packets exit with
+failure and `paper_start_ready=false`. Do not create or change protected values
+merely to make this observation pass. A current authoritative safety source and
+independent broker identity evidence remain prerequisites for an owner start card.
