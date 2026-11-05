@@ -173,3 +173,52 @@ configuration alongside its injected authorized session. Request-log and HK
 stop-result tools require `GCP_PROJECT_ID` in their process environment.
 `STRATEGY_PLUGIN_ALLOWED_SIGNAL_PREFIXES` supplies any additional approved
 plugin-signal prefixes; no project-specific bucket is a built-in fallback.
+
+## Plain-DCA Phase 1 consumer binding
+
+`application.plain_dca_paper_adapter.consume_plain_dca_preview` consumes the UES
+`evaluate_dca_period` preview interface for `nasdaq100_buy_and_hold` and
+`sp500_buy_and_hold`. It is an explicit library entry point; no route, scheduler,
+strategy registry, deployment workflow or order writer is attached to it.
+
+The trusted execution owner must provide `read_binding`, a callable that reads
+current protected configuration on every attempt. Its readback contains:
+
+- `target_id=paper` and `environment=longbridge-paper`, resolved by the protected
+  caller, with timezone-aware `observed_at` and `valid_until`. Evidence older
+  than five minutes, expired evidence and future observations are rejected.
+- Literal false `live_enabled`, `kelly_enabled` and `stop_loss_enabled` evidence.
+  The last field attests that **all** applicable stop-loss switches are OFF.
+  Missing or unknown runtime evidence must stay unknown, never be filled with
+  false merely to pass this check.
+- `protected_env`: current `CLOUD_RUN_SERVICE`, `RUNTIME_TARGET_JSON`,
+  `RUNTIME_TARGET_ENABLED`, `LONGBRIDGE_DRY_RUN_ONLY` and
+  `LONGBRIDGE_PHYSICAL_ACCOUNT_ID`, kept in restricted process memory only.
+
+`check_plain_dca_paper_binding(readback, now=now)` checks this contract. It rejects
+`longbridge-sg`, `longbridge-hk`, other target ids, service disagreement with the
+manifest, non-PAPER selectors and any target lacking explicit
+`execution_environment=paper`. The plan must bind the same physical account,
+PAPER environment and one of the two baseline profiles. No fallback to the
+legacy smart-DCA strategy is allowed. Protected values are never logged or
+included in exception messages.
+
+In the shared runtime contract, `dry_run_only=false` with legacy
+`execution_mode=live` is compatible with broker PAPER **only when** the explicit
+`execution_environment=paper` is present. False alone cannot establish broker
+PAPER identity. Phase 1 also requires `RUNTIME_TARGET_ENABLED=false`; the adapter
+cannot arm execution even with an admissible binding.
+
+Inputs are passed unchanged to UES, including approved final tranche, calendar,
+period records, quote, cash and capability evidence. There is no extra tier or
+Kelly scaling, catch-up, anchor acceleration or synthetic fill. All four preview
+flags remain enforced. The adapter neither claims periods nor reserves cash, so
+it makes no exactly-once or multi-process order-execution claim.
+
+The current locked UES package does not supply `plain_dca`. Until a separately
+reviewed compatible pin is adopted, a valid binding still fails with
+`plain_dca_api_unavailable`. This patch does not change shared dependency pins or
+other strategy bindings. It also does not authenticate the readback source or
+credentials: deployed PAPER account/state/schedule isolation, authentic safety
+readback, durable fencing/reconciliation, setup decisions and Phase 2 execution
+remain separate prerequisites. Unit fixtures cannot prove those runtime facts.
