@@ -223,3 +223,8 @@ A missing or incompatible installation still fails with
 readback source or credentials: deployed PAPER account/state/schedule isolation, authentic safety
 readback, durable fencing/reconciliation, setup decisions and Phase 2 execution
 remain separate prerequisites. Unit fixtures cannot prove those runtime facts.
+
+The existing V7 PAPER approval remains bound to its original UES revision.
+The plain-DCA dependency adoption does not renew or broaden that approval:
+V7 loaded-version admission rejects the new installed revision. No V7 approval
+constant, approved candidate or protected application binding is changed.
