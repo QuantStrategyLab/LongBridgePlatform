@@ -16,6 +16,14 @@ from application.plain_dca_paper_adapter import (
 NOW = datetime(2026, 11, 5, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def synthetic_paper_manifest(monkeypatch):
+    paper = SimpleNamespace(id="paper", environment="longbridge-paper", mode="paper",
+                            service="fake-paper-service")
+    monkeypatch.setattr("application.plain_dca_paper_adapter.load_runtime_target_manifest",
+                        lambda: SimpleNamespace(targets=(paper,)))
+
+
 @dataclass(frozen=True)
 class Preview:
     no_order: bool = True
@@ -30,11 +38,11 @@ def readback():
         "target_id": "paper", "environment": "longbridge-paper",
         "live_enabled": False, "kelly_enabled": False, "stop_loss_enabled": False,
         "protected_env": {
-            "CLOUD_RUN_SERVICE": "longbridge-quant-paper-service",
+            "CLOUD_RUN_SERVICE": "fake-paper-service",
             "RUNTIME_TARGET_ENABLED": "false", "LONGBRIDGE_DRY_RUN_ONLY": "false",
             "LONGBRIDGE_PHYSICAL_ACCOUNT_ID": "fake-paper-account",
             "RUNTIME_TARGET_JSON": json.dumps({
-                "platform_id": "longbridge", "service_name": "longbridge-quant-paper-service",
+                "platform_id": "longbridge", "service_name": "fake-paper-service",
                 "execution_environment": "paper", "dry_run_only": False,
                 "execution_mode": "live", "account_scope": "PAPER",
                 "account_selector": ["PAPER"], "deployment_selector": "PAPER",
