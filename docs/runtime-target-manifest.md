@@ -215,10 +215,11 @@ Kelly scaling, catch-up, anchor acceleration or synthetic fill. All four preview
 flags remain enforced. The adapter neither claims periods nor reserves cash, so
 it makes no exactly-once or multi-process order-execution claim.
 
-The current locked UES package does not supply `plain_dca`. Until a separately
-reviewed compatible pin is adopted, a valid binding still fails with
-`plain_dca_api_unavailable`. This patch does not change shared dependency pins or
-other strategy bindings. It also does not authenticate the readback source or
-credentials: deployed PAPER account/state/schedule isolation, authentic safety
+The locked UES package supplies `plain_dca`. The dependency adoption tests check
+the installed VCS revision against all three source declarations and exercise
+both baseline families through the real preview adapter with synthetic facts.
+A missing or incompatible installation still fails with
+`plain_dca_api_unavailable`. Installing the package does not authenticate the
+readback source or credentials: deployed PAPER account/state/schedule isolation, authentic safety
 readback, durable fencing/reconciliation, setup decisions and Phase 2 execution
 remain separate prerequisites. Unit fixtures cannot prove those runtime facts.
