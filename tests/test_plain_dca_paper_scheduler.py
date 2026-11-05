@@ -9,15 +9,22 @@ import pytest
 
 from application.plain_dca_paper_adapter import PlainDcaPaperError
 from application.plain_dca_paper_scheduler import scheduled_plain_dca_preview
-from application.runtime_target_manifest import load_runtime_target_manifest
 
 pytest_plugins = ("test_plain_dca_dependency",)
 
 NOW = datetime(2026, 11, 5, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def synthetic_paper_manifest(monkeypatch):
+    paper = SimpleNamespace(id="paper", environment="longbridge-paper", mode="paper",
+                            service="fake-paper-service")
+    monkeypatch.setattr("application.plain_dca_paper_adapter.load_runtime_target_manifest",
+                        lambda: SimpleNamespace(targets=(paper,)))
+
+
 def readback():
-    service, = [t.service for t in load_runtime_target_manifest().targets if t.id == "paper"]
+    service = "fake-paper-service"
     return {
         "observed_at": NOW, "valid_until": NOW+timedelta(minutes=1),
         "target_id": "paper", "environment": "longbridge-paper",
