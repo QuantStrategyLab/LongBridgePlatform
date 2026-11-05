@@ -231,6 +231,23 @@ The plain-DCA dependency adoption does not renew or broaden that approval:
 V7 loaded-version admission rejects the new installed revision. No V7 approval
 constant, approved candidate or protected application binding is changed.
 
+### Disabled scheduler hook
+
+`scheduled_plain_dca_preview` in `application.plain_dca_paper_scheduler` connects
+an injected scheduler tick to the Phase 1 consumer. It defaults to `enabled=False`
+and returns without reading protected state or fetching facts. An offline enabled
+tick checks the paper binding before reading the frozen inputs, then re-reads
+the binding through the adapter before evaluation. It preserves all preview-only
+flags and creates no period claim, fill, cash reservation, order or notification.
+
+No timer, cron, HTTP route or cloud scheduler job is installed or enabled by this
+hook. A host must supply the frozen plan/calendar/current-facts reader and an
+authoritative protected binding reader; no fallback source or synthetic runtime
+facts are provided. Wiring and activation of a deployed trigger, durable order
+execution and any PAPER start require the separate owner card. Keep the hook
+disabled until that work is explicitly authorized. Repeat ticks are disposable
+previews, not an exactly-once execution guarantee.
+
 ### Protected plain-DCA observation
 
 The existing PAPER metadata workflow has a `plain-dca` mode. It uses only the
