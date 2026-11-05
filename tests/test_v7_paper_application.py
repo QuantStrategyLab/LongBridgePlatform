@@ -413,6 +413,13 @@ def _loaded_v7_readback(monkeypatch):
 
 
 def test_loaded_version_readback_uses_process_identity_and_stays_paused(monkeypatch) -> None:
+    from application import v7_paper_application
+
+    original = v7_paper_application._installed_revision
+    monkeypatch.setattr(
+        v7_paper_application, "_installed_revision",
+        lambda name: V7_APPROVED_UES_REVISION if name == "us-equity-strategies" else original(name),
+    )
     readback = _loaded_v7_readback(monkeypatch)
     assert readback["activation_state"] == "applied_paused"
     assert readback["runtime_target_enabled"] is False
@@ -420,6 +427,16 @@ def test_loaded_version_readback_uses_process_identity_and_stays_paused(monkeypa
     assert readback["ues_revision"] == V7_APPROVED_UES_REVISION
     assert readback["revision_name"] == "paper-v7-00001"
     assert readback["runtime_loaded_receipt"]["schema_version"] == "runtime_loaded_receipt.v1"
+
+
+def test_plain_dca_installed_pin_does_not_renew_v7_approval(monkeypatch) -> None:
+    from application import v7_paper_application
+
+    # Exercise the real installed package: M03 adoption cannot alter V7 authority.
+    assert v7_paper_application._installed_revision("us-equity-strategies") == "1d087fa424972d5d5ab02c4650ce9f039cb6711f"
+    assert V7_APPROVED_UES_REVISION == "c16c81bdf21824615f7280554559adc6c721917c"
+    with pytest.raises(V7PaperApplicationError, match="loaded UES revision"):
+        _loaded_v7_readback(monkeypatch)
 
 
 @pytest.mark.parametrize("observed_revision", [
