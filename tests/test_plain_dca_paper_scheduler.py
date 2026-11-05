@@ -10,6 +10,7 @@ import pytest
 from application.plain_dca_paper_adapter import PlainDcaPaperError
 from application.plain_dca_paper_scheduler import scheduled_plain_dca_preview
 from application.runtime_target_manifest import load_runtime_target_manifest
+from test_plain_dca_dependency import installed_dca_case
 
 NOW = datetime(2026, 11, 5, tzinfo=timezone.utc)
 
@@ -97,3 +98,20 @@ def test_reader_failures_never_echo_values():
     with pytest.raises(PlainDcaPaperError, match="^plain_dca_scheduler_inputs_unavailable$"):
         scheduled_plain_dca_preview(enabled=True, read_binding=readback,
                                     read_inputs=Mock(side_effect=RuntimeError("fake-private")), now=NOW)
+
+
+def test_tick_consumes_real_installed_preview_without_changing_frozen_inputs(installed_dca_case):
+    from us_equity_strategies.plain_dca import evaluate_dca_period
+
+    now = installed_dca_case["now"]
+    protected = readback()
+    protected.update(observed_at=now, valid_until=now+timedelta(minutes=1))
+    values = {k: v for k, v in installed_dca_case.items() if k != "now"}
+    binding, inputs = Mock(return_value=protected), Mock(return_value=values)
+    expected = evaluate_dca_period(**installed_dca_case)
+    result = scheduled_plain_dca_preview(enabled=True, read_binding=binding, read_inputs=inputs, now=now)
+    assert result == expected
+    assert result.status == "DUE" and result.new_tranche == installed_dca_case["plan"].final_tranche
+    assert result.no_order and result.no_execute and result.preview_only and not result.live_ready
+    assert binding.call_count == 2
+    assert scheduled_plain_dca_preview(enabled=True, read_binding=binding, read_inputs=inputs, now=now) == expected
