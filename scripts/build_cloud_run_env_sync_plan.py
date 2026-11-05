@@ -355,24 +355,22 @@ def _build_target_plan(
         _target_field(target, defaults, "cloud_run_service"),
     )
     runtime_target = _resolve_runtime_target(target, defaults, env, per_service_mode)
-    if not service_name:
-        service_name = runtime_target.get("service_name") or ""
+    if service_name is None:
+        service_name = runtime_target.get("service_name")
     if not service_name:
         raise ValueError("Each Cloud Run sync target requires service/service_name")
 
     # Validate original values; never shorten, trim or otherwise rename a target.
     if not isinstance(service_name, str) or not re.fullmatch(r"[a-z](?:[a-z0-9-]{0,47}[a-z0-9])?", service_name):
         raise ValueError("Cloud Run exact service name is invalid")
-    runtime_target_service = runtime_target.get("service_name") or ""
-    if runtime_target_service and (
+    runtime_target_service = runtime_target.get("service_name")
+    if runtime_target_service is not None and (
         not isinstance(runtime_target_service, str)
         or not re.fullmatch(r"[a-z](?:[a-z0-9-]{0,47}[a-z0-9])?", runtime_target_service)
     ):
         raise ValueError("Cloud Run exact runtime service name is invalid")
-    if runtime_target_service and runtime_target_service != service_name:
-        raise ValueError(
-            f"Target {service_name} runtime_target.service_name={runtime_target_service!r} does not match"
-        )
+    if runtime_target_service is not None and runtime_target_service != service_name:
+        raise ValueError("Cloud Run exact service identity does not match")
     runtime_target["service_name"] = service_name
 
     raw_profile = str(runtime_target.get("strategy_profile") or "").strip()

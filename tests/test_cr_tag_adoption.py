@@ -23,16 +23,17 @@ def _plan(service, runtime_service=None):
     })["targets"][0]
 
 
-@pytest.mark.parametrize("service", ["invalid/name", " x", "UPPER", "x" * 50])
+@pytest.mark.parametrize("service", ["invalid/name", " x", "UPPER", "x" * 50, 0, False])
 def test_plan_rejects_exact_invalid_service_without_echo(service):
     with pytest.raises(ValueError) as error:
         _plan(service)
-    assert service not in str(error.value)
+    assert str(service) not in str(error.value)
 
 
-def test_plan_rejects_runtime_service_whitespace_instead_of_renaming():
+@pytest.mark.parametrize("runtime_service", [" fake-service ", 0, False])
+def test_plan_rejects_runtime_service_whitespace_instead_of_renaming(runtime_service):
     with pytest.raises(ValueError):
-        _plan("fake-service", " fake-service ")
+        _plan("fake-service", runtime_service)
 
 
 @pytest.mark.parametrize("length", [20, 34, 45, 46, 48])
@@ -114,3 +115,16 @@ def test_operation_claim_replacement_with_identical_bytes_loses_ownership(tmp_pa
     replacement.replace(path)
     with pytest.raises(canary.CanaryError, match="operation_ownership_lost"):
         canary._require_operation_claim(body, identity)
+
+
+def test_plan_service_identity_mismatch_does_not_echo_names():
+    with pytest.raises(ValueError) as error:
+        _plan("fake-sensitive-service", "fake-other-service")
+    assert "fake-sensitive-service" not in str(error.value)
+    assert "fake-other-service" not in str(error.value)
+
+
+@pytest.mark.parametrize("service", [0, False])
+def test_plan_invalid_configured_service_cannot_fall_back_to_runtime(service):
+    with pytest.raises(ValueError):
+        _plan(service, "fake-service")
