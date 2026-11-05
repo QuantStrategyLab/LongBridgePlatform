@@ -63,7 +63,9 @@ def require_identity(values, *, service, account):
                 or target.get("account_selectors", ["PAPER"]) != ["PAPER"]
                 or target.get("physical_account_id", account) != account
                 or values.get("RUNTIME_TARGET_ENABLED") != "false"
-                or values.get("LONGBRIDGE_DRY_RUN_ONLY") != "false"):
+                or values.get("LONGBRIDGE_DRY_RUN_ONLY") != "false"
+                or any(values.get("QSL_" + key, "false") != "false" for key in (
+                    "RUNTIME_TARGET_ENABLED", "LONGBRIDGE_DRY_RUN_ONLY"))):
             raise ValueError
     except (KeyError, TypeError, ValueError):
         raise ReadbackError("paper_disabled_identity_unproven") from None

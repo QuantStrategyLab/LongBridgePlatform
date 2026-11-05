@@ -92,6 +92,18 @@ class PlainDcaReadbackTests(TestCase):
         self.revision["spec"]["containers"][0]["env"].pop()
         self.assertIsNone(observe(env=self.env, load=self.load)["live_command_enabled"])
 
+    def test_qsl_overrides_cannot_hide_enabled_or_unresolved_configuration(self):
+        for key in ("QSL_RUNTIME_TARGET_ENABLED", "QSL_LONGBRIDGE_DRY_RUN_ONLY"):
+            for value in ("true", None, ""):
+                entries = self.revision["spec"]["containers"][0]["env"]
+                entries.append({"name": key, "value": value})
+                with self.subTest(key=key, value=value), self.assertRaises(ReadbackError):
+                    observe(env=self.env, load=self.load)
+                entries.pop()
+        entries = self.revision["spec"]["containers"][0]["env"]
+        entries.append({"name": "QSL_RUNTIME_TARGET_ENABLED", "value": "false"})
+        self.assertFalse(observe(env=self.env, load=self.load)["runtime_target_enabled"])
+
     def test_service_or_revision_drift_blocks(self):
         for family in ("services", "revisions"):
             counts = {"services": 0, "revisions": 0}

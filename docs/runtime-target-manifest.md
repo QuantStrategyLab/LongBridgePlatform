@@ -194,6 +194,8 @@ current protected configuration on every attempt. Its readback contains:
 - `protected_env`: current `CLOUD_RUN_SERVICE`, `RUNTIME_TARGET_JSON`,
   `RUNTIME_TARGET_ENABLED`, `LONGBRIDGE_DRY_RUN_ONLY` and
   `LONGBRIDGE_PHYSICAL_ACCOUNT_ID`, kept in restricted process memory only.
+  Include applicable `QSL_` overrides when present: conflicting or unresolved
+  target, enablement and dry-run aliases are rejected, not silently discarded.
 
 `check_plain_dca_paper_binding(readback, now=now)` checks this contract. It rejects
 `longbridge-sg`, `longbridge-hk`, other target ids, service disagreement with the
