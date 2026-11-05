@@ -438,6 +438,14 @@ assert "render_runtime_target_matrix.py --profile sync --github-output" in workf
 assert "matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}" in workflow
 legacy = workflow.split("\n  sync:\n", 1)[1].split("\n  cleanup-shared-monitor:\n", 1)[0]
 cleanup = workflow.split("\n  cleanup-shared-monitor:\n", 1)[1]
+selection, masking, *_ = legacy.split("    steps:\n", 1)[1].split("\n      - ")
+assert "name: Check whether Cloud Run automation is enabled" in selection
+assert "secrets." not in selection
+for key in ("GCP_PROJECT_ID", "GCP_RUNTIME_SERVICE_ACCOUNT", "GCP_SCHEDULER_SERVICE_ACCOUNT",
+            "GCP_WORKLOAD_IDENTITY_PROVIDER", "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"):
+    assert f'          {key}: ""' in selection
+assert "name: Mask WIF identity components" in masking
+assert "if: matrix.target.environment == 'longbridge-paper' && steps.config.outputs.enabled == 'true'" in masking
 for section in (legacy, cleanup):
     assert "inputs.deployment_mode == 'legacy'" in section.split("    steps:", 1)[0]
 assert "needs: resolve-matrix" in legacy.split("    steps:", 1)[0]

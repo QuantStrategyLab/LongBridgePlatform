@@ -802,43 +802,15 @@ jobs:
       STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN: ${{ secrets.STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN }}
       STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.TG_TOKEN }}
     steps:
-      - name: Mask WIF identity components
-        if: matrix.target.environment == 'longbridge-paper'
-        env:
-          # Suppress inherited identity fields while the runner prints this step.
-          GCP_PROJECT_ID: ""
-          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          GCP_RUNTIME_SERVICE_ACCOUNT: ""
-          GCP_SCHEDULER_SERVICE_ACCOUNT: ""
-          GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
-        run: |
-          set -euo pipefail
-          account="$GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"
-          if ! [[ "$account" =~ ^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$ ]]; then
-            printf '%s\n' '::error::Required Secret GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT is missing or malformed'
-            exit 1
-          fi
-          provider="${GCP_WORKLOAD_IDENTITY_PROVIDER:-}"
-          if ! [[ "$provider" =~ ^projects/([0-9]+)/locations/global/workloadIdentityPools/([a-z0-9-]+)/providers/([a-z0-9-]+)$ ]]; then
-            printf '%s\n' '::error::Required Secret GCP_WORKLOAD_IDENTITY_PROVIDER is missing or malformed'
-            exit 1
-          fi
-          project_number="${BASH_REMATCH[1]}"
-          pool_name="${BASH_REMATCH[2]}"
-          provider_name="${BASH_REMATCH[3]}"
-          account_name="${account%%@*}"
-          project="${account#*@}"
-          project="${project%.iam.gserviceaccount.com}"
-          printf '::add-mask::%s\n' "$account_name"
-          printf '::add-mask::%s\n' "$project"
-          printf '::add-mask::%s\n' "$project_number"
-          printf '::add-mask::%s\n' "$pool_name"
-          printf '::add-mask::%s\n' "$provider_name"
-          printf '::add-mask::%s\n' "$provider"
-          printf 'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT=%s\n' "$account" >> "$GITHUB_ENV"
-          printf 'GCP_WORKLOAD_IDENTITY_PROVIDER=%s\n' "$provider" >> "$GITHUB_ENV"
       - name: Check whether Cloud Run automation is enabled
         id: config
+        # Select the target without exposing inherited identities or reading PAPER Secrets.
+        env:
+          GCP_PROJECT_ID: ""
+          GCP_RUNTIME_SERVICE_ACCOUNT: ""
+          GCP_SCHEDULER_SERVICE_ACCOUNT: ""
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ""
+          GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ""
         run: |
           set -euo pipefail
 
@@ -952,6 +924,42 @@ jobs:
           fi
 
           write_github_output "enabled=true"
+
+      - name: Mask WIF identity components
+        if: matrix.target.environment == 'longbridge-paper' && steps.config.outputs.enabled == 'true'
+        env:
+          # Suppress inherited identity fields while the runner prints this step.
+          GCP_PROJECT_ID: ""
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_RUNTIME_SERVICE_ACCOUNT: ""
+          GCP_SCHEDULER_SERVICE_ACCOUNT: ""
+          GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          account="$GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"
+          if ! [[ "$account" =~ ^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$ ]]; then
+            printf '%s\n' '::error::Required Secret GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT is missing or malformed'
+            exit 1
+          fi
+          provider="${GCP_WORKLOAD_IDENTITY_PROVIDER:-}"
+          if ! [[ "$provider" =~ ^projects/([0-9]+)/locations/global/workloadIdentityPools/([a-z0-9-]+)/providers/([a-z0-9-]+)$ ]]; then
+            printf '%s\n' '::error::Required Secret GCP_WORKLOAD_IDENTITY_PROVIDER is missing or malformed'
+            exit 1
+          fi
+          project_number="${BASH_REMATCH[1]}"
+          pool_name="${BASH_REMATCH[2]}"
+          provider_name="${BASH_REMATCH[3]}"
+          account_name="${account%%@*}"
+          project="${account#*@}"
+          project="${project%.iam.gserviceaccount.com}"
+          printf '::add-mask::%s\n' "$account_name"
+          printf '::add-mask::%s\n' "$project"
+          printf '::add-mask::%s\n' "$project_number"
+          printf '::add-mask::%s\n' "$pool_name"
+          printf '::add-mask::%s\n' "$provider_name"
+          printf '::add-mask::%s\n' "$provider"
+          printf 'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT=%s\n' "$account" >> "$GITHUB_ENV"
+          printf 'GCP_WORKLOAD_IDENTITY_PROVIDER=%s\n' "$provider" >> "$GITHUB_ENV"
 
       - name: Checkout repository
         if: steps.config.outputs.enabled == 'true'
