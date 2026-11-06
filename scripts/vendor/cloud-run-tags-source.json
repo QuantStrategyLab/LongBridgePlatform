@@ -1,0 +1,8 @@
+{
+  "contract_version": "cloud-run-tags/v1",
+  "source_repository": "QuantStrategyLab/QuantPlatformKit",
+  "source_path": "src/quant_platform_kit/operators/cloud_run_tags.py",
+  "source_job": "qpk-cr-tag-helper-r1",
+  "source_status": "unmerged implementation snapshot",
+  "sha256": "ecb8762ddd8e76c1fb6bf4de2981347951ba9640442632b1e3aaa459d5fc8c05"
+}

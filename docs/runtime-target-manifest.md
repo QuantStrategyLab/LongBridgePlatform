@@ -174,6 +174,40 @@ stop-result tools require `GCP_PROJECT_ID` in their process environment.
 `STRATEGY_PLUGIN_ALLOWED_SIGNAL_PREFIXES` supplies any additional approved
 plugin-signal prefixes; no project-specific bucket is a built-in fallback.
 
+
+## Cloud Run tag preflight
+
+The sync-plan builder validates the exact configured service name without trimming
+or renaming it. Each target includes `tag_preflight` with the versioned shared
+`cloud-run-tags/v1` contract, remaining tagged-URL headroom (`46 - len(service)`),
+`AVAILABLE` or `TAG_IMPOSSIBLE`, and `traffic_authority: false`. This is a capacity
+check, not a tag reservation or proof that a tagged probe is safe. An image-only
+plan can remain valid when a tag is impossible; a tagged caller must refuse that
+lifecycle. Existing paper and image-only workflows acquire no traffic authority.
+
+The HK notification canary vendors the QPK operator contract recorded in
+`scripts/vendor/cloud-run-tags-source.json`. Its allocation journal is private,
+uses the complete configured and observed tag inventory (including zero-percent
+entries), and binds the exact target, candidate and operation. A foreign or
+unknown occupied tag causes refusal; no alternate tag is searched after a
+collision. Short tags use the shared deterministic hash policy, including the
+one-character boundary. The canary always refuses nonpositive headroom and never
+selects the helper's optional micro-traffic lifecycle.
+
+Before its first cloud write the canary creates a separate mode-0600 operation
+claim next to its original private backup, persists its tag and candidate, and
+re-reads both the claim's content and file identity before every cloud mutation,
+including restoration. Exclusive creation prevents concurrent or restarted runs
+from replaying an uncertain operation, even when backup reuse was requested.
+Claims and reservations are intentionally retained after success or failure;
+this helper never deletes them or automatically resumes an ambiguous mutation.
+Existing configuration, etag, readiness, paused-job and terminal-request gates
+remain required. Restore only the owned tag and original scheduler URI after the
+existing terminal proof, then verify the complete original distribution and job
+configuration. Lost ownership or unverified restore requires operator
+reconciliation under separately approved scope. These checks do not make local
+ownership and cloud mutations atomic.
+
 ## Plain-DCA Phase 1 consumer binding
 
 `application.plain_dca_paper_adapter.consume_plain_dca_preview` consumes the UES
