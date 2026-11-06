@@ -51,13 +51,42 @@ jobs:
       IAM_CONFIRM: ${{ inputs.confirm }}
       IAM_APPROVED_REVISION: ${{ inputs.approved_revision }}
       IAM_OWNER_RUN_CARD: ${{ inputs.owner_run_card }}
-      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-      PAPER_SCHEDULER_GET_PROJECT_ID: ${{ vars.PAPER_SCHEDULER_GET_PROJECT_ID }}
-      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
-      PAPER_IAM_GRANT_RECIPIENT: ${{ vars.PAPER_IAM_GRANT_RECIPIENT }}
-      PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT: ${{ vars.PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT }}
-      PAPER_IAM_BOOTSTRAP_WIF_PROVIDER: ${{ vars.PAPER_IAM_BOOTSTRAP_WIF_PROVIDER }}
     steps:
+      # Read mappings inside the action, never through logged inputs or env.
+      # Missing variable-read authority blocks before authentication or writes.
+      - name: Mask protected mappings before exposing step environment
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const names = [
+              'GCP_PROJECT_ID', 'PAPER_SCHEDULER_GET_PROJECT_ID',
+              'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT', 'PAPER_IAM_GRANT_RECIPIENT',
+              'PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT', 'PAPER_IAM_BOOTSTRAP_WIF_PROVIDER'
+            ];
+            const mappings = [];
+            try {
+              for (const name of names) {
+                let data;
+                try {
+                  ({data} = await github.request(
+                    'GET /repos/{owner}/{repo}/environments/{environment_name}/variables/{name}',
+                    {...context.repo, environment_name: 'longbridge-paper', name}));
+                } catch (error) {
+                  if (error.status !== 404) throw error;
+                  ({data} = await github.request(
+                    'GET /repos/{owner}/{repo}/actions/variables/{name}',
+                    {...context.repo, name}));
+                }
+                if (typeof data.value !== 'string' || !data.value.trim()) {
+                  throw new Error('Missing mapping');
+                }
+                core.setSecret(data.value);
+                mappings.push([name, data.value]);
+              }
+            } catch {
+              throw new Error('Protected mapping read failed; stop before authentication');
+            }
+            for (const [name, value] of mappings) core.exportVariable(name, value);
       - name: Verify Environment approval protection remains configured
         uses: actions/github-script@v8
         with:
@@ -91,12 +120,12 @@ jobs:
       - name: Authenticate existing authorized bootstrap identity
         uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ vars.PAPER_IAM_BOOTSTRAP_WIF_PROVIDER }}
-          service_account: ${{ vars.PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ env.PAPER_IAM_BOOTSTRAP_WIF_PROVIDER }}
+          service_account: ${{ env.PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT }}
       - name: Set up cloud client
         uses: google-github-actions/setup-gcloud@v3
         with:
-          project_id: ${{ vars.GCP_PROJECT_ID }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
       - name: Read plan and apply only the fixed delta when separately authorized
         run: |
           set -euo pipefail

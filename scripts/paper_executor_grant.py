@@ -51,7 +51,10 @@ def identity(env):
 
 def validate_role(role, name):
     if (not isinstance(role, dict) or role.get("name") != name
-            or role.get("includedPermissions") != list(PERMISSIONS)
+            or not isinstance(role.get("includedPermissions"), list)
+            or len(role["includedPermissions"]) != len(PERMISSIONS)
+            or any(type(p) is not str for p in role["includedPermissions"])
+            or set(role["includedPermissions"]) != set(PERMISSIONS)
             or role.get("deleted", False) is not False or role.get("stage") != "GA"
             or not isinstance(role.get("etag"), str) or not role["etag"]):
         raise Blocked("role_collision_or_integrity_failure")
@@ -74,6 +77,8 @@ def execute(env, request):
         role = request("GET", role_url, missing=True)
         if role is not None:
             validate_role(role, name)
+            # IAM does not promise ordering; compare fresh snapshots canonically.
+            role = {**role, "includedPermissions": sorted(role["includedPermissions"])}
         return role
 
     def read_policy():

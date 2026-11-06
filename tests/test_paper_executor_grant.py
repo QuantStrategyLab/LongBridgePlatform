@@ -1,5 +1,9 @@
 """Fake-only contract and adverse tests for the bootstrap grant definition."""
 import copy
+import json
+import subprocess
+
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -147,3 +151,107 @@ def test_workflow_protection_contract():
                  "persist-credentials: false"]:
         assert gate in text
     assert "secrets." not in text
+
+
+@pytest.mark.parametrize("mode", ["dry-run", "apply"])
+def test_role_response_order_is_irrelevant(mode):
+    cloud = Cloud()
+    m.execute(ENV, cloud)
+    cloud.calls.clear()
+    count = 0
+
+    def request(method, url, body=None, missing=False):
+        nonlocal count
+        result = cloud(method, url, body, missing)
+        if method == "GET" and result is not None:
+            count += 1
+            result["includedPermissions"] = sorted(m.PERMISSIONS, reverse=count % 2 == 0)
+        return result
+
+    m.execute({**ENV, "IAM_MODE": mode}, request)
+    assert not writes(cloud)
+
+
+def test_role_creation_accepts_reordered_readback():
+    cloud = Cloud()
+
+    def request(method, url, body=None, missing=False):
+        result = cloud(method, url, body, missing)
+        if method == "GET" and result is not None:
+            result["includedPermissions"] = sorted(m.PERMISSIONS)
+        return result
+
+    m.execute(ENV, request)
+    assert len(writes(cloud)) == 2
+
+
+@pytest.mark.parametrize("permissions", [
+    None, "not-a-list", [], list(m.PERMISSIONS) + [m.PERMISSIONS[0]],
+    list(m.PERMISSIONS[:-1]) + [m.PERMISSIONS[0]],
+    list(m.PERMISSIONS[:-1]) + [None],
+    list(m.PERMISSIONS[:-1]) + [{}],
+])
+def test_invalid_role_permissions_block_without_writes(permissions):
+    cloud = Cloud()
+    cloud.role = {**m.DEFINITION, "name": f"projects/{PROJECT}/roles/{m.ROLE_ID}",
+                  "etag": "fake-role-etag", "includedPermissions": permissions}
+    with pytest.raises(Blocked):
+        m.execute(ENV, cloud)
+    assert not writes(cloud)
+
+
+def test_mapping_masks_precede_all_step_details():
+    workflow = (Path(__file__).parents[1] /
+        ".github/workflows/grant-paper-executor-permissions.yml").read_text()
+    mappings = ["GCP_PROJECT_ID", "PAPER_SCHEDULER_GET_PROJECT_ID",
+                "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT", "PAPER_IAM_GRANT_RECIPIENT",
+                "PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT", "PAPER_IAM_BOOTSTRAP_WIF_PROVIDER"]
+    job_header, steps = workflow.split("    steps:\n", 1)
+    assert all(key + ":" not in job_header for key in mappings)
+    first = steps.split("      - name:")[1]
+    assert "uses: actions/github-script@v8" in first
+    assert "vars." not in first
+    assert "env:" not in first
+    script = textwrap.dedent(first.split("          script: |\n", 1)[1])
+    harness = r"""
+const assert = require('node:assert/strict');
+const script = SCRIPT;
+const keys = KEYS;
+async function check(failure) {
+  const masks = new Set(), exported = [];
+  const core = {
+    setSecret(value) { masks.add(value); },
+    exportVariable(key, value) {
+      assert(masks.has(value), 'export before mask');
+      assert.equal(masks.size, keys.length, 'export before all masks');
+      exported.push(key);
+    }
+  };
+  const github = { request: async (route, args) => {
+    assert(!exported.length, 'export before reads complete');
+    if (failure === 'fallback' && route.includes('/environments/')) {
+      throw Object.assign(new Error('fake-private-diagnostic'), {status: 404});
+    }
+    if (typeof failure === 'number') {
+      throw Object.assign(new Error('fake-private-diagnostic'), {status: failure});
+    }
+    if (failure === 'empty') return {data: {value: ''}};
+    if (failure === 'unknown') return {data: {value: null}};
+    return {data: {value: 'fake-' + args.name}};
+  }};
+  const context = {repo: {owner: 'fake-owner', repo: 'fake-repo'}};
+  const run = new Function('github', 'core', 'context', 'return (async () => {' + script + '})()');
+  if (failure && failure !== 'fallback') {
+    await assert.rejects(run(github, core, context), error =>
+      !error.message.includes('fake-private-diagnostic'));
+    assert.equal(exported.length, 0);
+  } else {
+    await run(github, core, context);
+    assert.deepEqual(exported, keys);
+  }
+}
+(async () => { await check(null); await check('fallback'); await check(403); await check(404);
+await check('empty'); await check('unknown'); })()
+.catch(() => process.exit(1));
+""".replace("SCRIPT", json.dumps(script)).replace("KEYS", json.dumps(mappings))
+    subprocess.run(["node", "-e", harness], check=True, capture_output=True)

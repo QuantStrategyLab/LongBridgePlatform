@@ -210,3 +210,21 @@ creation and policy binding are separate operations: partial or ambiguous
 outcomes require readback and a new scoped run card before another attempt.
 An existing exact role and binding are idempotent across process restarts.
 Only fixed status messages are emitted; raw cloud responses stay in memory.
+
+
+### Grant mapping redaction prerequisite
+
+The fixed executor grant masks mappings in its first action before exporting
+any mapping to later step environments or authentication inputs. It reads the
+six named variables from the protected Environment, falling back to repository
+variables only for an absent Environment variable (HTTP 404). Organization-only
+variables are not a fallback. All mappings must be readable and nonempty;
+permission, transport or malformed-response failures stop before authentication.
+No GitHub token permission or Environment configuration is changed by this
+workflow definition. Variable API access by the workflow token is a separate
+prerequisite and is not established by local tests; an inaccessible mapping
+blocks the route and does not authorize provisioning a token or changing access.
+
+Role permission responses are checked for exact membership and cardinality,
+independent of order. Fresh role snapshots normalize permission ordering while
+retaining etag and every other field for concurrent-drift detection.
