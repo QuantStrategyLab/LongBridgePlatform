@@ -1,0 +1,38 @@
+name: Validate PAPER offline dry-run
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install frozen test dependencies
+        run: |
+          python -m pip install --upgrade pip uv
+          uv sync --frozen --extra test
+      - name: Validate synthetic PAPER readback and blocked submissions
+        # Tests inject transports; conftest blocks network access during tests.
+        # This never calls the deployed /dry-run endpoint.
+        run: |
+          PYTHONPATH=. uv run --no-sync python -m pytest -q \
+            tests/test_paper_readback_routes.py \
+            tests/test_inspect_paper_serving_metadata.py \
+            tests/test_paper_russell_config_inspection.py \
+            tests/test_plain_dca_paper_readback.py \
+            tests/test_plain_dca_paper_adapter.py \
+            tests/test_paper_request_readback.py \
+            tests/test_paper_request_workflow_environment.py \
+            tests/test_validation_cycle_observation.py \
+            tests/test_validation_observer_readback.py

@@ -56,10 +56,71 @@ the log guard passes. These log checks do not authorize production recovery.
 
 ## Inspect a PAPER dry-run request
 
+### Readback routes and offline validation
+
+**Inspect PAPER Serving Metadata** and **Inspect PAPER dry-run request** are
+separate readback entries. Both are manual, main-only, and disabled unless the
+repository variable `PAPER_READBACK_ENABLED` is exactly `true`. Neither job
+references a GitHub Environment, so merging or dispatching these definitions
+cannot create one. They use only dedicated `PAPER_READBACK_*` configuration and
+never fall back to the mixed execution/deployment identity or its target values.
+Their shared concurrency group is separate from deployment.
+
+| Dedicated configuration | Purpose |
+| --- | --- |
+| Secret `PAPER_READBACK_SERVICE_ACCOUNT` | Separately approved read-only WIF identity |
+| Secret `PAPER_READBACK_IDENTITY_PROVIDER` | Provider bound to the readback entries |
+| Variable `PAPER_READBACK_PROJECT_ID` | Selected project |
+| Variable `PAPER_READBACK_REGION` | Serving-metadata region |
+| Secret `PAPER_READBACK_SERVICE` | Serving-metadata service |
+| Secret `PAPER_READBACK_RUNTIME_TARGET_JSON` | Expected PAPER target declaration |
+| Secret `PAPER_READBACK_PHYSICAL_ACCOUNT_ID` | Expected physical-account binding |
+| Variables `PAPER_READBACK_RUNTIME_TARGET_ENABLED`, `PAPER_READBACK_DRY_RUN_ONLY` | Expected plain-DCA target flags |
+
+The first step rejects a missing or malformed service-account Secret and masks
+its components before checkout or authentication. Checkout is bound to the
+workflow commit. `WORKFLOW_ENVIRONMENT=longbridge-paper` remains the logical
+PAPER manifest selector for the plain-DCA reader; it does not select a GitHub
+Environment or grant credentials. Request-log readback retains its existing
+fixed PAPER service/region filter and bounded time window.
+
+This change provides repository route separation, not verified IAM isolation.
+The dedicated configuration is not provisioned or enabled by this change.
+Before enabling cloud readback, the owner must separately authorize and verify
+the selected identity's read-only IAM and WIF trust for these entries, target
+bindings and the configuration wiring. Readback must have no service invocation,
+Scheduler mutation, deployment, Secret access/write, IAM mutation or deletion
+rights. Removing an Environment also changes the default OIDC subject from an
+Environment subject to a branch subject; see the [GitHub OIDC reference](https://docs.github.com/en/actions/reference/security/oidc).
+Verify the actual configured subject format and exact workflow/ref restrictions
+before enabling; repository-wide main-branch trust alone does not isolate these
+entries from another workflow. No OIDC subject template or trust is changed here.
+Image mode additionally needs registry read access; source-chain mode
+needs its bounded audit-log reads. Missing rights remain read failures. The
+intended future Environment name is `longbridge-paper-readonly`; it is documented
+here only. Creating it or adding an `environment:` binding requires separate
+owner authorization. Do not reuse a broad deployment identity to enable a route.
+
+**Validate PAPER offline dry-run** is an independent manual entry with only
+`contents: read`, no Environment, no OIDC permission and no Secrets or Variables.
+Dependency installation uses the frozen lockfile; the validation itself runs
+existing synthetic readback, preview and blocked-submit regression cases with
+injected transports and the test suite's network block. It does not call the
+deployed `/dry-run` endpoint. A pass proves those offline contracts, not a cloud
+readback, real broker dry-run, verified IAM, account acceptance or live readiness.
+
+**Invoke Cloud Run** stays a mixed write entry: even `/dry-run` may run a
+Scheduler job or temporarily resume and pause it. Its live and paused-Scheduler
+options, the deployment/lifecycle workflows, Secrets, IAM and destructive
+operations retain their existing review and owner authorization requirements.
+The readback and offline entries provide no authority to dispatch them. This
+source change is delivered as a Draft PR; an exact-head completed Codex review
+with no unresolved findings is required for acceptance, and integration remains
+with the repository's designated merge entry.
+
 Choose `target-config` in **Inspect PAPER Serving Metadata** for a configuration-only
-PAPER Russell check. This mode uses the existing `longbridge-paper` Environment
-and WIF service-account identity, passes that account explicitly to every gcloud
-call, and reads only the selected service and its positive-traffic revisions.
+PAPER Russell check. This mode passes the dedicated account explicitly to every
+gcloud call and reads only the selected service and its positive-traffic revisions.
 It requires PAPER account selectors, an explicit `execution_environment=paper`,
 and the canonical `russell_top50_leader_rotation` profile in both the service
 template and every serving revision. Missing, conflicting or changing configuration
@@ -69,18 +130,10 @@ account identifiers. This proves declared configuration only; it does not
 independently attest the broker account, approve deployment, or establish the
 installed UES revision. The existing image and source-chain modes remain separate.
 
-The inspection workflow requires the `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT`
-Actions Secret in the `longbridge-paper` Environment, mirroring the exact approved
-WIF variable value. Provision this Secret with separate owner approval before
-merging the workflow change. The first step masks derived account and project
-identifiers before checkout or authentication; a missing or malformed Secret
-stops the workflow. This prerequisite grants no workflow dispatch or deployment
-authority.
-
 The manual **Inspect PAPER Serving Metadata** workflow first observes the current
-service and every positive-traffic revision using the existing PAPER environment
-and cloud identity. It reads each immutable serving image in a container with no
-network, a read-only filesystem and Python `-I -S`; it never starts the application
+service and every positive-traffic revision using the dedicated readback
+configuration and cloud identity. It reads each immutable serving image in a
+container with no network, a read-only filesystem and Python `-I -S`; it never starts the application
 or invokes a service/broker endpoint. It compares installed distribution metadata,
 the image lock, source labels and protected target declarations. Missing source,
 lock, binding or installation metadata remains unknown. Distribution metadata and

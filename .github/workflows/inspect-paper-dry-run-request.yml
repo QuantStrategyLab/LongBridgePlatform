@@ -12,28 +12,58 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
+concurrency:
+  group: PAPER readback-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   inspect:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && vars.PAPER_READBACK_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: longbridge-paper
     permissions:
       contents: read
       id-token: write
     steps:
+      - name: Mask WIF identity components
+        env:
+          GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ secrets.PAPER_READBACK_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          account="$GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"
+          if ! [[ "$account" =~ ^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$ ]]; then
+            printf '%s\n' '::error::Required Secret PAPER_READBACK_SERVICE_ACCOUNT is missing or malformed'
+            exit 1
+          fi
+          account_name="${account%%@*}"
+          project="${account#*@}"
+          project="${project%.iam.gserviceaccount.com}"
+          printf '::add-mask::%s\n' "$account_name"
+          printf '::add-mask::%s\n' "$project"
+          printf 'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT=%s\n' "$account" >> "$GITHUB_ENV"
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate trusted readback source before cloud authentication
+        run: |
+          set -euo pipefail
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.PAPER_READBACK_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.PAPER_READBACK_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v3
         with:
-          project_id: ${{ vars.GCP_PROJECT_ID }}
+          project_id: ${{ vars.PAPER_READBACK_PROJECT_ID }}
           version: ">= 416.0.0"
       - name: Inspect bounded request logs
         env:
-          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT_ID: ${{ vars.PAPER_READBACK_PROJECT_ID }}
           READBACK_START_UTC: ${{ inputs.start_utc }}
           READBACK_END_UTC: ${{ inputs.end_utc }}
         run: python scripts/paper_request_readback.py
