@@ -113,10 +113,8 @@ readback, real broker dry-run, verified IAM, account acceptance or live readines
 Scheduler job or temporarily resume and pause it. Its live and paused-Scheduler
 options, the deployment/lifecycle workflows, Secrets, IAM and destructive
 operations retain their existing review and owner authorization requirements.
-The readback and offline entries provide no authority to dispatch them. This
-source change is delivered as a Draft PR; an exact-head completed Codex review
-with no unresolved findings is required for acceptance, and integration remains
-with the repository's designated merge entry.
+The readback and offline entries provide no authority to dispatch them. Source
+review and integration never authorize cloud enablement or operator actions.
 
 Choose `target-config` in **Inspect PAPER Serving Metadata** for a configuration-only
 PAPER Russell check. This mode passes the dedicated account explicitly to every
