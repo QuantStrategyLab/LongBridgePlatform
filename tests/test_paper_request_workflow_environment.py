@@ -44,7 +44,7 @@ def workflow_environment(project):
     step = step.split("      - ", 1)[0]
     assert "run: python scripts/paper_request_readback.py" in step
     expressions = {
-        "${{ vars.GCP_PROJECT_ID }}": project,
+        "${{ vars.PAPER_READBACK_PROJECT_ID }}": project,
         "${{ inputs.start_utc }}": "2026-11-02T01:00:00Z",
         "${{ inputs.end_utc }}": "2026-11-02T01:01:00Z",
     }

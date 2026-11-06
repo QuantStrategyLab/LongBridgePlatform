@@ -1,0 +1,66 @@
+name: Apply PAPER Scheduler jobs.get IAM
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Dry-run first; apply needs a separate exact-revision owner card
+        required: true
+        type: choice
+        options: [dry-run, apply]
+        default: dry-run
+      confirm:
+        description: Must be APPLY_PAPER_SCHEDULER_JOBS_GET
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# One project IAM writer across invocations; never cancel a write in flight.
+# External writers must honor the same owner window; etag CAS detects drift.
+concurrency:
+  group: paper-scheduler-jobs-get-iam
+  cancel-in-progress: false
+
+jobs:
+  bounded-iam:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && github.repository == 'QuantStrategyLab/LongBridgePlatform'
+      && github.ref == 'refs/heads/main'
+      && github.run_attempt == 1
+      && inputs.confirm == 'APPLY_PAPER_SCHEDULER_JOBS_GET'
+      && (inputs.mode == 'dry-run' || inputs.mode == 'apply')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: longbridge-paper
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IAM_ENVIRONMENT: longbridge-paper
+      IAM_MODE: ${{ inputs.mode }}
+      IAM_CONFIRM: ${{ inputs.confirm }}
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      PAPER_SCHEDULER_GET_PROJECT_ID: ${{ vars.PAPER_SCHEDULER_GET_PROJECT_ID }}
+      PAPER_SCHEDULER_GET_READER_EMAIL: ${{ vars.PAPER_SCHEDULER_GET_READER_EMAIL }}
+    steps:
+      - name: Checkout exact protected revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate protected PAPER mappings before authentication
+        run: python3 -c 'import os; from scripts.paper_scheduler_get_iam import identity, role_definition; identity(os.environ); role_definition()'
+      - name: Authenticate using existing PAPER Environment WIF
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+      - name: Set up existing cloud client
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+      - name: Plan then apply only the fixed IAM delta and verify readback
+        run: python3 scripts/paper_scheduler_get_iam.py

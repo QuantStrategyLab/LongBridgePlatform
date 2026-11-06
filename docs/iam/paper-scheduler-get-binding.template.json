@@ -1,0 +1,6 @@
+{
+  "role": "projects/<PROJECT_ID>/roles/paperSchedulerJobsGet",
+  "members": [
+    "serviceAccount:<EXISTING_BOX_READ_SA_EMAIL>"
+  ]
+}

@@ -207,3 +207,99 @@ existing terminal proof, then verify the complete original distribution and job
 configuration. Lost ownership or unverified restore requires operator
 reconciliation under separately approved scope. These checks do not make local
 ownership and cloud mutations atomic.
+
+## Plain-DCA Phase 1 consumer binding
+
+`application.plain_dca_paper_adapter.consume_plain_dca_preview` consumes the UES
+`evaluate_dca_period` preview interface for `nasdaq100_buy_and_hold` and
+`sp500_buy_and_hold`. It is an explicit library entry point; no route, scheduler,
+strategy registry, deployment workflow or order writer is attached to it.
+
+The trusted execution owner must provide `read_binding`, a callable that reads
+current protected configuration on every attempt. Its readback contains:
+
+- `target_id=paper` and `environment=longbridge-paper`, resolved by the protected
+  caller, with timezone-aware `observed_at` and `valid_until`. Evidence older
+  than five minutes, expired evidence and future observations are rejected.
+- Literal false `live_enabled`, `kelly_enabled` and `stop_loss_enabled` evidence.
+  The last field attests that **all** applicable stop-loss switches are OFF.
+  Missing or unknown runtime evidence must stay unknown, never be filled with
+  false merely to pass this check.
+- `protected_env`: current `CLOUD_RUN_SERVICE`, `RUNTIME_TARGET_JSON`,
+  `RUNTIME_TARGET_ENABLED`, `LONGBRIDGE_DRY_RUN_ONLY` and
+  `LONGBRIDGE_PHYSICAL_ACCOUNT_ID`, kept in restricted process memory only.
+  Include applicable `QSL_` overrides when present: conflicting or unresolved
+  target, enablement and dry-run aliases are rejected, not silently discarded.
+
+`check_plain_dca_paper_binding(readback, now=now)` checks this contract. It rejects
+`longbridge-sg`, `longbridge-hk`, other target ids, service disagreement with the
+manifest, non-PAPER selectors and any target lacking explicit
+`execution_environment=paper`. The plan must bind the same physical account,
+PAPER environment and one of the two baseline profiles. No fallback to the
+legacy smart-DCA strategy is allowed. Protected values are never logged or
+included in exception messages.
+
+In the shared runtime contract, `dry_run_only=false` with legacy
+`execution_mode=live` is compatible with broker PAPER **only when** the explicit
+`execution_environment=paper` is present. False alone cannot establish broker
+PAPER identity. Phase 1 also requires `RUNTIME_TARGET_ENABLED=false`; the adapter
+cannot arm execution even with an admissible binding.
+
+Inputs are passed unchanged to UES, including approved final tranche, calendar,
+period records, quote, cash and capability evidence. There is no extra tier or
+Kelly scaling, catch-up, anchor acceleration or synthetic fill. All four preview
+flags remain enforced. The adapter neither claims periods nor reserves cash, so
+it makes no exactly-once or multi-process order-execution claim.
+
+The locked UES package supplies `plain_dca`. The dependency adoption tests check
+the installed VCS revision against all three source declarations and exercise
+both baseline families through the real preview adapter with synthetic facts.
+A missing or incompatible installation still fails with
+`plain_dca_api_unavailable`. Installing the package does not authenticate the
+readback source or credentials: deployed PAPER account/state/schedule isolation, authentic safety
+readback, durable fencing/reconciliation, setup decisions and Phase 2 execution
+remain separate prerequisites. Unit fixtures cannot prove those runtime facts.
+
+The existing V7 PAPER approval remains bound to its original UES revision.
+The plain-DCA dependency adoption does not renew or broaden that approval:
+V7 loaded-version admission rejects the new installed revision. No V7 approval
+constant, approved candidate or protected application binding is changed.
+
+### Disabled scheduler hook
+
+`scheduled_plain_dca_preview` in `application.plain_dca_paper_scheduler` connects
+an injected scheduler tick to the Phase 1 consumer. It defaults to `enabled=False`
+and returns without reading protected state or fetching facts. An offline enabled
+tick checks the paper binding before reading the frozen inputs, then re-reads
+the binding through the adapter before evaluation. It preserves all preview-only
+flags and creates no period claim, fill, cash reservation, order or notification.
+
+No timer, cron, HTTP route or cloud scheduler job is installed or enabled by this
+hook. A host must supply the frozen plan/calendar/current-facts reader and an
+authoritative protected binding reader; no fallback source or synthetic runtime
+facts are provided. Wiring and activation of a deployed trigger, durable order
+execution and any PAPER start require the separate owner card. Keep the hook
+disabled until that work is explicitly authorized. Repeat ticks are disposable
+previews, not an exactly-once execution guarantee.
+
+### Protected plain-DCA observation
+
+The existing PAPER metadata workflow has a `plain-dca` mode. It uses only the
+fixed `longbridge-paper` Environment and existing protected bindings. Before
+cloud authentication it checks the manifest service/region, explicit PAPER
+selectors, physical-account binding and disabled target. It reads the service
+template and every positive-traffic revision twice, rejecting conflicting
+aliases, duplicate environment keys, missing values and configuration drift.
+It never resolves Secret Manager references, invokes the service or broker, or
+changes cloud configuration. Only fixed diagnostics and comparison results leave
+process memory; the packet is not an adapter admission token.
+
+This is a configuration observation, not independent broker identity proof.
+No authoritative Kelly/all-stop-loss source is implemented in this runtime, so
+those values remain `null`, even if an unrelated flag has a similar name. The
+existing durable live-command switch is reported OFF only when explicitly false
+in both the template and all serving revisions. A disabled PAPER configuration
+does not prove all deployed safety controls. Partial/unknown packets exit with
+failure and `paper_start_ready=false`. Do not create or change protected values
+merely to make this observation pass. A current authoritative safety source and
+independent broker identity evidence remain prerequisites for an owner start card.

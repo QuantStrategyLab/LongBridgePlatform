@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-PIN = "c16c81bdf21824615f7280554559adc6c721917c"
+PIN = "1d087fa424972d5d5ab02c4650ce9f039cb6711f"
 OTHER = "a" * 40
 
 
