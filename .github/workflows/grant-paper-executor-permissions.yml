@@ -1,0 +1,106 @@
+name: Grant fixed PAPER executor IAM permissions
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Dry-run first; apply needs a separate exact-revision run card
+        type: choice
+        options: [dry-run, apply]
+        default: dry-run
+        required: true
+      approved_revision:
+        description: Exact merged main SHA approved by the separate run card
+        type: string
+        required: true
+      owner_run_card:
+        description: Separate owner run-card reference; Environment reviewer verifies scope
+        type: string
+        required: true
+      confirm:
+        description: Must be GRANT_PAPER_EXECUTOR_FOUR_PERMISSIONS
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+# Serialize with the existing scheduler IAM route; never cancel an IAM writer.
+concurrency:
+  group: paper-scheduler-jobs-get-iam
+  cancel-in-progress: false
+
+jobs:
+  fixed-grant:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && github.repository == 'QuantStrategyLab/LongBridgePlatform'
+      && github.ref == 'refs/heads/main'
+      && github.run_attempt == 1
+      && inputs.approved_revision == github.sha
+      && inputs.confirm == 'GRANT_PAPER_EXECUTOR_FOUR_PERMISSIONS'
+      && (inputs.mode == 'dry-run' || inputs.mode == 'apply')
+    environment: longbridge-paper
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IAM_MODE: ${{ inputs.mode }}
+      IAM_CONFIRM: ${{ inputs.confirm }}
+      IAM_APPROVED_REVISION: ${{ inputs.approved_revision }}
+      IAM_OWNER_RUN_CARD: ${{ inputs.owner_run_card }}
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      PAPER_SCHEDULER_GET_PROJECT_ID: ${{ vars.PAPER_SCHEDULER_GET_PROJECT_ID }}
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+      PAPER_IAM_GRANT_RECIPIENT: ${{ vars.PAPER_IAM_GRANT_RECIPIENT }}
+      PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT: ${{ vars.PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT }}
+      PAPER_IAM_BOOTSTRAP_WIF_PROVIDER: ${{ vars.PAPER_IAM_BOOTSTRAP_WIF_PROVIDER }}
+    steps:
+      - name: Verify Environment approval protection remains configured
+        uses: actions/github-script@v8
+        with:
+          script: |
+            let data;
+            try {
+              ({data} = await github.rest.repos.getEnvironment({
+                ...context.repo, environment_name: 'longbridge-paper'
+              }));
+            } catch {
+              throw new Error('Environment protection read failed');
+            }
+            const approval = data.protection_rules?.find(r => r.type === 'required_reviewers');
+            if (!approval || !approval.reviewers || approval.reviewers.length < 1) {
+              throw new Error('Required Environment approval protection is missing');
+            }
+      - name: Checkout exact protected revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate fixed recipient and bootstrap mappings before authentication
+        run: |
+          python3 - <<'PY'
+          import os
+          from scripts.paper_executor_grant import identity
+          identity(os.environ)
+          if not os.environ.get('PAPER_IAM_BOOTSTRAP_WIF_PROVIDER'):
+              raise SystemExit('BLOCKED: bootstrap WIF mapping missing')
+          PY
+      - name: Authenticate existing authorized bootstrap identity
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.PAPER_IAM_BOOTSTRAP_WIF_PROVIDER }}
+          service_account: ${{ vars.PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT }}
+      - name: Set up cloud client
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+      - name: Read plan and apply only the fixed delta when separately authorized
+        run: |
+          set -euo pipefail
+          IAM_MODE=dry-run python3 -m scripts.paper_executor_grant
+          if [ "$IAM_MODE" = apply ]; then
+            python3 -m scripts.paper_executor_grant
+          fi

@@ -147,3 +147,66 @@ successful later operations. The original role GET, accepted 404, policy checks,
 CAS, dry-run default and apply gates remain required. A later executor grant,
 especially project `setIamPolicy`, needs a separate owner decision. Publishing
 this diagnostic does not authorize its execution or any IAM change.
+
+
+## Protected executor bootstrap definition
+
+The [fixed executor grant workflow](../../.github/workflows/grant-paper-executor-permissions.yml)
+addresses the executor-permission blocker in the scheduler IAM route. It creates
+one project custom role containing exactly `iam.roles.get`,
+`resourcemanager.projects.getIamPolicy`, `iam.roles.create`, and
+`resourcemanager.projects.setIamPolicy`, and binds it only to the existing
+`apply-paper-scheduler-jobs-get` executor. These are project-level IAM powers;
+this grant does not restrict what a compromised executor could do with those
+permissions. The fixed script restricts the intended operation, while the
+Environment approval and WIF trust remain essential access controls.
+
+Publishing or merging this definition does not execute or authorize a grant.
+The definition retains the four-permission scope of approval t1319s7706 and the
+scheduler workflow lineage from PR #719; t1320s7720 authorizes this Draft only.
+After merge, a separate owner run card must bind the merged main revision,
+PAPER project, existing recipient, bootstrap identity, and grant scope. The
+Environment reviewer must verify that card and a successful dry-run plan before
+approving apply. The workflow also runs a read-only plan immediately before an
+apply attempt. No scheduler apply, PAPER start, secret creation, deployment or
+trading-switch change is part of this workflow.
+
+Use the existing `longbridge-paper` Environment. It must have at least one
+required reviewer and protect main; the workflow rejects a missing or unreadable
+reviewer rule before cloud authentication. Current Environment policy is an
+operational prerequisite, not established by committing this file. Maintainers
+must ensure WIF trust limits the bootstrap to this repository, protected main
+and Environment, and prevent unreviewed callers from assuming it.
+
+Protected Environment mappings, never literal identifiers in Git:
+
+| Variable | Required meaning |
+| --- | --- |
+| `GCP_PROJECT_ID` | Approved PAPER project |
+| `PAPER_SCHEDULER_GET_PROJECT_ID` | Same approved project |
+| `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` | Existing scheduler IAM executor |
+| `PAPER_IAM_GRANT_RECIPIENT` | Independent approved mapping to that same executor |
+| `PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT` | Existing authorized bootstrap service account in the same project, distinct from recipient |
+| `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | Existing authorized WIF provider for that bootstrap |
+
+No new production principal is proposed or created. A compatible bootstrap
+identity, its effective authority and these additional protected mappings have
+not been proved by offline tests. Missing mappings block execution; configuration
+and WIF changes need their own authorization. Never substitute a broad new
+administrator grant or reuse the known deficient executor as bootstrap.
+
+Dispatch accepts only `dry-run` or `apply`, an exact merged-main revision,
+`owner_run_card` reference and `GRANT_PAPER_EXECUTOR_FOUR_PERMISSIONS`
+confirmation. Text input is an audit reference, not proof of owner authorization;
+the required Environment reviewer validates it. Workflow reruns are rejected.
+No grant dispatch is part of the Draft preparation job.
+
+The script checks bootstrap permissions, reads role and policy, rejects role or
+binding collisions, and re-reads before writes. It shares the scheduler IAM
+workflow concurrency group, uses policy etag compare-and-set, changes only
+bindings, and verifies the exact additive delta after writing. Transport errors,
+unknown state and concurrent changes exit nonzero without write retries. Role
+creation and policy binding are separate operations: partial or ambiguous
+outcomes require readback and a new scoped run card before another attempt.
+An existing exact role and binding are idempotent across process restarts.
+Only fixed status messages are emitted; raw cloud responses stay in memory.
