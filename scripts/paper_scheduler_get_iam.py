@@ -1,0 +1,190 @@
+"""One bounded PAPER IAM delta. Remote data and diagnostics never leave memory.
+
+Only fixed status messages are emitted, as in stop_hk_runtime.py. There is no
+arbitrary command, project, permission or member argument and no write retry.
+"""
+import copy
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import urllib.error
+import urllib.request
+
+ROLE_ID = "paperSchedulerJobsGet"
+PERMISSION = "cloudscheduler.jobs.get"
+ROLE_FILE = Path(__file__).resolve().parents[1] / "docs/iam/paper-scheduler-get-role.json"
+
+
+class Blocked(ValueError):
+    """Fixed failure category; never attach remote payloads or identifiers."""
+
+
+def role_definition(path=ROLE_FILE):
+    value = json.loads(path.read_text())
+    if (set(value) != {"title", "description", "stage", "includedPermissions"}
+            or value["includedPermissions"] != [PERMISSION] or value["stage"] != "GA"):
+        raise Blocked("role_definition_rejected")
+    return value
+
+
+def identity(env):
+    required = {
+        "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "GITHUB_REPOSITORY": "QuantStrategyLab/LongBridgePlatform",
+        "GITHUB_REF": "refs/heads/main", "GITHUB_RUN_ATTEMPT": "1",
+        "IAM_ENVIRONMENT": "longbridge-paper", "IAM_CONFIRM": "APPLY_PAPER_SCHEDULER_JOBS_GET",
+    }
+    project = env.get("GCP_PROJECT_ID", "")
+    reader = env.get("PAPER_SCHEDULER_GET_READER_EMAIL", "")
+    if (any(env.get(k) != v for k, v in required.items())
+            or env.get("IAM_MODE", "dry-run") not in {"dry-run", "apply"}
+            or not re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", project)
+            or project != env.get("PAPER_SCHEDULER_GET_PROJECT_ID")
+            or not re.fullmatch(r"grok-gcp-ro@[a-z][a-z0-9-]{4,28}[a-z0-9]\.iam\.gserviceaccount\.com", reader)):
+        raise Blocked("authority_mapping_rejected")
+    return project, f"serviceAccount:{reader}"
+
+
+def validate_role(role, name):
+    if (not isinstance(role, dict) or role.get("name") != name
+            or role.get("includedPermissions") != [PERMISSION]
+            or role.get("deleted", False) is not False or role.get("stage") != "GA"
+            or not isinstance(role.get("etag"), str) or not role["etag"]):
+        raise Blocked("role_collision_or_integrity_failure")
+
+
+def validate_policy(policy, name, member):
+    if (not isinstance(policy, dict) or not isinstance(policy.get("etag"), str)
+            or not policy["etag"] or policy.get("version") not in {1, 3}
+            or not isinstance(policy.get("bindings"), list)):
+        raise Blocked("policy_integrity_failure")
+    matches = []
+    for binding in policy["bindings"]:
+        if (not isinstance(binding, dict) or not isinstance(binding.get("role"), str)
+                or not isinstance(binding.get("members"), list)
+                or not binding["members"] or any(not isinstance(m, str) for m in binding["members"])):
+            raise Blocked("policy_integrity_failure")
+        if binding["role"] == name:
+            matches.append(binding)
+    if matches and (len(matches) != 1 or matches[0] != {"role": name, "members": [member]}):
+        raise Blocked("binding_collision")
+    return bool(matches)
+
+
+def execute(env, request):
+    project, member = identity(env)
+    definition = role_definition()
+    name = f"projects/{project}/roles/{ROLE_ID}"
+    role_url = f"https://iam.googleapis.com/v1/{name}"
+    project_url = f"https://cloudresourcemanager.googleapis.com/v1/projects/{project}"
+
+    def read_policy():
+        policy = request("POST", project_url + ":getIamPolicy", {"options": {"requestedPolicyVersion": 3}})
+        validate_policy(policy, name, member)
+        return policy
+
+    before_role = request("GET", role_url, missing=True)
+    if before_role is not None:
+        validate_role(before_role, name)
+    before_policy = read_policy()
+    already_bound = validate_policy(before_policy, name, member)
+    if before_role is None and already_bound:
+        raise Blocked("orphan_binding_collision")
+    print("before: project=longbridge-paper reader=existing-box-reader role=" + ROLE_ID)
+    print("plan: permissions=[cloudscheduler.jobs.get]; additive binding only")
+    if env.get("IAM_MODE", "dry-run") == "dry-run":
+        print("dry-run: no writes; PAPER remains stopped")
+        return
+
+    # Re-read both objects immediately before any write. Never adopt a role
+    # created by another writer after the initial absent snapshot.
+    current_role = request("GET", role_url, missing=True)
+    current_policy = read_policy()
+    if current_role != before_role or current_policy != before_policy:
+        raise Blocked("concurrent_drift")
+    if before_role is None:
+        request("POST", f"https://iam.googleapis.com/v1/projects/{project}/roles",
+                {"roleId": ROLE_ID, "role": definition})
+        created_role = request("GET", role_url)
+        validate_role(created_role, name)
+    else:
+        created_role = before_role
+    # Role creation and policy mutation are separate APIs, not a transaction.
+    # A failure can leave the role created with no binding. Stop; never rollback
+    # or retry. A later owner card must inspect the partial result.
+    fresh_policy = read_policy()
+    fresh_role = request("GET", role_url)
+    validate_role(fresh_role, name)
+    if fresh_policy != before_policy or fresh_role != created_role:
+        raise Blocked("concurrent_drift")
+    if not already_bound:
+        bindings = copy.deepcopy(fresh_policy["bindings"])
+        bindings.append({"role": name, "members": [member]})
+        # Google exposes additive project bindings through setIamPolicy. Use
+        # ONLY the binding field and etag CAS: no whole-policy replacement,
+        # auditConfig update, stale replay, CLI retry or unconditional write.
+        request("POST", project_url + ":setIamPolicy", {
+            "policy": {"version": fresh_policy["version"], "etag": fresh_policy["etag"], "bindings": bindings},
+            "updateMask": "bindings,etag",
+        })
+    after_role = request("GET", role_url)
+    validate_role(after_role, name)
+    after_policy = read_policy()
+    expected = copy.deepcopy(before_policy)
+    if not already_bound:
+        expected["bindings"].append({"role": name, "members": [member]})
+    # Etag changes are expected. All unrelated policy fields must be identical.
+    if ({k: v for k, v in after_policy.items() if k != "etag"}
+            != {k: v for k, v in expected.items() if k != "etag"}
+            or after_role != created_role
+            or not validate_policy(after_policy, name, member)):
+        raise Blocked("after_readback_drift")
+    print("after: permissions=[cloudscheduler.jobs.get]; existing-box-reader binding verified")
+    print("complete: PAPER remains stopped; no further operation authorized")
+
+
+class Cloud:
+    """Single-attempt REST adapter. No raw stderr, URL or response is printed."""
+
+    def __init__(self):
+        result = subprocess.run(["gcloud", "auth", "print-access-token"], capture_output=True, timeout=60, check=True)
+        self.token = result.stdout.decode().strip()
+        if not self.token or "\n" in self.token or "\r" in self.token:
+            raise Blocked("authentication_failed")
+
+    def __call__(self, method, url, body=None, missing=False):
+        data = None if body is None else json.dumps(body).encode()
+        request = urllib.request.Request(url, data=data, method=method, headers={
+            "Authorization": "Bearer " + self.token, "Content-Type": "application/json",
+        })
+        # Disable redirects so neither the bearer token nor a mutation can be
+        # replayed at another endpoint. urllib performs no automatic retries.
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+        try:
+            with urllib.request.build_opener(NoRedirect).open(request, timeout=60) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            if missing and method == "GET" and error.code == 404:
+                return None
+            raise Blocked("remote_rejected_or_unknown_stop_no_retry") from None
+        except Exception:
+            raise Blocked("remote_result_unknown_stop_no_retry") from None
+
+
+def main():
+    try:
+        identity(os.environ)  # Reject wrong scope before token access.
+        execute(os.environ, Cloud())
+        return 0
+    except Exception:
+        # Fixed allowlisted text; suppress even unexpected exception messages.
+        print("BLOCKED: verify mappings, permissions and remote state; do not retry an uncertain write")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
