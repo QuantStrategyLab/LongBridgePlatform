@@ -65,3 +65,66 @@ access, deployment, Scheduler enablement or PAPER start is performed by this
 proposal. PAPER remains stopped; `READY_FOR_START_CARD=false`. Live, Kelly and
 all stop-loss switches must remain OFF. A future successful IAM readback would
 prove only that IAM delta, not runtime safety or permission to start PAPER.
+
+## Restricted Actions entrypoint
+
+[Apply PAPER Scheduler jobs.get IAM](../../.github/workflows/apply-paper-scheduler-jobs-get.yml)
+provides the bounded entrypoint using
+[the single-purpose adapter](../../scripts/paper_scheduler_get_iam.py).
+This workflow proposal uses authority `t1293s7532=A` for Draft publication only.
+The earlier merge/apply authority `t1293s7526=B` ended at
+`MERGED_APPLY_BLOCKED_NO_ENTRYPOINT`; it is not reused. A separate owner card
+must pin the merged workflow revision and authorize its dry-run and ONE apply.
+No dispatch, IAM operation or PAPER start is authorized by this document.
+
+The only trigger is `workflow_dispatch` on this repository's `main`, first run
+attempt only, protected by Environment `longbridge-paper`. Enter exactly
+`APPLY_PAPER_SCHEDULER_JOBS_GET`; `mode` defaults to `dry-run`. The concurrency
+group `paper-scheduler-jobs-get-iam` queues writers without cancellation.
+The single-writer window also requires other project IAM/role writers to stay
+out; Actions concurrency cannot lock external clients.
+
+Existing PAPER Environment variables `GCP_PROJECT_ID`,
+`GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT`
+supply existing WIF authentication. Two additional protected mapping variables
+must already be verified at the later authorized boundary:
+`PAPER_SCHEDULER_GET_PROJECT_ID` must equal `GCP_PROJECT_ID` for the approved
+PAPER project, and `PAPER_SCHEDULER_GET_READER_EMAIL` must identify the existing
+`grok-gcp-ro` reader. Neither accepts dispatch input. Missing or inconsistent
+mappings fail before authentication. This PR neither configures these variables
+nor verifies their deployed presence, Environment protection or the executor's
+current IAM capabilities. Missing authority or permissions must block the later
+operation, never prompt an automatic admin grant or new trust configuration.
+
+Dry-run reads the role and version-3 project policy; it prints fixed aliases
+and the permission list only. Apply repeats those reads, refuses snapshot drift,
+creates the role only when absent, and never updates or undeletes an existing
+role. An existing role must have exactly `cloudscheduler.jobs.get`, GA stage
+and an etag. Conditional, duplicate or extra-member bindings for this role are
+collisions and stop the operation. An already-correct role/binding is a no-op.
+
+Project bindings use the Resource Manager `setIamPolicy` API with the explicit
+field mask `bindings,etag` and the freshly read etag. This is a conditional
+read-modify-write of the binding field, adding one member/role binding while
+preserving every unrelated binding; it is not a whole-policy replacement or
+an unconditional policy-file replay. Audit configuration is excluded from the
+write. A concurrent policy change produces an etag conflict and stops. Before
+and after reads validate exact role permissions, the single existing-reader
+binding and unchanged unrelated policy fields. This API cannot atomically
+lock a separate custom role: an external role writer remains a reason to
+stop and investigate, and the owner must reserve a single-writer window.
+
+Every HTTP mutation is attempted once, without redirects or automatic retry.
+Transport failures, collisions, unreadable results and drift exit non-zero.
+If role creation succeeds but the binding fails, the partial result remains;
+there is no rollback, automatic second apply or recovery dispatch. Independently
+read back remote state under a new owner decision before further action.
+A process interruption has the same uncertain-result treatment; re-running an
+Actions attempt is gated out. Logs emit fixed categories only, with no remote
+payload, project ID, email, token or exception message.
+
+The adapter has no permission, member, role or command input and exposes no
+image, Artifact Registry, Storage, Container Analysis, Secret IAM, Scheduler
+mutation, deployment, traffic or PAPER-start operation. Live, Kelly and all
+stop-loss switches stay OFF. Image metadata remains
+`UNKNOWN_PERMISSION_CLASS` / `OWNER_NEEDED_FOLLOWUP`.
