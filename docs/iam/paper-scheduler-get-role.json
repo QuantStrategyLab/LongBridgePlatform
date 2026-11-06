@@ -1,0 +1,8 @@
+{
+  "title": "PAPER Scheduler job metadata GET",
+  "description": "Read Cloud Scheduler job metadata only; no list, execution or mutation permission.",
+  "stage": "GA",
+  "includedPermissions": [
+    "cloudscheduler.jobs.get"
+  ]
+}
