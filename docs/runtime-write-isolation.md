@@ -84,6 +84,11 @@ PAPER manifest selector for the plain-DCA reader; it does not select a GitHub
 Environment or grant credentials. Request-log readback retains its existing
 fixed PAPER service/region filter and bounded time window.
 
+The separate [PAPER Scheduler GET-only IAM proposal](iam/paper-scheduler-get.md)
+contains an inert custom-role definition and project binding template for the
+existing Box reader. It grants no image access and requires a separate owner
+merge/apply card.
+
 This change provides repository route separation, not verified IAM isolation.
 The dedicated configuration is not provisioned or enabled by this change.
 Before enabling cloud readback, the owner must separately authorize and verify
