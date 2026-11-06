@@ -183,7 +183,15 @@ class Cloud:
         except urllib.error.HTTPError as error:
             if missing and method == "GET" and error.code == 404:
                 return None
-            raise Blocked("remote_rejected_or_unknown_stop_no_retry", phase=phase) from None
+            # Fixed categories only: never render any HTTPError payload.
+            category = {
+                401: "remote_http_401_stop_no_retry",
+                403: "remote_http_403_stop_no_retry",
+                429: "remote_http_429_stop_no_retry",
+            }.get(error.code, "remote_http_other_stop_no_retry")
+            if 500 <= error.code <= 599:
+                category = "remote_http_5xx_stop_no_retry"
+            raise Blocked(category, phase=phase) from None
         except Exception:
             raise Blocked("remote_result_unknown_stop_no_retry", phase=phase) from None
 
@@ -201,6 +209,9 @@ def main():
             "binding_collision", "orphan_binding_collision", "concurrent_drift",
             "after_readback_drift", "authentication_failed",
             "remote_rejected_or_unknown_stop_no_retry", "remote_result_unknown_stop_no_retry",
+            "remote_http_401_stop_no_retry", "remote_http_403_stop_no_retry",
+            "remote_http_429_stop_no_retry", "remote_http_5xx_stop_no_retry",
+            "remote_http_other_stop_no_retry",
         }
         category = error.args[0] if len(error.args) == 1 else None
         if type(category) is not str or category not in categories:

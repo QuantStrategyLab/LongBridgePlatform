@@ -265,7 +265,7 @@ def test_remote_diagnostic_phase_and_no_retry(phase, failure, monkeypatch, capsy
             raise TimeoutError(HOSTILE)
     monkeypatch.setattr(m.urllib.request, "build_opener", lambda handler: Opener())
     assert m.main() == 1
-    category = "remote_rejected_or_unknown_stop_no_retry" if failure == "http" else "remote_result_unknown_stop_no_retry"
+    category = "remote_http_403_stop_no_retry" if failure == "http" else "remote_result_unknown_stop_no_retry"
     assert capsys.readouterr() == (f"BLOCKED: {category} phase={phase}\n", "")
     assert len(calls) == (1 if phase == "role_get" else 2)
     assert all(req.get_method() == "GET" or req.full_url.endswith(":getIamPolicy") for req in calls)
@@ -280,3 +280,52 @@ def test_unknown_phase_is_not_printed(monkeypatch, capsys):
     monkeypatch.setattr(m, "Cloud", fail)
     assert m.main() == 1
     assert capsys.readouterr() == ("BLOCKED: authentication_failed phase=unknown\n", "")
+
+
+@pytest.mark.parametrize("phase", ["role_get", "get_iam_policy", "unknown"])
+@pytest.mark.parametrize("status,category", [
+    (401, "remote_http_401_stop_no_retry"),
+    (403, "remote_http_403_stop_no_retry"),
+    (429, "remote_http_429_stop_no_retry"),
+    (500, "remote_http_5xx_stop_no_retry"),
+    (503, "remote_http_5xx_stop_no_retry"),
+    (599, "remote_http_5xx_stop_no_retry"),
+    (400, "remote_http_other_stop_no_retry"),
+    (404, "remote_http_other_stop_no_retry"),
+    (302, "remote_http_other_stop_no_retry"),
+    (600, "remote_http_other_stop_no_retry"),
+])
+def test_http_status_category_is_safe_and_stops(status, category, phase, monkeypatch, capsys):
+    from io import BytesIO
+    monkeypatch.setattr(m.os, "environ", ENV)
+    monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: type("Result", (), {"stdout": b"fake-token"})())
+    calls = []
+    method = "GET" if phase == "role_get" else "POST"
+    url = "https://fake.invalid/role"
+    if phase == "get_iam_policy":
+        url += ":getIamPolicy"
+    class Opener:
+        def open(self, req, timeout):
+            calls.append(req)
+            raise m.urllib.error.HTTPError(url, status, HOSTILE, {"X-Fake": HOSTILE}, BytesIO(HOSTILE.encode()))
+    monkeypatch.setattr(m.urllib.request, "build_opener", lambda handler: Opener())
+    def execute(env, request):
+        request(method, url)
+        pytest.fail("HTTP failure must stop execution")
+    monkeypatch.setattr(m, "execute", execute)
+    assert m.main() == 1
+    assert capsys.readouterr() == (f"BLOCKED: {category} phase={phase}\n", "")
+    assert len(calls) == 1
+
+
+def test_role_get_404_remains_accepted_without_output(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: type("Result", (), {"stdout": b"fake-token"})())
+    class Opener:
+        def open(self, req, timeout):
+            calls.append(req)
+            raise m.urllib.error.HTTPError(req.full_url, 404, HOSTILE, {}, None)
+    monkeypatch.setattr(m.urllib.request, "build_opener", lambda handler: Opener())
+    assert m.Cloud()("GET", "https://fake.invalid/role", missing=True) is None
+    assert len(calls) == 1
+    assert capsys.readouterr() == ("", "")
