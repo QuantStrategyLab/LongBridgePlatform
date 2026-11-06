@@ -128,3 +128,22 @@ image, Artifact Registry, Storage, Container Analysis, Secret IAM, Scheduler
 mutation, deployment, traffic or PAPER-start operation. Live, Kelly and all
 stop-loss switches stay OFF. Image metadata remains
 `UNKNOWN_PERMISSION_CLASS` / `OWNER_NEEDED_FOLLOWUP`.
+
+
+### Executor permission observations
+
+After authentication, a single read-only `projects.testIamPermissions` request
+checks only `iam.roles.get`, `resourcemanager.projects.getIamPolicy`,
+`iam.roles.create`, and `resourcemanager.projects.setIamPolicy`. The response is
+limited to 4096 bytes. Output contains only `executor_preflight=held_all|missing`
+and `executor_missing`, in the fixed allowlist order. An omitted permissions
+field means none held; invalid, duplicate or unexpected values stop with a fixed
+unknown category. HTTP, transport and JSON failures stop without retry or raw
+response output, with phase `test_iam_permissions`.
+
+These observations do not grant authority. A missing result still reaches the
+existing role/policy validation; `held_all` proves neither API availability nor
+successful later operations. The original role GET, accepted 404, policy checks,
+CAS, dry-run default and apply gates remain required. A later executor grant,
+especially project `setIamPolicy`, needs a separate owner decision. Publishing
+this diagnostic does not authorize its execution or any IAM change.

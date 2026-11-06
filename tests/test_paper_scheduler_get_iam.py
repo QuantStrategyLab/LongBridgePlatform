@@ -35,6 +35,8 @@ class Cloud:
 
     def __call__(self, method, url, body=None, missing=False):
         self.calls.append((method, url, copy.deepcopy(body)))
+        if url.endswith(":testIamPermissions"):
+            return {"permissions": list(m.EXECUTOR_PERMISSIONS)}
         if url.endswith(":getIamPolicy"):
             self.policy_reads += 1
             if self.drift and self.policy_reads > 1:
@@ -78,7 +80,7 @@ def test_role_collision_never_adopted(permissions):
     cloud = Cloud(role)
     with pytest.raises(m.Blocked):
         m.execute(ENV, cloud)
-    assert all(c[0] == "GET" for c in cloud.calls)
+    assert all(c[0] == "GET" or c[1].endswith(":testIamPermissions") for c in cloud.calls)
 
 
 def test_dry_run_is_read_only_and_default():
@@ -86,7 +88,7 @@ def test_dry_run_is_read_only_and_default():
     env = {k: v for k, v in ENV.items() if k != "IAM_MODE"}
     m.execute(env, cloud)
     assert cloud.role is None
-    assert not any(c[1].endswith(":setIamPolicy") or (c[0] == "POST" and not c[1].endswith(":getIamPolicy")) for c in cloud.calls)
+    assert not any(c[1].endswith(":setIamPolicy") or (c[0] == "POST" and not c[1].endswith((":getIamPolicy", ":testIamPermissions"))) for c in cloud.calls)
 
 
 def test_additive_cas_preserves_unrelated_and_is_idempotent():
@@ -254,6 +256,9 @@ def test_remote_diagnostic_phase_and_no_retry(phase, failure, monkeypatch, capsy
     calls = []
     class Opener:
         def open(self, req, timeout):
+            if req.full_url.endswith(":testIamPermissions"):
+                from io import BytesIO
+                return BytesIO(json.dumps({"permissions": list(m.EXECUTOR_PERMISSIONS)}).encode())
             calls.append(req)
             if phase == "get_iam_policy" and len(calls) == 1:
                 raise m.urllib.error.HTTPError(req.full_url, 404, HOSTILE, {}, None)
@@ -266,7 +271,7 @@ def test_remote_diagnostic_phase_and_no_retry(phase, failure, monkeypatch, capsy
     monkeypatch.setattr(m.urllib.request, "build_opener", lambda handler: Opener())
     assert m.main() == 1
     category = "remote_http_403_stop_no_retry" if failure == "http" else "remote_result_unknown_stop_no_retry"
-    assert capsys.readouterr() == (f"BLOCKED: {category} phase={phase}\n", "")
+    assert capsys.readouterr() == ('executor_preflight=held_all executor_missing=[]\n' + f"BLOCKED: {category} phase={phase}\n", "")
     assert len(calls) == (1 if phase == "role_get" else 2)
     assert all(req.get_method() == "GET" or req.full_url.endswith(":getIamPolicy") for req in calls)
 
@@ -329,3 +334,84 @@ def test_role_get_404_remains_accepted_without_output(monkeypatch, capsys):
     assert m.Cloud()("GET", "https://fake.invalid/role", missing=True) is None
     assert len(calls) == 1
     assert capsys.readouterr() == ("", "")
+
+
+EXECUTOR_PERMISSIONS = (
+    "iam.roles.get", "resourcemanager.projects.getIamPolicy",
+    "iam.roles.create", "resourcemanager.projects.setIamPolicy",
+)
+
+
+@pytest.mark.parametrize("held", [[], list(EXECUTOR_PERMISSIONS), [EXECUTOR_PERMISSIONS[2]]])
+def test_executor_preflight_fixed_allowlist_and_diagnostic_only(held, capsys):
+    cloud = Cloud()
+    original = cloud.__call__
+    def request(method, url, body=None, missing=False):
+        if url.endswith(":testIamPermissions"):
+            cloud.calls.append((method, url, body))
+            assert method == "POST" and body == {"permissions": list(EXECUTOR_PERMISSIONS)}
+            return {"permissions": held}
+        return original(method, url, body, missing)
+    m.execute({**ENV, "IAM_MODE": "dry-run"}, request)
+    missing = [p for p in EXECUTOR_PERMISSIONS if p not in held]
+    category = "missing" if missing else "held_all"
+    output = capsys.readouterr().out
+    assert output.startswith(f"executor_preflight={category} executor_missing=" + json.dumps(missing) + "\n")
+    assert cloud.calls[0][1].endswith(":testIamPermissions")
+    assert cloud.calls[1][0] == "GET"  # diagnostic never replaces role validation
+    assert cloud.role is None
+
+
+@pytest.mark.parametrize("result", [None, [], {"permissions": None},
+    {"permissions": [HOSTILE]}, {"permissions": [1]},
+    {"permissions": [EXECUTOR_PERMISSIONS[0]] * 2}, {"extra": HOSTILE},
+    {"permissions": [], "extra": HOSTILE}])
+def test_executor_preflight_malformed_stops_without_leak(result, monkeypatch, capsys):
+    monkeypatch.setattr(m.os, "environ", ENV)
+    calls = []
+    def request(*args, **kwargs):
+        calls.append(args)
+        return result
+    monkeypatch.setattr(m, "Cloud", lambda: request)
+    assert m.main() == 1
+    assert capsys.readouterr() == ("BLOCKED: executor_preflight_unknown_stop_no_retry phase=test_iam_permissions\n", "")
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["http", "transport", "json", "oversized"])
+def test_executor_preflight_transport_bounded_and_single_attempt(failure, monkeypatch, capsys):
+    from io import BytesIO
+    monkeypatch.setattr(m.os, "environ", ENV)
+    monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: type("Result", (), {"stdout": b"fake-token"})())
+    calls = []
+    class Response(BytesIO):
+        def read(self, size=-1):
+            assert size == 4097
+            return super().read(size)
+    class Opener:
+        def open(self, req, timeout):
+            calls.append(req)
+            assert req.full_url.endswith(":testIamPermissions")
+            if failure == "http":
+                raise m.urllib.error.HTTPError(req.full_url, 403, HOSTILE, {}, BytesIO(HOSTILE.encode()))
+            if failure == "transport":
+                raise TimeoutError(HOSTILE)
+            return Response((HOSTILE if failure == "json" else " " * 4097).encode())
+    monkeypatch.setattr(m.urllib.request, "build_opener", lambda handler: Opener())
+    assert m.main() == 1
+    category = "remote_http_403_stop_no_retry" if failure == "http" else "remote_result_unknown_stop_no_retry"
+    assert capsys.readouterr() == (f"BLOCKED: {category} phase=test_iam_permissions\n", "")
+    assert len(calls) == 1
+
+
+def test_executor_preflight_empty_object_means_no_permissions(capsys):
+    calls = []
+    def request(method, url, body=None, missing=False):
+        calls.append(url)
+        if url.endswith(":testIamPermissions"):
+            return {}  # API omits an empty repeated field
+        raise m.Blocked("remote_http_403_stop_no_retry", phase="role_get")
+    with pytest.raises(m.Blocked, match="remote_http_403"):
+        m.execute(ENV, request)
+    assert len(calls) == 2
+    assert capsys.readouterr().out == 'executor_preflight=missing executor_missing=' + json.dumps(list(EXECUTOR_PERMISSIONS)) + '\n'

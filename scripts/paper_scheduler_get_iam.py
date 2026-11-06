@@ -12,6 +12,12 @@ import subprocess
 import urllib.error
 import urllib.request
 
+EXECUTOR_PERMISSIONS = (
+    "iam.roles.get", "resourcemanager.projects.getIamPolicy",
+    "iam.roles.create", "resourcemanager.projects.setIamPolicy",
+)
+PREFLIGHT_MAX_BYTES = 4096
+
 ROLE_ID = "paperSchedulerJobsGet"
 PERMISSION = "cloudscheduler.jobs.get"
 ROLE_FILE = Path(__file__).resolve().parents[1] / "docs/iam/paper-scheduler-get-role.json"
@@ -88,6 +94,20 @@ def execute(env, request):
         policy = request("POST", project_url + ":getIamPolicy", {"options": {"requestedPolicyVersion": 3}})
         validate_policy(policy, name, member)
         return policy
+
+    # Observations only: even held_all cannot establish API availability or
+    # authorize writes. Missing permissions never replace the existing reads.
+    result = request("POST", project_url + ":testIamPermissions",
+                     {"permissions": list(EXECUTOR_PERMISSIONS)})
+    held = result.get("permissions", []) if isinstance(result, dict) else None
+    if (not isinstance(result, dict) or set(result) - {"permissions"}
+            or not isinstance(held, list)
+            or any(type(p) is not str or p not in EXECUTOR_PERMISSIONS for p in held)
+            or len(held) != len(set(held))):
+        raise Blocked("executor_preflight_unknown_stop_no_retry", phase="test_iam_permissions")
+    missing_permissions = [p for p in EXECUTOR_PERMISSIONS if p not in held]
+    status = "missing" if missing_permissions else "held_all"
+    print("executor_preflight=" + status + " executor_missing=" + json.dumps(missing_permissions))
 
     before_role = request("GET", role_url, missing=True)
     if before_role is not None:
@@ -168,6 +188,8 @@ class Cloud:
             phase = "role_get"
         elif method == "POST" and url.endswith(":getIamPolicy"):
             phase = "get_iam_policy"
+        elif method == "POST" and url.endswith(":testIamPermissions"):
+            phase = "test_iam_permissions"
         data = None if body is None else json.dumps(body).encode()
         request = urllib.request.Request(url, data=data, method=method, headers={
             "Authorization": "Bearer " + self.token, "Content-Type": "application/json",
@@ -179,6 +201,11 @@ class Cloud:
                 return None
         try:
             with urllib.request.build_opener(NoRedirect).open(request, timeout=60) as response:
+                if phase == "test_iam_permissions":
+                    payload = response.read(PREFLIGHT_MAX_BYTES + 1)
+                    if len(payload) > PREFLIGHT_MAX_BYTES:
+                        raise ValueError("oversized_preflight")
+                    return json.loads(payload)
                 return json.load(response)
         except urllib.error.HTTPError as error:
             if missing and method == "GET" and error.code == 404:
@@ -208,6 +235,7 @@ def main():
             "role_collision_or_integrity_failure", "policy_integrity_failure",
             "binding_collision", "orphan_binding_collision", "concurrent_drift",
             "after_readback_drift", "authentication_failed",
+            "executor_preflight_unknown_stop_no_retry",
             "remote_rejected_or_unknown_stop_no_retry", "remote_result_unknown_stop_no_retry",
             "remote_http_401_stop_no_retry", "remote_http_403_stop_no_retry",
             "remote_http_429_stop_no_retry", "remote_http_5xx_stop_no_retry",
@@ -218,7 +246,7 @@ def main():
             print("BLOCKED: unknown_failure phase=unknown")
         else:
             phase = error.phase
-            if type(phase) is not str or phase not in {"token_acquisition", "role_get", "get_iam_policy"}:
+            if type(phase) is not str or phase not in {"token_acquisition", "role_get", "get_iam_policy", "test_iam_permissions"}:
                 phase = "unknown"
             print(f"BLOCKED: {category} phase={phase}")
         return 1
