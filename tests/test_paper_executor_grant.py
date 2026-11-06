@@ -255,3 +255,72 @@ await check('empty'); await check('unknown'); })()
 .catch(() => process.exit(1));
 """.replace("SCRIPT", json.dumps(script)).replace("KEYS", json.dumps(mappings))
     subprocess.run(["node", "-e", harness], check=True, capture_output=True)
+
+
+@pytest.mark.parametrize("index", range(6))
+@pytest.mark.parametrize("scope", ["environment", "repository"])
+@pytest.mark.parametrize("failure,category", [
+    (401, "http_401"), (403, "http_403"), (429, "http_429"),
+    (500, "http_5xx"), (599, "http_5xx"), (400, "other_http"),
+    (302, "other_http"), (600, "other_http"), ("403", "transport_error"),
+    ("transport", "transport_error"), ("null_error", "transport_error"),
+    ("blank", "blank_value"), ("null", "malformed_response"),
+    ("missing", "malformed_response"), ("wrong_type", "malformed_response"),
+    ("null_response", "malformed_response"),
+    (404, "http_404_both"),
+])
+def test_mapping_failure_diagnostic_is_allowlisted_and_exports_nothing(index, scope, failure, category):
+    # Execute the actual inline action offline, including failures after partial success.
+    workflow = (Path(__file__).parents[1] /
+        ".github/workflows/grant-paper-executor-permissions.yml").read_text()
+    first = workflow.split("      - name:")[1]
+    script = textwrap.dedent(first.split("          script: |\n", 1)[1])
+    harness = r"""
+const assert = require('node:assert/strict');
+const keys = ['GCP_PROJECT_ID', 'PAPER_SCHEDULER_GET_PROJECT_ID',
+  'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT', 'PAPER_IAM_GRANT_RECIPIENT',
+  'PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT', 'PAPER_IAM_BOOTSTRAP_WIF_PROVIDER'];
+const [index, scope, failure, category] = CASE;
+const calls = [], masks = [], exports = [];
+const core = {setSecret: value => masks.push(value),
+  exportVariable: (...args) => exports.push(args)};
+const github = {request: async (route, args) => {
+  assert.equal(exports.length, 0);
+  const actualScope = route.includes('/environments/') ? 'environment' : 'repository';
+  calls.push([args.name, actualScope]);
+  if (args.name !== keys[index]) return {data: {value: 'fake-' + args.name}};
+  if (actualScope === 'environment' && (scope === 'repository' || failure === 404)) {
+    throw {status: 404, message: 'fake-private-payload'};
+  }
+  if (failure === 'blank') return {data: {value: '   '}};
+  if (failure === 'null') return {data: null};
+  if (failure === 'missing') return {};
+  if (failure === 'wrong_type') return {data: {value: 17}};
+  if (failure === 'null_response') return null;
+  if (failure === 'null_error') throw null;
+  const error = new Error('fake-private-payload');
+  error.response = {data: 'fake-private-payload', headers: {'fake': 'fake-private-payload'}};
+  error.request = {url: 'fake-private-payload'};
+  if (failure !== 'transport') error.status = failure;
+  throw error;
+}};
+const context = {repo: {owner: 'fake-owner', repo: 'fake-repo'}};
+const run = new Function('github', 'core', 'context', 'return (async () => {' + SCRIPT + '})()');
+(async () => {
+  await assert.rejects(run(github, core, context), error => {
+    const expectedScope = failure === 404 ? 'repository' : scope;
+    assert.equal(error.message, 'Protected mapping read failed: name=' + keys[index] +
+      ' scope=' + expectedScope + ' category=' + category + '; stop before authentication');
+    assert.equal(error.cause, undefined);
+    return true;
+  });
+  assert.deepEqual(exports, []);
+  assert.equal(masks.length, index);
+  const expected = keys.slice(0, index).map(name => [name, 'environment']);
+  expected.push([keys[index], 'environment']);
+  if (scope === 'repository' || failure === 404) expected.push([keys[index], 'repository']);
+  assert.deepEqual(calls, expected);
+})().catch(error => { console.error(error); process.exit(1); });
+""".replace("SCRIPT", json.dumps(script)).replace("CASE", json.dumps([index, scope, failure, category]))
+    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

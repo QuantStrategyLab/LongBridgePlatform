@@ -64,27 +64,55 @@ jobs:
               'PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT', 'PAPER_IAM_BOOTSTRAP_WIF_PROVIDER'
             ];
             const mappings = [];
-            try {
-              for (const name of names) {
-                let data;
+            for (const name of names) {
+              let scope = 'environment';
+              let category = 'transport_error';
+              const read = async (route, args) => {
+                let response;
                 try {
-                  ({data} = await github.request(
-                    'GET /repos/{owner}/{repo}/environments/{environment_name}/variables/{name}',
-                    {...context.repo, environment_name: 'longbridge-paper', name}));
+                  response = await github.request(route, args);
                 } catch (error) {
-                  if (error.status !== 404) throw error;
-                  ({data} = await github.request(
-                    'GET /repos/{owner}/{repo}/actions/variables/{name}',
-                    {...context.repo, name}));
+                  const status = error?.status;
+                  if (status === 401 || status === 403 || status === 429) {
+                    category = `http_${status}`;
+                  } else if (status === 404) {
+                    category = scope === 'repository' ? 'http_404_both' : 'other_http';
+                  } else if (Number.isInteger(status) && status >= 500 && status <= 599) {
+                    category = 'http_5xx';
+                  } else if (Number.isInteger(status)) {
+                    category = 'other_http';
+                  } else {
+                    category = 'transport_error';
+                  }
+                  // Only an Environment HTTP 404 permits the same-name fallback.
+                  if (scope === 'environment' && status === 404) return null;
+                  throw new Error('Mapping lookup failed');
                 }
-                if (typeof data.value !== 'string' || !data.value.trim()) {
-                  throw new Error('Missing mapping');
+                const data = response?.data;
+                if (!data || typeof data.value !== 'string') {
+                  category = 'malformed_response';
+                  throw new Error('Invalid mapping response');
+                }
+                if (!data.value.trim()) {
+                  category = 'blank_value';
+                  throw new Error('Empty mapping');
+                }
+                return data;
+              };
+              try {
+                let data = await read(
+                  'GET /repos/{owner}/{repo}/environments/{environment_name}/variables/{name}',
+                  {...context.repo, environment_name: 'longbridge-paper', name});
+                if (data === null) {
+                  scope = 'repository';
+                  data = await read('GET /repos/{owner}/{repo}/actions/variables/{name}',
+                    {...context.repo, name});
                 }
                 core.setSecret(data.value);
                 mappings.push([name, data.value]);
+              } catch {
+                throw new Error(`Protected mapping read failed: name=${name} scope=${scope} category=${category}; stop before authentication`);
               }
-            } catch {
-              throw new Error('Protected mapping read failed; stop before authentication');
             }
             for (const [name, value] of mappings) core.exportVariable(name, value);
       - name: Verify Environment approval protection remains configured

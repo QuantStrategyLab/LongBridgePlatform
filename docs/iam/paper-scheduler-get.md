@@ -225,6 +225,16 @@ workflow definition. Variable API access by the workflow token is a separate
 prerequisite and is not established by local tests; an inaccessible mapping
 blocks the route and does not authorize provisioning a token or changing access.
 
+A mapping-read failure reports only the failing fixed variable name, lookup
+scope (`environment` or `repository`) and an allowlisted category: `http_401`,
+`http_403`, `http_404_both`, `http_429`, `http_5xx`, `other_http`, `blank_value`,
+`malformed_response` or `transport_error`. `http_404_both` means that both
+same-name lookups returned HTTP 404. A non-string or absent value is a malformed
+response; an empty or whitespace-only string is a blank value. No raw exception,
+URL, response, headers or mapping value is included. If any read fails, no
+mapping is exported, including previously read values. This diagnostic does not
+prove a permission repair or authorize a retry, grant, or PAPER start.
+
 Role permission responses are checked for exact membership and cardinality,
 independent of order. Fresh role snapshots normalize permission ordering while
 retaining etag and every other field for concurrent-drift detection.
