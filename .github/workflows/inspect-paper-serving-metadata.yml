@@ -18,37 +18,37 @@ permissions:
   contents: read
 
 concurrency:
-  group: Deploy Cloud Run-${{ github.ref_name }}
+  group: PAPER readback-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   inspect:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && vars.PAPER_READBACK_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: longbridge-paper
     permissions:
       contents: read
       id-token: write
     env:
       WORKFLOW_TARGET: PAPER
       INSPECTION_MODE: ${{ inputs.mode }}
-      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
-      CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
-      EXPECTED_RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+      CLOUD_RUN_REGION: ${{ vars.PAPER_READBACK_REGION }}
+      CLOUD_RUN_SERVICE: ${{ secrets.PAPER_READBACK_SERVICE }}
+      EXPECTED_RUNTIME_TARGET_JSON: ${{ secrets.PAPER_READBACK_RUNTIME_TARGET_JSON }}
+      # Logical PAPER manifest selector; this job has no GitHub Environment.
       WORKFLOW_ENVIRONMENT: longbridge-paper
-      EXPECTED_PHYSICAL_ACCOUNT_ID: ${{ vars.LONGBRIDGE_PHYSICAL_ACCOUNT_ID || secrets.LONGBRIDGE_PHYSICAL_ACCOUNT_ID }}
-      EXPECTED_RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED || secrets.RUNTIME_TARGET_ENABLED }}
-      EXPECTED_DRY_RUN_ONLY: ${{ vars.LONGBRIDGE_DRY_RUN_ONLY || secrets.LONGBRIDGE_DRY_RUN_ONLY }}
+      EXPECTED_PHYSICAL_ACCOUNT_ID: ${{ secrets.PAPER_READBACK_PHYSICAL_ACCOUNT_ID }}
+      EXPECTED_RUNTIME_TARGET_ENABLED: ${{ vars.PAPER_READBACK_RUNTIME_TARGET_ENABLED }}
+      EXPECTED_DRY_RUN_ONLY: ${{ vars.PAPER_READBACK_DRY_RUN_ONLY }}
     steps:
       - name: Mask WIF identity components
         env:
-          GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ secrets.PAPER_READBACK_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
           account="$GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"
           if ! [[ "$account" =~ ^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$ ]]; then
-            printf '%s\n' '::error::Required Secret GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT is missing or malformed'
+            printf '%s\n' '::error::Required Secret PAPER_READBACK_SERVICE_ACCOUNT is missing or malformed'
             exit 1
           fi
           account_name="${account%%@*}"
@@ -64,7 +64,7 @@ jobs:
           persist-credentials: false
       - name: Validate existing PAPER selection before cloud authentication
         env:
-          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT_ID: ${{ vars.PAPER_READBACK_PROJECT_ID }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
@@ -87,15 +87,15 @@ jobs:
       - name: Validate plain-DCA protected identity before cloud authentication
         if: inputs.mode == 'plain-dca'
         env:
-          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_PROJECT_ID: ${{ vars.PAPER_READBACK_PROJECT_ID }}
         run: uv run --no-sync python -m scripts.inspect_plain_dca_paper --validate-config
       - uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ secrets.PAPER_READBACK_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.PAPER_READBACK_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v3
         with:
-          project_id: ${{ vars.GCP_PROJECT_ID }}
+          project_id: ${{ vars.PAPER_READBACK_PROJECT_ID }}
       - name: Read serving metadata without invoking the service
         run: |
           set -euo pipefail

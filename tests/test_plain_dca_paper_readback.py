@@ -9,11 +9,12 @@ from scripts.inspect_plain_dca_paper import ReadbackError, container_env, main, 
 
 
 class PlainDcaReadbackTests(TestCase):
-    def test_workflow_uses_existing_protected_variable_contract(self):
+    def test_workflow_uses_dedicated_protected_readback_contract(self):
         from pathlib import Path
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/inspect-paper-serving-metadata.yml").read_text()
-        self.assertIn("EXPECTED_PHYSICAL_ACCOUNT_ID: ${{ vars.LONGBRIDGE_PHYSICAL_ACCOUNT_ID || secrets.LONGBRIDGE_PHYSICAL_ACCOUNT_ID }}", workflow)
-        self.assertIn("environment: longbridge-paper", workflow)
+        self.assertIn("EXPECTED_PHYSICAL_ACCOUNT_ID: ${{ secrets.PAPER_READBACK_PHYSICAL_ACCOUNT_ID }}", workflow)
+        self.assertIn("WORKFLOW_ENVIRONMENT: longbridge-paper", workflow)
+        self.assertNotIn("    environment:", workflow)
         self.assertNotIn("environment: longbridge-sg", workflow)
 
     def setUp(self):

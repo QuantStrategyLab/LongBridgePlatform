@@ -158,15 +158,16 @@ def test_cloud_denial_remains_distinct_without_rendering_stderr(monkeypatch):
         inspect.read_json(["gcloud", "run", "services", "describe"])
 
 
-def test_workflow_reuses_paper_environment_and_identity_without_write_actions():
+def test_workflow_uses_dedicated_readback_route_without_write_actions():
     workflow = Path(".github/workflows/inspect-paper-serving-metadata.yml").read_text()
     deployment = Path(".github/workflows/sync-cloud-run-env.yml").read_text()
     assert "workflow_dispatch:" in workflow and "schedule:" not in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
-    assert "environment: longbridge-paper" in workflow
-    assert "${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in workflow
+    assert "    environment:" not in workflow
+    assert "vars.PAPER_READBACK_ENABLED == 'true'" in workflow
+    assert "${{ secrets.PAPER_READBACK_SERVICE_ACCOUNT }}" in workflow
     assert "${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in deployment
-    assert "Deploy Cloud Run-${{ github.ref_name }}" in workflow
+    assert "PAPER readback-${{ github.ref_name }}" in workflow
     assert workflow.index("Validate existing PAPER selection") < workflow.index("google-github-actions/auth")
     assert all(token not in workflow for token in ("upload-artifact", "update-traffic", "scheduler", "curl", "secret-access"))
 
@@ -176,7 +177,7 @@ def test_workflow_wif_identity_is_not_in_job_environment():
     job_config = workflow.split("    steps:", 1)[0]
     assert "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT:" not in job_config
 
-    assert "${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in workflow
+    assert "${{ secrets.PAPER_READBACK_SERVICE_ACCOUNT }}" in workflow
     assert "vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT" not in workflow
     first_step = workflow.split("    steps:\n", 1)[1].split("      - uses:", 1)[0]
     assert "name: Mask WIF identity components" in first_step
@@ -215,7 +216,7 @@ def test_workflow_identity_masking_precedes_exports_and_rejects_missing_identity
 def test_workflow_invalid_wif_secret_reports_fixed_error_before_cloud_auth(tmp_path, identity):
     workflow = Path(".github/workflows/inspect-paper-serving-metadata.yml").read_text()
     first_step = workflow.split("    steps:\n", 1)[1].split("      - uses:", 1)[0]
-    assert "${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}" in first_step
+    assert "${{ secrets.PAPER_READBACK_SERVICE_ACCOUNT }}" in first_step
     assert "vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT" not in workflow
     assert workflow.index(first_step) < workflow.index("google-github-actions/auth@")
     script = first_step.split("        run: |\n", 1)[1]
@@ -236,7 +237,7 @@ def test_workflow_invalid_wif_secret_reports_fixed_error_before_cloud_auth(tmp_p
     if identity:
         assert identity not in output
     assert result.stdout == (
-        "::error::Required Secret GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT is missing or malformed\n"
+        "::error::Required Secret PAPER_READBACK_SERVICE_ACCOUNT is missing or malformed\n"
     )
     assert not result.stderr
 
