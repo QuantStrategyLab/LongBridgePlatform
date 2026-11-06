@@ -20,6 +20,10 @@ ROLE_FILE = Path(__file__).resolve().parents[1] / "docs/iam/paper-scheduler-get-
 class Blocked(ValueError):
     """Fixed failure category; never attach remote payloads or identifiers."""
 
+    def __init__(self, *args, phase="unknown"):
+        super().__init__(*args)
+        self.phase = phase
+
 
 def role_definition(path=ROLE_FILE):
     value = json.loads(path.read_text())
@@ -149,12 +153,21 @@ class Cloud:
     """Single-attempt REST adapter. No raw stderr, URL or response is printed."""
 
     def __init__(self):
-        result = subprocess.run(["gcloud", "auth", "print-access-token"], capture_output=True, timeout=60, check=True)
-        self.token = result.stdout.decode().strip()
+        try:
+            result = subprocess.run(["gcloud", "auth", "print-access-token"], capture_output=True, timeout=60, check=True)
+            self.token = result.stdout.decode().strip()
+        except (subprocess.SubprocessError, OSError, UnicodeError):
+            raise Blocked("authentication_failed", phase="token_acquisition") from None
         if not self.token or "\n" in self.token or "\r" in self.token:
-            raise Blocked("authentication_failed")
+            raise Blocked("authentication_failed", phase="token_acquisition")
 
     def __call__(self, method, url, body=None, missing=False):
+        # Only read operations receive a diagnostic label; never echo a URL.
+        phase = "unknown"
+        if method == "GET":
+            phase = "role_get"
+        elif method == "POST" and url.endswith(":getIamPolicy"):
+            phase = "get_iam_policy"
         data = None if body is None else json.dumps(body).encode()
         request = urllib.request.Request(url, data=data, method=method, headers={
             "Authorization": "Bearer " + self.token, "Content-Type": "application/json",
@@ -170,9 +183,9 @@ class Cloud:
         except urllib.error.HTTPError as error:
             if missing and method == "GET" and error.code == 404:
                 return None
-            raise Blocked("remote_rejected_or_unknown_stop_no_retry") from None
+            raise Blocked("remote_rejected_or_unknown_stop_no_retry", phase=phase) from None
         except Exception:
-            raise Blocked("remote_result_unknown_stop_no_retry") from None
+            raise Blocked("remote_result_unknown_stop_no_retry", phase=phase) from None
 
 
 def main():
@@ -180,9 +193,26 @@ def main():
         identity(os.environ)  # Reject wrong scope before token access.
         execute(os.environ, Cloud())
         return 0
+    except Blocked as error:
+        # Never format exception text, remote data, or arbitrary phase labels.
+        categories = {
+            "authority_mapping_rejected", "role_definition_rejected",
+            "role_collision_or_integrity_failure", "policy_integrity_failure",
+            "binding_collision", "orphan_binding_collision", "concurrent_drift",
+            "after_readback_drift", "authentication_failed",
+            "remote_rejected_or_unknown_stop_no_retry", "remote_result_unknown_stop_no_retry",
+        }
+        category = error.args[0] if len(error.args) == 1 else None
+        if type(category) is not str or category not in categories:
+            print("BLOCKED: unknown_failure phase=unknown")
+        else:
+            phase = error.phase
+            if type(phase) is not str or phase not in {"token_acquisition", "role_get", "get_iam_policy"}:
+                phase = "unknown"
+            print(f"BLOCKED: {category} phase={phase}")
+        return 1
     except Exception:
-        # Fixed allowlisted text; suppress even unexpected exception messages.
-        print("BLOCKED: verify mappings, permissions and remote state; do not retry an uncertain write")
+        print("BLOCKED: unknown_failure phase=unknown")
         return 1
 
 

@@ -188,3 +188,95 @@ def test_workflow_boundaries():
         assert gate in text
     assert "secrets." not in text and "longbridge-hk" not in text
     assert "gcloud " not in text
+
+
+SAFE_CATEGORIES = [
+    "authority_mapping_rejected", "role_definition_rejected",
+    "role_collision_or_integrity_failure", "policy_integrity_failure",
+    "binding_collision", "orphan_binding_collision", "concurrent_drift",
+    "after_readback_drift", "authentication_failed",
+    "remote_rejected_or_unknown_stop_no_retry", "remote_result_unknown_stop_no_retry",
+]
+HOSTILE = "fake-secret https://fake.invalid/payload fake@example.invalid\nPASS"
+
+
+@pytest.mark.parametrize("category", SAFE_CATEGORIES)
+def test_main_emits_only_allowlisted_category(category, monkeypatch, capsys):
+    monkeypatch.setattr(m.os, "environ", ENV)
+    def fail():
+        raise m.Blocked(category)
+    monkeypatch.setattr(m, "Cloud", fail)
+    assert m.main() == 1
+    assert capsys.readouterr() == (f"BLOCKED: {category} phase=unknown\n", "")
+
+
+@pytest.mark.parametrize("error", [m.Blocked(HOSTILE), RuntimeError(HOSTILE), m.Blocked(), m.Blocked([HOSTILE])])
+def test_main_unknown_failure_cannot_leak(error, monkeypatch, capsys):
+    monkeypatch.setattr(m.os, "environ", ENV)
+    def fail():
+        raise error
+    monkeypatch.setattr(m, "Cloud", fail)
+    assert m.main() == 1
+    assert capsys.readouterr() == ("BLOCKED: unknown_failure phase=unknown\n", "")
+
+
+@pytest.mark.parametrize("error", [
+    m.subprocess.CalledProcessError(1, [HOSTILE], stderr=HOSTILE),
+    m.subprocess.TimeoutExpired([HOSTILE], 60, stderr=HOSTILE),
+    FileNotFoundError(HOSTILE), UnicodeError(HOSTILE),
+])
+def test_token_subprocess_failure_is_fixed(error, monkeypatch, capsys):
+    monkeypatch.setattr(m.os, "environ", ENV)
+    calls = []
+    def fail(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise error
+    monkeypatch.setattr(m.subprocess, "run", fail)
+    assert m.main() == 1
+    assert capsys.readouterr() == ("BLOCKED: authentication_failed phase=token_acquisition\n", "")
+    assert len(calls) == 1
+    assert calls[0][1] == {"capture_output": True, "timeout": 60, "check": True}
+
+
+@pytest.mark.parametrize("token", [b"", b"fake\nsecret", b"fake\rsecret", b"\xff"])
+def test_invalid_token_has_safe_phase(token, monkeypatch, capsys):
+    monkeypatch.setattr(m.os, "environ", ENV)
+    monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: type("Result", (), {"stdout": token})())
+    assert m.main() == 1
+    assert capsys.readouterr() == ("BLOCKED: authentication_failed phase=token_acquisition\n", "")
+
+
+@pytest.mark.parametrize("phase", ["role_get", "get_iam_policy"])
+@pytest.mark.parametrize("failure", ["http", "transport", "json"])
+def test_remote_diagnostic_phase_and_no_retry(phase, failure, monkeypatch, capsys):
+    monkeypatch.setattr(m.os, "environ", {**ENV, "IAM_MODE": "dry-run"})
+    monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: type("Result", (), {"stdout": b"fake-token"})())
+    calls = []
+    class Opener:
+        def open(self, req, timeout):
+            calls.append(req)
+            if phase == "get_iam_policy" and len(calls) == 1:
+                raise m.urllib.error.HTTPError(req.full_url, 404, HOSTILE, {}, None)
+            if failure == "http":
+                raise m.urllib.error.HTTPError(req.full_url, 403, HOSTILE, {}, None)
+            if failure == "json":
+                from io import BytesIO
+                return BytesIO(HOSTILE.encode())
+            raise TimeoutError(HOSTILE)
+    monkeypatch.setattr(m.urllib.request, "build_opener", lambda handler: Opener())
+    assert m.main() == 1
+    category = "remote_rejected_or_unknown_stop_no_retry" if failure == "http" else "remote_result_unknown_stop_no_retry"
+    assert capsys.readouterr() == (f"BLOCKED: {category} phase={phase}\n", "")
+    assert len(calls) == (1 if phase == "role_get" else 2)
+    assert all(req.get_method() == "GET" or req.full_url.endswith(":getIamPolicy") for req in calls)
+
+
+def test_unknown_phase_is_not_printed(monkeypatch, capsys):
+    monkeypatch.setattr(m.os, "environ", ENV)
+    error = m.Blocked("authentication_failed")
+    error.phase = HOSTILE
+    def fail():
+        raise error
+    monkeypatch.setattr(m, "Cloud", fail)
+    assert m.main() == 1
+    assert capsys.readouterr() == ("BLOCKED: authentication_failed phase=unknown\n", "")
