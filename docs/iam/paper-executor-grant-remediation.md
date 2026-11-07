@@ -6,7 +6,8 @@ Environment approval, deployment, scheduler mutation nor PAPER start.
 
 Related definition: [paper-scheduler-get.md](paper-scheduler-get.md) and
 [grant-paper-executor-permissions.yml](../../.github/workflows/grant-paper-executor-permissions.yml).
-Lookup-channel fix lineage: PR #722 (Draft).
+Lookup-channel fix lineage: PR #722 (Draft). Offline discovery classifier:
+[paper_iam_discovery_evidence.py](../../scripts/paper_iam_discovery_evidence.py).
 
 ## Owner-provided installed configuration (t1393)
 
@@ -47,8 +48,8 @@ pool or provider is absent in the cloud project.
 ### In-repo identities reviewed (not adopted as bootstrap)
 
 These appear in workflows or docs and must **not** be treated as grant bootstrap
-without separate proof that they hold exactly the four executor-grant
-permissions and are distinct from the recipient:
+without separate proof that they hold exactly the four bootstrap permissions and
+are distinct from the recipient:
 
 | Identity channel | Role in repo | Bootstrap suitability |
 | --- | --- | --- |
@@ -59,8 +60,8 @@ permissions and are distinct from the recipient:
 
 No Terraform or provisioning module in this repository names a compatible
 bootstrap. Prefer reuse only after an owner-authorized proof of an **existing**
-independent SA that already holds the four permissions below and a WIF binding
-that trusts only this repository, protected `main`, and Environment
+independent SA that already holds the four bootstrap permissions below and a
+WIF binding that trusts only this repository, protected `main`, and Environment
 `longbridge-paper`.
 
 ## Card A — recipient Environment fill (config only)
@@ -82,7 +83,7 @@ Action (human / approved operator; not this agent):
    `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` (copy from the existing UI field).
 3. Verify sha256(UTF-8(value)) ==
    `382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22`.
-4. Leave repository/org copies unset for this name.
+4. Leave repository/org copies unset for this name (operational; see org-vars note).
 
 Rollback: delete the Environment variable `PAPER_IAM_GRANT_RECIPIENT` if the
 fill was wrong. No GCP IAM change is involved.
@@ -94,25 +95,58 @@ Out of scope for Card A: grant workflow_dispatch, IAM apply, PAPER start.
 ### B0 — bounded discovery of an existing independent identity (preferred if found)
 
 Class: **discovery proposal only**. Variable absence does not imply cloud
-absence. This engineering pass did **not** perform GCP GET (owner one-shot
-budget already consumed elsewhere). Exact later read-only targets, once the
-project id is taken from the privately known `GCP_PROJECT_ID` mapping:
+absence. This engineering pass did **not** perform GCP GET. Exact later
+read-only targets, once the project id is taken from the privately known
+`GCP_PROJECT_ID` mapping:
+
+Always keep these axes separate in any evidence pack:
+
+| Axis | Meaning |
+| --- | --- |
+| Candidate principal | `serviceAccount:<email>` under review for bootstrap |
+| Evaluated resource | `projects/<PROJECT_ID>` (project IAM powers) |
+| Evaluated permissions | The four bootstrap permissions listed under B1 |
+| Actual caller | Authenticated principal that invoked each API |
+| Trust binding | Who may act as the SA (SA `getIamPolicy` / WIF user binding) |
+
+Official contract:
+[`projects.testIamPermissions`](https://cloud.google.com/resource-manager/reference/rest/v1/projects/testIamPermissions)
+**returns permissions that a caller has on the specified Project**. The request
+body accepts only `permissions[]` — there is **no** candidate-principal field.
+Therefore an operator (or any non-candidate caller) invoking
+`testIamPermissions` and observing all four permissions **must not** be treated
+as proof that the candidate holds them. That pattern is a **false pass**
+(`caller_test_iam_not_candidate_effective`). Offline classifier:
+`scripts/paper_iam_discovery_evidence.py`.
+
+Forbidden proof techniques for B0:
+
+- Impersonating the candidate or minting a token as the candidate, then calling
+  `testIamPermissions` (bypass).
+- Treating SA `getIamPolicy` / WIF bindings as project-effective permission proof
+  (`sa_get_iam_policy_is_trust_not_project_perm`).
+- Equating the candidate with the recipient/executor principal.
+
+Accepted proof shape (owner-authorized read-only later):
 
 1. Resolve `<PROJECT_ID>` from Environment `GCP_PROJECT_ID` (hash
    `5fd9761b…52152e`); do not publish the raw id in chat.
-2. `serviceAccounts.get` / `getIamPolicy` only for candidate SA emails already
-   known from protected config or prior approved inventory — **no org-wide or
-   project-wide account listing**.
-3. On each candidate, `projects.testIamPermissions` for exactly:
-   `iam.roles.get`, `resourcemanager.projects.getIamPolicy`, `iam.roles.create`,
-   `resourcemanager.projects.setIamPolicy`.
-4. For a candidate that holds all four and whose email sha256 is **not**
-   `382a7cbe…697cc22`, read only that SA's WIF principal bindings and the
-   referenced `workloadIdentityPools.providers.get` for providers already named
-   in protected config.
-5. Accept only if trust is limited to this repository, protected `main`, and
-   Environment `longbridge-paper` (or can be narrowed under a separate trust
-   card).
+2. `serviceAccounts.get` only for candidate emails already known from protected
+   config or prior approved inventory — **no org-wide or project-wide account
+   listing**.
+3. Read **project** `getIamPolicy` and collect role bindings whose `members`
+   include the candidate principal. Expand each bound role's permission set via
+   `iam.roles.get` for custom roles (or an owner-approved predefined-role
+   permission baseline). Candidate is acceptable for permissions only if the
+   union of those expanded sets covers exactly-needed bootstrap permissions
+   (at least the four; extra permissions require a separate risk note).
+4. Separately, read the candidate SA's `getIamPolicy` **only** to inspect WIF /
+   `roles/iam.workloadIdentityUser` trust — never as a substitute for step 3.
+5. For providers already named in protected config, `workloadIdentityPools.providers.get`
+   and accept only if trust is limited to this repository, protected `main`, and
+   Environment `longbridge-paper` (or can be narrowed under a separate trust card).
+6. Reject any pack where `actual_caller == operator` and the only permission
+   evidence is that caller's `testIamPermissions` result.
 
 If no candidate passes, do not widen search; proceed to B1.
 
@@ -128,7 +162,8 @@ Proposed logical names (placeholders only; not created):
 | Custom role on project (bootstrap itself) | `paperIamBootstrap` | Exact permissions listed below — not `roles/owner` / `roles/resourcemanager.projectIamAdmin` unbounded. |
 | GitHub Environment variables | `PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT`, `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | Set only after resources exist and trust is verified. |
 
-Bootstrap custom role permissions (complete set):
+Bootstrap custom role permissions (complete set) — held by bootstrap **before**
+any Card C run so the grant job can authenticate as bootstrap:
 
 1. `iam.roles.get`
 2. `resourcemanager.projects.getIamPolicy`
@@ -150,11 +185,26 @@ Trust principals:
 - Required Environment reviewers remain mandatory before any grant job auth
   step.
 
+#### B1 versus Card C — same four permission strings, different stage and principal
+
+Owner decision preserved: the grant ultimately binds the four permissions to the
+**recipient** (scheduler IAM executor) so that executor can run the scheduler
+jobs.get IAM route. That is Card C's intentional outcome.
+
+| Stage | Principal | Four permissions meaning | Allowed? |
+| --- | --- | --- | --- |
+| B1 provision / B0 accept | Bootstrap SA (≠ recipient) | Bootstrap must **already hold** them to execute the grant workflow | Required for bootstrap |
+| B1 forbidden shortcut | Execution / runtime / scheduler / readback identities | Do **not** grant them to these as a way to skip a distinct bootstrap | Forbidden |
+| Card C apply | Recipient = `PAPER_IAM_GRANT_RECIPIENT` (= executor) | Grant workflow **binds** role `paperSchedulerIamExecutor` containing the same four strings to the recipient | Intended outcome after dry-run |
+
+There is no contradiction: forbidding “execution identity as bootstrap” blocks
+self-elevation without a separate trusted caller; Card C is that separate,
+Environment-gated write performed **by** bootstrap **to** recipient.
+
 Explicitly forbidden:
 
-- Granting the four permissions (or broader project IAM admin) to
-  `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT`, `GCP_RUNTIME_SERVICE_ACCOUNT`,
-  `GCP_SCHEDULER_SERVICE_ACCOUNT`, or PAPER readback identities as a shortcut.
+- Using `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT`, `GCP_RUNTIME_SERVICE_ACCOUNT`,
+  `GCP_SCHEDULER_SERVICE_ACCOUNT`, or PAPER readback identities **as bootstrap**.
 - Reusing the known deficient executor as bootstrap.
 - Org-wide admin, key creation, or unbound `setIamPolicy` without Environment
   gates.
@@ -179,17 +229,35 @@ Rollback for B1:
 After Cards A and B, a **separate** exact-revision owner run card may authorize
 `workflow_dispatch` of `grant-paper-executor-permissions.yml` with
 `mode=dry-run` first, then a new card for `apply`. Confirm string remains
-`GRANT_PAPER_EXECUTOR_FOUR_PERMISSIONS`. This remediation note is not that card.
+`GRANT_PAPER_EXECUTOR_FOUR_PERMISSIONS`. First attempt only; Environment
+approval; masking before auth; fail-closed. This remediation note is not that
+card.
 
 Grant script effect if later authorized: create project role
-`paperSchedulerIamExecutor` with the same four permissions and bind it only to
-`serviceAccount:<PAPER_IAM_GRANT_RECIPIENT>`. No PAPER runtime enablement.
+`paperSchedulerIamExecutor` with the four permissions and bind it only to
+`serviceAccount:<PAPER_IAM_GRANT_RECIPIENT>`. Bootstrap remains the authenticated
+caller; recipient is the binding member. No PAPER runtime enablement.
+
+## Org-inherited GitHub variables (claim versus enforcement)
+
+The grant workflow resolves mappings through the job Environment `vars` context.
+GitHub's documented resolution order is Environment → repository → organization.
+This repository's **policy** is that the six grant mapping names must not be
+defined only at organization scope.
+
+**Enforcement status:** operational prerequisite only. The workflow does **not**
+technically detect or reject an org-only value: `vars.<name>` returns a string
+without a scope tag, and the Variables REST API is unavailable to
+`GITHUB_TOKEN` with `contents: read` (historical run `42266306297`). Comments and
+docs must not claim a technical org-only block. Operators must keep these names
+unset at org scope; Card A step 4 restates that control.
 
 ## Remaining unknowns (do not fabricate)
 
 - Live GCP presence/permissions of any SA behind the executor hash (no GCP GET
   in this pass).
-- Whether any non-executor SA already holds the four permissions.
+- Whether any non-executor SA already holds the four permissions under project
+  policy expansion.
 - Effective WIF attribute conditions on existing providers.
 - Whether Environment protection reviewers remain configured at grant time
   (workflow re-checks; not re-verified here).
@@ -198,5 +266,7 @@ Grant script effect if later authorized: create project role
 
 ## Verification posture
 
-Offline: contract tests in `tests/test_paper_executor_grant.py` and documentation
-checks. Online grant, IAM, or PAPER verification requires future exact cards.
+Offline: contract and negative tests in `tests/test_paper_executor_grant.py` and
+`tests/test_paper_iam_discovery_evidence.py`. Passing offline tests is **not**
+merge acceptance or grant readiness. Online grant, IAM, or PAPER verification
+requires future exact cards and independent review markers on the exact head.

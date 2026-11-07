@@ -57,8 +57,9 @@ jobs:
       # workflow GITHUB_TOKEN only receives contents/metadata and cannot read it
       # (run 42266306297 failed on the first existing name before authentication).
       # Mask every value before exporting it to later steps. Missing or blank
-      # mappings fail closed. Organization-only names remain unsupported: do not
-      # define these six names only at org scope.
+      # mappings fail closed. Organization-only names are an operational
+      # prerequisite (unsupported by policy) but are NOT technically rejected:
+      # vars has no scope tag and GITHUB_TOKEN cannot query Variables REST.
       - name: Mask protected mappings before exposing step environment
         uses: actions/github-script@v8
         env:

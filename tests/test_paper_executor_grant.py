@@ -157,6 +157,7 @@ def test_remediation_artifact_separates_intent_install_and_proposals():
     root = Path(__file__).parents[1]
     remediation = (root / "docs/iam/paper-executor-grant-remediation.md").read_text()
     design = (root / "docs/iam/paper-scheduler-get.md").read_text()
+    workflow = (root / ".github/workflows/grant-paper-executor-permissions.yml").read_text()
     for token in [
         "OWNER-PROVIDED", "PROPOSED_NOT_OBSERVED", "Card A", "Card B",
         "382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22",
@@ -166,10 +167,15 @@ def test_remediation_artifact_separates_intent_install_and_proposals():
         "paper-iam-bootstrap@",
         "GRANT_PAPER_EXECUTOR_FOUR_PERMISSIONS",
         "no grant",
+        "caller_test_iam_not_candidate_effective",
+        "B1 versus Card C",
+        "operational prerequisite",
     ]:
         assert token in remediation
     assert "paper-executor-grant-remediation.md" in design
     assert "382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22" in design
+    assert "does **not** technically detect or reject" in design
+    assert "NOT technically rejected" in workflow
     # Recipient expected hash must track the installed executor mapping, not a new identity.
     assert remediation.index("GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT") < remediation.index(
         "382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22")

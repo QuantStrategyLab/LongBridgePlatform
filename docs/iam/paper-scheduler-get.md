@@ -222,7 +222,10 @@ then same-name repository), matching
 It does not call the GitHub Variables REST API: workflow `GITHUB_TOKEN` with
 `contents: read` lacks that authority, and historical run `42266306297` failed
 on the first already-configured name before authentication. Organization-only
-variables remain unsupported; do not define these six names only at org scope.
+definitions of these six names are unsupported by **policy** (operational
+prerequisite). The `vars` channel does **not** technically detect or reject
+org-only values: resolution may still return an org string, and this workflow
+cannot scope-tag the source. Do not define these names only at org scope.
 All mappings must be nonempty strings; blank or malformed values stop before
 authentication. No GitHub token permission or Environment configuration is
 changed by this workflow definition.
