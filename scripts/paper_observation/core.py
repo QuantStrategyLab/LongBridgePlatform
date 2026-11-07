@@ -470,9 +470,24 @@ class Watchdog:
         if verification:
             self.send = lambda message: send("[verification] " + message)
 
+    def record_routine(self, root, kind, incident, now):
+        # Observation facts are not business cycles or delivery receipts. Keep
+        # the existing append-only store, explicitly pending central ingestion.
+        record = {"event_kind": kind, "occurred_at": now.isoformat(),
+                  "incident_reason": incident, "actually_ran": False,
+                  "cycle_count": 0, "order_count": None, "fill_count": None,
+                  "delivery_status": "pending_central"}
+        key = f"{root}/digest/{kind}.json"
+        if not self.store.create(key, record) and not self.store.get(key):
+            raise ObservationError("storage_unavailable")
+
     def notify(self, incident, active, now):
         prefix = "verification/" if self.verification else ""
         root = f"alerts/{prefix}{incident}"
+        if incident in {f"calendar/coverage_{days}" for days in (90, 30, 7)}:
+            if active:
+                self.record_routine(root, "maintenance_reminder", incident, now)
+            return
         if active and not self.store.get(f"{root}/ack.json"):
             claim = f"{root}/claims/{slot(now)}.json"
             if self.store.create(claim, {"at": now.isoformat()}) and self.send(
@@ -491,10 +506,8 @@ class Watchdog:
             and self.store.get(f"{root}/ack.json")
             and not self.store.get(f"{root}/recovered.json")
         ):
-            if self.store.create(
-                f"{root}/recover-claims/{slot(now)}.json", {"at": now.isoformat()}
-            ) and self.send(f"PAPER observation recovery: {incident}"):
-                self.store.create(f"{root}/recovered.json", {"at": now.isoformat()})
+            self.record_routine(root, "recovery", incident, now)
+            self.store.create(f"{root}/recovered.json", {"at": now.isoformat()})
 
     def run(self, now):
         if now < self.activation:
@@ -544,8 +557,7 @@ class Watchdog:
                     pass
             # Storage failure must not depend on storage-based deduplication.
             code = "storage_unavailable"
-            self.send(
-                f"PAPER observation alert: {now.date()}/{code}; persistent dedup unavailable"
-            )
+            from notifications.renderers import render_runtime_error
+            self.send(render_runtime_error(kind="real_error", occurred_at=now))
             return code
         return "checked"

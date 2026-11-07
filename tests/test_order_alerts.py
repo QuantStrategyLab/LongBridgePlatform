@@ -68,7 +68,7 @@ def test_monitor_submitted_order_status_emits_lifecycle_events_via_callback():
         sleeper=lambda _seconds: None,
     )
 
-    assert len(events) == 1
+    assert [event.status for event in events] == ["PartialFilled", "StatusCheckTimeout"]
     assert events[0].symbol == "SOXL.US"
     assert events[0].status == "PartialFilled"
     assert events[0].executed_qty == "4"
@@ -91,7 +91,7 @@ def test_monitor_submitted_order_status_emits_unconfirmed_event_after_poll_windo
         sleeper=lambda _seconds: None,
     )
 
-    assert len(events) == 1
+    assert [event.status for event in events] == ["StatusCheckTimeout"]
     assert events[0].symbol == "SOXL.US"
     assert events[0].status == "StatusCheckTimeout"
     assert events[0].reason == "poll_timeout"

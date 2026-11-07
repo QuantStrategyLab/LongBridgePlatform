@@ -536,3 +536,22 @@ def _heartbeat_outcome_key(execution, *, skip_logs, note_logs) -> str:
     if bool(execution.get("direct_live_routing_blocked")):
         return "heartbeat_execution_blocked"
     return "no_executable_orders" if (skip_logs or note_logs) else "no_trades"
+
+
+def render_runtime_error(*, kind="real_error", occurred_at=None, report=None, locale=None):
+    """Adapt runtime facts to the step-1 shared formatter; never render diagnostics.
+
+    The QPK step-1 revision must be pinned before deployment. Monitor time is
+    not a business-run observation; missing producer links/counts stay unknown.
+    """
+    import os
+    from datetime import datetime, timezone
+    from quant_platform_kit.notifications.renderer_base import render_asset_management_error
+    from quant_platform_kit.notifications.unified_contract import NotificationEvent
+
+    report = report or {}
+    stamp = occurred_at or datetime.now(timezone.utc)
+    event = NotificationEvent(kind, stamp, platform_id="longbridge",
+        strategy_profile=report.get("strategy_profile"),
+        incident_reason=kind)
+    return render_asset_management_error(event, locale=locale or os.environ.get("NOTIFY_LANG") or "zh-CN")

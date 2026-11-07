@@ -1186,13 +1186,8 @@ def _notify_normal_heartbeat(name: str, detail: str, *, observed_at=None, checke
 def _notify_heartbeat_alert(message, *, now, kind, inspected_count=0):
     if not unified_notifications.enabled():
         return _send_telegram(message)
-    locale = _notification_locale()
-    issue = (_notice("heartbeat_no_recent_report", lookback_hours=os.environ.get("RUNTIME_HEARTBEAT_LOOKBACK_HOURS") or "36")
-             if kind == "receipt_missing" else _notice("heartbeat_no_acceptable_report", count=inspected_count))
-    # Keep raw diagnostics in the existing logs; use the shared localized
-    # template without private target names, archive URIs or mixed raw reasons.
-    compact = format_operational_alert(locale=locale, alert_type="execution_report_heartbeat",
-        name="Execution receipts" if locale == "en" else "执行回执", context={}, issues=[issue])
+    from notifications.renderers import render_runtime_error
+    compact = render_runtime_error(kind=kind, occurred_at=now, locale=_notification_locale())
     return unified_notifications.dispatch_immediate(lambda: _send_telegram(compact[:3900]),
         kind=kind, incident="execution_receipt", occurred_at=now,
         run_id=os.environ.get("GITHUB_RUN_ID"), actually_ran=False)
