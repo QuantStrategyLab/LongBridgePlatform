@@ -235,24 +235,26 @@ URL, response, headers or mapping value is included. If any read fails, no
 mapping is exported, including previously read values. This diagnostic does not
 prove a permission repair or authorize a retry, grant, or PAPER start.
 
-### Mapping provenance (reviewed Git scope)
+### Mapping provenance (reviewed Git scope + owner t1393)
 
-Authoritative in-repo sources for the three grant-specific mappings. This table
-does not assert live Environment presence and does not invent identities.
+Authoritative in-repo sources for the three grant-specific mappings, plus
+owner-provided GitHub variable presence. Offline remediation and approval-ready
+cards live in
+[paper-executor-grant-remediation.md](paper-executor-grant-remediation.md).
+This table does not invent cloud identities. Variable absence is not cloud
+identity absence.
 
-| Variable | Role | Reviewed state | Source path + commit + scope |
-| --- | --- | --- | --- |
-| `PAPER_IAM_GRANT_RECIPIENT` | Independent approved mapping that must equal the existing scheduler IAM executor (`GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT`) | `EXISTS_SOURCE_RESOLVED` for the intended value source; the separate Environment name still needs an authorized same-value fill when absent | Contract and dual-check: `docs/iam/paper-scheduler-get.md` (this section; introduced with `#720` / `1fef697`), `scripts/paper_executor_grant.py` `identity()`; executor auth source: `.github/workflows/apply-paper-scheduler-jobs-get.yml` (`vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT`, Environment `longbridge-paper`) |
-| `PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT` | Existing authorized bootstrap SA in the same PAPER project, distinct from recipient; never the deficient executor | `REQUIRES_DESIGN` in reviewed Git/IaC/history — `#720` states no compatible authorized bootstrap is proved; no Terraform/provisioning module or committed email exists | Required by `.github/workflows/grant-paper-executor-permissions.yml` and `scripts/paper_executor_grant.py`; no reusable identity source in reviewed scope |
-| `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | Existing authorized WIF provider that actually trusts that bootstrap | `REQUIRES_DESIGN` in reviewed Git/IaC/history — same gap as bootstrap SA; do not reuse runtime/execution provider as a substitute without separate proof | Required by `.github/workflows/grant-paper-executor-permissions.yml` auth step; no reusable provider source in reviewed scope |
+| Variable | Role | Intent state | Installed GitHub config (owner t1393) | Source path + commit + scope |
+| --- | --- | --- | --- | --- |
+| `PAPER_IAM_GRANT_RECIPIENT` | Independent approved mapping that must equal the existing scheduler IAM executor (`GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT`) | `EXISTS_SOURCE_RESOLVED` — intended value is the Environment executor mapping | **Absent** exact name in Environment then repository. Expected post-fill value sha256 (UTF-8) equals executor hash `382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22` (executor updated 2026-11-03T06:51:52Z). | Contract: this section / `#720` `1fef697`; dual-check `scripts/paper_executor_grant.py` `identity()`; executor installed source: Environment `longbridge-paper` / `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` via `.github/workflows/apply-paper-scheduler-jobs-get.yml` |
+| `PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT` | Existing authorized bootstrap SA in the same PAPER project, distinct from recipient; never the deficient executor | `REQUIRES_DESIGN` — no proved reusable bootstrap in Git/IaC | **Absent** exact name in Environment then repository. Any concrete SA id remains `PROPOSED_NOT_OBSERVED` until a discovery or provisioning card proves it. | Required by `.github/workflows/grant-paper-executor-permissions.yml` and `scripts/paper_executor_grant.py`; see remediation Card B |
+| `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | Existing authorized WIF provider that actually trusts that bootstrap | `REQUIRES_DESIGN` — same gap as bootstrap SA | **Absent** exact name in Environment then repository. Provider resource `PROPOSED_NOT_OBSERVED` until proved. | Required by grant workflow auth step; see remediation Card B |
 
-Sibling scheduler mappings (`GCP_PROJECT_ID`, `PAPER_SCHEDULER_GET_PROJECT_ID`,
-`GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT`, `GCP_WORKLOAD_IDENTITY_PROVIDER`) are
-consumed by the existing scheduler IAM route and are out of scope for inventing
-bootstrap. Owner browser review on 2026-11-07 (Asia/Shanghai) reported the three
-`PAPER_IAM_*` names absent from the visible Environment/repo variable lists in
-that reviewed scope only; that is not a claim of global absence. Live GET of
-those names remains a bounded parent-Mac operation when separately authorized.
+Sibling scheduler mappings observed nonempty in Environment `longbridge-paper`
+(owner t1393): `GCP_PROJECT_ID` and `PAPER_SCHEDULER_GET_PROJECT_ID` share sha256
+`5fd9761bc0f5e7a1b75fc007b946b554af81773faee45d940bbf52c04c52152e` (project pair
+already consistent). `GCP_WORKLOAD_IDENTITY_PROVIDER` remains the scheduler
+executor auth provider and is not a bootstrap substitute without separate proof.
 
 Role permission responses are checked for exact membership and cardinality,
 independent of order. Fresh role snapshots normalize permission ordering while

@@ -153,6 +153,28 @@ def test_workflow_protection_contract():
     assert "secrets." not in text
 
 
+def test_remediation_artifact_separates_intent_install_and_proposals():
+    root = Path(__file__).parents[1]
+    remediation = (root / "docs/iam/paper-executor-grant-remediation.md").read_text()
+    design = (root / "docs/iam/paper-scheduler-get.md").read_text()
+    for token in [
+        "OWNER-PROVIDED", "PROPOSED_NOT_OBSERVED", "Card A", "Card B",
+        "382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22",
+        "5fd9761bc0f5e7a1b75fc007b946b554af81773faee45d940bbf52c04c52152e",
+        "Variable absence is **not** evidence",
+        "Rejected as bootstrap",
+        "paper-iam-bootstrap@",
+        "GRANT_PAPER_EXECUTOR_FOUR_PERMISSIONS",
+        "no grant",
+    ]:
+        assert token in remediation
+    assert "paper-executor-grant-remediation.md" in design
+    assert "382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22" in design
+    # Recipient expected hash must track the installed executor mapping, not a new identity.
+    assert remediation.index("GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT") < remediation.index(
+        "382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22")
+
+
 @pytest.mark.parametrize("mode", ["dry-run", "apply"])
 def test_role_response_order_is_irrelevant(mode):
     cloud = Cloud()
