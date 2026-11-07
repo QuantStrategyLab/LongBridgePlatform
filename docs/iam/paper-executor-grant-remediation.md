@@ -127,6 +127,16 @@ Forbidden proof techniques for B0:
   (`sa_get_iam_policy_is_trust_not_project_perm`).
 - Equating the candidate with the recipient/executor principal.
 
+Offline classifier verdicts (`scripts/paper_iam_discovery_evidence.py`):
+`rejected` | `unknown` | `accepted`. **Fail-closed:** both `rejected` and
+`unknown` deny bootstrap acceptance. A project **allow-binding plus role
+permission expansion is necessary but not sufficient** for unconditional
+effective permission. Conditional bindings (resource/time/principal CEL),
+inherited allow/deny, Principal Access Boundary (PAB), and any unknown
+evaluation context must remain `unknown` unless authoritatively covered.
+Fake fixtures never prove live IAM; `accepted` is only an offline pack-completeness
+signal.
+
 Accepted proof shape (owner-authorized read-only later):
 
 1. Resolve `<PROJECT_ID>` from Environment `GCP_PROJECT_ID` (hash
@@ -135,20 +145,22 @@ Accepted proof shape (owner-authorized read-only later):
    config or prior approved inventory — **no org-wide or project-wide account
    listing**.
 3. Read **project** `getIamPolicy` and collect role bindings whose `members`
-   include the candidate principal. Expand each bound role's permission set via
-   `iam.roles.get` for custom roles (or an owner-approved predefined-role
-   permission baseline). Candidate is acceptable for permissions only if the
-   union of those expanded sets covers exactly-needed bootstrap permissions
-   (at least the four; extra permissions require a separate risk note).
+   include the **exact** candidate principal. Expand each bound role's permission
+   set via `iam.roles.get` for custom roles (or an owner-approved predefined-role
+   permission baseline). Missing expansion is a hard reject. Binding membership
+   alone without authoritative condition/deny/PAB/inheritance/time/identity
+   coverage is `unknown`, not pass.
 4. Separately, read the candidate SA's `getIamPolicy` **only** to inspect WIF /
    `roles/iam.workloadIdentityUser` trust — never as a substitute for step 3.
 5. For providers already named in protected config, `workloadIdentityPools.providers.get`
    and accept only if trust is limited to this repository, protected `main`, and
    Environment `longbridge-paper` (or can be narrowed under a separate trust card).
 6. Reject any pack where `actual_caller == operator` and the only permission
-   evidence is that caller's `testIamPermissions` result.
+   evidence is that caller's `testIamPermissions` result; reject resource
+   mismatch and stale value hashes when those axes are supplied.
 
-If no candidate passes, do not widen search; proceed to B1.
+If no candidate reaches authoritative `accepted`, do not widen search; proceed
+to B1.
 
 ### B1 — minimal new bootstrap design (**PROPOSED_NOT_OBSERVED**)
 
