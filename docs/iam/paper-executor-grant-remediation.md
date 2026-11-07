@@ -9,27 +9,33 @@ Related definition: [paper-scheduler-get.md](paper-scheduler-get.md) and
 Lookup-channel fix lineage: PR #722 (Draft). Offline discovery classifier:
 [paper_iam_discovery_evidence.py](../../scripts/paper_iam_discovery_evidence.py).
 
+Public material in this tree uses only synthetic placeholders. Digests,
+numeric Environment ids and Actions run ids that fingerprint live mappings are
+not recorded here. Earlier tip revisions of this PR introduced such fingerprints
+into tracked files; those commits remain in git history. This tip removes them
+from the working tree and does **not** claim history scrubbing or force-push
+erasure.
+
 ## Owner-provided installed configuration (t1393)
 
 Source class: **OWNER-PROVIDED browser metadata**, not an independent cloud or
-API verification by this engineering pass. Observation surfaces:
+API verification by this engineering pass. Observation surfaces (generic):
 
-- Environment `longbridge-paper` variables table (40 items):
-  `https://github.com/QuantStrategyLab/LongBridgePlatform/settings/environments/15143916325/edit`
-- Repository Actions variables (18 items):
-  `https://github.com/QuantStrategyLab/LongBridgePlatform/settings/variables/actions`
+- Environment `longbridge-paper` variables table (settings → Environments →
+  `longbridge-paper`)
+- Repository Actions variables table (settings → Secrets and variables → Actions)
 
-Hashes are SHA-256 over the full GitHub variable value encoded as UTF-8. Raw
-values are not recorded here.
+Owner confirmation (names/kinds/presence only; raw values and digests stay in
+private operator notes):
 
-| Name | Installed? | Scope observed | Updated (UTC) | Value sha256 (UTF-8) |
-| --- | --- | --- | --- | --- |
-| `GCP_PROJECT_ID` | yes, nonempty | Environment | 2026-11-06T05:04:28Z | `5fd9761bc0f5e7a1b75fc007b946b554af81773faee45d940bbf52c04c52152e` |
-| `PAPER_SCHEDULER_GET_PROJECT_ID` | yes, nonempty | Environment | 2026-11-06T09:11:15Z | **same hash as** `GCP_PROJECT_ID` |
-| `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` | yes, nonempty | Environment | 2026-11-03T06:51:52Z | `382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22` |
-| `PAPER_IAM_GRANT_RECIPIENT` | **absent** exact name | Environment then repository | — | — |
-| `PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT` | **absent** exact name | Environment then repository | — | — |
-| `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | **absent** exact name | Environment then repository | — | — |
+| Name | Installed? | Scope observed |
+| --- | --- | --- |
+| `GCP_PROJECT_ID` | yes, nonempty | Environment |
+| `PAPER_SCHEDULER_GET_PROJECT_ID` | yes, nonempty; privately verified same UTF-8 value as `GCP_PROJECT_ID` | Environment |
+| `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` | yes, nonempty | Environment |
+| `PAPER_IAM_GRANT_RECIPIENT` | **absent** exact name | Environment then repository |
+| `PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT` | **absent** exact name | Environment then repository |
+| `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | **absent** exact name | Environment then repository |
 
 Absence means the GitHub variable name is missing in the reviewed Environment
 table and, for those three names, also in the repository Actions variables
@@ -40,8 +46,8 @@ pool or provider is absent in the cloud project.
 
 | Mapping | Intent (contract) | Installed GitHub config (t1393) | Decision input |
 | --- | --- | --- | --- |
-| Recipient | `PAPER_IAM_GRANT_RECIPIENT` must equal the existing scheduler IAM executor `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` in the same PAPER project (`scripts/paper_executor_grant.py` `identity()`) | Executor mapping **exists** in Environment; recipient name **absent** | Fill Environment variable from the already-installed executor mapping; expected post-fill value sha256 must equal `382a7cbe…697cc22`. Do not invent a new email. |
-| Project pair | `PAPER_SCHEDULER_GET_PROJECT_ID` must equal `GCP_PROJECT_ID` | Both exist; **hashes already match** | No project remapping required for this gate. |
+| Recipient | `PAPER_IAM_GRANT_RECIPIENT` must equal the existing scheduler IAM executor `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` in the same PAPER project (`scripts/paper_executor_grant.py` `identity()`) | Executor mapping **exists** in Environment; recipient name **absent** | Fill Environment variable from the already-installed executor mapping; privately verify UTF-8 digests match. Do not invent a new email. |
+| Project pair | `PAPER_SCHEDULER_GET_PROJECT_ID` must equal `GCP_PROJECT_ID` | Both exist; privately verified equal | No project remapping required for this gate. |
 | Bootstrap SA | Distinct authorized SA in the same project, not the recipient/executor | Name absent; no in-repo proved reusable IAM bootstrap | Requires design or bounded discovery (below). **PROPOSED_NOT_OBSERVED** if newly named. |
 | Bootstrap WIF | Provider that actually trusts that bootstrap under repo/main/`longbridge-paper` limits | Name absent; no in-repo proved bootstrap provider | Same as bootstrap SA. |
 
@@ -71,8 +77,8 @@ Preconditions:
 1. PR #722 lookup-channel fix is merged to `main` (engineering merge only; still
    no grant). Until then, grant runs remain blocked on blank mappings even after
    fills.
-2. Owner confirms Environment `longbridge-paper` still shows executor sha256
-   `382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22`.
+2. Owner confirms Environment `longbridge-paper` still holds the nonempty
+   executor mapping (private digest check against operator notes).
 3. Exact authorization for GitHub Environment **variable create** on
    `longbridge-paper` (not repository-only, not org-only).
 
@@ -81,8 +87,7 @@ Action (human / approved operator; not this agent):
 1. Create Environment variable `PAPER_IAM_GRANT_RECIPIENT`.
 2. Set its value to the **same bytes** as Environment
    `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` (copy from the existing UI field).
-3. Verify sha256(UTF-8(value)) ==
-   `382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22`.
+3. Privately verify UTF-8 digests match; do not publish digests in Git.
 4. Leave repository/org copies unset for this name (operational; see org-vars note).
 
 Rollback: delete the Environment variable `PAPER_IAM_GRANT_RECIPIENT` if the
@@ -126,41 +131,40 @@ Forbidden proof techniques for B0:
 - Treating SA `getIamPolicy` / WIF bindings as project-effective permission proof
   (`sa_get_iam_policy_is_trust_not_project_perm`).
 - Equating the candidate with the recipient/executor principal.
+- Treating self-attested completeness booleans or unsigned fixture packs as
+  trusted provenance for operational ACCEPTED.
 
-Offline classifier verdicts (`scripts/paper_iam_discovery_evidence.py`):
-`rejected` | `unknown` | `accepted`. **Fail-closed:** both `rejected` and
-`unknown` deny bootstrap acceptance. A project **allow-binding plus role
-permission expansion is necessary but not sufficient** for unconditional
-effective permission. Conditional bindings (resource/time/principal CEL),
-inherited allow/deny, Principal Access Boundary (PAB), and any unknown
-evaluation context must remain `unknown` unless authoritatively covered.
-Fake fixtures never prove live IAM; `accepted` is only an offline pack-completeness
-signal.
+Offline classifier verdicts: `rejected` | `unknown` | `accepted`.
+**Fail-closed:** both `rejected` and `unknown` deny bootstrap acceptance.
+A project **allow-binding plus role permission expansion is necessary but not
+sufficient**. Conditional bindings (resource/time/principal CEL), inherited
+allow/deny, Principal Access Boundary (PAB), incomplete resource/hash pairs,
+and any missing trusted provenance must remain `unknown`.
+`SUPPORTED_TRUSTED_PROVENANCE_KINDS` is empty in-tree: **ACCEPTED is currently
+unreachable** from local assertions. Fake fixtures never prove live IAM.
 
-Accepted proof shape (owner-authorized read-only later):
+Accepted proof shape (owner-authorized read-only later, once a supported
+provenance kind exists):
 
-1. Resolve `<PROJECT_ID>` from Environment `GCP_PROJECT_ID` (hash
-   `5fd9761b…52152e`); do not publish the raw id in chat.
+1. Resolve `<PROJECT_ID>` from Environment `GCP_PROJECT_ID` privately; do not
+   publish the raw id in chat or Git.
 2. `serviceAccounts.get` only for candidate emails already known from protected
    config or prior approved inventory — **no org-wide or project-wide account
    listing**.
 3. Read **project** `getIamPolicy` and collect role bindings whose `members`
    include the **exact** candidate principal. Expand each bound role's permission
    set via `iam.roles.get` for custom roles (or an owner-approved predefined-role
-   permission baseline). Missing expansion is a hard reject. Binding membership
-   alone without authoritative condition/deny/PAB/inheritance/time/identity
-   coverage is `unknown`, not pass.
+   permission baseline). Missing expansion is a hard reject.
 4. Separately, read the candidate SA's `getIamPolicy` **only** to inspect WIF /
    `roles/iam.workloadIdentityUser` trust — never as a substitute for step 3.
 5. For providers already named in protected config, `workloadIdentityPools.providers.get`
    and accept only if trust is limited to this repository, protected `main`, and
    Environment `longbridge-paper` (or can be narrowed under a separate trust card).
-6. Reject any pack where `actual_caller == operator` and the only permission
-   evidence is that caller's `testIamPermissions` result; reject resource
-   mismatch and stale value hashes when those axes are supplied.
+6. Reject caller-scoped `testIamPermissions` as candidate proof; reject resource
+   mismatch and one-sided or stale value hashes when those axes are supplied.
 
-If no candidate reaches authoritative `accepted`, do not widen search; proceed
-to B1.
+If no candidate reaches authoritative acceptance under a supported provenance
+kind, do not widen search; proceed to B1.
 
 ### B1 — minimal new bootstrap design (**PROPOSED_NOT_OBSERVED**)
 
@@ -257,16 +261,18 @@ GitHub's documented resolution order is Environment → repository → organizat
 This repository's **policy** is that the six grant mapping names must not be
 defined only at organization scope.
 
-**Enforcement status:** operational prerequisite only. The workflow does **not**
-technically detect or reject an org-only value: `vars.<name>` returns a string
-without a scope tag, and the Variables REST API is unavailable to
-`GITHUB_TOKEN` with `contents: read` (historical run `42266306297`). Comments and
-docs must not claim a technical org-only block. Operators must keep these names
-unset at org scope; Card A step 4 restates that control.
+**Enforcement status:** operational prerequisite only (**D3 residual**). The
+workflow does **not** technically detect or reject an org-only value:
+`vars.<name>` returns a string without a scope tag, and the Variables REST API
+is unavailable to `GITHUB_TOKEN` with `contents: read` (historical mapping-read
+failure under contents-only token). Comments and docs must not claim a technical
+org-only block. Operators must keep these names unset at org scope; Card A
+step 4 restates that control. This residual is lower priority than mapping
+lookup and discovery semantics; do not pretend enforcement was restored.
 
 ## Remaining unknowns (do not fabricate)
 
-- Live GCP presence/permissions of any SA behind the executor hash (no GCP GET
+- Live GCP presence/permissions of any SA behind the executor mapping (no GCP GET
   in this pass).
 - Whether any non-executor SA already holds the four permissions under project
   policy expansion.
@@ -280,5 +286,6 @@ unset at org scope; Card A step 4 restates that control.
 
 Offline: contract and negative tests in `tests/test_paper_executor_grant.py` and
 `tests/test_paper_iam_discovery_evidence.py`. Passing offline tests is **not**
-merge acceptance or grant readiness. Online grant, IAM, or PAPER verification
-requires future exact cards and independent review markers on the exact head.
+merge acceptance, grant readiness, or live IAM proof. Online grant, IAM, or PAPER
+verification requires future exact cards and independent review markers on the
+exact head.

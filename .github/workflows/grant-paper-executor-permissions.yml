@@ -55,11 +55,12 @@ jobs:
       # Resolve mappings through the job Environment vars context (same channel as
       # apply-paper-scheduler-jobs-get). Do not call the Variables REST API: the
       # workflow GITHUB_TOKEN only receives contents/metadata and cannot read it
-      # (run 42266306297 failed on the first existing name before authentication).
-      # Mask every value before exporting it to later steps. Missing or blank
-      # mappings fail closed. Organization-only names are an operational
-      # prerequisite (unsupported by policy) but are NOT technically rejected:
-      # vars has no scope tag and GITHUB_TOKEN cannot query Variables REST.
+      # (a historical mapping-read failure under that token shape stopped before
+      # authentication on an already-configured name). Mask every value before
+      # exporting it to later steps. Missing or blank mappings fail closed.
+      # Organization-only names are an operational prerequisite (unsupported by
+      # policy) but are NOT technically rejected: vars has no scope tag and
+      # GITHUB_TOKEN cannot query Variables REST.
       - name: Mask protected mappings before exposing step environment
         uses: actions/github-script@v8
         env:

@@ -1,10 +1,12 @@
 """Offline classifiers for PAPER IAM bootstrap discovery evidence.
 
-No network I/O. Encodes the B0 contract so operator-held permissions cannot be
-mistaken for a candidate service account's project permissions, and so a bare
-project allow-binding plus role expansion is never treated as unconditional
-effective permission when conditions, deny, PAB or inheritance context are
-unknown.
+No network I/O. Distinguishes hard rejects, UNKNOWN (fail-closed), and a
+reserved ACCEPTED path that requires a supported trusted provenance kind.
+
+No supported trusted provenance kind is registered in this repository. Local
+booleans, fixture packs, and self-attested completeness flags therefore cannot
+produce operational ACCEPTED. Structural tests exercise reject/unknown only.
+This module never calls GCP and never mints credentials.
 """
 
 from __future__ import annotations
@@ -18,12 +20,15 @@ BOOTSTRAP_PERMISSIONS = (
 )
 
 # Recipient receives these via Card C as role paperSchedulerIamExecutor.
-# That outcome is intentional and distinct from using the recipient as bootstrap.
 RECIPIENT_GRANT_PERMISSIONS = BOOTSTRAP_PERMISSIONS
 
 VERDICT_REJECTED = "rejected"
 VERDICT_UNKNOWN = "unknown"
 VERDICT_ACCEPTED = "accepted"
+
+# Empty until an owner-approved, non-self-attested provenance scheme is wired.
+# Do not invent authority here (no local "self_attested" / fixture kinds).
+SUPPORTED_TRUSTED_PROVENANCE_KINDS: frozenset[str] = frozenset()
 
 
 def reject_reasons(
@@ -56,13 +61,15 @@ def reject_reasons(
     if impersonation_or_token_mint_used:
         reasons.append("impersonation_or_token_mint_forbidden")
 
-    if expected_resource is not None and evidence_resource is not None:
+    if (expected_resource is None) ^ (evidence_resource is None):
+        reasons.append("one_sided_resource_provenance")
+    elif expected_resource is not None and evidence_resource is not None:
         if expected_resource != evidence_resource or evaluated_resource != evidence_resource:
             reasons.append("resource_mismatch")
-    elif expected_resource is not None and expected_resource != evaluated_resource:
-        reasons.append("resource_mismatch")
 
-    if expected_value_sha256 is not None and observed_value_sha256 is not None:
+    if (expected_value_sha256 is None) ^ (observed_value_sha256 is None):
+        reasons.append("one_sided_value_hash")
+    elif expected_value_sha256 is not None and observed_value_sha256 is not None:
         if expected_value_sha256 != observed_value_sha256:
             reasons.append("stale_or_mismatched_value_hash")
 
@@ -75,8 +82,6 @@ def reject_reasons(
                 reasons.append("caller_test_iam_not_candidate_effective")
             reasons.append("test_iam_permissions_is_caller_scoped")
 
-    # SA getIamPolicy describes who may act as the SA (trust), not which project
-    # permissions the SA itself holds.
     if candidate_sa_iam_policy_members is not None and candidate_project_role_bindings is None:
         reasons.append("sa_get_iam_policy_is_trust_not_project_perm")
 
@@ -110,14 +115,19 @@ def unknown_reasons(
     inherited_allow_deny_context_complete: bool | None = None,
     principal_identity_context_complete: bool | None = None,
     time_context_complete: bool | None = None,
+    expected_resource: str | None = None,
+    evidence_resource: str | None = None,
+    expected_value_sha256: str | None = None,
+    observed_value_sha256: str | None = None,
+    trusted_provenance: dict | None = None,
     **_ignored,
 ) -> list[str]:
-    """Return UNKNOWN categories: fail-closed unless context is authoritatively covered.
+    """Return UNKNOWN categories: fail-closed without trusted provenance.
 
-    A project allow-binding plus role permission expansion is necessary but not
-    sufficient for unconditional effective permission. Conditional bindings,
-    unsatisfied resource/time/principal CEL, inherited allow/deny, and Principal
-    Access Boundary (PAB) must not produce ACCEPTED when uncovered.
+    Self-attested booleans (conditions/deny/PAB/etc.) are structural checklist
+    fields only. They never authorize ACCEPTED by themselves. Resource and hash
+    pairs must both be present for a complete pack; missing pairs stay UNKNOWN
+    when not already hard-rejected as one-sided.
     """
     reasons: list[str] = []
     has_binding_expansion = bool(
@@ -142,15 +152,26 @@ def unknown_reasons(
     if time_context_complete is not True:
         reasons.append("time_context_unknown")
 
+    if expected_resource is None or evidence_resource is None:
+        reasons.append("resource_provenance_incomplete")
+    if expected_value_sha256 is None or observed_value_sha256 is None:
+        reasons.append("value_hash_provenance_incomplete")
+
+    kind = None
+    if isinstance(trusted_provenance, dict):
+        kind = trusted_provenance.get("kind")
+    if kind not in SUPPORTED_TRUSTED_PROVENANCE_KINDS:
+        reasons.append("trusted_provenance_missing_or_unsupported")
+
     return _dedupe(reasons)
 
 
 def evidence_verdict(**kwargs) -> str:
     """Three-state verdict: rejected | unknown | accepted.
 
-    Fake fixtures never prove live IAM. ACCEPTED only means the offline pack
-    supplied authoritative coverage for every required axis; it is not a cloud
-    permission proof.
+    ACCEPTED is reserved for a future supported trusted provenance kind.
+    With ``SUPPORTED_TRUSTED_PROVENANCE_KINDS`` empty, ACCEPTED is unreachable
+    from fixtures or local assertions. Fake packs never prove live IAM.
     """
     if reject_reasons(**kwargs):
         return VERDICT_REJECTED
@@ -158,6 +179,11 @@ def evidence_verdict(**kwargs) -> str:
         return VERDICT_UNKNOWN
     if not kwargs.get("candidate_project_role_bindings") or not kwargs.get(
             "candidate_role_permission_sets"):
+        return VERDICT_UNKNOWN
+    # Provenance allowlist empty ⇒ unreachable; keep explicit guard.
+    provenance = kwargs.get("trusted_provenance")
+    kind = provenance.get("kind") if isinstance(provenance, dict) else None
+    if kind not in SUPPORTED_TRUSTED_PROVENANCE_KINDS:
         return VERDICT_UNKNOWN
     return VERDICT_ACCEPTED
 

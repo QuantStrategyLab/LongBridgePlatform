@@ -160,8 +160,6 @@ def test_remediation_artifact_separates_intent_install_and_proposals():
     workflow = (root / ".github/workflows/grant-paper-executor-permissions.yml").read_text()
     for token in [
         "OWNER-PROVIDED", "PROPOSED_NOT_OBSERVED", "Card A", "Card B",
-        "382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22",
-        "5fd9761bc0f5e7a1b75fc007b946b554af81773faee45d940bbf52c04c52152e",
         "Variable absence is **not** evidence",
         "Rejected as bootstrap",
         "paper-iam-bootstrap@",
@@ -170,15 +168,21 @@ def test_remediation_artifact_separates_intent_install_and_proposals():
         "caller_test_iam_not_candidate_effective",
         "B1 versus Card C",
         "operational prerequisite",
+        "SUPPORTED_TRUSTED_PROVENANCE_KINDS",
+        "D3 residual",
     ]:
         assert token in remediation
     assert "paper-executor-grant-remediation.md" in design
-    assert "382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22" in design
-    assert "does **not** technically detect or reject" in design
+    assert "technically detect or reject" in design
     assert "NOT technically rejected" in workflow
-    # Recipient expected hash must track the installed executor mapping, not a new identity.
-    assert remediation.index("GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT") < remediation.index(
-        "382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22")
+    # Public tip: no full sha256 digests, numeric Environment settings paths, or numeric run ids.
+    import re
+    for text in (remediation, design, workflow):
+        assert not re.search(r"\b[0-9a-f]{64}\b", text)
+        assert not re.search(r"environments/\d+/edit", text)
+        assert not re.search(r"\brun\s+`?\d{8,}", text, flags=re.I)
+    assert "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT" in remediation
+    assert "same bytes" in remediation
 
 
 @pytest.mark.parametrize("mode", ["dry-run", "apply"])

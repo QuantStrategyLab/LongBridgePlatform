@@ -220,15 +220,15 @@ the six named variables through the job Environment `vars` context (Environment
 then same-name repository), matching
 [apply-paper-scheduler-jobs-get](../../.github/workflows/apply-paper-scheduler-jobs-get.yml).
 It does not call the GitHub Variables REST API: workflow `GITHUB_TOKEN` with
-`contents: read` lacks that authority, and historical run `42266306297` failed
-on the first already-configured name before authentication. Organization-only
-definitions of these six names are unsupported by **policy** (operational
-prerequisite). The `vars` channel does **not** technically detect or reject
-org-only values: resolution may still return an org string, and this workflow
-cannot scope-tag the source. Do not define these names only at org scope.
-All mappings must be nonempty strings; blank or malformed values stop before
-authentication. No GitHub token permission or Environment configuration is
-changed by this workflow definition.
+`contents: read` lacks that authority, and a historical mapping-read failure
+under that token shape stopped on an already-configured name before
+authentication. Organization-only definitions of these six names are
+unsupported by **policy** (operational prerequisite). The `vars` channel does
+**not** technically detect or reject org-only values: resolution may still
+return an org string, and this workflow cannot scope-tag the source. Do not
+define these names only at org scope. All mappings must be nonempty strings;
+blank or malformed values stop before authentication. No GitHub token
+permission or Environment configuration is changed by this workflow definition.
 
 A mapping-read failure reports only the failing fixed variable name, lookup
 scope (`vars`) and an allowlisted category: `blank_value` or
@@ -249,15 +249,15 @@ identity absence.
 
 | Variable | Role | Intent state | Installed GitHub config (owner t1393) | Source path + commit + scope |
 | --- | --- | --- | --- | --- |
-| `PAPER_IAM_GRANT_RECIPIENT` | Independent approved mapping that must equal the existing scheduler IAM executor (`GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT`) | `EXISTS_SOURCE_RESOLVED` — intended value is the Environment executor mapping | **Absent** exact name in Environment then repository. Expected post-fill value sha256 (UTF-8) equals executor hash `382a7cbea2ea0de0f455ed00cf29a3181766399a5cd28a794d00a79d8697cc22` (executor updated 2026-11-03T06:51:52Z). | Contract: this section / `#720` `1fef697`; dual-check `scripts/paper_executor_grant.py` `identity()`; executor installed source: Environment `longbridge-paper` / `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` via `.github/workflows/apply-paper-scheduler-jobs-get.yml` |
+| `PAPER_IAM_GRANT_RECIPIENT` | Independent approved mapping that must equal the existing scheduler IAM executor (`GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT`) | `EXISTS_SOURCE_RESOLVED` — intended value is the Environment executor mapping | **Absent** exact name in Environment then repository. Post-fill UTF-8 digests must privately match the installed executor mapping; digests are not published here. | Contract: this section / `#720`; dual-check `scripts/paper_executor_grant.py` `identity()`; executor installed source: Environment `longbridge-paper` / `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` via `.github/workflows/apply-paper-scheduler-jobs-get.yml` |
 | `PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT` | Existing authorized bootstrap SA in the same PAPER project, distinct from recipient; never the deficient executor | `REQUIRES_DESIGN` — no proved reusable bootstrap in Git/IaC | **Absent** exact name in Environment then repository. Any concrete SA id remains `PROPOSED_NOT_OBSERVED` until a discovery or provisioning card proves it. | Required by `.github/workflows/grant-paper-executor-permissions.yml` and `scripts/paper_executor_grant.py`; see remediation Card B |
 | `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | Existing authorized WIF provider that actually trusts that bootstrap | `REQUIRES_DESIGN` — same gap as bootstrap SA | **Absent** exact name in Environment then repository. Provider resource `PROPOSED_NOT_OBSERVED` until proved. | Required by grant workflow auth step; see remediation Card B |
 
 Sibling scheduler mappings observed nonempty in Environment `longbridge-paper`
-(owner t1393): `GCP_PROJECT_ID` and `PAPER_SCHEDULER_GET_PROJECT_ID` share sha256
-`5fd9761bc0f5e7a1b75fc007b946b554af81773faee45d940bbf52c04c52152e` (project pair
-already consistent). `GCP_WORKLOAD_IDENTITY_PROVIDER` remains the scheduler
-executor auth provider and is not a bootstrap substitute without separate proof.
+(owner t1393): `GCP_PROJECT_ID` and `PAPER_SCHEDULER_GET_PROJECT_ID` privately
+verified equal; digests not published in Git. `GCP_WORKLOAD_IDENTITY_PROVIDER`
+remains the scheduler executor auth provider and is not a bootstrap substitute
+without separate proof.
 
 Role permission responses are checked for exact membership and cardinality,
 independent of order. Fresh role snapshots normalize permission ordering while
