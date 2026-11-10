@@ -246,3 +246,14 @@ source binding 是 deployment/scope/token-version 来源摘要，含 revision；
 降级到拒绝扩展字段的旧接收端。
 
 券商字段说明：https://open.longbridge.com/docs/trade/asset/stock 。
+
+## Shared image release
+
+Run `Paper observation release` manually from the default branch. Select the
+protected target and start with `verify`. It reads the expected fixed image
+through the target's short-lived release identity. Keep the runtime identity
+and schedule separate. Use an isolated target to exercise image updates.
+The deploy operation stages a revision at zero traffic. Traffic promotion
+and rollback remain separate operations.
+
+[Organization release workflow](https://github.com/QuantStrategyLab/.github/blob/main/docs/deployment-workflows.md)
