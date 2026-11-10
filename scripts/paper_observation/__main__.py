@@ -163,12 +163,13 @@ def sender(token, recipient):
     return send
 
 
-def main():
+def main(argv=None):
     logging.disable(logging.CRITICAL)
     try:
-        if len(sys.argv) != 2 or sys.argv[1] not in ("collect", "watchdog", "verify"):
+        args = sys.argv[1:] if argv is None else argv
+        if len(args) != 1 or args[0] not in ("collect", "watchdog", "verify"):
             raise ObservationError("configuration_invalid")
-        mode = sys.argv[1]
+        mode = args[0]
         store = Store(os.environ["OBSERVATION_BUCKET"])
         start = date.fromisoformat(os.environ["OBSERVATION_START"])
         now = datetime.now(UTC)
