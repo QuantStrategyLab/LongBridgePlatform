@@ -76,6 +76,32 @@ back by pausing only the two new Schedulers, inspecting their active executions,
 restoring the previous service traffic map and revoking only the added IAM
 bindings. Preserve the archive and t0.
 
+### Request-based Cloud Run candidate
+
+Deploy the same image to two internal, authenticated Cloud Run Services with
+request-based billing, zero minimum instances and concurrency one. The
+container command is `python -m scripts.paper_observation.http_tick collect`
+for the collector and uses `watchdog` for the watchdog. Each deployment retains
+its existing runtime identity, bucket prefixes and network configuration. Only
+the collector uses Direct VPC egress for the internal PAPER service.
+
+Each service accepts `POST /tick` from its dedicated Scheduler identity through
+Cloud Run IAM. Configure Scheduler OIDC against the default service URL and
+leave the service ingress internal. The request cannot select a role or supply
+observation input. Keep both schedules and zero Scheduler retries. Allow the
+same bounded execution time on the request as on the job, including container
+startup in the Scheduler attempt deadline. A failed tick returns HTTP 500 and
+keeps the existing structured observation result for diagnosis.
+
+Before changing Scheduler targets, measure cold and warm requests in isolation.
+Verify the calendar, missed ticks, the post-close retry window, private
+collector access, and alert handling with a test receiver. Compare measured
+billable request time with the job baseline. At cutover, allow at most one
+active target per schedule. Keep both existing jobs for rollback. To restore
+them, stop HTTP dispatch, let in-flight ticks finish, then restore the saved
+Job targets and recheck the next heartbeat. The archive and claims stay in
+the same bucket throughout.
+
 ## Private forward reader
 
 `collect_read_only_reconciliation_observations` accepts an optional
@@ -220,3 +246,14 @@ source binding 是 deployment/scope/token-version 来源摘要，含 revision；
 降级到拒绝扩展字段的旧接收端。
 
 券商字段说明：https://open.longbridge.com/docs/trade/asset/stock 。
+
+## Shared image release
+
+Run `Paper observation release` manually from the default branch. Select the
+protected target and start with `verify`. It reads the expected fixed image
+through the target's short-lived release identity. Keep the runtime identity
+and schedule separate. Use an isolated target to exercise image updates.
+The deploy operation stages a revision at zero traffic. Traffic promotion
+and rollback remain separate operations.
+
+[Organization release workflow](https://github.com/QuantStrategyLab/.github/blob/main/docs/deployment-workflows.md)
