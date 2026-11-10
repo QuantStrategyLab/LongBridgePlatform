@@ -155,7 +155,7 @@ def test_workflow_protection_contract():
                  "PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT", "PAPER_IAM_BOOTSTRAP_WIF_PROVIDER",
                  "persist-credentials: false"]:
         assert gate in text
-    assert set(re.findall(r"secrets\.([A-Z_]+)", text)) == set(MAPPINGS)
+    assert set(re.findall(r"secrets\.([A-Z_]+)", text)) == {"PAPER_GRANT_ENVELOPE_" + name for name in MAPPINGS}
     assert len(re.findall(r"secrets\.([A-Z_]+)", text)) == 6
 
 
@@ -252,7 +252,7 @@ def test_mapping_channel_uses_six_environment_secrets_not_rest_api():
     assert "actions/variables/{name}" not in first
     assert "github.request" not in first
     for name in mappings:
-        assert f"MAPPING_{name}: ${{{{ secrets.{name} }}}}" in first
+        assert f"MAPPING_{name}: ${{{{ secrets.PAPER_GRANT_ENVELOPE_{name} }}}}" in first
     assert "process.env['MAPPING_' + name]" in first
     assert not re.search(r"\$\{\{\s*vars\.", workflow)
     assert "rest.actions" not in workflow
@@ -395,9 +395,10 @@ def test_runner_preparation_does_not_render_unmasked_mappings(blank_index):
     # Evaluate the direct mapping expressions, then mask the prepared output,
     # matching Worker.InitializeSecretMasker -> ExecutionContext.Write ordering.
     rendered = re.sub(r"\$\{\{\s*(vars|secrets)\.([A-Z_]+)\s*\}\}",
-                      lambda match: values[match[2]], first)
+                      lambda match: values[match[2].removeprefix("PAPER_GRANT_ENVELOPE_")], first)
     secret_names = re.findall(r"\$\{\{\s*secrets\.([A-Z_]+)\s*\}\}", first)
-    registered_masks = {values[name] for name in secret_names if values[name]}
+    registered_masks = {values[name.removeprefix("PAPER_GRANT_ENVELOPE_")] for name in secret_names
+                        if values[name.removeprefix("PAPER_GRANT_ENVELOPE_")]}
     for value in registered_masks:
         rendered = rendered.replace(value, "***")
     for name, value in values.items():
@@ -458,3 +459,54 @@ const run = new Function('github', 'core', 'context', 'return (async () => {' + 
         "CASE", json.dumps([index, fault]))
     result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_grant_envelopes_coexist_with_shared_deploy_identity():
+    root = Path(__file__).parents[1]
+    workflow = (root / ".github/workflows/grant-paper-executor-permissions.yml").read_text()
+    first = workflow.split("      - name:")[1]
+    revision, card = "a" * 40, "fake-owner-card"
+    secrets = {"GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT": EXECUTOR}
+    for name in MAPPINGS:
+        secrets["PAPER_GRANT_ENVELOPE_" + name] = json.dumps({
+            "version": 1, "name": name, "repository": "QuantStrategyLab/LongBridgePlatform",
+            "environment": "longbridge-paper", "scope": "environment",
+            "revision": revision, "owner_run_card": card, "value": ENV.get(name, "fake-provider"),
+        })
+    bindings = re.findall(r"MAPPING_([A-Z_]+): \$\{\{ secrets\.([A-Z_]+) \}\}", first)
+    assert len(bindings) == 6
+    environment = {"MAPPING_" + name: secrets.get(secret, "") for name, secret in bindings}
+    environment.update(GITHUB_REPOSITORY="QuantStrategyLab/LongBridgePlatform",
+                       GITHUB_SHA=revision, IAM_APPROVED_REVISION=revision, IAM_OWNER_RUN_CARD=card)
+    script = textwrap.dedent(first.split("          script: |\n", 1)[1])
+    harness = """
+const assert = require('node:assert/strict');
+Object.assign(process.env, ENVIRONMENT);
+const exported = {}, masks = new Set();
+const core = {setSecret: value => masks.add(value), exportVariable: (name, value) => {
+  assert(masks.has(value)); exported[name] = value;
+}};
+const run = new Function('core', 'return (async () => {' + SCRIPT + '})()');
+run(core).then(() => assert.deepEqual(exported, EXPECTED))
+  .catch(() => { console.error('Grant/deploy Secret coexistence failed'); process.exit(1); });
+""".replace("ENVIRONMENT", json.dumps(environment)).replace("SCRIPT", json.dumps(script)).replace(
+        "EXPECTED", json.dumps({name: ENV.get(name, "fake-provider") for name in MAPPINGS}))
+    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert secrets["GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"] == EXECUTOR
+    deploy = (root / ".github/workflows/sync-cloud-run-env.yml").read_text()
+    assert "secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT" in deploy
+    assert not set(re.findall(r"secrets\.([A-Z_]+)", workflow)) & set(
+        re.findall(r"secrets\.([A-Z_]+)", deploy))
+
+
+@pytest.mark.parametrize("document", ["paper-scheduler-get.md", "paper-executor-grant-remediation.md"])
+def test_operator_contract_names_secret_envelopes_and_generation(document):
+    text = (Path(__file__).parents[1] / "docs/iam" / document).read_text()
+    for name in MAPPINGS:
+        assert f"| `PAPER_GRANT_ENVELOPE_{name}` | `{name}` |" in text
+    for field in ["version", "name", "repository", "environment", "scope", "revision", "owner_run_card", "value"]:
+        assert f"`{field}`" in text
+    assert "approved_revision" in text
+    assert "each separately authorized run" in text
+    assert "Environment then same-name repository" not in text

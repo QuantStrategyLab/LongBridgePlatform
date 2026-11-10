@@ -52,7 +52,7 @@ jobs:
       IAM_APPROVED_REVISION: ${{ inputs.approved_revision }}
       IAM_OWNER_RUN_CARD: ${{ inputs.owner_run_card }}
     steps:
-      # Exactly six protected Environment Secrets transport compact, single-line
+      # Exactly six grant-specific Environment Secrets transport compact, single-line
       # JSON envelopes. The runner must register each complete secret before
       # PrepareExecution prints evaluated env/with (in-action masking is too late).
       # Never use vars or a Variables API fallback. Trusted provisioning must bind
@@ -62,12 +62,12 @@ jobs:
       - name: Mask protected mappings before exposing step environment
         uses: actions/github-script@v8
         env:
-          MAPPING_GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-          MAPPING_PAPER_SCHEDULER_GET_PROJECT_ID: ${{ secrets.PAPER_SCHEDULER_GET_PROJECT_ID }}
-          MAPPING_GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
-          MAPPING_PAPER_IAM_GRANT_RECIPIENT: ${{ secrets.PAPER_IAM_GRANT_RECIPIENT }}
-          MAPPING_PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT: ${{ secrets.PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT }}
-          MAPPING_PAPER_IAM_BOOTSTRAP_WIF_PROVIDER: ${{ secrets.PAPER_IAM_BOOTSTRAP_WIF_PROVIDER }}
+          MAPPING_GCP_PROJECT_ID: ${{ secrets.PAPER_GRANT_ENVELOPE_GCP_PROJECT_ID }}
+          MAPPING_PAPER_SCHEDULER_GET_PROJECT_ID: ${{ secrets.PAPER_GRANT_ENVELOPE_PAPER_SCHEDULER_GET_PROJECT_ID }}
+          MAPPING_GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ secrets.PAPER_GRANT_ENVELOPE_GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          MAPPING_PAPER_IAM_GRANT_RECIPIENT: ${{ secrets.PAPER_GRANT_ENVELOPE_PAPER_IAM_GRANT_RECIPIENT }}
+          MAPPING_PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT: ${{ secrets.PAPER_GRANT_ENVELOPE_PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT }}
+          MAPPING_PAPER_IAM_BOOTSTRAP_WIF_PROVIDER: ${{ secrets.PAPER_GRANT_ENVELOPE_PAPER_IAM_BOOTSTRAP_WIF_PROVIDER }}
         with:
           script: |
             const names = [

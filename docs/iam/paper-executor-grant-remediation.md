@@ -72,13 +72,24 @@ WIF binding that trusts only this repository, protected `main`, and Environment
 
 ## Protected mapping ingestion contract (source-only L2)
 
-The grant workflow permits exactly these six Environment Secret names:
-`GCP_PROJECT_ID`, `PAPER_SCHEDULER_GET_PROJECT_ID`,
-`GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT`, `PAPER_IAM_GRANT_RECIPIENT`,
-`PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT`, `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER`.
-No Variables API, `vars` fallback, additional secret name or changed IAM delta
-is part of this contract. Existing variable observations above are historical;
-they do not establish that these Secret transports are installed.
+The grant workflow permits exactly these six grant-specific Environment Secrets:
+
+| Grant Environment Secret | Envelope `name` / exported mapping |
+| --- | --- |
+| `PAPER_GRANT_ENVELOPE_GCP_PROJECT_ID` | `GCP_PROJECT_ID` |
+| `PAPER_GRANT_ENVELOPE_PAPER_SCHEDULER_GET_PROJECT_ID` | `PAPER_SCHEDULER_GET_PROJECT_ID` |
+| `PAPER_GRANT_ENVELOPE_GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` | `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` |
+| `PAPER_GRANT_ENVELOPE_PAPER_IAM_GRANT_RECIPIENT` | `PAPER_IAM_GRANT_RECIPIENT` |
+| `PAPER_GRANT_ENVELOPE_PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT` | `PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT` |
+| `PAPER_GRANT_ENVELOPE_PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` |
+
+These transport names are separate from the original mapping names used by
+scheduler and deploy workflows. Preserve existing raw-value Secrets, especially
+`GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT`, as raw values; never replace them with
+JSON. The envelope `name` and exported mapping remain the original mapping name
+in the second column. No Variables API, `vars` fallback, additional secret name
+or changed IAM delta is part of this contract. Existing variable observations
+above are historical; they do not establish that these Secret transports exist.
 
 Each Secret carries one compact, single-line JSON object with fields `version`
 (integer `1`), `name` (its exact mapping name), `repository`
@@ -86,8 +97,12 @@ Each Secret carries one compact, single-line JSON object with fields `version`
 `scope` (`environment`), `revision` (the exact approved workflow source SHA),
 `owner_run_card` (the separate exact-generation run-card reference), and `value`
 (the original mapping bytes). All six must match the same approved revision and
-run card. Wrong, missing or malformed bindings fail before authentication and
-export nothing. Existing project/recipient/bootstrap identity checks still run.
+run card. For each separately authorized run, trusted provisioning must bind all
+six envelopes to that run's `approved_revision` and `owner_run_card` inputs;
+refresh the generation under separate provisioning authority when either input
+changes. A dry-run envelope set does not authorize or bind a later apply card.
+Wrong, missing or malformed bindings fail before authentication and export
+nothing. Existing project/recipient/bootstrap identity checks still run.
 The recipient and executor **value fields** must contain the same bytes;
 envelopes differ by mapping name.
 
@@ -128,8 +143,8 @@ Action (human / approved operator; not this agent):
 3. Privately verify UTF-8 digests match; do not publish digests in Git.
 4. Leave repository/org Secret copies unset (operational prerequisite below).
 
-Rollback under separate authority: remove the recipient Secret if the
-fill was wrong. No GCP IAM change is involved.
+Rollback under separate authority: remove the grant-specific recipient envelope
+Secret if the fill was wrong. No GCP IAM change is involved.
 
 Out of scope for Card A: grant workflow_dispatch, IAM apply, PAPER start.
 
@@ -214,7 +229,7 @@ Proposed logical names (placeholders only; not created):
 | WIF pool | `github-paper-iam` (or reuse an existing pool **only** if a separate trust card proves isolation) | Prefer a dedicated pool so trading/deploy providers are untouched. |
 | WIF provider | `github-paper-iam-bootstrap` | Attribute conditions: repository `QuantStrategyLab/LongBridgePlatform`, ref `refs/heads/main`, Environment `longbridge-paper`. |
 | Custom role on project (bootstrap itself) | `paperIamBootstrap` | Exact permissions listed below — not `roles/owner` / `roles/resourcemanager.projectIamAdmin` unbounded. |
-| GitHub Environment Secrets | `PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT`, `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | Versioned envelopes only after resources exist, trust is verified and provisioning is separately authorized. |
+| GitHub Environment Secrets | `PAPER_GRANT_ENVELOPE_PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT`, `PAPER_GRANT_ENVELOPE_PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | Versioned envelopes only after resources exist, trust is verified and provisioning is separately authorized. |
 
 Bootstrap custom role permissions (complete set) — held by bootstrap **before**
 any Card C run so the grant job can authenticate as bootstrap:
@@ -273,7 +288,7 @@ Preconditions for B1 apply:
 
 Rollback for B1:
 
-1. Remove Environment Secret transports `PAPER_IAM_BOOTSTRAP_*` first (fail-closed).
+1. Remove grant Environment Secret transports `PAPER_GRANT_ENVELOPE_PAPER_IAM_BOOTSTRAP_*` first (fail-closed).
 2. Remove SA WIF user binding; disable/delete provider; delete SA only if unused.
 3. Remove bootstrap custom role binding/role if created.
 4. Never roll back by widening another identity's permissions.

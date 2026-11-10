@@ -178,9 +178,10 @@ operational prerequisite, not established by committing this file. Maintainers
 must ensure WIF trust limits the bootstrap to this repository, protected main
 and Environment, and prevent unreviewed callers from assuming it.
 
-Protected Environment mappings, never literal identifiers in Git:
+Logical mappings exported by the grant ingestion step, never literal identifiers
+in Git (the grant Secret transport names are listed below):
 
-| Variable | Required meaning |
+| Mapping | Required meaning |
 | --- | --- |
 | `GCP_PROJECT_ID` | Approved PAPER project |
 | `PAPER_SCHEDULER_GET_PROJECT_ID` | Same approved project |
@@ -214,29 +215,53 @@ Only fixed status messages are emitted; raw cloud responses stay in memory.
 
 ### Grant mapping redaction prerequisite
 
-The fixed executor grant masks mappings in its first action before exporting
-any mapping to later step environments or authentication inputs. It resolves
-the six named variables through the job Environment `vars` context (Environment
-then same-name repository), matching
-[apply-paper-scheduler-jobs-get](../../.github/workflows/apply-paper-scheduler-jobs-get.yml).
-It does not call the GitHub Variables REST API: workflow `GITHUB_TOKEN` with
-`contents: read` lacks that authority, and a historical mapping-read failure
-under that token shape stopped on an already-configured name before
-authentication. Organization-only definitions of these six names are
-unsupported by **policy** (operational prerequisite). The `vars` channel does
-**not** technically detect or reject org-only values: resolution may still
-return an org string, and this workflow cannot scope-tag the source. Do not
-define these names only at org scope. All mappings must be nonempty strings;
-blank or malformed values stop before authentication. No GitHub token
-permission or Environment configuration is changed by this workflow definition.
+The fixed executor grant requires six grant-specific Secrets containing compact,
+single-line JSON envelopes in Environment `longbridge-paper`:
 
-A mapping-read failure reports only the failing fixed variable name, lookup
-scope (`vars`) and an allowlisted category: `blank_value` or
-`malformed_response`. An empty or whitespace-only string is a blank value; a
-non-string or absent process environment entry is malformed. No raw exception,
-URL, response, headers or mapping value is included. If any read fails, no
-mapping is exported, including previously read values. This diagnostic does not
-prove a permission repair or authorize a retry, grant, or PAPER start.
+| Grant Environment Secret | Envelope `name` / exported mapping |
+| --- | --- |
+| `PAPER_GRANT_ENVELOPE_GCP_PROJECT_ID` | `GCP_PROJECT_ID` |
+| `PAPER_GRANT_ENVELOPE_PAPER_SCHEDULER_GET_PROJECT_ID` | `PAPER_SCHEDULER_GET_PROJECT_ID` |
+| `PAPER_GRANT_ENVELOPE_GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` | `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` |
+| `PAPER_GRANT_ENVELOPE_PAPER_IAM_GRANT_RECIPIENT` | `PAPER_IAM_GRANT_RECIPIENT` |
+| `PAPER_GRANT_ENVELOPE_PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT` | `PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT` |
+| `PAPER_GRANT_ENVELOPE_PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` |
+
+Existing scheduler/deploy raw-value Secrets retain their existing names and
+values. In particular, `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` remains a raw
+service-account email; do not replace it with JSON. The grant reads only the
+Secret names in the first column, validates each envelope, and exports the
+original mapping names in the second column after all six validate.
+
+Each envelope contains `version` (integer `1`), `name` (the second-column mapping
+name), `repository` (`QuantStrategyLab/LongBridgePlatform`), `environment`
+(`longbridge-paper`), `scope` (`environment`), `revision` (the exact approved
+source SHA), `owner_run_card` (the exact-generation run-card reference), and
+`value` (the original mapping bytes). For each separately authorized run, trusted
+provisioning must bind all six envelopes to the same `approved_revision` and
+`owner_run_card` inputs. Refresh the generation under separate provisioning
+authority whenever either input changes, including a later apply card. Raw
+values in these grant Secrets are invalid; configuring `vars` alone cannot
+satisfy this prerequisite. The grant has no Variables API or `vars` fallback.
+See the [protected mapping ingestion contract](paper-executor-grant-remediation.md#protected-mapping-ingestion-contract-source-only-l2)
+for the complete contract and separate provisioning prerequisites.
+
+The runner must register each complete Secret for masking before printing the
+first action's evaluated environment. The action then masks extracted values
+before exporting any mapping or authenticating. A mapping-read failure reports
+only the fixed mapping name, scope (`environment_secret`) and an allowlisted
+category: `blank_value`, `malformed_response` or `provenance_mismatch`. Empty or
+whitespace-only transports are blank; malformed JSON, invalid values and wrong
+generation bindings stop before authentication. No mapping is exported if any
+read fails, and no raw exception or mapping value is logged.
+
+Trusted provisioning must independently establish physical Environment-only
+storage, generation binding and absence of same-named repository/org Secrets.
+The merged `secrets` context cannot technically detect or reject a falsely
+labelled inherited Secret with matching metadata. Envelope assertions and
+local tests do not establish physical scope or hosted runner behavior. These
+source changes neither provision Secrets nor authorize configuration changes,
+grant dispatch, retries or PAPER start.
 
 ### Mapping provenance (reviewed Git scope + owner t1393)
 
@@ -244,8 +269,9 @@ Authoritative in-repo sources for the three grant-specific mappings, plus
 owner-provided GitHub variable presence. Offline remediation and approval-ready
 cards live in
 [paper-executor-grant-remediation.md](paper-executor-grant-remediation.md).
-This table does not invent cloud identities. Variable absence is not cloud
-identity absence.
+This table records historical variable observations, not installation of the
+grant-specific Secret envelopes above. It does not invent cloud identities.
+Variable absence is not cloud identity absence.
 
 | Variable | Role | Intent state | Installed GitHub config (owner t1393) | Source path + commit + scope |
 | --- | --- | --- | --- | --- |
