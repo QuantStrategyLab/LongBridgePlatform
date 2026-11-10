@@ -46,7 +46,7 @@ pool or provider is absent in the cloud project.
 
 | Mapping | Intent (contract) | Installed GitHub config (t1393) | Decision input |
 | --- | --- | --- | --- |
-| Recipient | `PAPER_IAM_GRANT_RECIPIENT` must equal the existing scheduler IAM executor `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` in the same PAPER project (`scripts/paper_executor_grant.py` `identity()`) | Executor mapping **exists** in Environment; recipient name **absent** | Fill Environment variable from the already-installed executor mapping; privately verify UTF-8 digests match. Do not invent a new email. |
+| Recipient | `PAPER_IAM_GRANT_RECIPIENT` must equal the existing scheduler IAM executor `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` in the same PAPER project (`scripts/paper_executor_grant.py` `identity()`) | Executor mapping **exists** in Environment; recipient name **absent** | Populate the protected Secret envelope from the already-installed executor mapping under separate authority; privately verify value bytes match. Do not invent a new email. |
 | Project pair | `PAPER_SCHEDULER_GET_PROJECT_ID` must equal `GCP_PROJECT_ID` | Both exist; privately verified equal | No project remapping required for this gate. |
 | Bootstrap SA | Distinct authorized SA in the same project, not the recipient/executor | Name absent; no in-repo proved reusable IAM bootstrap | Requires design or bounded discovery (below). **PROPOSED_NOT_OBSERVED** if newly named. |
 | Bootstrap WIF | Provider that actually trusts that bootstrap under repo/main/`longbridge-paper` limits | Name absent; no in-repo proved bootstrap provider | Same as bootstrap SA. |
@@ -70,6 +70,43 @@ independent SA that already holds the four bootstrap permissions below and a
 WIF binding that trusts only this repository, protected `main`, and Environment
 `longbridge-paper`.
 
+## Protected mapping ingestion contract (source-only L2)
+
+The grant workflow permits exactly these six Environment Secret names:
+`GCP_PROJECT_ID`, `PAPER_SCHEDULER_GET_PROJECT_ID`,
+`GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT`, `PAPER_IAM_GRANT_RECIPIENT`,
+`PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT`, `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER`.
+No Variables API, `vars` fallback, additional secret name or changed IAM delta
+is part of this contract. Existing variable observations above are historical;
+they do not establish that these Secret transports are installed.
+
+Each Secret carries one compact, single-line JSON object with fields `version`
+(integer `1`), `name` (its exact mapping name), `repository`
+(`QuantStrategyLab/LongBridgePlatform`), `environment` (`longbridge-paper`),
+`scope` (`environment`), `revision` (the exact approved workflow source SHA),
+`owner_run_card` (the separate exact-generation run-card reference), and `value`
+(the original mapping bytes). All six must match the same approved revision and
+run card. Wrong, missing or malformed bindings fail before authentication and
+export nothing. Existing project/recipient/bootstrap identity checks still run.
+The recipient and executor **value fields** must contain the same bytes;
+envelopes differ by mapping name.
+
+Safety requires runner pre-action mask registration of each complete Secret
+before evaluated `env` or `with` details are printed. Inline `core.setSecret`
+alone cannot protect preparation logs. The action never logs/paraphrases packet
+content or parse errors; it masks extracted values before exporting only after
+all six packets validate. Missing/denied transports stop without fallback.
+Local tests model runner ordering, not hosted execution or a general expression
+interpreter; future runner behavior/adoption remains unverified.
+
+Trusted provisioning must independently establish the physical Environment
+scope and approved generation. Packet metadata is a provisioning assertion;
+the merged `secrets` context cannot prove physical storage scope or distinguish
+a repository/org Secret that falsely claims the same binding. Keep same-named
+repository/org Secrets absent and retain independent names-only provisioning
+evidence. Neither local metadata tests nor this note authorize provisioning,
+Secret access, permission changes or workflow execution.
+
 ## Card A — recipient Environment fill (config only)
 
 Preconditions:
@@ -79,18 +116,19 @@ Preconditions:
    fills.
 2. Owner confirms Environment `longbridge-paper` still holds the nonempty
    executor mapping (private digest check against operator notes).
-3. Exact authorization for GitHub Environment **variable create** on
+3. Exact authorization for GitHub Environment **Secret provisioning** on
    `longbridge-paper` (not repository-only, not org-only).
 
 Action (human / approved operator; not this agent):
 
-1. Create Environment variable `PAPER_IAM_GRANT_RECIPIENT`.
-2. Set its value to the **same bytes** as Environment
-   `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` (copy from the existing UI field).
+1. Provision only the approved Environment Secret envelopes under the ingestion
+   contract above; this note grants no provisioning authority.
+2. Set the recipient envelope value field to the **same bytes** as the existing
+   executor mapping. Bind each envelope to its own name and the approved generation.
 3. Privately verify UTF-8 digests match; do not publish digests in Git.
-4. Leave repository/org copies unset for this name (operational; see org-vars note).
+4. Leave repository/org Secret copies unset (operational prerequisite below).
 
-Rollback: delete the Environment variable `PAPER_IAM_GRANT_RECIPIENT` if the
+Rollback under separate authority: remove the recipient Secret if the
 fill was wrong. No GCP IAM change is involved.
 
 Out of scope for Card A: grant workflow_dispatch, IAM apply, PAPER start.
@@ -176,7 +214,7 @@ Proposed logical names (placeholders only; not created):
 | WIF pool | `github-paper-iam` (or reuse an existing pool **only** if a separate trust card proves isolation) | Prefer a dedicated pool so trading/deploy providers are untouched. |
 | WIF provider | `github-paper-iam-bootstrap` | Attribute conditions: repository `QuantStrategyLab/LongBridgePlatform`, ref `refs/heads/main`, Environment `longbridge-paper`. |
 | Custom role on project (bootstrap itself) | `paperIamBootstrap` | Exact permissions listed below — not `roles/owner` / `roles/resourcemanager.projectIamAdmin` unbounded. |
-| GitHub Environment variables | `PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT`, `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | Set only after resources exist and trust is verified. |
+| GitHub Environment Secrets | `PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT`, `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | Versioned envelopes only after resources exist, trust is verified and provisioning is separately authorized. |
 
 Bootstrap custom role permissions (complete set) — held by bootstrap **before**
 any Card C run so the grant job can authenticate as bootstrap:
@@ -231,11 +269,11 @@ Preconditions for B1 apply:
 2. Single-writer window for project IAM and WIF admin.
 3. Card A complete (recipient mapping installed) before any grant dry-run that
    needs all six names.
-4. PR #722 on `main` so the grant workflow can read mappings via `vars`.
+4. PR #722 on `main` so the grant workflow can validate the six protected Secret envelopes.
 
 Rollback for B1:
 
-1. Remove Environment variables `PAPER_IAM_BOOTSTRAP_*` first (fail-closed).
+1. Remove Environment Secret transports `PAPER_IAM_BOOTSTRAP_*` first (fail-closed).
 2. Remove SA WIF user binding; disable/delete provider; delete SA only if unused.
 3. Remove bootstrap custom role binding/role if created.
 4. Never roll back by widening another identity's permissions.
@@ -254,21 +292,18 @@ Grant script effect if later authorized: create project role
 `serviceAccount:<PAPER_IAM_GRANT_RECIPIENT>`. Bootstrap remains the authenticated
 caller; recipient is the binding member. No PAPER runtime enablement.
 
-## Org-inherited GitHub variables (claim versus enforcement)
+## Inherited configuration (claim versus enforcement)
 
-The grant workflow resolves mappings through the job Environment `vars` context.
-GitHub's documented resolution order is Environment → repository → organization.
-This repository's **policy** is that the six grant mapping names must not be
-defined only at organization scope.
+Organization-only or repository-only mapping transport is unsupported by policy.
+The six-name Secret allowlist and envelope binding checks replace the former
+vars-only ingestion contract. Variables are not consumed by this grant workflow.
 
-**Enforcement status:** operational prerequisite only (**D3 residual**). The
-workflow does **not** technically detect or reject an org-only value:
-`vars.<name>` returns a string without a scope tag, and the Variables REST API
-is unavailable to `GITHUB_TOKEN` with `contents: read` (historical mapping-read
-failure under contents-only token). Comments and docs must not claim a technical
-org-only block. Operators must keep these names unset at org scope; Card A
-step 4 restates that control. This residual is lower priority than mapping
-lookup and discovery semantics; do not pretend enforcement was restored.
+**D3 residual:** the `secrets` context has no physical scope tag. The workflow
+checks declared provenance but cannot technically detect or reject a falsely
+labelled inherited Secret with identical trusted-envelope metadata. Independent
+Environment-only provisioning and absence of inherited copies remain an
+operational prerequisite; comments and tests must not claim actual storage
+scope was verified. No Variables REST API or Secret inventory/read API is added.
 
 ## Remaining unknowns (do not fabricate)
 
