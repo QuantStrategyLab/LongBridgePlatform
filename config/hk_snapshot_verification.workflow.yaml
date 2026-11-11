@@ -34,7 +34,9 @@ main:
           - now: ${sys.now()}
     - check_binding_and_fields:
         switch:
-          - condition: '${response.code != 200 or get_type(snapshot) != "map" or map.get(snapshot, "schema_version") != "longbridge_account_snapshot.v1" or map.get(snapshot, "status") != "partial" or map.get(snapshot, "account_scope") != "HK" or map.get(snapshot, "no_order") != true or map.get(snapshot, "live_authority_granted") != false or map.get(snapshot, "cash_complete") != true or map.get(snapshot, "positions_complete") != true}'
+          - condition: '${response.code != 200 or get_type(snapshot) != "map" or map.get(snapshot, "schema_version") != "longbridge_account_snapshot.v1" or map.get(snapshot, "status") != "partial" or map.get(snapshot, "account_scope") != "HK"}'
+            raise: hk_snapshot_contract_invalid
+          - condition: '${map.get(snapshot, "no_order") != true or map.get(snapshot, "live_authority_granted") != false or map.get(snapshot, "cash_complete") != true or map.get(snapshot, "positions_complete") != true}'
             raise: hk_snapshot_contract_invalid
           - condition: '${map.get(snapshot, ["source_binding", "kind"]) != "deployment_scope_token_version" or map.get(snapshot, ["source_binding", "status"]) != "bound" or map.get(snapshot, ["source_binding", "id"]) != expected_binding}'
             raise: hk_snapshot_binding_invalid

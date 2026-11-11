@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -195,3 +196,10 @@ def test_account_snapshot_sync_uses_matrix_identity_and_preserves_heartbeat_fail
     assert "{config.service_url}/probe" in script
     assert "config.scheduler_resource}:run" in script
     assert 'ACCOUNT_HISTORY_SERVICE_URL' in workflow
+
+
+def test_internal_hk_snapshot_conditions_fit_workflows_expression_limit() -> None:
+    source = (ROOT / "config/hk_snapshot_verification.workflow.yaml").read_text()
+    expressions = re.findall(r"\$\{([^}]+)\}", source)
+    assert expressions
+    assert max(len(expression) for expression in expressions) <= 400
