@@ -30,6 +30,21 @@ def test_heartbeat_dispatch_selects_one_manifest_target_and_schedule_uses_all() 
     assert 'scripts/render_runtime_target_matrix.py --profile heartbeat --target "$MATRIX_TARGET" --github-output' in workflow
 
 
+def test_heartbeat_concurrency_is_scoped_to_each_manifest_target() -> None:
+    workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+    header, jobs = workflow.split("\njobs:\n", 1)
+    assert "\nconcurrency:" not in header
+
+    group = (
+        "    concurrency:\n"
+        "      group: ${{ github.workflow }}-${{ github.ref_name }}-${{ matrix.target.id }}\n"
+        "      cancel-in-progress: false\n"
+    )
+    heartbeat, inspection = jobs.split("\n  inspect-account-snapshot:\n", 1)
+    assert group in heartbeat.split("\n  heartbeat:\n", 1)[1]
+    assert group in inspection
+
+
 def test_runtime_monitor_workflows_retry_gcp_authentication() -> None:
     for name in ("execution-report-heartbeat.yml", "runtime-guard.yml"):
         workflow = (ROOT / ".github/workflows" / name).read_text()
