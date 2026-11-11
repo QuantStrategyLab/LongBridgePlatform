@@ -2317,7 +2317,7 @@ jobs:
       github.run_attempt == 1 && inputs.deployment_mode == 'sg-serving-snapshot' &&
       inputs.target == 'SG' && inputs.approved_ref == 'main' &&
       inputs.account_snapshot_enabled == 'true' &&
-      inputs.source_commit == '2bace9b851495dc25f2b4772bcf602b09eb9e61e' &&
+      inputs.source_commit == '' &&
       inputs.account_history_recording_enabled == '' && inputs.account_history_gcs_prefix == '' &&
       inputs.account_history_target_id == '' && inputs.account_history_expected_scope == ''
     runs-on: ubuntu-latest
@@ -2340,4 +2340,6 @@ jobs:
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v3
       - name: Stage and verify the serving image with the snapshot flag
+        env:
+          SG_SNAPSHOT_APPROVED_SERVING_SOURCE: ${{ secrets.SG_SNAPSHOT_APPROVED_SERVING_SOURCE }}
         run: python3 scripts/enable_sg_serving_snapshot.py

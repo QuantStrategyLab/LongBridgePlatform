@@ -10,9 +10,14 @@ import time
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-SOURCE = "2bace9b851495dc25f2b4772bcf602b09eb9e61e"
 FLAG = "LONGBRIDGE_ACCOUNT_SNAPSHOT_ENABLED"
 API = "https://run.googleapis.com/v2/"
+REVISION_METADATA = {
+    "name", "uid", "generation", "createTime", "updateTime", "deleteTime", "expireTime",
+    "launchStage", "service", "reconciling", "conditions", "observedGeneration", "logUri",
+    "satisfiesPzs", "scalingStatus", "containerStatuses", "creator", "etag",
+}
+TEMPLATE_METADATA = {"revision", "client", "clientVersion"}
 
 
 def _require(value):
@@ -32,7 +37,18 @@ def _revision_path(service, revision):
     return service + "/revisions/" + revision
 
 
-def enable_snapshot(request, service):
+def _require_matching_revision(template, revision):
+    wanted = {k: v for k, v in template.items() if k not in TEMPLATE_METADATA}
+    actual = {k: v for k, v in revision.items() if k not in REVISION_METADATA | TEMPLATE_METADATA}
+    expected_container, = wanted["containers"]
+    actual_container, = actual["containers"]
+    if "name" not in expected_container:
+        actual["containers"] = [{k: v for k, v in actual_container.items() if k != "name"}]
+    _require(wanted == actual)
+
+
+def enable_snapshot(request, service, approved_source):
+    _require(re.fullmatch(r"[a-f0-9]{40}", approved_source))
     baseline = request(service)
     _require(baseline["name"] == service and baseline["ingress"] == "INGRESS_TRAFFIC_INTERNAL_ONLY")
     current_traffic, = baseline["traffic"]
@@ -43,12 +59,11 @@ def enable_snapshot(request, service):
     old_path = _revision_path(service, active["revision"])
     _require(old_path == _revision_path(service, current_traffic["revision"]))
     old = request(old_path)
-    _require(old.get("labels", {}).get("commit-sha") == SOURCE)
+    _require(old.get("labels", {}).get("commit-sha") == approved_source)
     template = copy.deepcopy(baseline["template"])
     container, = template["containers"]
-    serving_container, = old["containers"]
+    _require_matching_revision(template, old)
     env = _environment(container)
-    _require(container["image"] == serving_container["image"] and env == _environment(serving_container))
     _require(re.search(r"@sha256:[a-f0-9]{64}$", container["image"]))
     _require(env["RUNTIME_TARGET_ENABLED"].get("value") == "false")
     target = json.loads(env["RUNTIME_TARGET_JSON"]["value"])
@@ -71,9 +86,7 @@ def enable_snapshot(request, service):
     new_path = _revision_path(service, live["latestReadyRevision"])
     _require(new_path != old_path and new_path == _revision_path(service, live["latestCreatedRevision"]))
     ready = request(new_path)
-    new_container, = ready["containers"]
-    _require(new_container["image"] == container["image"] and _environment(new_container) == _environment(container))
-    _require(ready.get("labels", {}).get("commit-sha") == SOURCE and ready["serviceAccount"] == old["serviceAccount"])
+    _require_matching_revision(template, ready)
     route = {**current_traffic, "revision": new_path.rsplit("/", 1)[-1], "percent": 100}
     moved = request(service + "?updateMask=traffic", "PATCH", {"name": service, "etag": live["etag"], "traffic": [route]})
     _wait(request, moved)
@@ -106,7 +119,8 @@ def main():
         _require(not result.get("error"))
         return result
 
-    enable_snapshot(request, f"projects/{project}/locations/{region}/services/{service}")
+    approved_source = os.environ["SG_SNAPSHOT_APPROVED_SERVING_SOURCE"]
+    enable_snapshot(request, f"projects/{project}/locations/{region}/services/{service}", approved_source)
 
 
 if __name__ == "__main__":

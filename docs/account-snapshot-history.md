@@ -199,7 +199,7 @@ producer 为每次观察写入 `{prefix}/{target_id}/{source_binding_id}/{observ
 
 ## SG 快照开关的单独发布
 
-`Deploy Cloud Run` 的 `sg-serving-snapshot` 模式只接受已核验的 SG serving inventory 版本。流程先用云端预检核对现役镜像、停用的交易开关和当前固定流量，然后暂存同一镜像并单独开启快照。新版本的配置和身份核对通过后，才将流量切到该版本。SG 的日报采集还需要独立验证真实快照及私有归档。
+`Deploy Cloud Run` 的 `sg-serving-snapshot` 模式从受保护的 SG Environment 读取已核准的现役来源。流程先用云端预检核对完整现役配置、停用的交易开关和当前固定流量，然后暂存同一镜像并单独开启快照。新版本的配置和身份核对通过后，才将流量切到该版本。SG 的日报采集还需要独立验证真实快照及私有归档。
 
 ## HK 独立只读观察模式（默认关闭，仅手动）
 
