@@ -1,0 +1,58 @@
+# One manual account snapshot verification on Google Cloud Workflows.
+# Call logging stays disabled. Only the validated field counts leave the workflow.
+main:
+  steps:
+    - configuration:
+        assign:
+          - origin: ${sys.get_env("HK_SNAPSHOT_ORIGIN")}
+          - expected_binding: ${sys.get_env("HK_SNAPSHOT_EXPECTED_BINDING")}
+          - requested_at: ${sys.now()}
+    - check_configuration:
+        switch:
+          - condition: '${not text.match_regex(origin, "^https://[a-z0-9-]+[.][a-z0-9-]+[.]run[.]app$") or not text.match_regex(expected_binding, "^[a-f0-9]{64}$")}'
+            raise: hk_snapshot_configuration_invalid
+    - read_snapshot:
+        try:
+          call: http.get
+          args:
+            url: ${origin + "/account-snapshot"}
+            timeout: 30
+            headers:
+              Accept: application/json
+            auth:
+              type: OIDC
+              audience: ${origin}
+          result: response
+        except:
+          as: error
+          steps:
+            - reject_http_error:
+                raise: hk_snapshot_request_failed
+    - select_snapshot:
+        assign:
+          - snapshot: ${response.body}
+          - now: ${sys.now()}
+    - check_binding_and_fields:
+        switch:
+          - condition: '${response.code != 200 or get_type(snapshot) != "map" or map.get(snapshot, "schema_version") != "longbridge_account_snapshot.v1" or map.get(snapshot, "status") != "partial" or map.get(snapshot, "account_scope") != "HK" or map.get(snapshot, "no_order") != true or map.get(snapshot, "live_authority_granted") != false or map.get(snapshot, "cash_complete") != true or map.get(snapshot, "positions_complete") != true}'
+            raise: hk_snapshot_contract_invalid
+          - condition: '${map.get(snapshot, ["source_binding", "kind"]) != "deployment_scope_token_version" or map.get(snapshot, ["source_binding", "status"]) != "bound" or map.get(snapshot, ["source_binding", "id"]) != expected_binding}'
+            raise: hk_snapshot_binding_invalid
+          - condition: '${get_type(map.get(snapshot, "broker_reported_balances")) != "list" or len(snapshot.broker_reported_balances) == 0 or get_type(map.get(snapshot, "positions")) != "list"}'
+            raise: hk_snapshot_fields_invalid
+    - verify_observation_time:
+        assign:
+          - started: ${time.parse(snapshot.observed_started_at)}
+          - finished: ${time.parse(snapshot.observed_finished_at)}
+    - check_freshness:
+        switch:
+          - condition: ${started < requested_at or started > finished or finished > now or now - started > 900}
+            raise: hk_snapshot_time_invalid
+    - receipt:
+        return:
+          account_scope: HK
+          source_binding_verified: true
+          read_only_snapshot_verified: true
+          observed_at: ${snapshot.observed_finished_at}
+          balance_count: ${len(snapshot.broker_reported_balances)}
+          position_count: ${len(snapshot.positions)}
