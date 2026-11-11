@@ -6,9 +6,10 @@ main:
         assign:
           - origin: ${sys.get_env("HK_SNAPSHOT_ORIGIN")}
           - expected_binding: ${sys.get_env("HK_SNAPSHOT_EXPECTED_BINDING")}
+          - requested_at: ${sys.now()}
     - check_configuration:
         switch:
-          - condition: '${not text.match_regex(origin, "^https://[a-z0-9-]+[.]run[.]app$") or not text.match_regex(expected_binding, "^[a-f0-9]{64}$")}'
+          - condition: '${not text.match_regex(origin, "^https://[a-z0-9-]+[.][a-z0-9-]+[.]run[.]app$") or not text.match_regex(expected_binding, "^[a-f0-9]{64}$")}'
             raise: hk_snapshot_configuration_invalid
     - read_snapshot:
         try:
@@ -45,7 +46,7 @@ main:
           - finished: ${time.parse(snapshot.observed_finished_at)}
     - check_freshness:
         switch:
-          - condition: ${started > finished or finished > now or now - started > 900}
+          - condition: ${started < requested_at or started > finished or finished > now or now - started > 900}
             raise: hk_snapshot_time_invalid
     - receipt:
         return:
