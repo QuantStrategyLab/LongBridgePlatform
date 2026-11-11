@@ -203,3 +203,15 @@ def test_internal_hk_snapshot_conditions_fit_workflows_expression_limit() -> Non
     expressions = re.findall(r"\$\{([^}]+)\}", source)
     assert expressions
     assert max(len(expression) for expression in expressions) <= 400
+
+
+def test_internal_hk_archive_is_one_account_and_create_only() -> None:
+    source = (ROOT / "config/hk_snapshot_verification.workflow.yaml").read_text()
+    assert source.count("call: http.get") == 1
+    assert source.count("call: http.post") == 1
+    assert 'url: ${origin + "/account-snapshot"}' in source
+    assert 'text.substring(time.format(finished + 7200), 0, 10)' in source
+    assert '"/longbridge-hk-snapshot.json"' in source
+    assert "ifGenerationMatch: 0" in source
+    assert "actually_ran: false" in source
+    assert "order_count:" not in source and "fill_count:" not in source
