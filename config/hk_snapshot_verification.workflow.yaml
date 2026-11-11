@@ -5,6 +5,7 @@ main:
     - configuration:
         assign:
           - origin: ${sys.get_env("HK_SNAPSHOT_ORIGIN")}
+          - audience: ${sys.get_env("SNAPSHOT_VERIFICATION_AUDIENCE", origin)}
           - expected_binding: ${sys.get_env("HK_SNAPSHOT_EXPECTED_BINDING")}
           - expected_scope: ${sys.get_env("SNAPSHOT_VERIFICATION_SCOPE", "HK")}
           - requested_at: ${sys.now()}
@@ -17,6 +18,8 @@ main:
         switch:
           - condition: '${not text.match_regex(origin, "^https://[a-z0-9-]+[.][a-z0-9-]+[.]run[.]app$") or not text.match_regex(expected_binding, "^[a-f0-9]{64}$") or (expected_scope != "HK" and expected_scope != "SG")}'
             raise: hk_snapshot_configuration_invalid
+          - condition: '${origin != audience and (expected_scope != "SG" or not text.match_regex(audience, "^https://[a-z0-9-]+[.][a-z0-9-]+[.]run[.]app$") or origin != "https://snapshot-check---" + text.substring(audience, 8, len(audience)))}'
+            raise: hk_snapshot_configuration_invalid
     - read_snapshot:
         try:
           call: http.get
@@ -27,7 +30,7 @@ main:
               Accept: application/json
             auth:
               type: OIDC
-              audience: ${origin}
+              audience: ${audience}
           result: response
         except:
           as: error
@@ -60,7 +63,7 @@ main:
         switch:
           - condition: ${archive_bucket == "" and archive_prefix == "" and account_uid == "" and target_id == "" and strategy_profile == ""}
             next: receipt
-          - condition: '${account_uid != "longbridge-" + text.to_lower(expected_scope) or not text.match_regex(archive_bucket, "^[a-z0-9][a-z0-9._-]{2,62}$") or not text.match_regex(archive_prefix, "^[A-Za-z0-9_/-]+$") or account_uid == "" or target_id == "" or strategy_profile == ""}'
+          - condition: '${origin != audience or account_uid != "longbridge-" + text.to_lower(expected_scope) or not text.match_regex(archive_bucket, "^[a-z0-9][a-z0-9._-]{2,62}$") or not text.match_regex(archive_prefix, "^[A-Za-z0-9_/-]+$") or account_uid == "" or target_id == "" or strategy_profile == ""}'
             raise: hk_digest_archive_configuration_invalid
     - start_projection:
         assign:

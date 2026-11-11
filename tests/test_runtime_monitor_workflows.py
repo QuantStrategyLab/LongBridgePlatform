@@ -222,3 +222,11 @@ def test_internal_sg_verification_cannot_archive_to_the_hk_slot() -> None:
     assert 'sys.get_env("SNAPSHOT_VERIFICATION_SCOPE", "HK")' in source
     assert 'map.get(snapshot, "account_scope") != expected_scope' in source
     assert 'account_uid != "longbridge-" + text.to_lower(expected_scope)' in source
+
+
+def test_sg_zero_traffic_tag_has_a_service_audience_and_cannot_archive() -> None:
+    source = (ROOT / "config/hk_snapshot_verification.workflow.yaml").read_text()
+    assert 'sys.get_env("SNAPSHOT_VERIFICATION_AUDIENCE", origin)' in source
+    assert 'origin != "https://snapshot-check---" + text.substring(audience, 8, len(audience))' in source
+    assert "audience: ${audience}" in source
+    assert 'origin != audience or account_uid != "longbridge-"' in source
