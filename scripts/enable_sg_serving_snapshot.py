@@ -60,33 +60,52 @@ def enable_snapshot(request, service, approved_source):
     _require(old_path == _revision_path(service, current_traffic["revision"]))
     old = request(old_path)
     _require(old.get("labels", {}).get("commit-sha") == approved_source)
+    old_container, = old["containers"]
+    old_env = _environment(old_container)
+    _require(old_env["RUNTIME_TARGET_ENABLED"].get("value") == "false")
+    target = json.loads(old_env["RUNTIME_TARGET_JSON"]["value"])
+    _require(target["platform_id"] == "longbridge" and target["account_scope"].upper() == "SG")
+    if FLAG in old_env:
+        _require(old_env[FLAG] == {"name": FLAG, "value": "false"})
+
     template = copy.deepcopy(baseline["template"])
     container, = template["containers"]
-    _require_matching_revision(template, old)
     env = _environment(container)
     _require(re.search(r"@sha256:[a-f0-9]{64}$", container["image"]))
-    _require(env["RUNTIME_TARGET_ENABLED"].get("value") == "false")
-    target = json.loads(env["RUNTIME_TARGET_JSON"]["value"])
-    _require(target["platform_id"] == "longbridge" and target["account_scope"].upper() == "SG")
-    if FLAG in env:
-        _require(env[FLAG].get("value") == "false" and "valueSource" not in env[FLAG])
-        env[FLAG]["value"] = "true"
+    already_staged = env.get(FLAG) == {"name": FLAG, "value": "true"}
+    if already_staged:
+        # A previous run can leave a ready revision at zero traffic.
+        comparison = copy.deepcopy(template)
+        comparison["containers"][0]["env"] = [
+            old_env[FLAG] if entry["name"] == FLAG else entry
+            for entry in container["env"] if entry["name"] != FLAG or FLAG in old_env
+        ]
+        _require_matching_revision(comparison, old)
     else:
-        container["env"].append({"name": FLAG, "value": "true"})
-    template.pop("revision", None)
-    body = {"name": service, "etag": baseline["etag"], "template": template}
-    request(service + "?" + urlencode({"updateMask": "template", "validateOnly": "true"}), "PATCH", body)
-    _require(request(service)["etag"] == baseline["etag"])
-    staged = request(service + "?updateMask=template", "PATCH", body)
-    _wait(request, staged)
+        _require_matching_revision(template, old)
+        if FLAG in env:
+            env[FLAG]["value"] = "true"
+        else:
+            container["env"].append({"name": FLAG, "value": "true"})
+        template.pop("revision", None)
+        body = {"name": service, "etag": baseline["etag"], "template": template}
+        request(service + "?" + urlencode({"updateMask": "template", "validateOnly": "true"}), "PATCH", body)
+        _require(request(service)["etag"] == baseline["etag"])
+        staged = request(service + "?updateMask=template", "PATCH", body)
+        _wait(request, staged)
 
     live = request(service)
     _require(live["traffic"] == baseline["traffic"] and live["trafficStatuses"] == baseline["trafficStatuses"])
-    _require(live["ingress"] == baseline["ingress"] and live["template"]["serviceAccount"] == template["serviceAccount"])
-    new_path = _revision_path(service, live["latestReadyRevision"])
-    _require(new_path != old_path and new_path == _revision_path(service, live["latestCreatedRevision"]))
+    _require(live["ingress"] == baseline["ingress"] and not live.get("reconciling"))
+    # latestReadyRevision may still name the serving revision when traffic is pinned.
+    new_path = _revision_path(service, live["latestCreatedRevision"])
+    _require(new_path != old_path)
     ready = request(new_path)
+    _require(not ready.get("reconciling") and any(
+        item["type"] == "Ready" and item["state"] == "CONDITION_SUCCEEDED" for item in ready.get("conditions", [])
+    ))
     _require_matching_revision(template, ready)
+    _require_matching_revision(live["template"], ready)
     route = {**current_traffic, "revision": new_path.rsplit("/", 1)[-1], "percent": 100}
     moved = request(service + "?updateMask=traffic", "PATCH", {"name": service, "etag": live["etag"], "traffic": [route]})
     _wait(request, moved)
