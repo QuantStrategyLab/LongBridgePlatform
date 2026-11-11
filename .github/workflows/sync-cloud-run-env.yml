@@ -2327,7 +2327,6 @@ jobs:
       contents: read
       id-token: write
     env:
-      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
       CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
     steps:
@@ -2336,10 +2335,12 @@ jobs:
           persist-credentials: false
       - uses: google-github-actions/auth@v3
         with:
-          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v3
       - name: Stage and verify the serving image with the snapshot flag
         env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
           SG_SNAPSHOT_APPROVED_SERVING_SOURCE: ${{ secrets.SG_SNAPSHOT_APPROVED_SERVING_SOURCE }}
         run: python3 scripts/enable_sg_serving_snapshot.py
