@@ -205,20 +205,28 @@ def test_internal_hk_snapshot_conditions_fit_workflows_expression_limit() -> Non
     assert max(len(expression) for expression in expressions) <= 400
 
 
-def test_internal_hk_archive_is_one_account_and_create_only() -> None:
+def test_internal_snapshot_archive_is_one_account_and_create_only() -> None:
     source = (ROOT / "config/hk_snapshot_verification.workflow.yaml").read_text()
     assert source.count("call: http.get") == 1
     assert source.count("call: http.post") == 1
     assert 'url: ${origin + "/account-snapshot"}' in source
     assert 'text.substring(time.format(finished + 7200), 0, 10)' in source
-    assert '"/longbridge-hk-snapshot.json"' in source
+    assert 'business_day + "/" + account_uid + "-snapshot.json"' in source
     assert "ifGenerationMatch: 0" in source
     assert "actually_ran: false" in source
     assert "order_count:" not in source and "fill_count:" not in source
 
 
-def test_internal_sg_verification_uses_sg_identity_without_hk_archive() -> None:
+def test_internal_sg_verification_cannot_archive_to_the_hk_slot() -> None:
     source = (ROOT / "config/hk_snapshot_verification.workflow.yaml").read_text()
     assert 'sys.get_env("SNAPSHOT_VERIFICATION_SCOPE", "HK")' in source
     assert 'map.get(snapshot, "account_scope") != expected_scope' in source
-    assert 'expected_scope != "HK" or not text.match_regex(archive_bucket' in source
+    assert 'account_uid != "longbridge-" + text.to_lower(expected_scope)' in source
+
+
+def test_sg_zero_traffic_tag_has_a_service_audience_and_cannot_archive() -> None:
+    source = (ROOT / "config/hk_snapshot_verification.workflow.yaml").read_text()
+    assert 'sys.get_env("SNAPSHOT_VERIFICATION_AUDIENCE", origin)' in source
+    assert 'origin != "https://snapshot-check---" + text.substring(audience, 8, len(audience))' in source
+    assert "audience: ${audience}" in source
+    assert 'origin != audience or account_uid != "longbridge-"' in source
