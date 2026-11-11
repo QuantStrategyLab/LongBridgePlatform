@@ -1,4 +1,4 @@
-# Verify and optionally archive the HK read-only account snapshot.
+# Verify and optionally archive one read-only account snapshot.
 # Call logging stays disabled. Only the validated field counts leave the workflow.
 main:
   steps:
@@ -60,7 +60,7 @@ main:
         switch:
           - condition: ${archive_bucket == "" and archive_prefix == "" and account_uid == "" and target_id == "" and strategy_profile == ""}
             next: receipt
-          - condition: '${expected_scope != "HK" or not text.match_regex(archive_bucket, "^[a-z0-9][a-z0-9._-]{2,62}$") or not text.match_regex(archive_prefix, "^[A-Za-z0-9_/-]+$") or account_uid == "" or target_id == "" or strategy_profile == ""}'
+          - condition: '${account_uid != "longbridge-" + text.to_lower(expected_scope) or not text.match_regex(archive_bucket, "^[a-z0-9][a-z0-9._-]{2,62}$") or not text.match_regex(archive_prefix, "^[A-Za-z0-9_/-]+$") or account_uid == "" or target_id == "" or strategy_profile == ""}'
             raise: hk_digest_archive_configuration_invalid
     - start_projection:
         assign:
@@ -115,7 +115,7 @@ main:
                   account_daily_facts:
                     snapshots:
                       - ${asof_snapshot}
-          - object_name: ${archive_prefix + "/longbridge/" + business_day + "/longbridge-hk-snapshot.json"}
+          - object_name: ${archive_prefix + "/longbridge/" + business_day + "/" + account_uid + "-snapshot.json"}
     - archive_snapshot:
         try:
           call: http.post
