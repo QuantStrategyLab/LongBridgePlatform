@@ -178,9 +178,10 @@ operational prerequisite, not established by committing this file. Maintainers
 must ensure WIF trust limits the bootstrap to this repository, protected main
 and Environment, and prevent unreviewed callers from assuming it.
 
-Protected Environment mappings, never literal identifiers in Git:
+Logical mappings exported by the grant ingestion step, never literal identifiers
+in Git (the grant Secret transport names are listed below):
 
-| Variable | Required meaning |
+| Mapping | Required meaning |
 | --- | --- |
 | `GCP_PROJECT_ID` | Approved PAPER project |
 | `PAPER_SCHEDULER_GET_PROJECT_ID` | Same approved project |
@@ -214,26 +215,75 @@ Only fixed status messages are emitted; raw cloud responses stay in memory.
 
 ### Grant mapping redaction prerequisite
 
-The fixed executor grant masks mappings in its first action before exporting
-any mapping to later step environments or authentication inputs. It reads the
-six named variables from the protected Environment, falling back to repository
-variables only for an absent Environment variable (HTTP 404). Organization-only
-variables are not a fallback. All mappings must be readable and nonempty;
-permission, transport or malformed-response failures stop before authentication.
-No GitHub token permission or Environment configuration is changed by this
-workflow definition. Variable API access by the workflow token is a separate
-prerequisite and is not established by local tests; an inaccessible mapping
-blocks the route and does not authorize provisioning a token or changing access.
+The fixed executor grant requires six grant-specific Secrets containing compact,
+single-line JSON envelopes in Environment `longbridge-paper`:
 
-A mapping-read failure reports only the failing fixed variable name, lookup
-scope (`environment` or `repository`) and an allowlisted category: `http_401`,
-`http_403`, `http_404_both`, `http_429`, `http_5xx`, `other_http`, `blank_value`,
-`malformed_response` or `transport_error`. `http_404_both` means that both
-same-name lookups returned HTTP 404. A non-string or absent value is a malformed
-response; an empty or whitespace-only string is a blank value. No raw exception,
-URL, response, headers or mapping value is included. If any read fails, no
-mapping is exported, including previously read values. This diagnostic does not
-prove a permission repair or authorize a retry, grant, or PAPER start.
+| Grant Environment Secret | Envelope `name` / exported mapping |
+| --- | --- |
+| `PAPER_GRANT_ENVELOPE_GCP_PROJECT_ID` | `GCP_PROJECT_ID` |
+| `PAPER_GRANT_ENVELOPE_PAPER_SCHEDULER_GET_PROJECT_ID` | `PAPER_SCHEDULER_GET_PROJECT_ID` |
+| `PAPER_GRANT_ENVELOPE_GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` | `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` |
+| `PAPER_GRANT_ENVELOPE_PAPER_IAM_GRANT_RECIPIENT` | `PAPER_IAM_GRANT_RECIPIENT` |
+| `PAPER_GRANT_ENVELOPE_PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT` | `PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT` |
+| `PAPER_GRANT_ENVELOPE_PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` |
+
+Existing scheduler/deploy raw-value Secrets retain their existing names and
+values. In particular, `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` remains a raw
+service-account email; do not replace it with JSON. The grant reads only the
+Secret names in the first column, validates each envelope, and exports the
+original mapping names in the second column after all six validate.
+
+Each envelope contains `version` (integer `1`), `name` (the second-column mapping
+name), `repository` (`QuantStrategyLab/LongBridgePlatform`), `environment`
+(`longbridge-paper`), `scope` (`environment`), `revision` (the exact approved
+source SHA), `owner_run_card` (the exact-generation run-card reference), and
+`value` (the original mapping bytes). For each separately authorized run, trusted
+provisioning must bind all six envelopes to the same `approved_revision` and
+`owner_run_card` inputs. Refresh the generation under separate provisioning
+authority whenever either input changes, including a later apply card. Raw
+values in these grant Secrets are invalid; configuring `vars` alone cannot
+satisfy this prerequisite. The grant has no Variables API or `vars` fallback.
+See the [protected mapping ingestion contract](paper-executor-grant-remediation.md#protected-mapping-ingestion-contract-source-only-l2)
+for the complete contract and separate provisioning prerequisites.
+
+The runner must register each complete Secret for masking before printing the
+first action's evaluated environment. The action then masks extracted values
+before exporting any mapping or authenticating. A mapping-read failure reports
+only the fixed mapping name, scope (`environment_secret`) and an allowlisted
+category: `blank_value`, `malformed_response` or `provenance_mismatch`. Empty or
+whitespace-only transports are blank; malformed JSON, invalid values and wrong
+generation bindings stop before authentication. No mapping is exported if any
+read fails, and no raw exception or mapping value is logged.
+
+Trusted provisioning must independently establish physical Environment-only
+storage, generation binding and absence of same-named repository/org Secrets.
+The merged `secrets` context cannot technically detect or reject a falsely
+labelled inherited Secret with matching metadata. Envelope assertions and
+local tests do not establish physical scope or hosted runner behavior. These
+source changes neither provision Secrets nor authorize configuration changes,
+grant dispatch, retries or PAPER start.
+
+### Mapping provenance (reviewed Git scope + owner t1393)
+
+Authoritative in-repo sources for the three grant-specific mappings, plus
+owner-provided GitHub variable presence. Offline remediation and approval-ready
+cards live in
+[paper-executor-grant-remediation.md](paper-executor-grant-remediation.md).
+This table records historical variable observations, not installation of the
+grant-specific Secret envelopes above. It does not invent cloud identities.
+Variable absence is not cloud identity absence.
+
+| Variable | Role | Intent state | Installed GitHub config (owner t1393) | Source path + commit + scope |
+| --- | --- | --- | --- | --- |
+| `PAPER_IAM_GRANT_RECIPIENT` | Independent approved mapping that must equal the existing scheduler IAM executor (`GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT`) | `EXISTS_SOURCE_RESOLVED` — intended value is the Environment executor mapping | **Absent** exact name in Environment then repository. Post-fill UTF-8 digests must privately match the installed executor mapping; digests are not published here. | Contract: this section / `#720`; dual-check `scripts/paper_executor_grant.py` `identity()`; executor installed source: Environment `longbridge-paper` / `GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT` via `.github/workflows/apply-paper-scheduler-jobs-get.yml` |
+| `PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT` | Existing authorized bootstrap SA in the same PAPER project, distinct from recipient; never the deficient executor | `REQUIRES_DESIGN` — no proved reusable bootstrap in Git/IaC | **Absent** exact name in Environment then repository. Any concrete SA id remains `PROPOSED_NOT_OBSERVED` until a discovery or provisioning card proves it. | Required by `.github/workflows/grant-paper-executor-permissions.yml` and `scripts/paper_executor_grant.py`; see remediation Card B |
+| `PAPER_IAM_BOOTSTRAP_WIF_PROVIDER` | Existing authorized WIF provider that actually trusts that bootstrap | `REQUIRES_DESIGN` — same gap as bootstrap SA | **Absent** exact name in Environment then repository. Provider resource `PROPOSED_NOT_OBSERVED` until proved. | Required by grant workflow auth step; see remediation Card B |
+
+Sibling scheduler mappings observed nonempty in Environment `longbridge-paper`
+(owner t1393): `GCP_PROJECT_ID` and `PAPER_SCHEDULER_GET_PROJECT_ID` privately
+verified equal; digests not published in Git. `GCP_WORKLOAD_IDENTITY_PROVIDER`
+remains the scheduler executor auth provider and is not a bootstrap substitute
+without separate proof.
 
 Role permission responses are checked for exact membership and cardinality,
 independent of order. Fresh role snapshots normalize permission ordering while

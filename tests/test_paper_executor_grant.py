@@ -1,6 +1,7 @@
 """Fake-only contract and adverse tests for the bootstrap grant definition."""
 import copy
 import json
+import re
 import subprocess
 
 import textwrap
@@ -10,6 +11,10 @@ import pytest
 
 from scripts import paper_executor_grant as m
 from scripts.paper_scheduler_get_iam import Blocked
+
+MAPPINGS = ["GCP_PROJECT_ID", "PAPER_SCHEDULER_GET_PROJECT_ID",
+            "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT", "PAPER_IAM_GRANT_RECIPIENT",
+            "PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT", "PAPER_IAM_BOOTSTRAP_WIF_PROVIDER"]
 
 PROJECT = "fake-paper-project"
 EXECUTOR = f"executor@{PROJECT}.iam.gserviceaccount.com"
@@ -150,7 +155,40 @@ def test_workflow_protection_contract():
                  "PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT", "PAPER_IAM_BOOTSTRAP_WIF_PROVIDER",
                  "persist-credentials: false"]:
         assert gate in text
-    assert "secrets." not in text
+    assert set(re.findall(r"secrets\.([A-Z_]+)", text)) == {"PAPER_GRANT_ENVELOPE_" + name for name in MAPPINGS}
+    assert len(re.findall(r"secrets\.([A-Z_]+)", text)) == 6
+
+
+def test_remediation_artifact_separates_intent_install_and_proposals():
+    root = Path(__file__).parents[1]
+    remediation = (root / "docs/iam/paper-executor-grant-remediation.md").read_text()
+    design = (root / "docs/iam/paper-scheduler-get.md").read_text()
+    workflow = (root / ".github/workflows/grant-paper-executor-permissions.yml").read_text()
+    for token in [
+        "OWNER-PROVIDED", "PROPOSED_NOT_OBSERVED", "Card A", "Card B",
+        "Variable absence is **not** evidence",
+        "Rejected as bootstrap",
+        "paper-iam-bootstrap@",
+        "GRANT_PAPER_EXECUTOR_FOUR_PERMISSIONS",
+        "no grant",
+        "caller_test_iam_not_candidate_effective",
+        "B1 versus Card C",
+        "operational prerequisite",
+        "SUPPORTED_TRUSTED_PROVENANCE_KINDS",
+        "D3 residual",
+    ]:
+        assert token in remediation
+    assert "paper-executor-grant-remediation.md" in design
+    assert "technically detect or reject" in design
+    assert "physical storage scope" in workflow
+    # Public tip: no full sha256 digests, numeric Environment settings paths, or numeric run ids.
+    import re
+    for text in (remediation, design, workflow):
+        assert not re.search(r"\b[0-9a-f]{64}\b", text)
+        assert not re.search(r"environments/\d+/edit", text)
+        assert not re.search(r"\brun\s+`?\d{8,}", text, flags=re.I)
+    assert "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT" in remediation
+    assert "same bytes" in remediation
 
 
 @pytest.mark.parametrize("mode", ["dry-run", "apply"])
@@ -200,7 +238,7 @@ def test_invalid_role_permissions_block_without_writes(permissions):
     assert not writes(cloud)
 
 
-def test_mapping_masks_precede_all_step_details():
+def test_mapping_channel_uses_six_environment_secrets_not_rest_api():
     workflow = (Path(__file__).parents[1] /
         ".github/workflows/grant-paper-executor-permissions.yml").read_text()
     mappings = ["GCP_PROJECT_ID", "PAPER_SCHEDULER_GET_PROJECT_ID",
@@ -210,8 +248,23 @@ def test_mapping_masks_precede_all_step_details():
     assert all(key + ":" not in job_header for key in mappings)
     first = steps.split("      - name:")[1]
     assert "uses: actions/github-script@v8" in first
-    assert "vars." not in first
-    assert "env:" not in first
+    assert "environments/{environment_name}/variables/{name}" not in first
+    assert "actions/variables/{name}" not in first
+    assert "github.request" not in first
+    for name in mappings:
+        assert f"MAPPING_{name}: ${{{{ secrets.PAPER_GRANT_ENVELOPE_{name} }}}}" in first
+    assert "process.env['MAPPING_' + name]" in first
+    assert not re.search(r"\$\{\{\s*vars\.", workflow)
+    assert "rest.actions" not in workflow
+
+
+def test_mapping_masks_precede_all_step_details():
+    workflow = (Path(__file__).parents[1] /
+        ".github/workflows/grant-paper-executor-permissions.yml").read_text()
+    mappings = ["GCP_PROJECT_ID", "PAPER_SCHEDULER_GET_PROJECT_ID",
+                "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT", "PAPER_IAM_GRANT_RECIPIENT",
+                "PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT", "PAPER_IAM_BOOTSTRAP_WIF_PROVIDER"]
+    first = workflow.split("    steps:\n", 1)[1].split("      - name:")[1]
     script = textwrap.dedent(first.split("          script: |\n", 1)[1])
     harness = r"""
 const assert = require('node:assert/strict');
@@ -219,58 +272,57 @@ const script = SCRIPT;
 const keys = KEYS;
 async function check(failure) {
   const masks = new Set(), exported = [];
-  const core = {
-    setSecret(value) { masks.add(value); },
-    exportVariable(key, value) {
-      assert(masks.has(value), 'export before mask');
-      assert.equal(masks.size, keys.length, 'export before all masks');
-      exported.push(key);
+  const prior = {...process.env};
+process.env.GITHUB_REPOSITORY = 'QuantStrategyLab/LongBridgePlatform';
+process.env.GITHUB_SHA = 'a'.repeat(40);
+process.env.IAM_APPROVED_REVISION = 'a'.repeat(40);
+process.env.IAM_OWNER_RUN_CARD = 'fake-owner-card';
+function envelope(name, value) {
+  return JSON.stringify({version: 1, repository: process.env.GITHUB_REPOSITORY,
+    environment: 'longbridge-paper', scope: 'environment', revision: process.env.GITHUB_SHA,
+    owner_run_card: process.env.IAM_OWNER_RUN_CARD, name, value});
+}
+  for (const name of keys) process.env['MAPPING_' + name] = envelope(name, 'fake-' + name);
+  if (failure === 'empty') process.env['MAPPING_' + keys[0]] = '';
+  if (failure === 'blank') process.env['MAPPING_' + keys[0]] = '   ';
+  try {
+    const core = {
+      setSecret(value) { masks.add(value); },
+      exportVariable(key, value) {
+        assert(masks.has(value), 'export before mask');
+        assert.equal(masks.size, keys.length, 'export before all masks');
+        exported.push(key);
+      }
+    };
+    const run = new Function('github', 'core', 'context', 'return (async () => {' + script + '})()');
+    if (failure) {
+      await assert.rejects(run({}, core, {}), error =>
+        error.message.includes('Protected mapping read failed: name=' + keys[0] +
+          ' scope=environment_secret category=blank_value'));
+      assert.equal(exported.length, 0);
+    } else {
+      await run({}, core, {});
+      assert.deepEqual(exported, keys);
     }
-  };
-  const github = { request: async (route, args) => {
-    assert(!exported.length, 'export before reads complete');
-    if (failure === 'fallback' && route.includes('/environments/')) {
-      throw Object.assign(new Error('fake-private-diagnostic'), {status: 404});
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in prior)) delete process.env[key];
     }
-    if (typeof failure === 'number') {
-      throw Object.assign(new Error('fake-private-diagnostic'), {status: failure});
-    }
-    if (failure === 'empty') return {data: {value: ''}};
-    if (failure === 'unknown') return {data: {value: null}};
-    return {data: {value: 'fake-' + args.name}};
-  }};
-  const context = {repo: {owner: 'fake-owner', repo: 'fake-repo'}};
-  const run = new Function('github', 'core', 'context', 'return (async () => {' + script + '})()');
-  if (failure && failure !== 'fallback') {
-    await assert.rejects(run(github, core, context), error =>
-      !error.message.includes('fake-private-diagnostic'));
-    assert.equal(exported.length, 0);
-  } else {
-    await run(github, core, context);
-    assert.deepEqual(exported, keys);
+    Object.assign(process.env, prior);
   }
 }
-(async () => { await check(null); await check('fallback'); await check(403); await check(404);
-await check('empty'); await check('unknown'); })()
-.catch(() => process.exit(1));
+(async () => { await check(null); await check('empty'); await check('blank'); })()
+.catch((error) => { console.error(error); process.exit(1); });
 """.replace("SCRIPT", json.dumps(script)).replace("KEYS", json.dumps(mappings))
     subprocess.run(["node", "-e", harness], check=True, capture_output=True)
 
 
 @pytest.mark.parametrize("index", range(6))
-@pytest.mark.parametrize("scope", ["environment", "repository"])
 @pytest.mark.parametrize("failure,category", [
-    (401, "http_401"), (403, "http_403"), (429, "http_429"),
-    (500, "http_5xx"), (599, "http_5xx"), (400, "other_http"),
-    (302, "other_http"), (600, "other_http"), ("403", "transport_error"),
-    ("transport", "transport_error"), ("null_error", "transport_error"),
-    ("blank", "blank_value"), ("null", "malformed_response"),
-    ("missing", "malformed_response"), ("wrong_type", "malformed_response"),
-    ("null_response", "malformed_response"),
-    (404, "http_404_both"),
+    ("blank", "blank_value"), ("empty", "blank_value"),
 ])
-def test_mapping_failure_diagnostic_is_allowlisted_and_exports_nothing(index, scope, failure, category):
-    # Execute the actual inline action offline, including failures after partial success.
+def test_mapping_failure_diagnostic_is_allowlisted_and_exports_nothing(index, failure, category):
+    # Actions secrets context yields strings; denied/unset names arrive as "".
     workflow = (Path(__file__).parents[1] /
         ".github/workflows/grant-paper-executor-permissions.yml").read_text()
     first = workflow.split("      - name:")[1]
@@ -280,47 +332,181 @@ const assert = require('node:assert/strict');
 const keys = ['GCP_PROJECT_ID', 'PAPER_SCHEDULER_GET_PROJECT_ID',
   'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT', 'PAPER_IAM_GRANT_RECIPIENT',
   'PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT', 'PAPER_IAM_BOOTSTRAP_WIF_PROVIDER'];
-const [index, scope, failure, category] = CASE;
-const calls = [], masks = [], exports = [];
+const [index, failure, category] = CASE;
+const masks = [], exports = [];
+const prior = {...process.env};
+process.env.GITHUB_REPOSITORY = 'QuantStrategyLab/LongBridgePlatform';
+process.env.GITHUB_SHA = 'a'.repeat(40);
+process.env.IAM_APPROVED_REVISION = 'a'.repeat(40);
+process.env.IAM_OWNER_RUN_CARD = 'fake-owner-card';
+function envelope(name, value) {
+  return JSON.stringify({version: 1, repository: process.env.GITHUB_REPOSITORY,
+    environment: 'longbridge-paper', scope: 'environment', revision: process.env.GITHUB_SHA,
+    owner_run_card: process.env.IAM_OWNER_RUN_CARD, name, value});
+}
+for (const name of keys) process.env['MAPPING_' + name] = envelope(name, 'fake-' + name);
+const target = 'MAPPING_' + keys[index];
+process.env[target] = failure === 'blank' ? '   ' : '';
 const core = {setSecret: value => masks.push(value),
   exportVariable: (...args) => exports.push(args)};
-const github = {request: async (route, args) => {
-  assert.equal(exports.length, 0);
-  const actualScope = route.includes('/environments/') ? 'environment' : 'repository';
-  calls.push([args.name, actualScope]);
-  if (args.name !== keys[index]) return {data: {value: 'fake-' + args.name}};
-  if (actualScope === 'environment' && (scope === 'repository' || failure === 404)) {
-    throw {status: 404, message: 'fake-private-payload'};
-  }
-  if (failure === 'blank') return {data: {value: '   '}};
-  if (failure === 'null') return {data: null};
-  if (failure === 'missing') return {};
-  if (failure === 'wrong_type') return {data: {value: 17}};
-  if (failure === 'null_response') return null;
-  if (failure === 'null_error') throw null;
-  const error = new Error('fake-private-payload');
-  error.response = {data: 'fake-private-payload', headers: {'fake': 'fake-private-payload'}};
-  error.request = {url: 'fake-private-payload'};
-  if (failure !== 'transport') error.status = failure;
-  throw error;
-}};
-const context = {repo: {owner: 'fake-owner', repo: 'fake-repo'}};
 const run = new Function('github', 'core', 'context', 'return (async () => {' + SCRIPT + '})()');
 (async () => {
-  await assert.rejects(run(github, core, context), error => {
-    const expectedScope = failure === 404 ? 'repository' : scope;
-    assert.equal(error.message, 'Protected mapping read failed: name=' + keys[index] +
-      ' scope=' + expectedScope + ' category=' + category + '; stop before authentication');
-    assert.equal(error.cause, undefined);
-    return true;
-  });
-  assert.deepEqual(exports, []);
-  assert.equal(masks.length, index);
-  const expected = keys.slice(0, index).map(name => [name, 'environment']);
-  expected.push([keys[index], 'environment']);
-  if (scope === 'repository' || failure === 404) expected.push([keys[index], 'repository']);
-  assert.deepEqual(calls, expected);
+  try {
+    await assert.rejects(run({}, core, {}), error => {
+      assert.equal(error.message, 'Protected mapping read failed: name=' + keys[index] +
+        ' scope=environment_secret category=' + category + '; stop before authentication');
+      assert.equal(error.cause, undefined);
+      return true;
+    });
+    assert.deepEqual(exports, []);
+    assert.equal(masks.length, index);
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in prior)) delete process.env[key];
+    }
+    Object.assign(process.env, prior);
+  }
 })().catch(error => { console.error(error); process.exit(1); });
-""".replace("SCRIPT", json.dumps(script)).replace("CASE", json.dumps([index, scope, failure, category]))
+""".replace("SCRIPT", json.dumps(script)).replace("CASE", json.dumps([index, failure, category]))
     result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("blank_index", [None, *range(6)])
+def test_runner_preparation_does_not_render_unmasked_mappings(blank_index):
+    """Model Handler.PrepareExecution before the action can call setSecret.
+
+    The runner renders evaluated with/input and environment values, not only
+    action output. A later blank mapping must not expose earlier valid values.
+    No action JavaScript or authentication runs during this preparation phase.
+    """
+    workflow = (Path(__file__).parents[1] /
+        ".github/workflows/grant-paper-executor-permissions.yml").read_text()
+    names = ["GCP_PROJECT_ID", "PAPER_SCHEDULER_GET_PROJECT_ID",
+             "GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT", "PAPER_IAM_GRANT_RECIPIENT",
+             "PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT", "PAPER_IAM_BOOTSTRAP_WIF_PROVIDER"]
+    values = {name: f"fake-preparation-value-{index}" for index, name in enumerate(names)}
+    if blank_index is not None:
+        values[names[blank_index]] = ""
+    first = workflow.split("      - name:", 2)[1]
+    # Handler.PrintActionDetails prints both evaluated inputs and env before
+    # RunAsync. Include the whole step to catch moving interpolation into script.
+    # Job message variables marked IsSecret are registered before any action.
+    # Evaluate the direct mapping expressions, then mask the prepared output,
+    # matching Worker.InitializeSecretMasker -> ExecutionContext.Write ordering.
+    rendered = re.sub(r"\$\{\{\s*(vars|secrets)\.([A-Z_]+)\s*\}\}",
+                      lambda match: values[match[2].removeprefix("PAPER_GRANT_ENVELOPE_")], first)
+    secret_names = re.findall(r"\$\{\{\s*secrets\.([A-Z_]+)\s*\}\}", first)
+    registered_masks = {values[name.removeprefix("PAPER_GRANT_ENVELOPE_")] for name in secret_names
+                        if values[name.removeprefix("PAPER_GRANT_ENVELOPE_")]}
+    for value in registered_masks:
+        rendered = rendered.replace(value, "***")
+    for name, value in values.items():
+        if value:
+            assert value not in rendered, f"runner preparation discloses mapping {name}"
+
+
+@pytest.mark.parametrize("index", range(6))
+@pytest.mark.parametrize("fault", [
+    "version", "repository", "environment", "scope", "revision", "owner_run_card", "name",
+    "invalid_json", "null", "array", "blank_value", "invalid_value", "multiline", "denied", "control_value", "partial",
+])
+def test_secret_envelope_rejects_wrong_provenance_or_transport(index, fault):
+    workflow = (Path(__file__).parents[1] /
+        ".github/workflows/grant-paper-executor-permissions.yml").read_text()
+    first = workflow.split("      - name:")[1]
+    script = textwrap.dedent(first.split("          script: |\n", 1)[1])
+    harness = r"""
+const assert = require('node:assert/strict');
+const keys = KEYS;
+process.env.GITHUB_REPOSITORY = 'QuantStrategyLab/LongBridgePlatform';
+process.env.GITHUB_SHA = 'a'.repeat(40);
+process.env.IAM_APPROVED_REVISION = 'a'.repeat(40);
+process.env.IAM_OWNER_RUN_CARD = 'fake-owner-card';
+function envelope(name) {
+  return {version: 1, repository: process.env.GITHUB_REPOSITORY,
+    environment: 'longbridge-paper', scope: 'environment', revision: process.env.GITHUB_SHA,
+    owner_run_card: process.env.IAM_OWNER_RUN_CARD, name, value: 'fake-private-' + name};
+}
+for (const name of keys) process.env['MAPPING_' + name] = JSON.stringify(envelope(name));
+const [index, fault] = CASE;
+const packet = envelope(keys[index]);
+if (fault in packet) packet[fault] = 'wrong-generation-or-scope';
+if (fault === 'blank_value') packet.value = '   ';
+if (fault === 'invalid_value') packet.value = 7;
+if (fault === 'control_value') packet.value = 'fake-private\nvalue';
+if (fault === 'partial') delete packet.revision;
+const target = 'MAPPING_' + keys[index];
+process.env[target] = JSON.stringify(packet);
+if (fault === 'invalid_json') process.env[target] = 'fake-private-transport-error';
+if (fault === 'null') process.env[target] = 'null';
+if (fault === 'array') process.env[target] = '[]';
+if (fault === 'multiline') process.env[target] = JSON.stringify(packet, null, 2);
+if (fault === 'denied') delete process.env[target];
+const exported = [], masks = [];
+const core = {setSecret: value => masks.push(value), exportVariable: (...args) => exported.push(args)};
+const run = new Function('github', 'core', 'context', 'return (async () => {' + SCRIPT + '})()');
+(async () => {
+  await assert.rejects(run({}, core, {}), error => {
+    assert.match(error.message, /^Protected mapping read failed: name=[A-Z_]+ scope=environment_secret category=(blank_value|malformed_response|provenance_mismatch); stop before authentication$/);
+    assert.equal(error.cause, undefined);
+    assert(!error.message.includes('fake-private'));
+    return true;
+  });
+  assert.deepEqual(exported, []);
+})().catch(error => { console.error(error); process.exit(1); });
+""".replace("SCRIPT", json.dumps(script)).replace("KEYS", json.dumps(MAPPINGS)).replace(
+        "CASE", json.dumps([index, fault]))
+    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+def test_grant_envelopes_coexist_with_shared_deploy_identity():
+    root = Path(__file__).parents[1]
+    workflow = (root / ".github/workflows/grant-paper-executor-permissions.yml").read_text()
+    first = workflow.split("      - name:")[1]
+    revision, card = "a" * 40, "fake-owner-card"
+    secrets = {"GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT": EXECUTOR}
+    for name in MAPPINGS:
+        secrets["PAPER_GRANT_ENVELOPE_" + name] = json.dumps({
+            "version": 1, "name": name, "repository": "QuantStrategyLab/LongBridgePlatform",
+            "environment": "longbridge-paper", "scope": "environment",
+            "revision": revision, "owner_run_card": card, "value": ENV.get(name, "fake-provider"),
+        })
+    bindings = re.findall(r"MAPPING_([A-Z_]+): \$\{\{ secrets\.([A-Z_]+) \}\}", first)
+    assert len(bindings) == 6
+    environment = {"MAPPING_" + name: secrets.get(secret, "") for name, secret in bindings}
+    environment.update(GITHUB_REPOSITORY="QuantStrategyLab/LongBridgePlatform",
+                       GITHUB_SHA=revision, IAM_APPROVED_REVISION=revision, IAM_OWNER_RUN_CARD=card)
+    script = textwrap.dedent(first.split("          script: |\n", 1)[1])
+    harness = """
+const assert = require('node:assert/strict');
+Object.assign(process.env, ENVIRONMENT);
+const exported = {}, masks = new Set();
+const core = {setSecret: value => masks.add(value), exportVariable: (name, value) => {
+  assert(masks.has(value)); exported[name] = value;
+}};
+const run = new Function('core', 'return (async () => {' + SCRIPT + '})()');
+run(core).then(() => assert.deepEqual(exported, EXPECTED))
+  .catch(() => { console.error('Grant/deploy Secret coexistence failed'); process.exit(1); });
+""".replace("ENVIRONMENT", json.dumps(environment)).replace("SCRIPT", json.dumps(script)).replace(
+        "EXPECTED", json.dumps({name: ENV.get(name, "fake-provider") for name in MAPPINGS}))
+    result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert secrets["GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"] == EXECUTOR
+    deploy = (root / ".github/workflows/sync-cloud-run-env.yml").read_text()
+    assert "secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT" in deploy
+    assert not set(re.findall(r"secrets\.([A-Z_]+)", workflow)) & set(
+        re.findall(r"secrets\.([A-Z_]+)", deploy))
+
+
+@pytest.mark.parametrize("document", ["paper-scheduler-get.md", "paper-executor-grant-remediation.md"])
+def test_operator_contract_names_secret_envelopes_and_generation(document):
+    text = (Path(__file__).parents[1] / "docs/iam" / document).read_text()
+    for name in MAPPINGS:
+        assert f"| `PAPER_GRANT_ENVELOPE_{name}` | `{name}` |" in text
+    for field in ["version", "name", "repository", "environment", "scope", "revision", "owner_run_card", "value"]:
+        assert f"`{field}`" in text
+    assert "approved_revision" in text
+    assert "each separately authorized run" in text
+    assert "Environment then same-name repository" not in text

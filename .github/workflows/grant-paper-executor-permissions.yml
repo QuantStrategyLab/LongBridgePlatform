@@ -52,10 +52,22 @@ jobs:
       IAM_APPROVED_REVISION: ${{ inputs.approved_revision }}
       IAM_OWNER_RUN_CARD: ${{ inputs.owner_run_card }}
     steps:
-      # Read mappings inside the action, never through logged inputs or env.
-      # Missing variable-read authority blocks before authentication or writes.
+      # Exactly six grant-specific Environment Secrets transport compact, single-line
+      # JSON envelopes. The runner must register each complete secret before
+      # PrepareExecution prints evaluated env/with (in-action masking is too late).
+      # Never use vars or a Variables API fallback. Trusted provisioning must bind
+      # each envelope to this Environment and approved revision/run-card generation.
+      # The secrets context cannot attest physical storage scope: independent
+      # Environment-only provisioning evidence remains an operational prerequisite.
       - name: Mask protected mappings before exposing step environment
         uses: actions/github-script@v8
+        env:
+          MAPPING_GCP_PROJECT_ID: ${{ secrets.PAPER_GRANT_ENVELOPE_GCP_PROJECT_ID }}
+          MAPPING_PAPER_SCHEDULER_GET_PROJECT_ID: ${{ secrets.PAPER_GRANT_ENVELOPE_PAPER_SCHEDULER_GET_PROJECT_ID }}
+          MAPPING_GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ secrets.PAPER_GRANT_ENVELOPE_GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+          MAPPING_PAPER_IAM_GRANT_RECIPIENT: ${{ secrets.PAPER_GRANT_ENVELOPE_PAPER_IAM_GRANT_RECIPIENT }}
+          MAPPING_PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT: ${{ secrets.PAPER_GRANT_ENVELOPE_PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT }}
+          MAPPING_PAPER_IAM_BOOTSTRAP_WIF_PROVIDER: ${{ secrets.PAPER_GRANT_ENVELOPE_PAPER_IAM_BOOTSTRAP_WIF_PROVIDER }}
         with:
           script: |
             const names = [
@@ -65,51 +77,47 @@ jobs:
             ];
             const mappings = [];
             for (const name of names) {
-              let scope = 'environment';
-              let category = 'transport_error';
-              const read = async (route, args) => {
-                let response;
-                try {
-                  response = await github.request(route, args);
-                } catch (error) {
-                  const status = error?.status;
-                  if (status === 401 || status === 403 || status === 429) {
-                    category = `http_${status}`;
-                  } else if (status === 404) {
-                    category = scope === 'repository' ? 'http_404_both' : 'other_http';
-                  } else if (Number.isInteger(status) && status >= 500 && status <= 599) {
-                    category = 'http_5xx';
-                  } else if (Number.isInteger(status)) {
-                    category = 'other_http';
-                  } else {
-                    category = 'transport_error';
-                  }
-                  // Only an Environment HTTP 404 permits the same-name fallback.
-                  if (scope === 'environment' && status === 404) return null;
-                  throw new Error('Mapping lookup failed');
-                }
-                const data = response?.data;
-                if (!data || typeof data.value !== 'string') {
+              const scope = 'environment_secret';
+              let category = 'blank_value';
+              try {
+                const raw = process.env['MAPPING_' + name];
+                if (raw === undefined || raw === null || typeof raw !== 'string') {
                   category = 'malformed_response';
                   throw new Error('Invalid mapping response');
                 }
-                if (!data.value.trim()) {
+                if (!raw.trim()) {
                   category = 'blank_value';
                   throw new Error('Empty mapping');
                 }
-                return data;
-              };
-              try {
-                let data = await read(
-                  'GET /repos/{owner}/{repo}/environments/{environment_name}/variables/{name}',
-                  {...context.repo, environment_name: 'longbridge-paper', name});
-                if (data === null) {
-                  scope = 'repository';
-                  data = await read('GET /repos/{owner}/{repo}/actions/variables/{name}',
-                    {...context.repo, name});
+                category = 'malformed_response';
+                // Keep the entire transport unchanged until the runner has masked
+                // its preparation output. Never log parsed or malformed content.
+                if (/[\r\n]/.test(raw)) throw new Error('Multiline transport');
+                const packet = JSON.parse(raw);
+                if (!packet || Array.isArray(packet) || typeof packet !== 'object') {
+                  throw new Error('Invalid envelope');
                 }
-                core.setSecret(data.value);
-                mappings.push([name, data.value]);
+                category = 'provenance_mismatch';
+                const revision = process.env.IAM_APPROVED_REVISION;
+                const card = process.env.IAM_OWNER_RUN_CARD;
+                if (!/^[0-9a-f]{40}$/.test(revision || '') || !card?.trim()
+                    || process.env.GITHUB_SHA !== revision
+                    || process.env.GITHUB_REPOSITORY !== 'QuantStrategyLab/LongBridgePlatform'
+                    || packet.version !== 1 || packet.name !== name
+                    || packet.repository !== process.env.GITHUB_REPOSITORY
+                    || packet.environment !== 'longbridge-paper' || packet.scope !== 'environment'
+                    || packet.revision !== revision || packet.owner_run_card !== card) {
+                  throw new Error('Envelope binding mismatch');
+                }
+                const value = packet.value;
+                category = 'malformed_response';
+                if (typeof value !== 'string' || /[\r\n\0]/.test(value)) {
+                  throw new Error('Invalid mapping value');
+                }
+                category = 'blank_value';
+                if (!value.trim()) throw new Error('Empty mapping value');
+                core.setSecret(value);
+                mappings.push([name, value]);
               } catch {
                 throw new Error(`Protected mapping read failed: name=${name} scope=${scope} category=${category}; stop before authentication`);
               }
