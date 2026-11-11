@@ -215,3 +215,10 @@ def test_internal_hk_archive_is_one_account_and_create_only() -> None:
     assert "ifGenerationMatch: 0" in source
     assert "actually_ran: false" in source
     assert "order_count:" not in source and "fill_count:" not in source
+
+
+def test_internal_sg_verification_uses_sg_identity_without_hk_archive() -> None:
+    source = (ROOT / "config/hk_snapshot_verification.workflow.yaml").read_text()
+    assert 'sys.get_env("SNAPSHOT_VERIFICATION_SCOPE", "HK")' in source
+    assert 'map.get(snapshot, "account_scope") != expected_scope' in source
+    assert 'expected_scope != "HK" or not text.match_regex(archive_bucket' in source
