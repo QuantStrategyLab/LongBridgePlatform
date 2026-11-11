@@ -13,6 +13,7 @@ on:
           - legacy
           - image-only-no-traffic
           - image-only-notification-overlay
+          - sg-serving-snapshot
       approved_ref:
         description: "Exact workflow branch/tag name approved for image-only staging."
         required: false
@@ -2307,3 +2308,38 @@ jobs:
               --location="${scheduler_location}" \
               --quiet
           fi
+
+
+  sg-serving-snapshot:
+    name: Enable only the SG read-only snapshot
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+      github.run_attempt == 1 && inputs.deployment_mode == 'sg-serving-snapshot' &&
+      inputs.target == 'SG' && inputs.approved_ref == 'main' &&
+      inputs.account_snapshot_enabled == 'true' &&
+      inputs.source_commit == '' &&
+      inputs.account_history_recording_enabled == '' && inputs.account_history_gcs_prefix == '' &&
+      inputs.account_history_target_id == '' && inputs.account_history_expected_scope == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment: longbridge-sg
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ vars.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+      CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Stage and verify the serving image with the snapshot flag
+        env:
+          SG_SNAPSHOT_APPROVED_SERVING_SOURCE: ${{ secrets.SG_SNAPSHOT_APPROVED_SERVING_SOURCE }}
+        run: python3 scripts/enable_sg_serving_snapshot.py

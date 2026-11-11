@@ -28,7 +28,7 @@
 
 `independent_get` 适用于可由当前执行器访问的已鉴权 Cloud Run 服务。内部 ingress 返回固定原因 `internal_observer_required`，在调用券商或发送账户事实前停止；不得为采集开放 ingress。内部服务应复用受支持的内部执行入口，另行验证只读采集、私有归档与接收闭环。此文档不表示该内部闭环已经完成。
 
-HK 内网连通性可用 `config/hk_snapshot_verification.workflow.yaml` 单独验证。它在同一 GCP 项目通过 OIDC 调用固定的 `GET /account-snapshot`，从受保护的部署配置读取服务地址和预期绑定。验证只返回时间、字段数量和绑定结果。Cloud Workflows 的调用日志须关闭，运行身份单独配置，调用者不能传入地址、方法或请求参数。未配置归档时只做手动验证。HK 生产归档使用受保护的 `HK_DIGEST_BUCKET`、`HK_DIGEST_PREFIX`、`HK_DIGEST_ACCOUNT_UID`、`HK_DIGEST_TARGET_ID` 和 `HK_DIGEST_STRATEGY_PROFILE`，每天在新加坡时间 06:00 前采集，按 06:00 分界写入唯一的账户候选对象。只保留有来源绑定的净资产和股票持仓，不从快照推断订单或成交。归档权限仅允许在 HK 候选路径创建对象，候选已存在时保留原对象。
+HK 内网连通性可用 `config/hk_snapshot_verification.workflow.yaml` 单独验证。它在同一 GCP 项目通过 OIDC 调用固定的 `GET /account-snapshot`，从受保护的部署配置读取服务地址和预期绑定。验证只返回时间、字段数量和绑定结果。Cloud Workflows 的调用日志须关闭，运行身份单独配置，调用者不能传入地址、方法或请求参数。未配置归档时只做手动验证。SG 的部署可在只读快照开启后将 `SNAPSHOT_VERIFICATION_SCOPE` 设为 `SG`，使用其独立身份和服务来源绑定。SG 验证模式不写入 HK 归档。HK 生产归档使用受保护的 `HK_DIGEST_BUCKET`、`HK_DIGEST_PREFIX`、`HK_DIGEST_ACCOUNT_UID`、`HK_DIGEST_TARGET_ID` 和 `HK_DIGEST_STRATEGY_PROFILE`，每天在新加坡时间 06:00 前采集，按 06:00 分界写入唯一的账户候选对象。只保留有来源绑定的净资产和股票持仓，不从快照推断订单或成交。归档权限仅允许在 HK 候选路径创建对象，候选已存在时保留原对象。
 
 单次操作最多一次快照 GET 和一次事实 POST，不自动重试未知结果。投影保留券商实际币种、金额、观察时间及来源；账户来源不匹配时拒收，不补零、不改旧数据时间。交易启停、风险预算和通知不由此观察器控制。
 

@@ -6,6 +6,7 @@ main:
         assign:
           - origin: ${sys.get_env("HK_SNAPSHOT_ORIGIN")}
           - expected_binding: ${sys.get_env("HK_SNAPSHOT_EXPECTED_BINDING")}
+          - expected_scope: ${sys.get_env("SNAPSHOT_VERIFICATION_SCOPE", "HK")}
           - requested_at: ${sys.now()}
           - archive_bucket: ${sys.get_env("HK_DIGEST_BUCKET", "")}
           - archive_prefix: ${sys.get_env("HK_DIGEST_PREFIX", "")}
@@ -14,7 +15,7 @@ main:
           - strategy_profile: ${sys.get_env("HK_DIGEST_STRATEGY_PROFILE", "")}
     - check_configuration:
         switch:
-          - condition: '${not text.match_regex(origin, "^https://[a-z0-9-]+[.][a-z0-9-]+[.]run[.]app$") or not text.match_regex(expected_binding, "^[a-f0-9]{64}$")}'
+          - condition: '${not text.match_regex(origin, "^https://[a-z0-9-]+[.][a-z0-9-]+[.]run[.]app$") or not text.match_regex(expected_binding, "^[a-f0-9]{64}$") or (expected_scope != "HK" and expected_scope != "SG")}'
             raise: hk_snapshot_configuration_invalid
     - read_snapshot:
         try:
@@ -39,7 +40,7 @@ main:
           - now: ${sys.now()}
     - check_binding_and_fields:
         switch:
-          - condition: '${response.code != 200 or get_type(snapshot) != "map" or map.get(snapshot, "schema_version") != "longbridge_account_snapshot.v1" or map.get(snapshot, "status") != "partial" or map.get(snapshot, "account_scope") != "HK"}'
+          - condition: '${response.code != 200 or get_type(snapshot) != "map" or map.get(snapshot, "schema_version") != "longbridge_account_snapshot.v1" or map.get(snapshot, "status") != "partial" or map.get(snapshot, "account_scope") != expected_scope}'
             raise: hk_snapshot_contract_invalid
           - condition: '${map.get(snapshot, "no_order") != true or map.get(snapshot, "live_authority_granted") != false or map.get(snapshot, "cash_complete") != true or map.get(snapshot, "positions_complete") != true}'
             raise: hk_snapshot_contract_invalid
@@ -59,7 +60,7 @@ main:
         switch:
           - condition: ${archive_bucket == "" and archive_prefix == "" and account_uid == "" and target_id == "" and strategy_profile == ""}
             next: receipt
-          - condition: '${not text.match_regex(archive_bucket, "^[a-z0-9][a-z0-9._-]{2,62}$") or not text.match_regex(archive_prefix, "^[A-Za-z0-9_/-]+$") or account_uid == "" or target_id == "" or strategy_profile == ""}'
+          - condition: '${expected_scope != "HK" or not text.match_regex(archive_bucket, "^[a-z0-9][a-z0-9._-]{2,62}$") or not text.match_regex(archive_prefix, "^[A-Za-z0-9_/-]+$") or account_uid == "" or target_id == "" or strategy_profile == ""}'
             raise: hk_digest_archive_configuration_invalid
     - start_projection:
         assign:
@@ -149,7 +150,7 @@ main:
           position_count: ${len(snapshot.positions)}
     - receipt:
         return:
-          account_scope: HK
+          account_scope: ${expected_scope}
           source_binding_verified: true
           read_only_snapshot_verified: true
           observed_at: ${snapshot.observed_finished_at}

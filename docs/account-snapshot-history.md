@@ -197,6 +197,10 @@ producer 为每次观察写入 `{prefix}/{target_id}/{source_binding_id}/{observ
 
 这份记录不是 TWR，不是收益率，也不授予 live 权限。
 
+## SG 快照开关的单独发布
+
+`Deploy Cloud Run` 的 `sg-serving-snapshot` 模式从受保护的 SG Environment 读取已核准的现役来源。流程先用云端预检核对完整现役配置、停用的交易开关和当前固定流量，然后暂存同一镜像并单独开启快照。新版本的配置和身份核对通过后，才将流量切到该版本。SG 的日报采集还需要独立验证真实快照及私有归档。
+
 ## HK 独立只读观察模式（默认关闭，仅手动）
 
 新增的 `ACCOUNT_HISTORY_OBSERVATION_MODE=independent_get` 是与旧归档路线分开的 HK-only 模式。缺省仍为 `scheduler_archive`，旧模式继续保留一次 Scheduler 触发、受限 GCS listing、固定 generation、原字节发布及原有 SG/HK 受限恢复保证。选择独立模式后，失败不会回退到 Scheduler、`/probe`、`/run`、`/dry-run` 或策略 canary。
