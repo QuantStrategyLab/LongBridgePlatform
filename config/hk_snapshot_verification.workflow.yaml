@@ -1,4 +1,4 @@
-# One manual account snapshot verification on Google Cloud Workflows.
+# Verify and optionally archive the HK read-only account snapshot.
 # Call logging stays disabled. Only the validated field counts leave the workflow.
 main:
   steps:
@@ -7,6 +7,11 @@ main:
           - origin: ${sys.get_env("HK_SNAPSHOT_ORIGIN")}
           - expected_binding: ${sys.get_env("HK_SNAPSHOT_EXPECTED_BINDING")}
           - requested_at: ${sys.now()}
+          - archive_bucket: ${sys.get_env("HK_DIGEST_BUCKET", "")}
+          - archive_prefix: ${sys.get_env("HK_DIGEST_PREFIX", "")}
+          - account_uid: ${sys.get_env("HK_DIGEST_ACCOUNT_UID", "")}
+          - target_id: ${sys.get_env("HK_DIGEST_TARGET_ID", "")}
+          - strategy_profile: ${sys.get_env("HK_DIGEST_STRATEGY_PROFILE", "")}
     - check_configuration:
         switch:
           - condition: '${not text.match_regex(origin, "^https://[a-z0-9-]+[.][a-z0-9-]+[.]run[.]app$") or not text.match_regex(expected_binding, "^[a-f0-9]{64}$")}'
@@ -50,6 +55,98 @@ main:
         switch:
           - condition: ${started < requested_at or started > finished or finished > now or now - started > 900}
             raise: hk_snapshot_time_invalid
+    - archive_configuration:
+        switch:
+          - condition: ${archive_bucket == "" and archive_prefix == "" and account_uid == "" and target_id == "" and strategy_profile == ""}
+            next: receipt
+          - condition: '${not text.match_regex(archive_bucket, "^[a-z0-9][a-z0-9._-]{2,62}$") or not text.match_regex(archive_prefix, "^[A-Za-z0-9_/-]+$") or account_uid == "" or target_id == "" or strategy_profile == ""}'
+            raise: hk_digest_archive_configuration_invalid
+    - start_projection:
+        assign:
+          - business_day: ${text.substring(time.format(finished + 7200), 0, 10)}
+          - asof_snapshot:
+              as_of: ${snapshot.observed_finished_at}
+              holdings: []
+              holdings_scope: stocks_only
+    - project_single_currency_equity:
+        switch:
+          - condition: ${len(snapshot.broker_reported_balances) == 1}
+            steps:
+              - select_equity:
+                  assign:
+                    - balance: ${snapshot.broker_reported_balances[0]}
+              - check_equity:
+                  switch:
+                    - condition: '${not text.match_regex(balance.currency, "^[A-Z]{3}$") or not text.match_regex(balance.net_assets, "^-?[0-9]{1,15}([.][0-9]{1,8})?$")}'
+                      raise: hk_digest_equity_invalid
+              - set_equity:
+                  assign:
+                    - asof_snapshot.equity_currency: ${balance.currency}
+                    - asof_snapshot.equity: ${double(balance.net_assets)}
+    - project_holdings:
+        for:
+          value: position
+          in: ${snapshot.positions}
+          steps:
+            - check_holding:
+                switch:
+                  - condition: '${not text.match_regex(position.symbol, "^[A-Za-z0-9._-]{1,32}$") or not text.match_regex(position.quantity, "^-?[0-9]{1,15}([.][0-9]{1,8})?$")}'
+                    raise: hk_digest_position_invalid
+            - project_holding:
+                assign:
+                  - holding:
+                      symbol: ${position.symbol}
+                      quantity: ${double(position.quantity)}
+                      asset_type: stock
+                  - asof_snapshot.holdings: ${list.concat(asof_snapshot.holdings, holding)}
+    - prepare_candidate:
+        assign:
+          - candidate:
+              schema_version: qsl.digest_candidates.v1
+              producer_status: projected
+              runs:
+                - platform_id: longbridge
+                  opaque_account_uid: ${account_uid}
+                  target_id: ${target_id}
+                  strategy_profile: ${strategy_profile}
+                  business_day: ${business_day}
+                  actually_ran: false
+                  account_daily_facts:
+                    snapshots:
+                      - ${asof_snapshot}
+          - object_name: ${archive_prefix + "/longbridge/" + business_day + "/longbridge-hk-snapshot.json"}
+    - archive_snapshot:
+        try:
+          call: http.post
+          args:
+            url: ${"https://storage.googleapis.com/upload/storage/v1/b/" + archive_bucket + "/o"}
+            auth:
+              type: OAuth2
+            query:
+              uploadType: media
+              name: ${object_name}
+              ifGenerationMatch: 0
+            headers:
+              Content-Type: application/json
+            timeout: 15
+            body: ${candidate}
+        except:
+          as: error
+          steps:
+            - archive_error:
+                switch:
+                  - condition: ${map.get(error, "code") == 412}
+                    return:
+                      state: archive_exists
+                      business_day: ${business_day}
+            - reject_archive_error:
+                raise: hk_digest_archive_failed
+    - archive_receipt:
+        return:
+          state: archived
+          business_day: ${business_day}
+          observed_at: ${snapshot.observed_finished_at}
+          position_count: ${len(snapshot.positions)}
     - receipt:
         return:
           account_scope: HK
