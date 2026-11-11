@@ -64,10 +64,6 @@ env:
   GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
   GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ secrets.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
-  cancel-in-progress: false
-
 jobs:
   resolve-matrix:
     name: Resolve runtime-target matrix
@@ -115,6 +111,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref_name }}-${{ matrix.target.id }}
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
@@ -336,6 +335,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref_name }}-${{ matrix.target.id }}
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write

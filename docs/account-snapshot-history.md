@@ -175,7 +175,7 @@ cash-flow-adjusted returns or historical position completeness.
 - 同一步提供 `ACCOUNT_HISTORY_SERVICE_URL`、`ACCOUNT_HISTORY_GCS_PREFIX` 和可信的 `ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID`（优先使用 GitHub protected Secret，旧 variable 仅作兼容回退）
 - 目标 ID 来自 `matrix.target.id`，期望 scope 来自 `matrix.target.label`，项目来自已有 `GCP_PROJECT_ID`
 
-`execution-report-heartbeat` 的每日定时运行始终选择完整 manifest matrix。手动 `workflow_dispatch` 可将 `target` 选为 `paper`、`hk` 或 `sg`，只检查该 manifest target；默认 `all` 保持完整 matrix。单目标选择只缩小这次 heartbeat 的账户范围，不启用账户记录或修改任何 target variable；对应 GitHub Environment 的 `ACCOUNT_HISTORY_RECORDING_ENABLED` 仍须单独精确为 `true`，否则采样步骤跳过。
+`execution-report-heartbeat` 的每日定时运行始终选择完整 manifest matrix。手动 `workflow_dispatch` 可将 `target` 选为 `paper`、`hk` 或 `sg`，只检查该 manifest target；默认 `all` 保持完整 matrix。单目标选择只缩小这次 heartbeat 的账户范围，不启用账户记录或修改任何 target variable；对应 GitHub Environment 的 `ACCOUNT_HISTORY_RECORDING_ENABLED` 仍须单独精确为 `true`，否则采样步骤跳过。 心跳和快照检查按账户排队，同一账户的任务串行执行，PAPER 等待审批时 HK 和 SG 可以继续检查。
 
 仅需核验部署身份在项目级的 SG probe 权限时，手动选择 `target=sg` 并开启默认关闭的 `inspect_sg_probe_permissions`。其他 target 会在 matrix 解析阶段拒绝。检查只调用 Cloud Resource Manager `testIamPermissions`，输出 `context=project` 及 `cloudscheduler.jobs.get/run/enable/pause` 四项布尔值；该模式跳过采样、heartbeat 检查和发布。项目级结果不证明某个 job 上的条件角色生效，也不替代 SG probe 的实际 job 读回。
 
