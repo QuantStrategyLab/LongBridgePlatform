@@ -153,9 +153,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  approve-live-traffic:
+    name: Approve LongBridge production traffic
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+      github.run_attempt == 1 &&
+      ((inputs.deployment_mode == 'legacy' && inputs.shift_traffic_to_commit) ||
+      ((inputs.deployment_mode == 'image-only-no-traffic' || inputs.deployment_mode == 'image-only-notification-overlay') &&
+      inputs.target == 'HK' && inputs.account_snapshot_enabled == 'true'))
+    environment: longbridge-live-approval
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions: {}
+    steps:
+      - name: Record approval
+        run: echo "Approved the production traffic change for this dispatch." >> "$GITHUB_STEP_SUMMARY"
+
   image-only-no-traffic:
     name: Stage ${{ inputs.target }} image without traffic
-    if: github.event_name == 'workflow_dispatch' && (inputs.deployment_mode == 'image-only-no-traffic' || inputs.deployment_mode == 'image-only-notification-overlay')
+    needs: approve-live-traffic
+    if: >-
+      !cancelled() && github.event_name == 'workflow_dispatch' &&
+      (inputs.deployment_mode == 'image-only-no-traffic' || inputs.deployment_mode == 'image-only-notification-overlay') &&
+      (needs.approve-live-traffic.result == 'success' ||
+      (needs.approve-live-traffic.result == 'skipped' &&
+      !(inputs.target == 'HK' && inputs.account_snapshot_enabled == 'true')))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -652,10 +674,14 @@ jobs:
           python3 scripts/render_runtime_target_matrix.py --profile sync --github-output
 
   sync:
-    needs: resolve-matrix
+    needs: [resolve-matrix, approve-live-traffic]
     name: Deploy / Sync ${{ matrix.target.label }} Cloud Run
     # Production deployment and environment sync require an explicit operator dispatch.
-    if: github.event_name == 'workflow_dispatch' && inputs.deployment_mode == 'legacy'
+    if: >-
+      !cancelled() && github.event_name == 'workflow_dispatch' &&
+      inputs.deployment_mode == 'legacy' && needs.resolve-matrix.result == 'success' &&
+      (needs.approve-live-traffic.result == 'success' ||
+      (needs.approve-live-traffic.result == 'skipped' && !inputs.shift_traffic_to_commit))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:

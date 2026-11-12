@@ -10,7 +10,7 @@ grep -Fq 'name: Deploy / Sync ${{ matrix.target.label }} Cloud Run' "$workflow_f
 grep -Fq 'fail-fast: false' "$workflow_file"
 grep -Fq 'resolve-matrix:' "$workflow_file"
 grep -Fq 'render_runtime_target_matrix.py --profile sync --github-output' "$workflow_file"
-grep -Fq 'needs: resolve-matrix' "$workflow_file"
+grep -Fq 'needs: [resolve-matrix, approve-live-traffic]' "$workflow_file"
 grep -Fq 'matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}' "$workflow_file"
 grep -Fq "inputs.target == 'PAPER' && 'longbridge-paper'" "$workflow_file"
 grep -Fq "inputs.target == 'HK' && 'longbridge-hk'" "$workflow_file"
@@ -448,7 +448,9 @@ assert "name: Mask WIF identity components" in masking
 assert "if: matrix.target.environment == 'longbridge-paper' && steps.config.outputs.enabled == 'true'" in masking
 for section in (legacy, cleanup):
     assert "inputs.deployment_mode == 'legacy'" in section.split("    steps:", 1)[0]
-assert "needs: resolve-matrix" in legacy.split("    steps:", 1)[0]
+assert "needs: [resolve-matrix, approve-live-traffic]" in legacy.split("    steps:", 1)[0]
+assert "needs.approve-live-traffic.result == 'success'" in legacy.split("    steps:", 1)[0]
+assert "needs.approve-live-traffic.result == 'success'" in job.split("    steps:", 1)[0]
 assert job.index("name: Validate image-only dispatch") < job.index("uses: google-github-actions/auth@")
 assert job.index("name: Verify exact image-only source") < job.index("uses: google-github-actions/auth@")
 # Only the service selector, protected WIF identity and immutable overlay inputs are allowed;
