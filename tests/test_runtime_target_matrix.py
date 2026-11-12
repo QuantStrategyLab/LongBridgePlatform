@@ -280,7 +280,8 @@ def test_monitor_and_deploy_workflows_consume_validated_matrix_output():
             assert 'render_runtime_target_matrix.py --profile heartbeat --target "$MATRIX_TARGET" --github-output' in text
         else:
             assert f"render_runtime_target_matrix.py --profile {profile} --github-output" in text
-        assert "needs: resolve-matrix" in text
+        dependency = "needs: [resolve-matrix, approve-live-traffic]" if profile == "sync" else "needs: resolve-matrix"
+        assert dependency in text
         assert "matrix: ${{ fromJSON(needs.resolve-matrix.outputs.matrix) }}" in text
         assert "vars.RUNTIME_TARGET_ENABLED" in text
         # Hardcoded PAPER/HK/SG matrix blocks must not remain in dynamic consumers.
