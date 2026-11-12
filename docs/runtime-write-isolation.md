@@ -317,3 +317,13 @@ staging; this mode neither changes configuration nor moves traffic.
 
 
 
+
+
+## Production traffic approval
+
+LongBridge traffic promotion uses the `longbridge-live-approval` Environment
+on `main`. This covers explicit `shift_traffic_to_commit` and the HK and SG snapshot
+modes that promote a serving revision. Staging without traffic and
+standalone readback skip this approval. The existing runtime-target,
+revision and readback checks still run before or after the traffic change
+as appropriate.
