@@ -159,6 +159,7 @@ jobs:
       github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
       github.run_attempt == 1 &&
       ((inputs.deployment_mode == 'legacy' && inputs.shift_traffic_to_commit) ||
+      (inputs.deployment_mode == 'sg-serving-snapshot' && inputs.target == 'SG' && inputs.account_snapshot_enabled == 'true') ||
       ((inputs.deployment_mode == 'image-only-no-traffic' || inputs.deployment_mode == 'image-only-notification-overlay') &&
       inputs.target == 'HK' && inputs.account_snapshot_enabled == 'true'))
     environment: longbridge-live-approval
@@ -2338,8 +2339,9 @@ jobs:
 
   sg-serving-snapshot:
     name: Enable only the SG read-only snapshot
+    needs: approve-live-traffic
     if: >-
-      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+      needs.approve-live-traffic.result == 'success' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
       github.run_attempt == 1 && inputs.deployment_mode == 'sg-serving-snapshot' &&
       inputs.target == 'SG' && inputs.approved_ref == 'main' &&
       inputs.account_snapshot_enabled == 'true' &&

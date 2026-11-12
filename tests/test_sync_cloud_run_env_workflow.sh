@@ -451,6 +451,9 @@ for section in (legacy, cleanup):
 assert "needs: [resolve-matrix, approve-live-traffic]" in legacy.split("    steps:", 1)[0]
 assert "needs.approve-live-traffic.result == 'success'" in legacy.split("    steps:", 1)[0]
 assert "needs.approve-live-traffic.result == 'success'" in job.split("    steps:", 1)[0]
+sg_snapshot = workflow.split("\n  sg-serving-snapshot:\n", 1)[1]
+assert "needs: approve-live-traffic" in sg_snapshot.split("    steps:", 1)[0]
+assert "needs.approve-live-traffic.result == 'success'" in sg_snapshot.split("    steps:", 1)[0]
 assert job.index("name: Validate image-only dispatch") < job.index("uses: google-github-actions/auth@")
 assert job.index("name: Verify exact image-only source") < job.index("uses: google-github-actions/auth@")
 # Only the service selector, protected WIF identity and immutable overlay inputs are allowed;
