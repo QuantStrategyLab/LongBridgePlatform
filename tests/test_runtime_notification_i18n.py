@@ -30,6 +30,15 @@ def runtime_function(name, **overrides):
                      strategy_display_name="Test strategy", build_translator=build_translator,
                      t=build_translator("zh-CN"))
     namespace.update(overrides)
+
+    class _MainProxy:
+        def __getattr__(self, attr):
+            try:
+                return namespace[attr]
+            except KeyError as exc:
+                raise AttributeError(attr) from exc
+
+    namespace["main"] = _MainProxy()
     exec(compile(ast.Module(body=[function], type_ignores=[]), source_name, "exec"), namespace)
     return namespace[name]
 
