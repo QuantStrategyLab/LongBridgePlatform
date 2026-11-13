@@ -14,7 +14,15 @@ def test_chinese_locale_variants_use_chinese(locale):
 
 
 def runtime_function(name, **overrides):
-    tree = ast.parse((Path(__file__).resolve().parents[1] / "main.py").read_text())
+    root = Path(__file__).resolve().parents[1]
+    source_name = {
+        "_runtime_error_notification_message": "notifications_runtime.py",
+        "_runtime_error_notification_targets": "notifications_runtime.py",
+        "_notify_runtime_error": "notifications_runtime.py",
+        "_publish_runtime_failure_notification": "notifications_runtime.py",
+        "_publish_runtime_failure_notification_legacy": "notifications_runtime.py",
+    }.get(name, "main.py")
+    tree = ast.parse((root / source_name).read_text())
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
     namespace = dict(os=os, request=SimpleNamespace(method="GET", path="/main"),
                      NOTIFY_LANG="zh-CN", SERVICE_NAME="Test service", SECRET_NAME="Test secret alias",
@@ -22,7 +30,7 @@ def runtime_function(name, **overrides):
                      strategy_display_name="Test strategy", build_translator=build_translator,
                      t=build_translator("zh-CN"))
     namespace.update(overrides)
-    exec(compile(ast.Module(body=[function], type_ignores=[]), "main.py", "exec"), namespace)
+    exec(compile(ast.Module(body=[function], type_ignores=[]), source_name, "exec"), namespace)
     return namespace[name]
 
 
