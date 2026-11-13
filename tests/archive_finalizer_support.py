@@ -217,10 +217,13 @@ def run_cycle(monkeypatch, case, *, report, authorized=False):
     with unified.bind_report(report):
         returned = run(runtime=runtime, config=config)
     assert returned is result
+    class _MainProxy:
+        unified_notifications = unified
+
     summarize = function_from(
-        (ROOT / "main.py").read_text(),
+        (ROOT / "http_routes.py").read_text(),
         "_summarize_cycle_result_for_report",
-        {"unified_notifications": unified},
+        {"unified_notifications": unified, "main": _MainProxy()},
     )
     summary = summarize(result, dry_run=False)
     if report is not None:
