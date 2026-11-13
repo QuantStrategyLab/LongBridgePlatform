@@ -239,7 +239,12 @@ _IMPL_MODULES = (
 )
 
 class _LongBridgeMainFacade(types.ModuleType):
-    """Forward attribute writes to the owning implementation module."""
+    """Resolve missing attributes from split modules without mutating them.
+
+    ``unittest.mock.patch.object`` restores by deleting temporary facade
+    attributes. Keeping writes local to the facade lets ``__getattr__`` return
+    the original implementation binding after the patch context exits.
+    """
 
     def __getattr__(self, name: str):
         for module in _IMPL_MODULES:
@@ -247,11 +252,11 @@ class _LongBridgeMainFacade(types.ModuleType):
                 return module.__dict__[name]
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-    def __setattr__(self, name: str, value):
-        super().__setattr__(name, value)
-        for module in _IMPL_MODULES:
-            if name in module.__dict__:
-                setattr(module, name, value)
+    def __delattr__(self, name: str):
+        if name in self.__dict__:
+            super().__delattr__(name)
+            return
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 sys.modules[__name__].__class__ = _LongBridgeMainFacade
 
