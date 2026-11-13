@@ -2,16 +2,14 @@
 
 Thin facade over the platform split modules. Public helpers are
 re-exported by explicit name so existing ``import main`` / monkeypatch
-call sites keep working. Mutable process globals resolve through the
-module facade so rebinding inside implementation modules stays visible.
+call sites keep working. A module facade forwards attribute writes to
+the owning implementation module.
 """
 from __future__ import annotations
 
 import sys
 import types
 
-# Reload split modules whenever main is (re)imported so test harnesses
-# that only pop ``main`` still observe fresh env/stubs.
 for _split_module_name in (
     "runtime_wiring",
     "notifications_runtime",
@@ -28,11 +26,34 @@ import strategy_plugins_runtime as _strategy_plugins_runtime
 
 from runtime_wiring import (
     get_project_id,
+    RUNTIME_SETTINGS,
+    PROJECT_ID,
+    SECRET_NAME,
+    ACCOUNT_PREFIX,
+    STRATEGY_PROFILE,
+    STRATEGY_DISPLAY_NAME,
     _normalize_plugin_mounts_strategy,
     _adopt_startup_config,
+    MONITOR_DISPATCH_ENV_OVERRIDES,
+    STARTUP_CONFIG_RECEIPT,
     _load_monitor_dispatch_targets,
+    ACCOUNT_REGION,
+    MARKET,
+    MARKET_CALENDAR,
+    MARKET_TIMEZONE,
+    SYMBOL_SUFFIX,
+    TRADING_CURRENCY,
+    NOTIFY_LANG,
+    TG_TOKEN,
+    TG_CHAT_ID,
     _NOTIFICATION_CHANNEL,
     _NOTIFICATION_WEBHOOK_URL,
+    CASH_ONLY_EXECUTION,
+    STRATEGY_RUNTIME,
+    STRATEGY_RUNTIME_CONFIG,
+    MANAGED_SYMBOLS,
+    AVAILABLE_INPUTS,
+    BENCHMARK_SYMBOL,
     _emit_v7_loaded_version_log,
     SIGNAL_EFFECTIVE_AFTER_TRADING_DAYS,
     LIMIT_SELL_DISCOUNT,
@@ -49,6 +70,7 @@ from runtime_wiring import (
     SEPARATOR,
     COMPACT_ERROR_NOTIFICATION_MAX_CHARS,
     _load_limit_buy_premium_by_symbol,
+    LIMIT_BUY_PREMIUM_BY_SYMBOL,
     t,
     _build_notification_delivery_log_for_report,
     _build_notification_delivery_summary,
@@ -56,6 +78,8 @@ from runtime_wiring import (
     strategy_display_name,
     log_position_snapshot,
     log_runtime_warning,
+    BROKER_ADAPTERS,
+    STRATEGY_ADAPTERS,
     _safe_haven_cash_substitute_threshold_usd,
     build_composer,
     fetch_account_snapshot_token_with_metadata,
@@ -82,6 +106,7 @@ from strategy_plugins_runtime import (
 
 from http_routes import (
     app,
+    READ_ONLY_BROKER_RECONCILIATION_COLLECTOR,
     _summarize_cycle_result_for_report,
     _min_order_notional_usd,
     run_strategy,
@@ -109,11 +134,34 @@ from http_routes import (
 
 __all__ = [
     'get_project_id',
+    'RUNTIME_SETTINGS',
+    'PROJECT_ID',
+    'SECRET_NAME',
+    'ACCOUNT_PREFIX',
+    'STRATEGY_PROFILE',
+    'STRATEGY_DISPLAY_NAME',
     '_normalize_plugin_mounts_strategy',
     '_adopt_startup_config',
+    'MONITOR_DISPATCH_ENV_OVERRIDES',
+    'STARTUP_CONFIG_RECEIPT',
     '_load_monitor_dispatch_targets',
+    'ACCOUNT_REGION',
+    'MARKET',
+    'MARKET_CALENDAR',
+    'MARKET_TIMEZONE',
+    'SYMBOL_SUFFIX',
+    'TRADING_CURRENCY',
+    'NOTIFY_LANG',
+    'TG_TOKEN',
+    'TG_CHAT_ID',
     '_NOTIFICATION_CHANNEL',
     '_NOTIFICATION_WEBHOOK_URL',
+    'CASH_ONLY_EXECUTION',
+    'STRATEGY_RUNTIME',
+    'STRATEGY_RUNTIME_CONFIG',
+    'MANAGED_SYMBOLS',
+    'AVAILABLE_INPUTS',
+    'BENCHMARK_SYMBOL',
     '_emit_v7_loaded_version_log',
     'SIGNAL_EFFECTIVE_AFTER_TRADING_DAYS',
     'LIMIT_SELL_DISCOUNT',
@@ -130,6 +178,7 @@ __all__ = [
     'SEPARATOR',
     'COMPACT_ERROR_NOTIFICATION_MAX_CHARS',
     '_load_limit_buy_premium_by_symbol',
+    'LIMIT_BUY_PREMIUM_BY_SYMBOL',
     't',
     '_build_notification_delivery_log_for_report',
     '_build_notification_delivery_summary',
@@ -137,35 +186,11 @@ __all__ = [
     'strategy_display_name',
     'log_position_snapshot',
     'log_runtime_warning',
+    'BROKER_ADAPTERS',
+    'STRATEGY_ADAPTERS',
     '_safe_haven_cash_substitute_threshold_usd',
     'build_composer',
     'fetch_account_snapshot_token_with_metadata',
-    'RUNTIME_SETTINGS',
-    'PROJECT_ID',
-    'SECRET_NAME',
-    'ACCOUNT_PREFIX',
-    'STRATEGY_PROFILE',
-    'STRATEGY_DISPLAY_NAME',
-    'MONITOR_DISPATCH_ENV_OVERRIDES',
-    'STARTUP_CONFIG_RECEIPT',
-    'ACCOUNT_REGION',
-    'MARKET',
-    'MARKET_CALENDAR',
-    'MARKET_TIMEZONE',
-    'SYMBOL_SUFFIX',
-    'TRADING_CURRENCY',
-    'NOTIFY_LANG',
-    'TG_TOKEN',
-    'TG_CHAT_ID',
-    'CASH_ONLY_EXECUTION',
-    'STRATEGY_RUNTIME',
-    'STRATEGY_RUNTIME_CONFIG',
-    'MANAGED_SYMBOLS',
-    'AVAILABLE_INPUTS',
-    'BENCHMARK_SYMBOL',
-    'LIMIT_BUY_PREMIUM_BY_SYMBOL',
-    'BROKER_ADAPTERS',
-    'STRATEGY_ADAPTERS',
     '_runtime_failure_reason',
     '_compact_error_notification',
     '_split_env_list',
@@ -180,6 +205,7 @@ __all__ = [
     'build_strategy_plugin_alert_context_label',
     'publish_strategy_plugin_alerts',
     'app',
+    'READ_ONLY_BROKER_RECONCILIATION_COLLECTOR',
     '_summarize_cycle_result_for_report',
     '_min_order_notional_usd',
     'run_strategy',
@@ -203,7 +229,6 @@ __all__ = [
     'handle_monitor_dispatch',
     'request_method',
     'health',
-    'READ_ONLY_BROKER_RECONCILIATION_COLLECTOR',
 ]
 
 _IMPL_MODULES = (
@@ -212,37 +237,6 @@ _IMPL_MODULES = (
     _strategy_plugins_runtime,
     _http_routes,
 )
-
-# Keep these off this module's __dict__ so reads see live impl bindings.
-_MUTABLE_PROCESS_GLOBALS = frozenset({
-    'ACCOUNT_PREFIX',
-    'ACCOUNT_REGION',
-    'AVAILABLE_INPUTS',
-    'BENCHMARK_SYMBOL',
-    'BROKER_ADAPTERS',
-    'CASH_ONLY_EXECUTION',
-    'LIMIT_BUY_PREMIUM_BY_SYMBOL',
-    'MANAGED_SYMBOLS',
-    'MARKET',
-    'MARKET_CALENDAR',
-    'MARKET_TIMEZONE',
-    'MONITOR_DISPATCH_ENV_OVERRIDES',
-    'NOTIFY_LANG',
-    'PROJECT_ID',
-    'READ_ONLY_BROKER_RECONCILIATION_COLLECTOR',
-    'RUNTIME_SETTINGS',
-    'SECRET_NAME',
-    'STARTUP_CONFIG_RECEIPT',
-    'STRATEGY_ADAPTERS',
-    'STRATEGY_DISPLAY_NAME',
-    'STRATEGY_PROFILE',
-    'STRATEGY_RUNTIME',
-    'STRATEGY_RUNTIME_CONFIG',
-    'SYMBOL_SUFFIX',
-    'TG_CHAT_ID',
-    'TG_TOKEN',
-    'TRADING_CURRENCY',
-})
 
 class _LongBridgeMainFacade(types.ModuleType):
     """Forward attribute writes to the owning implementation module."""
@@ -254,12 +248,6 @@ class _LongBridgeMainFacade(types.ModuleType):
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
     def __setattr__(self, name: str, value):
-        if name in _MUTABLE_PROCESS_GLOBALS:
-            for module in _IMPL_MODULES:
-                if name in module.__dict__:
-                    setattr(module, name, value)
-                    return
-            raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
         super().__setattr__(name, value)
         for module in _IMPL_MODULES:
             if name in module.__dict__:
