@@ -29,3 +29,9 @@ jobs:
       provider: gcp-service
       environment: ${{ inputs.target }}
       operation: ${{ inputs.operation }}
+    secrets:
+      DEPLOY_WIF_PROVIDER: ${{ secrets.DEPLOY_WIF_PROVIDER }}
+      DEPLOY_SERVICE_ACCOUNT: ${{ secrets.DEPLOY_SERVICE_ACCOUNT }}
+      DEPLOY_RESOURCE: ${{ secrets.DEPLOY_RESOURCE }}
+      DEPLOY_PREVIOUS_IMAGE: ${{ secrets.DEPLOY_PREVIOUS_IMAGE }}
+      DEPLOY_CANDIDATE_IMAGE: ${{ secrets.DEPLOY_CANDIDATE_IMAGE }}
