@@ -218,6 +218,23 @@ def test_watchdog_storage_failure_still_notifies():
     assert len(messages) == 1
 
 
+@pytest.mark.parametrize("age,reads,missing", [(7, 1, False), (45, 4, False), (46, 4, True)])
+def test_watchdog_stops_reading_at_a_fresh_heartbeat(age, reads, missing):
+    from scripts.paper_observation.core import slot
+
+    store, messages = MemoryStore(), []
+    now = NOW + timedelta(minutes=67)
+    beat = now - timedelta(minutes=age)
+    store.create(f"health/heartbeat/{slot(beat)}.json", {"at": beat.isoformat()})
+    store.get = Mock(wraps=store.get)
+    watch = Watchdog(store, lambda message: (messages.append(message), True)[1], Calendar(), NOW.date(), NOW)
+
+    assert watch.run(now) == "checked"
+    heartbeat_reads = [arg[0][0] for arg in store.get.call_args_list if arg[0][0].startswith("health/heartbeat/")]
+    assert len(heartbeat_reads) == reads
+    assert any("collector_heartbeat" in msg for msg in messages) is missing
+
+
 def test_ambiguous_store_write_reads_back_without_retry():
     from scripts.paper_observation.__main__ import Store
 
