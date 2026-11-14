@@ -503,15 +503,14 @@ class Watchdog:
             self.store.create(
                 f"alerts/watch-heartbeat/{slot(now)}.json", {"at": now.isoformat()}
             )
-            beats = [
-                self.store.get(
-                    f"health/heartbeat/{slot(now - timedelta(minutes=i * 15))}.json"
-                )
-                for i in range(4)
-            ]
             alive = any(
-                b and now - timedelta(minutes=45) <= instant(b["at"]) <= now
-                for b in beats
+                beat and now - timedelta(minutes=45) <= instant(beat["at"]) <= now
+                for beat in (
+                    self.store.get(
+                        f"health/heartbeat/{slot(now - timedelta(minutes=i * 15))}.json"
+                    )
+                    for i in range(4)
+                )
             )
             self.notify(
                 f"{now.date()}/collector_heartbeat",

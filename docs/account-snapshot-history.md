@@ -46,6 +46,9 @@ token/recipient supplied through protected configuration. It reads only health
 and alert records, detects missing snapshots and collector heartbeats, and
 writes its own heartbeat for the existing central monitor. Alert claims are
 per 15-minute slot; an acknowledged incident and recovery are recorded once.
+The watcher reads collector heartbeat slots newest first and stops at the
+first valid timestamp within 45 minutes. It checks all four slots before
+declaring a heartbeat missing. Both Scheduler cadences are preserved.
 An ambiguous Telegram acknowledgment can duplicate a later delivery. Sender ACK
 does not prove receiver receipt. Storage failure uses one bounded direct alert
 per execution because persistent deduplication is then unavailable.
