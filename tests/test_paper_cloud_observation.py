@@ -199,8 +199,10 @@ def test_watchdog_missing_recovery_and_dedup():
     watch.run(NOW + timedelta(minutes=91))
     watch.run(NOW + timedelta(minutes=106))
     assert (
-        len([m for m in messages if "recovery" in m and "missing_snapshot" in m]) == 1
+        len([m for m in messages if "recovery" in m and "missing_snapshot" in m]) == 0
     )
+    assert store.get("alerts/2026-11-02/missing_snapshot/recovered.json")
+    assert store.get("alerts/2026-11-02/missing_snapshot/digest/recovery.json")["delivery_status"] == "pending_central"
     assert store.get("alerts/watch-heartbeat/20261102T2245Z.json")
 
 

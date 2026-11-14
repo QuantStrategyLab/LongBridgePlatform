@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import traceback
+from decimal import Decimal, InvalidOperation
 
 from notifications.events import NotificationPublisher, RenderedNotification
 
@@ -19,6 +20,7 @@ class OrderLifecycleEvent:
     executed_qty: str = "0"
     executed_price: str = "0"
     reason: str = ""
+    status_verified: bool = False
 
 
 def is_filled_status(status):
@@ -27,6 +29,17 @@ def is_filled_status(status):
 
 def is_partial_filled_status(status):
     return "PartialFilled" in status
+
+
+def is_verified_partial_fill(event: OrderLifecycleEvent) -> bool:
+    """Only a broker observation with consistent quantities proves processing."""
+    if not event.status_verified or not is_partial_filled_status(event.status) or event.reason:
+        return False
+    try:
+        executed, requested, price = map(Decimal, (event.executed_qty, str(event.quantity), event.executed_price))
+        return all(value.is_finite() for value in (executed, requested, price)) and 0 < executed < requested and price > 0
+    except (InvalidOperation, ValueError, TypeError):
+        return False
 
 
 def is_terminal_error_status(status):
@@ -47,6 +60,7 @@ def build_order_lifecycle_event(
     executed_qty="0",
     executed_price="0",
     reason="",
+    status_verified=False,
 ):
     return OrderLifecycleEvent(
         symbol=str(symbol),
@@ -57,6 +71,7 @@ def build_order_lifecycle_event(
         executed_qty=str(executed_qty or "0"),
         executed_price=str(executed_price or "0"),
         reason=str(reason or ""),
+        status_verified=status_verified,
     )
 
 
@@ -163,7 +178,6 @@ def monitor_submitted_order_status(
         return
 
     try:
-        published_any_status = False
         for _ in range(order_poll_max_attempts):
             sleeper(order_poll_interval_sec)
             order_status = fetch_order_status(trade_context, order_id)
@@ -183,6 +197,7 @@ def monitor_submitted_order_status(
                 executed_qty=executed_qty,
                 executed_price=executed_price,
                 reason=reject_message,
+                status_verified=True,
             )
 
             if is_filled_status(status):
@@ -191,22 +206,21 @@ def monitor_submitted_order_status(
 
             if is_partial_filled_status(status):
                 publish_order_event(event)
-                published_any_status = True
 
             if is_terminal_error_status(status):
                 publish_order_event(event)
                 return
-        if not published_any_status:
-            publish_order_event(
-                build_order_lifecycle_event(
-                    symbol,
-                    side_text,
-                    quantity,
-                    order_id,
-                    "StatusCheckTimeout",
-                    reason="poll_timeout",
-                )
+        # A partial observation does not prove the eventual terminal outcome.
+        publish_order_event(
+            build_order_lifecycle_event(
+                symbol,
+                side_text,
+                quantity,
+                order_id,
+                "StatusCheckTimeout",
+                reason="poll_timeout",
             )
+        )
     except Exception:
         notify_issue(
             "Order status poll failed",

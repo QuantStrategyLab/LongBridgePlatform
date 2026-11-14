@@ -541,11 +541,17 @@ def record_order_resolution(order_event):
     try:
         digest = order_identity_digest(order_event.order_id)
         fact = make_event("fill", order_execution_digest=digest)
-        persist_candidate(fact.to_candidate(), actually_ran=False)
+        if persist_candidate(fact.to_candidate(), actually_ran=False) is not True:
+            raise CandidatePersistenceError("notification_candidate_write_unconfirmed")
+        from .order_alerts import is_filled_status
+        if not is_filled_status(order_event.status):
+            return True
         for stream in ("order_status", "order_status_poll"):
             observe_incident(replace(fact, incident_reason=f"{stream}:{digest}"), state="filled", recovered=True, severity=0)
+        return True
     except Exception:
         record_failure("order_notification_evidence_unconfirmed")
+        return False
 
 
 def recover_runtime(*, report=None, route_label=None, occurred_at=None, run_id=None, probe=False):
