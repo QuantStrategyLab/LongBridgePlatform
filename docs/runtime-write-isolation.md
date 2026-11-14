@@ -118,6 +118,10 @@ readback, real broker dry-run, verified IAM, account acceptance or live readines
 Scheduler job or temporarily resume and pause it. Its live and paused-Scheduler
 options, the deployment/lifecycle workflows, Secrets, IAM and destructive
 operations retain their existing review and owner authorization requirements.
+Use a literal POST route, such as `/probe`, with an optional leading slash.
+The workflow rejects URLs, query strings and path aliases before cloud login.
+Internal services still accept only `/run`, `/probe` and `/dry-run` through
+their Scheduler jobs. `/run` requires explicit live confirmation.
 The readback and offline entries provide no authority to dispatch them. Source
 review and integration never authorize cloud enablement or operator actions.
 
