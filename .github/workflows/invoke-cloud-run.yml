@@ -50,23 +50,49 @@ jobs:
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
       CLOUD_SCHEDULER_LOCATION: ${{ vars.CLOUD_SCHEDULER_LOCATION }}
+      ALLOW_PAUSED_DRY_RUN: ${{ inputs.allow_paused_dry_run }}
     steps:
       - name: Validate inputs
+        id: request
+        env:
+          REQUEST_ENVIRONMENT: ${{ inputs.environment }}
+          REQUEST_PATH: ${{ inputs.path }}
+          ALLOW_LIVE_EXECUTION: ${{ inputs.allow_live_execution }}
         run: |
           set -euo pipefail
 
-          case "${{ inputs.environment }}" in
+          case "$REQUEST_ENVIRONMENT" in
             longbridge-hk|longbridge-paper|longbridge-sg) ;;
             *)
-              echo "Unsupported environment: ${{ inputs.environment }}" >&2
+              echo "Unsupported environment." >&2
               exit 1
               ;;
           esac
 
-          if [ -z "${CLOUD_RUN_REGION:-}" ] || [ -z "${CLOUD_RUN_SERVICE:-}" ]; then
-            echo "CLOUD_RUN_REGION and CLOUD_RUN_SERVICE are required on ${{ inputs.environment }}." >&2
+          raw_path="${REQUEST_PATH:-/dry-run}"
+          if [[ "$raw_path" != /* ]]; then
+            raw_path="/$raw_path"
+          fi
+          case "$raw_path" in
+            /run|/probe|/dry-run|/backfill|/reconcile|/paper-command-consumer|/monitor-dispatch) ;;
+            *)
+              echo "Unsupported invocation path." >&2
+              exit 1
+              ;;
+          esac
+          if [ "$raw_path" = "/run" ] && [ "$ALLOW_LIVE_EXECUTION" != "true" ]; then
+            echo "Calling ${raw_path} can trigger the live execution entrypoint. Re-run with allow_live_execution=true if this is intentional." >&2
             exit 1
           fi
+          if [ "$ALLOW_PAUSED_DRY_RUN" = "true" ] && [ "$raw_path" != "/dry-run" ]; then
+            echo "allow_paused_dry_run is permitted only for the /dry-run validation endpoint." >&2
+            exit 1
+          fi
+          if [ -z "${CLOUD_RUN_REGION:-}" ] || [ -z "${CLOUD_RUN_SERVICE:-}" ]; then
+            echo "CLOUD_RUN_REGION and CLOUD_RUN_SERVICE are required." >&2
+            exit 1
+          fi
+          printf 'path=%s\n' "$raw_path" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -82,24 +108,10 @@ jobs:
 
       - name: Resolve service URL
         id: service
+        env:
+          INVOKE_PATH: ${{ steps.request.outputs.path }}
         run: |
           set -euo pipefail
-
-          raw_path="${{ inputs.path }}"
-          if [ -z "${raw_path}" ]; then
-            raw_path="/dry-run"
-          fi
-          if [[ "${raw_path}" != /* ]]; then
-            raw_path="/${raw_path}"
-          fi
-          if [ "${raw_path}" = "/run" ] && [ "${{ inputs.allow_live_execution }}" != "true" ]; then
-            echo "Calling ${raw_path} can trigger the live execution entrypoint. Re-run with allow_live_execution=true if this is intentional." >&2
-            exit 1
-          fi
-          if [ "${{ inputs.allow_paused_dry_run }}" = "true" ] && [ "${raw_path}" != "/dry-run" ]; then
-            echo "allow_paused_dry_run is permitted only for the /dry-run validation endpoint." >&2
-            exit 1
-          fi
 
           service_json="$(
             gcloud run services describe "${CLOUD_RUN_SERVICE}" \
@@ -152,7 +164,7 @@ jobs:
           scheduler_expected_path=""
           if [ "${service_ingress}" = "internal" ]; then
             scheduler_location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}"
-            case "${raw_path}" in
+            case "$INVOKE_PATH" in
               /run)
                 scheduler_job="${CLOUD_RUN_SERVICE}-scheduler"
                 scheduler_expected_path="/run"
@@ -166,7 +178,7 @@ jobs:
                 scheduler_expected_path="/dry-run"
                 ;;
               *)
-                echo "Cloud Run service ${CLOUD_RUN_SERVICE} has internal ingress, so GitHub-hosted runners cannot curl ${raw_path} directly." >&2
+                echo "Cloud Run service ${CLOUD_RUN_SERVICE} has internal ingress, so GitHub-hosted runners cannot curl ${INVOKE_PATH} directly." >&2
                 echo "Use one of the scheduler-backed paths: /run, /probe, /dry-run." >&2
                 exit 1
                 ;;
@@ -220,7 +232,6 @@ jobs:
 
           {
             echo "url=${service_url}"
-            echo "path=${raw_path}"
             echo "invoke_method=${invoke_method}"
             echo "scheduler_job=${scheduler_job}"
             echo "scheduler_location=${scheduler_location}"
@@ -239,22 +250,29 @@ jobs:
 
       - name: Invoke service
         if: steps.service.outputs.invoke_method == 'direct'
+        env:
+          SERVICE_URL: ${{ steps.service.outputs.url }}
+          INVOKE_PATH: ${{ steps.request.outputs.path }}
+          INVOCATION_ID_TOKEN: ${{ steps.invoke-auth.outputs.id_token }}
         run: |
           set -euo pipefail
 
           curl --fail-with-body --show-error --silent \
             --request POST \
-            --header "Authorization: Bearer ${{ steps.invoke-auth.outputs.id_token }}" \
-            "${{ steps.service.outputs.url }}${{ steps.service.outputs.path }}"
+            --header "Authorization: Bearer $INVOCATION_ID_TOKEN" \
+            --url "${SERVICE_URL}${INVOKE_PATH}"
 
       - name: Invoke internal service through Cloud Scheduler
         if: steps.service.outputs.invoke_method == 'scheduler'
+        env:
+          SCHEDULER_JOB: ${{ steps.service.outputs.scheduler_job }}
+          SCHEDULER_LOCATION: ${{ steps.service.outputs.scheduler_location }}
         run: |
           set -euo pipefail
 
           started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          scheduler_job="${{ steps.service.outputs.scheduler_job }}"
-          scheduler_location="${{ steps.service.outputs.scheduler_location }}"
+          scheduler_job="$SCHEDULER_JOB"
+          scheduler_location="$SCHEDULER_LOCATION"
           temporarily_resumed=false
 
           restore_paused_scheduler() {
@@ -270,7 +288,7 @@ jobs:
           scheduler_state="$(gcloud scheduler jobs describe "${scheduler_job}" \
             --location="${scheduler_location}" \
             --format='value(state)')"
-          if [ "${scheduler_state}" = "PAUSED" ] && [ "${{ inputs.allow_paused_dry_run }}" = "true" ]; then
+          if [ "${scheduler_state}" = "PAUSED" ] && [ "$ALLOW_PAUSED_DRY_RUN" = "true" ]; then
             echo "Temporarily resuming paused ${scheduler_job} for one dry-run validation."
             gcloud scheduler jobs resume "${scheduler_job}" \
               --location="${scheduler_location}" \
