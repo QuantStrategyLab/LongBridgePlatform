@@ -152,7 +152,7 @@ gh workflow run sync-cloud-run-env.yml \
   -f target=hk-verify \
   -f cloud_run_region=<gcp-region> \
   -f cloud_run_service=longbridge-quant-hk-verify-service \
-  -f longport_secret_name=longport_token_hk \
+  -f longport_secret_name=longport-token-hk \
   -f longport_app_key_secret_name=longport-app-key-hk \
   -f longport_app_secret_secret_name=longport-app-secret-hk \
   -f deploy_image=true \
@@ -166,7 +166,7 @@ gh workflow run sync-cloud-run-env.yml \
 - 目标 Cloud Run service 是独立 HK service；不要和 paper / SG 服务共用同一个 service 名。
 - `longbridge-hk` GitHub Environment 或 workflow 输入里有 `CLOUD_RUN_REGION`。
 - `GLOBAL_TELEGRAM_CHAT_ID`、`NOTIFY_LANG`、`TELEGRAM_TOKEN_SECRET_NAME` 或 `TELEGRAM_TOKEN` 已在 `longbridge-hk` Environment 配好。
-- `longport_token_hk`、`longport-app-key-hk`、`longport-app-secret-hk` 已在 Secret Manager 存在，且 runtime service account 有读取权限。
+- `longport-token-hk`、`longport-app-key-hk`、`longport-app-secret-hk` 已在 Secret Manager 存在，且 runtime service account 有读取权限。
 - LongBridge HK 账号和行情权限已开通；如果 `LONGBRIDGE_DRY_RUN_ONLY=true`，服务只做订单预览，不提交真实订单。
 
 ## 通知和日志

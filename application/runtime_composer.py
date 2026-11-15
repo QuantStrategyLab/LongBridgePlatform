@@ -48,21 +48,34 @@ def _trusted_cloud_run_region(env_reader: Callable[[str, str], str | None]) -> s
     return None
 
 
+LEGACY_DURABLE_ACCOUNT_SECRETS = {
+    "longport-token-hk": "longport_token_hk",
+    "longport-token-paper": "longport_token_paper",
+    "longport-token-sg": "longport_token_sg",
+}
+
+
+def build_durable_physical_account_id(secret_name: str) -> str:
+    """Return the canonical ``lb:<secret>`` fence id, preserving legacy snake_case ids."""
+    normalized = str(secret_name or "").strip()
+    if not normalized:
+        return ""
+    canonical = LEGACY_DURABLE_ACCOUNT_SECRETS.get(normalized, normalized)
+    return f"lb:{canonical}"
+
+
 def _resolve_configured_physical_account_id(*, env_reader) -> str:
     """Resolve the durable LongBridge account-owner fence id.
 
     Prefer an explicit ``LONGBRIDGE_PHYSICAL_ACCOUNT_ID``. When unset, fall back
-    to ``lb:<LONGPORT_SECRET_NAME>`` — each live/paper/HK/SG service already
-    binds one LongPort token secret to one physical broker account, so the
-    secret name is a stable account-binding identity (not a region/channel label).
+    to ``lb:<canonical LONGPORT_SECRET_NAME>`` — normalizing migrated
+    kebab-case LongPort token secrets to their legacy snake_case fence id so
+    existing execution-marker fences stay unbroken.
     """
     explicit = str(env_reader("LONGBRIDGE_PHYSICAL_ACCOUNT_ID", "") or "").strip()
     if explicit:
         return explicit
-    secret_name = str(env_reader("LONGPORT_SECRET_NAME", "") or "").strip()
-    if secret_name:
-        return f"lb:{secret_name}"
-    return ""
+    return build_durable_physical_account_id(env_reader("LONGPORT_SECRET_NAME", ""))
 
 
 @dataclass(frozen=True)

@@ -138,7 +138,7 @@ def _build_runtime_settings(
 ) -> PlatformRuntimeSettings:
     return PlatformRuntimeSettings(
         project_id=None,
-        secret_name="longport_token_hk",
+        secret_name="longport-token-hk",
         account_prefix="HK",
         strategy_profile=profile,
         strategy_display_name=(

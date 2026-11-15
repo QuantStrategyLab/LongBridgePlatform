@@ -26,9 +26,9 @@ def _jwt_with_exp(exp: int) -> str:
 
 def test_target_secret_names_match_public_manifest():
     assert TARGET_SECRETS == {
-        "paper": "longport_token_paper",
-        "hk": "longport_token_hk",
-        "sg": "longport_token_sg",
+        "paper": "longport-token-paper",
+        "hk": "longport-token-hk",
+        "sg": "longport-token-sg",
     }
 
 
@@ -46,7 +46,7 @@ def test_inspect_one_ok_warn_expired_without_leaking_token():
     secret_token = _jwt_with_exp(int(now + 60 * 86400))
     ok = inspect_one(
         project_id="demo",
-        secret_name="longport_token_paper",
+        secret_name="longport-token-paper",
         warn_days=30,
         now=now,
         token_reader=lambda *_a, **_k: secret_token,
@@ -59,7 +59,7 @@ def test_inspect_one_ok_warn_expired_without_leaking_token():
 
     warn = inspect_one(
         project_id="demo",
-        secret_name="longport_token_paper",
+        secret_name="longport-token-paper",
         warn_days=30,
         now=now,
         token_reader=lambda *_a, **_k: _jwt_with_exp(int(now + 10 * 86400)),
@@ -69,7 +69,7 @@ def test_inspect_one_ok_warn_expired_without_leaking_token():
 
     expired = inspect_one(
         project_id="demo",
-        secret_name="longport_token_paper",
+        secret_name="longport-token-paper",
         warn_days=30,
         now=now,
         token_reader=lambda *_a, **_k: _jwt_with_exp(int(now - 86400)),

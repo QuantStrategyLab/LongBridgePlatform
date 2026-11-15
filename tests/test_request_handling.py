@@ -67,7 +67,7 @@ def install_stub_modules(*, notify_lang="en"):
     runtime_config_support_module = types.ModuleType("runtime_config_support")
     runtime_config_support_module.load_platform_runtime_settings = lambda **_kwargs: types.SimpleNamespace(
         project_id=None,
-        secret_name="longport_token_hk",
+        secret_name="longport-token-hk",
         account_prefix="HK",
         strategy_profile="soxl_soxx_trend_income",
         strategy_display_name="SOXL/SOXX Semiconductor Trend Income",
@@ -1142,7 +1142,7 @@ class RequestHandlingTests(unittest.TestCase):
         from application import broker_reconciliation as reconciliation_module
 
         observed = {"metadata_reads": 0}
-        version_name = "projects/snapshot-project/secrets/longport_token_hk/versions/4"
+        version_name = "projects/snapshot-project/secrets/longport-token-hk/versions/4"
 
         def collect(quote_context, trade_context, *, account_scope, now, include_broker_balances):
             observed["collector"] = (quote_context, trade_context, account_scope, now)
@@ -1229,7 +1229,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertTrue(observed["read_only_contexts"])
         self.assertEqual(observed["context_credentials"], ("app-key", "app-secret", "snapshot-token"))
         self.assertEqual(observed["metadata_reads"], 1)
-        self.assertEqual(observed["metadata_request"], ("snapshot-project", "longport_token_hk"))
+        self.assertEqual(observed["metadata_request"], ("snapshot-project", "longport-token-hk"))
         self.assertEqual(observed["collector"][:3], ("quote-context", "trade-context", "HK"))
         self.assertEqual(
             payload["source_binding"],
@@ -1244,7 +1244,7 @@ class RequestHandlingTests(unittest.TestCase):
         )
         self.assertNotIn(version_name, body)
         self.assertNotIn("snapshot-token", body)
-        self.assertNotIn("longport_token_hk", body)
+        self.assertNotIn("longport-token-hk", body)
 
     def test_account_snapshot_endpoint_stays_unbound_without_deployment_revision(self):
         module = load_module()
@@ -1282,7 +1282,7 @@ class RequestHandlingTests(unittest.TestCase):
             observed["metadata_reads"] += 1
             return types.SimpleNamespace(
                 value="snapshot-token",
-                version_name="projects/snapshot-project/secrets/longport_token_hk/versions/4",
+                version_name="projects/snapshot-project/secrets/longport-token-hk/versions/4",
             )
 
         module.PROJECT_ID = "snapshot-project"
@@ -1314,7 +1314,7 @@ class RequestHandlingTests(unittest.TestCase):
             {"kind": "deployment_scope_token_version", "status": "unavailable", "id": None},
         )
         self.assertNotIn("snapshot-token", body)
-        self.assertNotIn("longport_token_hk", body)
+        self.assertNotIn("longport-token-hk", body)
 
     def test_disabled_account_snapshot_does_not_read_a_secret(self):
         module = load_module()
@@ -1359,7 +1359,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(observed["metadata_reads"], 1)
         self.assertEqual(observed["latest_reads"], 0)
         self.assertNotIn("raw-token-value", body)
-        self.assertNotIn("longport_token_hk", body)
+        self.assertNotIn("longport-token-hk", body)
         self.assertNotIn("secrets/", body)
 
     def test_account_snapshot_without_metadata_reads_configured_store_once(self):
@@ -1430,7 +1430,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(observed["store_reads"], 1)
         self.assertEqual(observed["secret_reads"], 1)
-        self.assertEqual(observed["secret_request"], ("longport_token_hk", "snapshot-project"))
+        self.assertEqual(observed["secret_request"], ("longport-token-hk", "snapshot-project"))
         self.assertEqual(observed["context_token"], "snapshot-token")
         self.assertEqual(payload["cash"][0]["available_cash"], "1")
         self.assertEqual(
@@ -1465,7 +1465,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(observed["secret_reads"], 0)
         self.assertNotIn("fallback-token", body)
         self.assertNotIn("raw-token-value", body)
-        self.assertNotIn("longport_token_hk", body)
+        self.assertNotIn("longport-token-hk", body)
 
     def test_broker_reconciliation_all_scopes_require_a_collector_before_contexts(self):
         module = load_module()

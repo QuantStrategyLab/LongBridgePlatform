@@ -36,7 +36,7 @@ def _manifest():
                     "region": "asia-east2",
                     "strategy_profile": "tqqq_growth_income",
                     "secret_ref": {
-                        "longport_token": "longport_token_hk",
+                        "longport_token": "longport-token-hk",
                         "longport_app_key": "longport-app-key-hk",
                         "longport_app_secret": "longport-app-secret-hk",
                     },

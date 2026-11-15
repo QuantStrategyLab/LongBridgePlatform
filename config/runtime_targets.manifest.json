@@ -14,7 +14,7 @@
       "region": "asia-east1",
       "strategy_profile": "russell_top50_leader_rotation",
       "secret_ref": {
-        "longport_token": "longport_token_paper",
+        "longport_token": "longport-token-paper",
         "longport_app_key": "longport-app-key-paper",
         "longport_app_secret": "longport-app-secret-paper"
       }
@@ -30,7 +30,7 @@
       "region": "asia-east2",
       "strategy_profile": "tqqq_growth_income",
       "secret_ref": {
-        "longport_token": "longport_token_hk",
+        "longport_token": "longport-token-hk",
         "longport_app_key": "longport-app-key-hk",
         "longport_app_secret": "longport-app-secret-hk"
       }
@@ -46,7 +46,7 @@
       "region": "asia-southeast1",
       "strategy_profile": "soxl_soxx_trend_income",
       "secret_ref": {
-        "longport_token": "longport_token_sg",
+        "longport_token": "longport-token-sg",
         "longport_app_key": "longport-app-key-sg",
         "longport_app_secret": "longport-app-secret-sg"
       }

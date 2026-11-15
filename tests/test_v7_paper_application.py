@@ -66,7 +66,7 @@ def _protected_env():
     return {
         "CLOUD_RUN_SERVICE": "longbridge-quant-paper-service",
         "CLOUD_RUN_REGION": "asia-east1",
-        "LONGPORT_SECRET_NAME": "longport_token_paper",
+        "LONGPORT_SECRET_NAME": "longport-token-paper",
         "LONGPORT_APP_KEY_SECRET_NAME": "longport-app-key-paper",
         "LONGPORT_APP_SECRET_SECRET_NAME": "longport-app-secret-paper",
         "LONGBRIDGE_PHYSICAL_ACCOUNT_ID": "paper-account-1",
@@ -910,7 +910,7 @@ def test_runtime_settings_accept_only_bound_v7_and_force_disabled_paper_target(m
     monkeypatch.setenv("LONGBRIDGE_DRY_RUN_ONLY", "false")
     monkeypatch.setenv("ACCOUNT_PREFIX", "PAPER")
     monkeypatch.setenv("ACCOUNT_REGION", "PAPER")
-    monkeypatch.setenv("LONGPORT_SECRET_NAME", "longport_token_paper")
+    monkeypatch.setenv("LONGPORT_SECRET_NAME", "longport-token-paper")
 
     settings = load_platform_runtime_settings(project_id_resolver=lambda: "project-1")
 
