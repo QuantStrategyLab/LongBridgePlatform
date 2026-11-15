@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from application.runtime_target_manifest import (  # noqa: E402
+    ALLOWED_MODES,
     MATRIX_PROFILES,
     RuntimeTargetManifestError,
     build_github_actions_matrix,
@@ -47,6 +48,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Render all targets (default) or exactly one manifest target ID.",
     )
     parser.add_argument(
+        "--mode",
+        choices=("all", *sorted(ALLOWED_MODES)),
+        default=None,
+        help="Optional mode filter when --target all (defaults to RUNTIME_TARGET_MATRIX_MODE or 'all').",
+    )
+    parser.add_argument(
         "--github-output",
         action="store_true",
         help="Append compact matrix=... to $GITHUB_OUTPUT for workflow jobs.",
@@ -54,6 +61,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        mode = args.mode
+        if mode is None:
+            mode = (os.environ.get("RUNTIME_TARGET_MATRIX_MODE") or "").strip().lower() or "all"
+        if mode not in {"all", *ALLOWED_MODES}:
+            raise RuntimeTargetManifestError(
+                f"Unknown RUNTIME_TARGET_MATRIX_MODE {mode!r}; expected 'all' or one of {sorted(ALLOWED_MODES)}"
+            )
         manifest = load_runtime_target_manifest(args.path or default_manifest_path())
         matrix = build_github_actions_matrix(manifest, profile=args.profile)
         if args.target != "all":
@@ -61,6 +75,14 @@ def main(argv: list[str] | None = None) -> int:
             if not selected:
                 raise RuntimeTargetManifestError(
                     f"Unknown target {args.target!r}; expected 'all' or a manifest target ID"
+                )
+            matrix["target"] = selected
+        elif mode != "all":
+            allowed_ids = {entry.id for entry in manifest.targets if entry.mode == mode}
+            selected = [row for row in matrix["target"] if row["id"] in allowed_ids]
+            if not selected:
+                raise RuntimeTargetManifestError(
+                    f"No manifest targets matched mode {mode!r}"
                 )
             matrix["target"] = selected
     except RuntimeTargetManifestError as exc:

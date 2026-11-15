@@ -295,3 +295,21 @@ def test_render_script_is_stdlib_only():
     assert "import uv" not in script
     assert "yaml" not in script
     assert "requests" not in script
+
+
+def test_render_matrix_filters_by_mode_flag_and_env(monkeypatch, capsys):
+    module = _load_render_script()
+
+    monkeypatch.setenv("RUNTIME_TARGET_MATRIX_MODE", "live")
+    assert module.main(["--profile", "heartbeat", "--target", "all"]) == 0
+    live_rows = json.loads(capsys.readouterr().out)["target"]
+    assert [row["id"] for row in live_rows] == ["hk", "sg"]
+
+    monkeypatch.delenv("RUNTIME_TARGET_MATRIX_MODE", raising=False)
+    assert module.main(["--profile", "heartbeat", "--target", "all", "--mode", "paper"]) == 0
+    paper_rows = json.loads(capsys.readouterr().out)["target"]
+    assert [row["id"] for row in paper_rows] == ["paper"]
+
+    assert module.main(["--profile", "heartbeat", "--target", "all", "--mode", "all"]) == 0
+    all_rows = json.loads(capsys.readouterr().out)["target"]
+    assert [row["id"] for row in all_rows] == ["paper", "hk", "sg"]

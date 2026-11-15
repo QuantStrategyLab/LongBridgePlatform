@@ -230,3 +230,8 @@ def test_sg_zero_traffic_tag_has_a_service_audience_and_cannot_archive() -> None
     assert 'origin != "https://snapshot-check---" + text.substring(audience, 8, len(audience))' in source
     assert "audience: ${audience}" in source
     assert 'origin != audience or account_uid != "longbridge-"' in source
+
+
+def test_execution_report_heartbeat_filters_scheduled_matrix_to_live_only() -> None:
+    heartbeat = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+    assert "RUNTIME_TARGET_MATRIX_MODE: ${{ github.event_name == 'schedule' && 'live' || 'all' }}" in heartbeat
