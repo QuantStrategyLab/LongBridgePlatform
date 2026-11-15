@@ -47,6 +47,7 @@ for candidate in (ROOT, QPK_SRC, UES_SRC, HES_SRC):
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
 
+from application.runtime_composer import build_durable_physical_account_id  # noqa: E402
 from scripts.vendor.cloud_run_tags import CONTRACT_VERSION, headroom  # noqa: E402
 
 
@@ -473,7 +474,7 @@ def _build_target_plan(
                 env.get("LONGPORT_SECRET_NAME"),
             )
             if secret_name:
-                value = f"lb:{secret_name}"
+                value = build_durable_physical_account_id(secret_name)
 
         if name in PAPER_ONLY_DURABLE_COMMAND_ENV and not allow_paper_only_flags:
             # Live / formal targets: never deploy paper-only switches, and

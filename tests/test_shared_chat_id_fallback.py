@@ -58,7 +58,7 @@ def install_stub_modules():
     runtime_config_support_module = types.ModuleType("runtime_config_support")
     runtime_config_support_module.load_platform_runtime_settings = lambda **_kwargs: types.SimpleNamespace(
         project_id=None,
-        secret_name="longport_token_hk",
+        secret_name="longport-token-hk",
         account_prefix="HK",
         strategy_profile="soxl_soxx_trend_income",
         strategy_display_name="SOXL/SOXX Semiconductor Trend Income",

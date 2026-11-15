@@ -72,7 +72,7 @@ def test_dry_run_would_refresh_without_network():
 def test_live_refresh_writes_version_name_only():
     now = time.time()
     secrets = {
-        "longport_token_paper": _jwt(int(now + 5 * 86400)),
+        "longport-token-paper": _jwt(int(now + 5 * 86400)),
         "longport-app-key-paper": "app-key",
         "longport-app-secret-paper": "app-secret",
     }
@@ -84,11 +84,11 @@ def test_live_refresh_writes_version_name_only():
     def writer(_project, name, payload):
         written["name"] = name
         written["payload"] = payload
-        return "projects/demo/secrets/longport_token_paper/versions/9"
+        return "projects/demo/secrets/longport-token-paper/versions/9"
 
     def refresher(**kwargs):
         assert kwargs["app_key"] == "app-key"
-        assert kwargs["access_token"] == secrets["longport_token_paper"]
+        assert kwargs["access_token"] == secrets["longport-token-paper"]
         return "brand-new-token"
 
     result = run_refresh(

@@ -20,9 +20,9 @@ Public inventory: [`config/runtime_targets.manifest.json`](../config/runtime_tar
 
 | Target | GitHub Environment | Cloud Run service | SM token | SM app key | SM app secret |
 | --- | --- | --- | --- | --- | --- |
-| paper | `longbridge-paper` | `longbridge-quant-paper-service` | `longport_token_paper` | `longport-app-key-paper` | `longport-app-secret-paper` |
-| hk | `longbridge-hk` | `longbridge-quant-hk-service` | `longport_token_hk` | `longport-app-key-hk` | `longport-app-secret-hk` |
-| sg | `longbridge-sg` | `longbridge-quant-sg-service` | `longport_token_sg` | `longport-app-key-sg` | `longport-app-secret-sg` |
+| paper | `longbridge-paper` | `longbridge-quant-paper-service` | `longport-token-paper` | `longport-app-key-paper` | `longport-app-secret-paper` |
+| hk | `longbridge-hk` | `longbridge-quant-hk-service` | `longport-token-hk` | `longport-app-key-hk` | `longport-app-secret-hk` |
+| sg | `longbridge-sg` | `longbridge-quant-sg-service` | `longport-token-sg` | `longport-app-key-sg` | `longport-app-secret-sg` |
 
 Runtime wiring (Actions deploy + Cloud Run):
 
