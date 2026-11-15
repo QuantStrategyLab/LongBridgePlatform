@@ -509,7 +509,7 @@ def test_build_cloud_run_env_sync_plan_derives_physical_account_id_and_keeps_git
             {
                 "service": "longbridge-quant-live-mega-service",
                 "account_prefix": "SG",
-                "LONGPORT_SECRET_NAME": "longport_token_sg",
+                "LONGPORT_SECRET_NAME": "longport-token-sg",
                 "longbridge_feature_snapshot_path": "gs://runtime/mega/snapshot.csv",
                 "longbridge_feature_snapshot_manifest_path": "gs://runtime/mega/snapshot.csv.manifest.json",
                 "runtime_target": json.loads(
@@ -554,5 +554,5 @@ def test_build_cloud_run_env_sync_plan_derives_physical_account_id_and_keeps_git
     )
     plan = json.loads(result.stdout)
     target = plan["targets"][0]
-    assert target["env"]["LONGBRIDGE_PHYSICAL_ACCOUNT_ID"] == "lb:longport_token_sg"
+    assert target["env"]["LONGBRIDGE_PHYSICAL_ACCOUNT_ID"] == "lb:longport-token-sg"
     assert "LONGBRIDGE_PHYSICAL_ACCOUNT_ID" not in target["remove_env_vars"]

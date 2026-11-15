@@ -8,7 +8,7 @@ Usage (ADC or GHA WIF already authenticated):
 
   python scripts/inspect_longport_token_expiry.py \\
     --project "$GCP_PROJECT_ID" \\
-    --secret longport_token_paper \\
+    --secret longport-token-paper \\
     --warn-days 30
 """
 
@@ -23,9 +23,9 @@ from typing import Any
 
 
 TARGET_SECRETS = {
-    "paper": "longport_token_paper",
-    "hk": "longport_token_hk",
-    "sg": "longport_token_sg",
+    "paper": "longport-token-paper",
+    "hk": "longport-token-hk",
+    "sg": "longport-token-sg",
 }
 
 

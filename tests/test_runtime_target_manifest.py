@@ -34,7 +34,7 @@ def _valid_payload() -> dict:
                 "region": "asia-east1",
                 "strategy_profile": "russell_top50_leader_rotation",
                 "secret_ref": {
-                    "longport_token": "longport_token_paper",
+                    "longport_token": "longport-token-paper",
                     "longport_app_key": "longport-app-key-paper",
                     "longport_app_secret": "longport-app-secret-paper",
                 },
@@ -61,7 +61,7 @@ def test_checked_in_manifest_loads_existing_paper_hk_sg_targets():
     assert paper.service == "longbridge-quant-paper-service"
     assert paper.region == "asia-east1"
     assert paper.strategy_profile == "russell_top50_leader_rotation"
-    assert paper.secret_ref.longport_token == "longport_token_paper"
+    assert paper.secret_ref.longport_token == "longport-token-paper"
     assert paper.enabled is False
 
     hk = by_id["hk"]

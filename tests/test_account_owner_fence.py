@@ -70,7 +70,7 @@ class ConfiguredPhysicalAccountIdTests(unittest.TestCase):
         def reader(name, default=""):
             values = {
                 "LONGBRIDGE_PHYSICAL_ACCOUNT_ID": "lb:explicit-acct",
-                "LONGPORT_SECRET_NAME": "longport_token_sg",
+                "LONGPORT_SECRET_NAME": "longport-token-sg",
             }
             return values.get(name, default)
 
@@ -80,12 +80,12 @@ class ConfiguredPhysicalAccountIdTests(unittest.TestCase):
         )
 
         def reader_fallback(name, default=""):
-            values = {"LONGPORT_SECRET_NAME": "longport_token_sg"}
+            values = {"LONGPORT_SECRET_NAME": "longport-token-sg"}
             return values.get(name, default)
 
         self.assertEqual(
             _resolve_configured_physical_account_id(env_reader=reader_fallback),
-            "lb:longport_token_sg",
+            "lb:longport-token-sg",
         )
 
         def reader_empty(name, default=""):

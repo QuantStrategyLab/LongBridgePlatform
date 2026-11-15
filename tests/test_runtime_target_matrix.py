@@ -207,7 +207,7 @@ def test_unknown_profile_and_empty_targets_fail_closed():
                 "region": "asia-east1",
                 "strategy_profile": "russell_top50_leader_rotation",
                 "secret_ref": {
-                    "longport_token": "longport_token_paper",
+                    "longport_token": "longport-token-paper",
                     "longport_app_key": "longport-app-key-paper",
                     "longport_app_secret": "longport-app-secret-paper",
                 },
