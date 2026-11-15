@@ -79,6 +79,7 @@ jobs:
         id: render
         env:
           MATRIX_TARGET: ${{ inputs.target || 'all' }}
+          RUNTIME_TARGET_MATRIX_MODE: ${{ github.event_name == 'schedule' && (vars.RUNTIME_HEARTBEAT_SCHEDULE_MODE || 'all') || 'all' }}
           INSPECT_SG_PROBE_PERMISSIONS: ${{ inputs.inspect_sg_probe_permissions || 'false' }}
           INSPECT_SG_ACCOUNT_SNAPSHOT: ${{ inputs.inspect_sg_account_snapshot || 'false' }}
           INSPECT_PAPER_ACCOUNT_SNAPSHOT: ${{ inputs.inspect_paper_account_snapshot || 'false' }}

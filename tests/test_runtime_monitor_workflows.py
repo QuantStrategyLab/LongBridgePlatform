@@ -230,3 +230,40 @@ def test_sg_zero_traffic_tag_has_a_service_audience_and_cannot_archive() -> None
     assert 'origin != "https://snapshot-check---" + text.substring(audience, 8, len(audience))' in source
     assert "audience: ${audience}" in source
     assert 'origin != audience or account_uid != "longbridge-"' in source
+
+
+def test_execution_report_heartbeat_supports_configurable_scheduled_matrix_mode() -> None:
+    import json
+    import os
+    import subprocess
+    import tempfile
+
+    heartbeat = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+    assert "RUNTIME_TARGET_MATRIX_MODE: ${{ github.event_name == 'schedule' && (vars.RUNTIME_HEARTBEAT_SCHEDULE_MODE || 'all') || 'all' }}" in heartbeat
+
+    for mode, expected_ids in (("all", ["paper", "hk", "sg"]), ("live", ["hk", "sg"])):
+        with tempfile.NamedTemporaryFile(mode="w+") as gh_out:
+            env = {
+                **os.environ,
+                "RUNTIME_TARGET_MATRIX_MODE": mode,
+                "GITHUB_OUTPUT": gh_out.name,
+            }
+            res = subprocess.run(
+                [
+                    "python3",
+                    str(ROOT / "scripts/render_runtime_target_matrix.py"),
+                    "--profile",
+                    "heartbeat",
+                    "--target",
+                    "all",
+                    "--github-output",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            gh_out.seek(0)
+            line = next(entry for entry in gh_out.read().splitlines() if entry.startswith("matrix="))
+            ids = [row["id"] for row in json.loads(line.split("=", 1)[1])["target"]]
+            assert ids == expected_ids, res.stdout + res.stderr
