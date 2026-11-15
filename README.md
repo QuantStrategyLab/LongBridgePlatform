@@ -79,7 +79,7 @@ Final execution-report persistence failures in `main.py` are logged rather than
 sent through a dedicated issue notification. Marker and durable-command
 persistence failures have their existing issue notifications. Explicit
 `validation_only` callers already request a silent cycle sink, and V7 validation
-also mutes issue notifications. These isolated validation paths remain unchanged;
+also mutes issue notifications. These isolated validation paths keep their existing behavior;
 attention classification here is not proof that those sinks deliver errors.
 
 ## Direct vs snapshot-backed profiles
