@@ -255,8 +255,11 @@ def resolve_max_daily_loss_usd(
     policy_limit = _max_daily_loss_from_runtime_target_json()
     if policy_limit is not None:
         return policy_limit
-    env_raw = _first_env_nonempty(*_MAX_DAILY_LOSS_ENV_KEYS)
-    return _positive_limit_or_none(env_raw) if env_raw else None
+    for key in _MAX_DAILY_LOSS_ENV_KEYS:
+        limit = _positive_limit_or_none(os.environ.get(key))
+        if limit is not None:
+            return limit
+    return None
 
 
 def runtime_risk_limits_for_daily_loss_axis(
