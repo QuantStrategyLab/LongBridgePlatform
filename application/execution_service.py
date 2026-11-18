@@ -5,6 +5,7 @@ from __future__ import annotations
 import traceback
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from application.account_new_risk_gate_support import (
     apply_combined_scale_to_allocation_targets,
@@ -144,12 +145,19 @@ def _safe_haven_cash_symbols(*, portfolio: dict, allocation: dict) -> tuple[str,
     return tuple(dict.fromkeys(symbols))
 
 
-def _small_account_drift_reference_targets(allocation: Mapping, *, portfolio: Mapping | None = None) -> dict:
-    allocation = dict(allocation or {})
-    targets = {
+def _normalize_float_map(raw: object) -> dict[str, float]:
+    return {
         str(symbol or "").strip().upper(): float(value or 0.0)
-        for symbol, value in dict(allocation.get("targets") or {}).items()
+        for symbol, value in dict(raw or {}).items()
     }
+
+
+def _candidate_risk_income_symbols(
+    allocation: Mapping,
+    *,
+    portfolio: Mapping | None = None,
+    targets: Mapping | None = None,
+) -> tuple[str, ...]:
     candidate_symbols = tuple(
         dict.fromkeys(
             str(symbol or "").strip().upper()
@@ -158,9 +166,27 @@ def _small_account_drift_reference_targets(allocation: Mapping, *, portfolio: Ma
             if str(symbol or "").strip()
         )
     )
-    if not candidate_symbols:
-        safe_haven_symbols = set(_safe_haven_cash_symbols(portfolio=dict(portfolio or {}), allocation=allocation))
-        candidate_symbols = tuple(symbol for symbol in targets if symbol not in safe_haven_symbols)
+    if candidate_symbols:
+        return candidate_symbols
+    safe_haven_symbols = set(
+        _safe_haven_cash_symbols(portfolio=dict(portfolio or {}), allocation=dict(allocation or {}))
+    )
+    target_source = targets if targets is not None else dict(allocation.get("targets") or {})
+    return tuple(
+        normalized
+        for symbol in target_source
+        if (normalized := str(symbol or "").strip().upper()) and normalized not in safe_haven_symbols
+    )
+
+
+def _small_account_drift_reference_targets(allocation: Mapping, *, portfolio: Mapping | None = None) -> dict:
+    allocation = dict(allocation or {})
+    targets = _normalize_float_map(allocation.get("targets"))
+    candidate_symbols = _candidate_risk_income_symbols(
+        allocation,
+        portfolio=portfolio,
+        targets=targets,
+    )
     return {symbol: targets.get(symbol, 0.0) for symbol in candidate_symbols if symbol in targets}
 
 
@@ -604,23 +630,12 @@ def _apply_small_account_whole_share_compatibility(
     limit_buy_premium_by_symbol=None,
 ) -> tuple[dict, dict]:
     target_values = dict(allocation.get("targets") or {})
-    candidate_symbols = tuple(
-        dict.fromkeys(
-            str(symbol or "").strip().upper()
-            for symbol in tuple(allocation.get("risk_symbols", ()))
-            + tuple(allocation.get("income_symbols", ()))
-            if str(symbol or "").strip()
-        )
+    portfolio = dict((plan or {}).get("portfolio") or {})
+    candidate_symbols = _candidate_risk_income_symbols(
+        allocation,
+        portfolio=portfolio,
+        targets=target_values,
     )
-    if not candidate_symbols:
-        safe_haven_symbols = set(
-            _safe_haven_cash_symbols(portfolio=dict((plan or {}).get("portfolio") or {}), allocation=allocation)
-        )
-        candidate_symbols = tuple(
-            str(symbol or "").strip().upper()
-            for symbol in target_values
-            if str(symbol or "").strip().upper() not in safe_haven_symbols
-        )
     quote_prices = {}
     for symbol in candidate_symbols:
         try:
@@ -631,19 +646,12 @@ def _apply_small_account_whole_share_compatibility(
             quote_prices[symbol] = price
     retained_symbols = []
     bootstrap_symbols = []
-    portfolio = dict((plan or {}).get("portfolio") or {})
     execution = dict((plan or {}).get("execution") or {})
     _liquid_cash = float(portfolio.get("liquid_cash", 0.0) or 0.0)
     _reserved_cash = float(execution.get("reserved_cash", 0.0) or 0.0)
     _estimated_buying_power = max(0.0, _liquid_cash - _reserved_cash)
-    quantities = {
-        str(symbol or "").strip().upper(): float(quantity or 0.0)
-        for symbol, quantity in dict(portfolio.get("quantities") or {}).items()
-    }
-    compatibility_targets = {
-        str(symbol or "").strip().upper(): float(value or 0.0)
-        for symbol, value in target_values.items()
-    }
+    quantities = _normalize_float_map(portfolio.get("quantities"))
+    compatibility_targets = _normalize_float_map(target_values)
     for symbol in candidate_symbols:
         target_value = max(0.0, float(compatibility_targets.get(symbol, 0.0) or 0.0))
         price = max(0.0, float(quote_prices.get(symbol, 0.0) or 0.0))
@@ -654,17 +662,12 @@ def _apply_small_account_whole_share_compatibility(
         )
         # Skip bootstrap if the account cannot afford even 1 share at limit price.
         _can_afford_one_share = limit_price > 0.0 and _estimated_buying_power >= limit_price
-        if not _should_retain_existing_whole_share(symbol, target_value=target_value, price=price):
-            if (
-                quantities.get(symbol, 0.0) <= 0.0
-                and 0.0 < target_value < limit_price
-                and _can_afford_one_share
-                and _should_bootstrap_whole_share_buy(symbol, target_value=target_value, limit_price=limit_price)
-            ):
-                compatibility_targets[symbol] = limit_price
-                bootstrap_symbols.append(symbol)
-            continue
-        if price > 0.0 and 0.0 < target_value < price and quantities.get(symbol, 0.0) >= 1.0:
+        if (
+            _should_retain_existing_whole_share(symbol, target_value=target_value, price=price)
+            and price > 0.0
+            and 0.0 < target_value < price
+            and quantities.get(symbol, 0.0) >= 1.0
+        ):
             compatibility_targets[symbol] = price
             retained_symbols.append(symbol)
             continue
@@ -784,6 +787,180 @@ def _estimate_buy_quantity_candidate(
     return candidate_quantity, budget_quantity, float(cash_limit_quantity)
 
 
+def _emit_note(note_logs: list[str], message: str, *, with_prefix) -> None:
+    note_logs.append(message)
+    print(with_prefix(message), flush=True)
+
+
+def _current_min_trade_floor(
+    execution: Mapping,
+    *,
+    fractional_buy_execution: bool,
+    min_order_notional: float,
+) -> float:
+    floor = MIN_FRACTIONAL_BUY_NOTIONAL_USD if fractional_buy_execution else min_order_notional
+    return max(float(execution["current_min_trade"]), floor)
+
+
+def _buy_reference_price(
+    symbol: str,
+    price: float,
+    *,
+    is_limit_order: bool,
+    limit_buy_premium: float,
+    limit_buy_premium_by_symbol,
+) -> float:
+    if is_limit_order:
+        return _limit_buy_price(symbol, price, limit_buy_premium, limit_buy_premium_by_symbol)
+    return round(price, 2)
+
+
+def _evaluate_cycle_account_new_risk(
+    portfolio: Mapping,
+    *,
+    execution: Mapping,
+) -> tuple[dict, Any, Any]:
+    portfolio_copy = dict(portfolio)
+    portfolio_copy["account_new_risk_snapshot"] = build_account_new_risk_snapshot(
+        portfolio_copy,
+        execution=execution,
+    )
+    admission = evaluate_portfolio_new_risk_admission(portfolio_copy, execution=execution)
+    cycle_snapshot = build_snapshot_from_portfolio(portfolio_copy, execution=execution)
+    set_cycle_snapshot(cycle_snapshot)
+    return portfolio_copy, admission, cycle_snapshot
+
+
+def _prepare_cycle_targets_and_notes(
+    *,
+    plan: dict,
+    portfolio: dict,
+    allocation: dict,
+    threshold_usd: float,
+    fractional_buy_execution: bool,
+    market_data_port,
+    notify_issue,
+    symbol_suffix: str,
+    limit_buy_premium: float,
+    limit_buy_premium_by_symbol,
+    note_logs: list[str],
+    translator,
+    with_prefix,
+    small_account_cash_note_keys: set[str],
+    small_account_bootstrap_note_keys: set[str],
+) -> tuple[dict, dict, dict]:
+    plan, allocation = _apply_safe_haven_cash_substitution(
+        plan=plan,
+        portfolio=portfolio,
+        allocation=allocation,
+        threshold_usd=threshold_usd,
+    )
+    reference_targets = _small_account_drift_reference_targets(
+        allocation,
+        portfolio=portfolio,
+    )
+    if not fractional_buy_execution:
+        plan, allocation = _apply_small_account_whole_share_compatibility(
+            plan=plan,
+            allocation=allocation,
+            strategy_assets=tuple(allocation["strategy_symbols"]),
+            market_data_port=market_data_port,
+            notify_issue=notify_issue,
+            symbol_suffix=symbol_suffix,
+            limit_buy_premium=limit_buy_premium,
+            limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+        )
+    record_small_account_cash_substitution_notes(
+        note_logs,
+        allocation=allocation,
+        translator=translator,
+        with_prefix=with_prefix,
+        seen_keys=small_account_cash_note_keys,
+        symbol_suffix=symbol_suffix,
+    )
+    record_small_account_whole_share_bootstrap_notes(
+        note_logs,
+        allocation=allocation,
+        translator=translator,
+        with_prefix=with_prefix,
+        seen_keys=small_account_bootstrap_note_keys,
+        symbol_suffix=symbol_suffix,
+    )
+    return plan, allocation, reference_targets
+
+
+def _refresh_post_sell_snapshots(
+    *,
+    fetch_replanned_state,
+    trade_context,
+    submitted_sell_orders: list[dict[str, Any]],
+    fetch_order_status,
+    sleeper,
+    refresh_attempts: int,
+    refresh_interval: float,
+    previous_investable_cash: float,
+    account_new_risk_buy_blocked: bool,
+    account_new_risk_reason_codes: tuple[str, ...],
+    cycle_combined_scale: float | None,
+    submission_halted: bool,
+):
+    best_investable_cash = previous_investable_cash
+    projected_sell_release_value = 0.0
+    refreshed_state = None
+    for attempt in range(refresh_attempts):
+        if attempt > 0:
+            sleeper(refresh_interval)
+        refreshed_state = fetch_replanned_state()
+        refreshed_plan, refreshed_portfolio, refreshed_execution, refreshed_allocation = refreshed_state
+        # Every observed refresh constrains this cycle, even when its
+        # cash forecast is lower than an earlier observation's.
+        if _execution_is_blocked(
+            plan=refreshed_plan, execution=refreshed_execution, allocation=refreshed_allocation,
+        ):
+            submission_halted = True
+        if is_account_new_risk_gate_enabled():
+            refreshed_portfolio, refreshed_admission, _ = _evaluate_cycle_account_new_risk(
+                refreshed_portfolio,
+                execution=refreshed_execution,
+            )
+            account_new_risk_buy_blocked = (
+                account_new_risk_buy_blocked or new_risk_buy_prohibited(refreshed_admission)
+            )
+            account_new_risk_reason_codes = tuple(dict.fromkeys(
+                (*account_new_risk_reason_codes, *refreshed_admission.reason_codes)
+            ))
+            refreshed_scale = refreshed_admission.combined_scale
+            if refreshed_scale is not None:
+                cycle_combined_scale = (
+                    refreshed_scale if cycle_combined_scale is None
+                    else min(cycle_combined_scale, refreshed_scale)
+                )
+            refreshed_state = (
+                refreshed_plan, refreshed_portfolio, refreshed_execution, refreshed_allocation,
+            )
+        refreshed_investable_cash = float(refreshed_execution["investable_cash"])
+        projected_sell_release_value = max(
+            projected_sell_release_value,
+            _filled_sell_release_value(
+                trade_context=trade_context,
+                submitted_sell_orders=submitted_sell_orders,
+                fetch_order_status=fetch_order_status,
+            ),
+        )
+        best_investable_cash = max(best_investable_cash, refreshed_investable_cash)
+        if refreshed_investable_cash > previous_investable_cash:
+            break
+    return (
+        refreshed_state,
+        best_investable_cash,
+        projected_sell_release_value,
+        submission_halted,
+        account_new_risk_buy_blocked,
+        account_new_risk_reason_codes,
+        cycle_combined_scale,
+    )
+
+
 def execute_rebalance_cycle(
     *,
     trade_context,
@@ -872,17 +1049,13 @@ def execute_rebalance_cycle(
     account_new_risk_reason_codes: tuple[str, ...] = ()
     cycle_combined_scale = None
     if is_account_new_risk_gate_enabled():
-        portfolio = dict(portfolio)
-        portfolio["account_new_risk_snapshot"] = build_account_new_risk_snapshot(
+        portfolio, admission, account_new_risk_cycle_snapshot = _evaluate_cycle_account_new_risk(
             portfolio,
             execution=execution,
         )
-        admission = evaluate_portfolio_new_risk_admission(portfolio, execution=execution)
         account_new_risk_buy_blocked = new_risk_buy_prohibited(admission)
         account_new_risk_reason_codes = tuple(admission.reason_codes)
         cycle_combined_scale = admission.combined_scale
-        account_new_risk_cycle_snapshot = build_snapshot_from_portfolio(portfolio, execution=execution)
-        set_cycle_snapshot(account_new_risk_cycle_snapshot)
         gate_diagnostic_message = (
             "[Account new-risk gate] "
             f"disposition={admission.disposition.value} "
@@ -938,21 +1111,9 @@ def execute_rebalance_cycle(
             note_logs=tuple(note_logs),
             action_done=False,
         )
-    plan, allocation = _apply_safe_haven_cash_substitution(
-        plan=plan,
-        portfolio=portfolio,
-        allocation=allocation,
-        threshold_usd=safe_haven_cash_substitute_threshold_usd,
-    )
-    small_account_reference_target_values = _small_account_drift_reference_targets(
-        allocation,
-        portfolio=portfolio,
-    )
     cash_sweep_symbol = str(portfolio.get("cash_sweep_symbol") or "").strip().upper()
     estimate_kwargs = {"fractional_shares": True} if fractional_buy_execution else {}
-    effective_buy_quantity_step = (
-        float(buy_quantity_step) if fractional_buy_execution else DEFAULT_BUY_QUANTITY_STEP
-    )
+    del buy_quantity_step  # Preserved in signature for caller compatibility.
 
     if notional_buy_compat_mode:
         compat_note = translator(
@@ -961,8 +1122,7 @@ def execute_rebalance_cycle(
                 "dca_notional_to_whole_share_compat",
             ),
         )
-        note_logs.append(compat_note)
-        print(with_prefix(compat_note), flush=True)
+        _emit_note(note_logs, compat_note, with_prefix=with_prefix)
 
     def _buy_step_for(symbol: str) -> float:
         """Return the per-symbol buy quantity step, falling back to lot_size or 1."""
@@ -970,32 +1130,23 @@ def execute_rebalance_cycle(
             return FRACTIONAL_BUY_QUANTITY_STEP
         lot = _lot_for(symbol)
         return float(lot) if lot > 1 else DEFAULT_BUY_QUANTITY_STEP
-    if not fractional_buy_execution:
-        plan, allocation = _apply_small_account_whole_share_compatibility(
-            plan=plan,
-            allocation=allocation,
-            strategy_assets=strategy_assets,
-            market_data_port=market_data_port,
-            notify_issue=notify_issue,
-            symbol_suffix=symbol_suffix,
-            limit_buy_premium=limit_buy_premium,
-            limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
-        )
-    record_small_account_cash_substitution_notes(
-        note_logs,
+
+    plan, allocation, small_account_reference_target_values = _prepare_cycle_targets_and_notes(
+        plan=plan,
+        portfolio=portfolio,
         allocation=allocation,
+        threshold_usd=safe_haven_cash_substitute_threshold_usd,
+        fractional_buy_execution=fractional_buy_execution,
+        market_data_port=market_data_port,
+        notify_issue=notify_issue,
+        symbol_suffix=symbol_suffix,
+        limit_buy_premium=limit_buy_premium,
+        limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+        note_logs=note_logs,
         translator=translator,
         with_prefix=with_prefix,
-        seen_keys=small_account_cash_note_keys,
-        symbol_suffix=symbol_suffix,
-    )
-    record_small_account_whole_share_bootstrap_notes(
-        note_logs,
-        allocation=allocation,
-        translator=translator,
-        with_prefix=with_prefix,
-        seen_keys=small_account_bootstrap_note_keys,
-        symbol_suffix=symbol_suffix,
+        small_account_cash_note_keys=small_account_cash_note_keys,
+        small_account_bootstrap_note_keys=small_account_bootstrap_note_keys,
     )
     target_values = dict(allocation["targets"])
     small_account_buy_blocked = _is_truthy(execution.get("small_account_warning"))
@@ -1005,10 +1156,11 @@ def execute_rebalance_cycle(
     cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
     investable_cash = float(execution["investable_cash"])
     min_order_notional = max(0.0, float(min_order_notional_usd or 0.0))
-    if fractional_buy_execution:
-        current_min_trade = max(float(execution["current_min_trade"]), MIN_FRACTIONAL_BUY_NOTIONAL_USD)
-    else:
-        current_min_trade = max(float(execution["current_min_trade"]), min_order_notional)
+    current_min_trade = _current_min_trade_floor(
+        execution,
+        fractional_buy_execution=fractional_buy_execution,
+        min_order_notional=min_order_notional,
+    )
     dry_run_sale_proceeds = 0.0
     cash_sweep_sold_this_cycle = False
 
@@ -1151,6 +1303,26 @@ def execute_rebalance_cycle(
         print(with_prefix(message), flush=True)
         return True
 
+    def dispatch_order(symbol: str, *, side: str, order_type: str, quantity, price: float, log_message: str) -> bool:
+        quantity_text = format_quantity(quantity)
+        effective_price = price if order_type == "limit" else round(price, 2)
+        if dry_run_only:
+            return record_dry_run(
+                market_symbol(symbol),
+                side,
+                quantity_text,
+                effective_price,
+                order_type=order_type,
+            )
+        return submit_order_via_port(
+            market_symbol(symbol),
+            order_type,
+            side,
+            quantity,
+            log_message,
+            submitted_price=price if order_type == "limit" else None,
+        )
+
     for symbol in strategy_assets:
         if submission_halted:
             break
@@ -1179,42 +1351,26 @@ def execute_rebalance_cycle(
                 quantity_text = format_quantity(quantity)
                 if symbol in limit_order_symbols:
                     limit_price = round(price * limit_sell_discount, 2)
-                    if dry_run_only:
-                        submitted = record_dry_run(
-                            market_symbol(symbol),
-                            "sell",
-                            quantity_text,
-                            limit_price,
-                            order_type="limit",
-                        )
-                    else:
-                        submitted = submit_order_via_port(
-                            market_symbol(symbol),
-                            "limit",
-                            "sell",
-                            quantity,
-                            translator("limit_sell", symbol=symbol, qty=quantity_text, price=limit_price),
-                            submitted_price=limit_price,
-                        )
+                    submitted = dispatch_order(
+                        symbol,
+                        side="sell",
+                        order_type="limit",
+                        quantity=quantity,
+                        price=limit_price,
+                        log_message=translator("limit_sell", symbol=symbol, qty=quantity_text, price=limit_price),
+                    )
                 else:
-                    if dry_run_only:
-                        submitted = record_dry_run(
-                            market_symbol(symbol),
-                            "sell",
-                            quantity_text,
-                            round(price, 2),
-                            order_type="market",
-                        )
-                        if submitted:
-                            dry_run_sale_proceeds += float(quantity) * round(price, 2)
-                    else:
-                        submitted = submit_order_via_port(
-                            market_symbol(symbol),
-                            "market",
-                            "sell",
-                            quantity,
-                            translator("market_sell", symbol=symbol, qty=quantity_text, price=round(price, 2)),
-                        )
+                    market_price = round(price, 2)
+                    submitted = dispatch_order(
+                        symbol,
+                        side="sell",
+                        order_type="market",
+                        quantity=quantity,
+                        price=market_price,
+                        log_message=translator("market_sell", symbol=symbol, qty=quantity_text, price=market_price),
+                    )
+                    if dry_run_only and submitted:
+                        dry_run_sale_proceeds += float(quantity) * market_price
 
                 if submission_halted and not submitted:
                     break
@@ -1291,9 +1447,13 @@ def execute_rebalance_cycle(
                 funding_needs.append(
                     (
                         target_values[buy_symbol] - market_values[buy_symbol],
-                        _limit_buy_price(buy_symbol, buy_price, limit_buy_premium, limit_buy_premium_by_symbol)
-                        if buy_symbol in limit_order_symbols
-                        else round(buy_price, 2),
+                        _buy_reference_price(
+                            buy_symbol,
+                            buy_price,
+                            is_limit_order=buy_symbol in limit_order_symbols,
+                            limit_buy_premium=limit_buy_premium,
+                            limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+                        ),
                     )
                 )
             if should_sell_cash_sweep_to_fund_whole_share_buy(
@@ -1303,30 +1463,22 @@ def execute_rebalance_cycle(
                 funding_needs,
             ):
                 sweep_quantity = float(sellable_quantities[cash_sweep_symbol])
-                quantity_text = format_quantity(sweep_quantity)
-                if dry_run_only:
-                    submitted = record_dry_run(
-                        market_symbol(cash_sweep_symbol),
-                        "sell",
-                        quantity_text,
-                        round(sweep_price, 2),
-                        order_type="market",
-                    )
-                    if submitted:
-                        dry_run_sale_proceeds += float(sweep_quantity) * round(sweep_price, 2)
-                else:
-                    submitted = submit_order_via_port(
-                        market_symbol(cash_sweep_symbol),
-                        "market",
-                        "sell",
-                        sweep_quantity,
-                        translator(
-                            "market_sell",
-                            symbol=cash_sweep_symbol,
-                            qty=quantity_text,
-                            price=round(sweep_price, 2),
-                        ),
-                    )
+                sweep_market_price = round(sweep_price, 2)
+                submitted = dispatch_order(
+                    cash_sweep_symbol,
+                    side="sell",
+                    order_type="market",
+                    quantity=sweep_quantity,
+                    price=sweep_market_price,
+                    log_message=translator(
+                        "market_sell",
+                        symbol=cash_sweep_symbol,
+                        qty=format_quantity(sweep_quantity),
+                        price=sweep_market_price,
+                    ),
+                )
+                if dry_run_only and submitted:
+                    dry_run_sale_proceeds += float(sweep_quantity) * sweep_market_price
                 if submitted:
                     action_done = True
                     sell_submitted = True
@@ -1341,63 +1493,31 @@ def execute_rebalance_cycle(
                 f"🧪 验证回款已入账: cash=${simulated_cash:.2f} "
                 f"investable=${investable_cash:.2f}"
             )
-            note_logs.append(validation_message)
-            print(with_prefix(validation_message), flush=True)
+            _emit_note(note_logs, validation_message, with_prefix=with_prefix)
         else:
             previous_investable_cash = investable_cash
-            refresh_attempts = max(1, int(post_sell_refresh_attempts or 1))
-            refresh_interval = max(0.0, float(post_sell_refresh_interval_sec or 0.0))
-            best_investable_cash = previous_investable_cash
-            projected_sell_release_value = 0.0
-            for attempt in range(refresh_attempts):
-                if attempt > 0:
-                    sleeper(refresh_interval)
-                refreshed_state = fetch_replanned_state()
-                refreshed_plan, refreshed_portfolio, refreshed_execution, refreshed_allocation = refreshed_state
-                # Every observed refresh constrains this cycle, even when its
-                # cash forecast is lower than an earlier observation's.
-                if _execution_is_blocked(
-                    plan=refreshed_plan, execution=refreshed_execution, allocation=refreshed_allocation,
-                ):
-                    submission_halted = True
-                if is_account_new_risk_gate_enabled():
-                    refreshed_portfolio = dict(refreshed_portfolio)
-                    refreshed_portfolio["account_new_risk_snapshot"] = build_account_new_risk_snapshot(
-                        refreshed_portfolio, execution=refreshed_execution,
-                    )
-                    refreshed_admission = evaluate_portfolio_new_risk_admission(
-                        refreshed_portfolio, execution=refreshed_execution,
-                    )
-                    account_new_risk_buy_blocked = (
-                        account_new_risk_buy_blocked or new_risk_buy_prohibited(refreshed_admission)
-                    )
-                    account_new_risk_reason_codes = tuple(dict.fromkeys(
-                        (*account_new_risk_reason_codes, *refreshed_admission.reason_codes)
-                    ))
-                    set_cycle_snapshot(build_snapshot_from_portfolio(
-                        refreshed_portfolio, execution=refreshed_execution,
-                    ))
-                    refreshed_scale = refreshed_admission.combined_scale
-                    if refreshed_scale is not None:
-                        cycle_combined_scale = (
-                            refreshed_scale if cycle_combined_scale is None
-                            else min(cycle_combined_scale, refreshed_scale)
-                        )
-                    refreshed_state = (
-                        refreshed_plan, refreshed_portfolio, refreshed_execution, refreshed_allocation,
-                    )
-                refreshed_investable_cash = float(refreshed_execution["investable_cash"])
-                projected_sell_release_value = max(
-                    projected_sell_release_value,
-                    _filled_sell_release_value(
-                        trade_context=trade_context,
-                        submitted_sell_orders=submitted_sell_orders,
-                        fetch_order_status=fetch_order_status,
-                    ),
-                )
-                best_investable_cash = max(best_investable_cash, refreshed_investable_cash)
-                if refreshed_investable_cash > previous_investable_cash:
-                    break
+            (
+                refreshed_state,
+                best_investable_cash,
+                projected_sell_release_value,
+                submission_halted,
+                account_new_risk_buy_blocked,
+                account_new_risk_reason_codes,
+                cycle_combined_scale,
+            ) = _refresh_post_sell_snapshots(
+                fetch_replanned_state=fetch_replanned_state,
+                trade_context=trade_context,
+                submitted_sell_orders=submitted_sell_orders,
+                fetch_order_status=fetch_order_status,
+                sleeper=sleeper,
+                refresh_attempts=max(1, int(post_sell_refresh_attempts or 1)),
+                refresh_interval=max(0.0, float(post_sell_refresh_interval_sec or 0.0)),
+                previous_investable_cash=previous_investable_cash,
+                account_new_risk_buy_blocked=account_new_risk_buy_blocked,
+                account_new_risk_reason_codes=account_new_risk_reason_codes,
+                cycle_combined_scale=cycle_combined_scale,
+                submission_halted=submission_halted,
+            )
             # Use the latest producer plan for risk/targets; retain the best
             # cash forecast only for funding and the already-known sell facts.
             plan, portfolio, execution, allocation = refreshed_state
@@ -1407,42 +1527,22 @@ def execute_rebalance_cycle(
                 allocation = apply_combined_scale_to_allocation_targets(
                     allocation, cycle_combined_scale,
                 )
-            plan, allocation = _apply_safe_haven_cash_substitution(
+            plan, allocation, small_account_reference_target_values = _prepare_cycle_targets_and_notes(
                 plan=plan,
                 portfolio=portfolio,
                 allocation=allocation,
                 threshold_usd=safe_haven_cash_substitute_threshold_usd,
-            )
-            small_account_reference_target_values = _small_account_drift_reference_targets(
-                allocation,
-                portfolio=portfolio,
-            )
-            if not fractional_buy_execution:
-                plan, allocation = _apply_small_account_whole_share_compatibility(
-                    plan=plan,
-                    allocation=allocation,
-                    strategy_assets=tuple(allocation["strategy_symbols"]),
-                    market_data_port=market_data_port,
-                    notify_issue=notify_issue,
-                    symbol_suffix=symbol_suffix,
-                    limit_buy_premium=limit_buy_premium,
-                    limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
-                )
-            record_small_account_cash_substitution_notes(
-                note_logs,
-                allocation=allocation,
+                fractional_buy_execution=fractional_buy_execution,
+                market_data_port=market_data_port,
+                notify_issue=notify_issue,
+                symbol_suffix=symbol_suffix,
+                limit_buy_premium=limit_buy_premium,
+                limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+                note_logs=note_logs,
                 translator=translator,
                 with_prefix=with_prefix,
-                seen_keys=small_account_cash_note_keys,
-                symbol_suffix=symbol_suffix,
-            )
-            record_small_account_whole_share_bootstrap_notes(
-                note_logs,
-                allocation=allocation,
-                translator=translator,
-                with_prefix=with_prefix,
-                seen_keys=small_account_bootstrap_note_keys,
-                symbol_suffix=symbol_suffix,
+                small_account_cash_note_keys=small_account_cash_note_keys,
+                small_account_bootstrap_note_keys=small_account_bootstrap_note_keys,
             )
             threshold_value = float(execution["trade_threshold_value"])
             limit_order_symbols = set(
@@ -1460,10 +1560,11 @@ def execute_rebalance_cycle(
                 best_investable_cash,
                 previous_investable_cash + projected_sell_release_value,
             )
-            if fractional_buy_execution:
-                current_min_trade = max(float(execution["current_min_trade"]), MIN_FRACTIONAL_BUY_NOTIONAL_USD)
-            else:
-                current_min_trade = max(float(execution["current_min_trade"]), min_order_notional)
+            current_min_trade = _current_min_trade_floor(
+                execution,
+                fractional_buy_execution=fractional_buy_execution,
+                min_order_notional=min_order_notional,
+            )
 
     if (
         available_cash <= 0.0
@@ -1491,23 +1592,27 @@ def execute_rebalance_cycle(
     buys_blocked_reason: str | None = None
     if small_account_buy_blocked and buy_candidates:
         buys_blocked_reason = "small_account_below_recommended_equity"
-        message = translator(
-            "buy_deferred_small_account",
-            portfolio_equity=_format_optional_equity(small_account_portfolio_equity),
-            min_recommended_equity=_format_optional_equity(small_account_min_equity),
+        _emit_note(
+            note_logs,
+            translator(
+                "buy_deferred_small_account",
+                portfolio_equity=_format_optional_equity(small_account_portfolio_equity),
+                min_recommended_equity=_format_optional_equity(small_account_min_equity),
+            ),
+            with_prefix=with_prefix,
         )
-        note_logs.append(message)
-        print(with_prefix(message), flush=True)
         buy_candidates = []
     elif account_new_risk_buy_blocked and buy_candidates:
         buys_blocked_reason = "account_new_risk_gate"
         reason_text = ", ".join(account_new_risk_reason_codes) or "NEW_RISK_PROHIBITED"
-        message = translator(
-            "buy_deferred",
-            detail=f"[Account new-risk gate] {reason_text}",
+        _emit_note(
+            note_logs,
+            translator(
+                "buy_deferred",
+                detail=f"[Account new-risk gate] {reason_text}",
+            ),
+            with_prefix=with_prefix,
         )
-        note_logs.append(message)
-        print(with_prefix(message), flush=True)
         buy_candidates = []
     elif cash_only_execution and buy_candidates and pending_sell_release_symbols:
         estimated_buy_cost = 0.0
@@ -1526,11 +1631,12 @@ def execute_rebalance_cycle(
                 if can_buy_value >= MIN_FRACTIONAL_BUY_NOTIONAL_USD:
                     estimated_buy_cost += can_buy_value
                 continue
-            is_limit_order = symbol in limit_order_symbols or symbol == cash_sweep_symbol
-            ref_price = (
-                _limit_buy_price(symbol, price, limit_buy_premium, limit_buy_premium_by_symbol)
-                if is_limit_order
-                else round(price, 2)
+            ref_price = _buy_reference_price(
+                symbol,
+                price,
+                is_limit_order=(symbol in limit_order_symbols or symbol == cash_sweep_symbol),
+                limit_buy_premium=limit_buy_premium,
+                limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
             )
             quantity = _planned_whole_share_buy_quantity(
                 symbol,
@@ -1547,21 +1653,25 @@ def execute_rebalance_cycle(
                 estimated_buy_cost += quantity * ref_price
         if estimated_buy_cost > investable_cash:
             buys_blocked_reason = "pending_sell_release"
-            message = translator(
-                "buy_deferred_pending_sell_release",
-                symbols=", ".join(pending_sell_release_symbols),
+            _emit_note(
+                note_logs,
+                translator(
+                    "buy_deferred_pending_sell_release",
+                    symbols=", ".join(pending_sell_release_symbols),
+                ),
+                with_prefix=with_prefix,
             )
-            note_logs.append(message)
-            print(with_prefix(message), flush=True)
             buy_candidates = []
     if cash_only_execution and buy_candidates and available_cash < 0 and buys_blocked_reason is None:
         buys_blocked_reason = "negative_cash"
-        message = translator(
-            "buy_deferred_negative_cash",
-            cash=f"{available_cash:.2f}",
+        _emit_note(
+            note_logs,
+            translator(
+                "buy_deferred_negative_cash",
+                cash=f"{available_cash:.2f}",
+            ),
+            with_prefix=with_prefix,
         )
-        note_logs.append(message)
-        print(with_prefix(message), flush=True)
         buy_candidates = []
     elif buy_candidates and investable_cash <= 0:
         buy_candidates = []
@@ -1586,10 +1696,12 @@ def execute_rebalance_cycle(
             if fractional_buy_execution
             else (symbol in limit_order_symbols or symbol == cash_sweep_symbol)
         )
-        ref_price = (
-            _limit_buy_price(symbol, price, limit_buy_premium, limit_buy_premium_by_symbol)
-            if is_limit_order
-            else round(price, 2)
+        ref_price = _buy_reference_price(
+            symbol,
+            price,
+            is_limit_order=is_limit_order,
+            limit_buy_premium=limit_buy_premium,
+            limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
         )
         if not fractional_buy_execution:
             planned_quantity = _planned_whole_share_buy_quantity(
@@ -1626,14 +1738,11 @@ def execute_rebalance_cycle(
             )
             if limit_candidate is None:
                 continue
-            limit_candidate_quantity, limit_budget_quantity, limit_cash_limit_quantity = limit_candidate
-            limit_quantity = _normalize_buy_quantity(
+            limit_candidate_quantity, limit_budget_quantity, _ = limit_candidate
+            quantity = _normalize_buy_quantity(
                 limit_candidate_quantity,
                 quantity_step=_buy_step_for(market_symbol(symbol)),
             )
-            order_kind = limit_order_kind
-            quantity = limit_quantity
-            cost_estimate = 0.0
             if quantity <= 0:
                 record_note_log(
                     note_logs,
@@ -1647,42 +1756,26 @@ def execute_rebalance_cycle(
                 continue
 
             quantity_text = format_quantity(quantity)
-            if order_kind == "limit":
-                if dry_run_only:
-                    submitted = record_dry_run(
-                        market_symbol(symbol),
-                        "buy",
-                        quantity_text,
-                        ref_price,
-                        order_type="limit",
-                    )
-                else:
-                    submitted = submit_order_via_port(
-                        market_symbol(symbol),
-                        "limit",
-                        "buy",
-                        quantity,
-                        translator("limit_buy", symbol=symbol, qty=quantity_text, price=ref_price),
-                        submitted_price=ref_price,
-                    )
+            if limit_order_kind == "limit":
+                submitted = dispatch_order(
+                    symbol,
+                    side="buy",
+                    order_type="limit",
+                    quantity=quantity,
+                    price=ref_price,
+                    log_message=translator("limit_buy", symbol=symbol, qty=quantity_text, price=ref_price),
+                )
                 cost_estimate = quantity * ref_price
             else:
-                if dry_run_only:
-                    submitted = record_dry_run(
-                        market_symbol(symbol),
-                        "buy",
-                        quantity_text,
-                        round(price, 2),
-                        order_type="market",
-                    )
-                else:
-                    submitted = submit_order_via_port(
-                        market_symbol(symbol),
-                        "market",
-                        "buy",
-                        quantity,
-                        translator("market_buy", symbol=symbol, qty=quantity_text, price=round(price, 2)),
-                    )
+                market_price = round(price, 2)
+                submitted = dispatch_order(
+                    symbol,
+                    side="buy",
+                    order_type="market",
+                    quantity=quantity,
+                    price=market_price,
+                    log_message=translator("market_buy", symbol=symbol, qty=quantity_text, price=market_price),
+                )
                 cost_estimate = quantity * price
 
             if submitted:
@@ -1764,28 +1857,19 @@ def execute_rebalance_cycle(
                 quantity = 0
             if quantity > 0:
                 quantity_text = format_quantity(quantity)
-                if dry_run_only:
-                    submitted = record_dry_run(
-                        market_symbol(cash_sweep_symbol),
-                        "buy",
-                        quantity_text,
-                        ref_price,
-                        order_type="limit",
-                    )
-                else:
-                    submitted = submit_order_via_port(
-                        market_symbol(cash_sweep_symbol),
-                        "limit",
-                        "buy",
-                        quantity,
-                        translator(
-                            "limit_buy",
-                            symbol=cash_sweep_symbol,
-                            qty=quantity_text,
-                            price=ref_price,
-                        ),
-                        submitted_price=ref_price,
-                    )
+                submitted = dispatch_order(
+                    cash_sweep_symbol,
+                    side="buy",
+                    order_type="limit",
+                    quantity=quantity,
+                    price=ref_price,
+                    log_message=translator(
+                        "limit_buy",
+                        symbol=cash_sweep_symbol,
+                        qty=quantity_text,
+                        price=ref_price,
+                    ),
+                )
                 if submitted:
                     rebuy_message = translator(
                         "cash_sweep_rebuy",
@@ -1793,8 +1877,7 @@ def execute_rebalance_cycle(
                         qty=quantity_text,
                         price=f"{ref_price:.2f}",
                     )
-                    note_logs.append(rebuy_message)
-                    print(with_prefix(rebuy_message), flush=True)
+                    _emit_note(note_logs, rebuy_message, with_prefix=with_prefix)
                     action_done = True
             elif substitution_threshold <= 0.0 or investable_cash >= substitution_threshold:
                 record_note_log(

@@ -29,6 +29,7 @@ from application.account_new_risk_gate_support import (
     maybe_publish_attention_for_admission,
     new_risk_buy_prohibited,
     reset_attention_sent_keys_for_tests,
+    resolve_max_daily_loss_usd,
     set_cycle_snapshot,
 )
 from application.execution_service import execute_rebalance_cycle
@@ -138,6 +139,24 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             result = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
         self.assertIn("DAILY_LOSS_UNKNOWN_FAIL_CLOSED", result.reason_codes)
+
+    def test_invalid_primary_daily_loss_env_falls_back_to_valid_secondary(self) -> None:
+        portfolio = {
+            "total_strategy_equity": 50_000.0,
+            "account_new_risk_snapshot": {"daily_loss_usd": 300.0},
+        }
+        with patch.dict(
+            os.environ,
+            {"LONGBRIDGE_MAX_DAILY_LOSS_USD": "0", "MAX_DAILY_LOSS_USD": "250"},
+            clear=False,
+        ), patch(
+            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            return_value=None,
+        ):
+            self.assertEqual(resolve_max_daily_loss_usd(portfolio), 250.0)
+            result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("DAILY_LOSS_LIMIT_EXCEEDED", result.reason_codes)
 
     def test_production_drift_review_prohibits_new_risk(self) -> None:
         portfolio = {
