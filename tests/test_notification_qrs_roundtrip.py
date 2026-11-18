@@ -12,8 +12,8 @@ from unittest.mock import patch
 
 import pytest
 
-from notifications import unified
-from notifications.digest_snapshot.digest_candidates import cycle_evidence
+from longbridge_platform.notifications import unified
+from longbridge_platform.notifications.digest_snapshot.digest_candidates import cycle_evidence
 from test_notification_consolidation import MemoryStore, binding_env, fake_stores, source_report
 
 

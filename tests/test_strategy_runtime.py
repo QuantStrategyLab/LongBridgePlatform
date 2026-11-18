@@ -4,7 +4,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import strategy_runtime as strategy_runtime_module
+import longbridge_platform.strategy_runtime as strategy_runtime_module
 from quant_platform_kit.common.models import PortfolioSnapshot
 from quant_platform_kit.common.strategy_contracts import (
     StrategyDecision,
@@ -12,7 +12,7 @@ from quant_platform_kit.common.strategy_contracts import (
     StrategyRuntimeAdapter,
     StrategyRuntimePolicy,
 )
-from runtime_config_support import PlatformRuntimeSettings
+from longbridge_platform.runtime_config_support import PlatformRuntimeSettings
 
 
 class _TqqqEntrypoint:
@@ -267,8 +267,8 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertIs(ctx.portfolio, snapshot)
 
     def test_actual_pinned_soxl_keeps_risk_rejection_after_capital_wiring(self):
-        from application.longbridge_portfolio import fetch_strategy_account_state
-        from application.runtime_broker_adapters import build_runtime_broker_adapters
+        from longbridge_platform.application.longbridge_portfolio import fetch_strategy_account_state
+        from longbridge_platform.application.runtime_broker_adapters import build_runtime_broker_adapters
         from us_equity_strategies import get_strategy_entrypoint
 
         runtime = self._capital_runtime(entrypoint=get_strategy_entrypoint("soxl_soxx_trend_income"))

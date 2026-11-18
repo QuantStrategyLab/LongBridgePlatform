@@ -11,7 +11,7 @@ import pytest
 from quant_platform_kit.common.models import PortfolioSnapshot
 from quant_platform_kit.risk.contracts import RuntimeRiskLimits
 
-import strategy_runtime as runtime_module
+import longbridge_platform.strategy_runtime as runtime_module
 
 PROFILE = "russell_top50_leader_rotation"
 DAY = "2026-11-03"
@@ -122,7 +122,7 @@ def test_unreadable_configuration_blocks_without_raw_diagnostics(platform, conte
 
 def test_read_failure_blocks_without_private_exception_text(platform):
     _, evaluate = platform
-    with patch("strategy_runtime.Path.read_text", side_effect=OSError("synthetic-private-detail")):
+    with patch("longbridge_platform.strategy_runtime.Path.read_text", side_effect=OSError("synthetic-private-detail")):
         with pytest.raises(ValueError, match="^Invalid Russell regime configuration$") as error:
             evaluate()
     assert error.value.__suppress_context__ is True

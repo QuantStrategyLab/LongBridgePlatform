@@ -6,7 +6,7 @@ import unittest
 from dataclasses import dataclass
 from unittest.mock import patch
 
-from application import validation_cycle_observation as observer
+from longbridge_platform.application import validation_cycle_observation as observer
 
 
 class ValidationCycleObservationTests(unittest.TestCase):

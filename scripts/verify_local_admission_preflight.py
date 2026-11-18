@@ -14,10 +14,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for _path in (ROOT, ROOT / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
-from application.local_admission_preflight import evaluate_local_admission  # noqa: E402
+from longbridge_platform.application.local_admission_preflight import evaluate_local_admission  # noqa: E402
 
 
 def _load_payload(path: Path) -> object:

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from application.v7_paper_preview import build_v7_paper_preview_mapping
+from longbridge_platform.application.v7_paper_preview import build_v7_paper_preview_mapping
 from quant_platform_kit.common.models import PortfolioSnapshot
 from quant_platform_kit.common.strategy_contracts import StrategyContext
-from strategy_loader import load_strategy_entrypoint_for_profile
+from longbridge_platform.strategy_loader import load_strategy_entrypoint_for_profile
 from us_equity_strategies.v7_soxl_profile import (
     SOXL_SOXX_CORE_ONLY_P2_V7_PROFILE,
     V7_CONFIG_SHA256,

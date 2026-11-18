@@ -12,8 +12,8 @@ QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
 if str(QPK_SRC) not in sys.path:
     sys.path.insert(0, str(QPK_SRC))
 
-from application.longbridge_execution import submit_order
-from application.longbridge_portfolio import fetch_strategy_account_state
+from longbridge_platform.application.longbridge_execution import submit_order
+from longbridge_platform.application.longbridge_portfolio import fetch_strategy_account_state
 from quant_platform_kit.common.models import ExecutionReport
 
 
@@ -63,7 +63,7 @@ class LongBridgeLocalHelpersTests(unittest.TestCase):
             account_balance=unittest.mock.Mock(return_value=[balance]),
             stock_positions=lambda: FakePositionsResponse(),
         )
-        with patch("application.longbridge_portfolio.datetime", create=True) as clock:
+        with patch("longbridge_platform.application.longbridge_portfolio.datetime", create=True) as clock:
             clock.now.return_value = observed
             state = fetch_strategy_account_state(FakeQuoteContext(), trade, ["SOXL"])
         trade.account_balance.assert_called_once_with()
@@ -333,7 +333,7 @@ class LongBridgeLocalHelpersTests(unittest.TestCase):
             error.code = 603203
             raise error
 
-        with patch("application.longbridge_execution._qpk_submit_order", fake_submit_order):
+        with patch("longbridge_platform.application.longbridge_execution._qpk_submit_order", fake_submit_order):
             with self.assertRaisesRegex(RuntimeError, "internal server error"):
                 submit_order(
                     object(),
@@ -352,7 +352,7 @@ class LongBridgeLocalHelpersTests(unittest.TestCase):
             attempts["count"] += 1
             raise TimeoutError("submission timed out")
 
-        with patch("application.longbridge_execution._qpk_submit_order", fake_submit_order):
+        with patch("longbridge_platform.application.longbridge_execution._qpk_submit_order", fake_submit_order):
             with self.assertRaisesRegex(TimeoutError, "timed out"):
                 submit_order(
                     object(),
@@ -371,7 +371,7 @@ class LongBridgeLocalHelpersTests(unittest.TestCase):
             attempts["count"] += 1
             raise RuntimeError("internal server error")
 
-        with patch("application.longbridge_execution._qpk_submit_order", fake_submit_order):
+        with patch("longbridge_platform.application.longbridge_execution._qpk_submit_order", fake_submit_order):
             with self.assertRaisesRegex(RuntimeError, "internal server error"):
                 submit_order(
                     object(),
@@ -391,7 +391,7 @@ class LongBridgeLocalHelpersTests(unittest.TestCase):
             status="rejected",
             raw_payload={"detail": "rejected by broker"},
         )
-        with patch("application.longbridge_execution._qpk_submit_order", return_value=rejected) as submit:
+        with patch("longbridge_platform.application.longbridge_execution._qpk_submit_order", return_value=rejected) as submit:
             report = submit_order(
                 object(),
                 "BOXX.US",
@@ -412,7 +412,7 @@ class LongBridgeLocalHelpersTests(unittest.TestCase):
             broker_order_id="OID-1",
             raw_payload={},
         )
-        with patch("application.longbridge_execution._qpk_submit_order", return_value=submitted) as submit:
+        with patch("longbridge_platform.application.longbridge_execution._qpk_submit_order", return_value=submitted) as submit:
             report = submit_order(
                 object(),
                 "BOXX.US",

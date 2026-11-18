@@ -9,11 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from application.durable_execution_commands import (  # noqa: E402
+from longbridge_platform.application.durable_execution_commands import (  # noqa: E402
     build_paper_execution_decision_digest,
     build_paper_execution_command,
 )
-from application.paper_execution_command_consumer import (  # noqa: E402
+from longbridge_platform.application.paper_execution_command_consumer import (  # noqa: E402
     consume_due_paper_execution_commands,
 )
 from quant_platform_kit.common.execution_commands import (  # noqa: E402

@@ -31,9 +31,9 @@ from scripts.verify_deployed_runtime_target_admission import (
     APPROVED_HK_PROBE_DIAGNOSTICS_CANDIDATE,
     _validate_image_only_source,
 )
-from application.runtime_target_manifest import load_runtime_target_manifest
+from longbridge_platform.application.runtime_target_manifest import load_runtime_target_manifest
 from hk_equity_strategies import get_strategy_definition
-from strategy_registry import LONGBRIDGE_PLATFORM
+from longbridge_platform.strategy_registry import LONGBRIDGE_PLATFORM
 
 
 BASE_APPLICATION_SHA = "922f338fea7c46391b50bb8316ac88154596916f"

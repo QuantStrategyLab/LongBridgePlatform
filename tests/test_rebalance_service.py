@@ -27,16 +27,16 @@ requests_stub.post = lambda *args, **kwargs: None
 _original_requests_module = sys.modules.get("requests")
 sys.modules["requests"] = requests_stub
 try:
-    from application import rebalance_service
-    from application.execution_service import execute_rebalance_cycle
-    from application.execution_state import ExecutionMarkerStore
-    from application.longbridge_execution import submit_order
-    from application.longbridge_portfolio import fetch_strategy_account_state
-    from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
+    from longbridge_platform.application import rebalance_service
+    from longbridge_platform.application.execution_service import execute_rebalance_cycle
+    from longbridge_platform.application.execution_state import ExecutionMarkerStore
+    from longbridge_platform.application.longbridge_execution import submit_order
+    from longbridge_platform.application.longbridge_portfolio import fetch_strategy_account_state
+    from longbridge_platform.application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
     from quant_platform_kit.common.account_identity import BrokerAccountIdentity
     from quant_platform_kit.common.execution_commands import ExecutionCommandState, ExecutionCommandStore
-    from notifications.telegram import build_translator
-    from decision_mapper import map_strategy_decision_to_plan
+    from longbridge_platform.notifications.telegram import build_translator
+    from longbridge_platform.decision_mapper import map_strategy_decision_to_plan
     from quant_platform_kit.common.strategy_contracts import PositionTarget, StrategyDecision
     from quant_platform_kit.common.models import ExecutionReport, PortfolioSnapshot, Position, QuoteSnapshot
     from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort, CallableNotificationPort, CallablePortfolioPort
@@ -178,7 +178,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
     def setUp(self):
         # Business-only cases run with a source-bound in-memory CAS store, so
         # suppressing routine delivery still requires a successful candidate write.
-        from notifications import unified
+        from longbridge_platform.notifications import unified
         from test_daily_policy_offline import Memory, setup
 
         env, report = setup()
@@ -1535,7 +1535,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
             notify_no_trade_cycles=False,
         )
 
-        with patch("application.longbridge_execution._qpk_submit_order", fake_submit_order):
+        with patch("longbridge_platform.application.longbridge_execution._qpk_submit_order", fake_submit_order):
             result = rebalance_service.run_strategy(runtime=runtime, config=config)
             rebalance_service.run_strategy(runtime=runtime, config=config)
 
@@ -1693,7 +1693,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(command_store.list_due("2026-07-22")), 1)
         duplicate = command_store.list_due("2026-07-22")[0]
         command_store.append_event(duplicate, next_state=ExecutionCommandState.CANCELLED)
-        from application.durable_execution_commands import build_live_execution_command
+        from longbridge_platform.application.durable_execution_commands import build_live_execution_command
         dedup_command = build_live_execution_command(
             platform="longbridge", account_scope="SG", strategy_profile=config.strategy_profile,
             physical_account_id=config.physical_account_id,
@@ -1729,7 +1729,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(orders), 2)
 
     def test_terminal_stale_live_command_is_ignored_before_current_cycle(self):
-        from application.durable_execution_commands import build_live_execution_command
+        from longbridge_platform.application.durable_execution_commands import build_live_execution_command
 
         plan = _build_plan(
             strategy_symbols=("SOXL",), risk_symbols=("SOXL",),
@@ -1782,7 +1782,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
 
     def test_same_day_terminal_live_command_prevents_duplicate_command_or_submit(self):
-        from application.durable_execution_commands import build_live_execution_command
+        from longbridge_platform.application.durable_execution_commands import build_live_execution_command
 
         plan = _build_plan(
             strategy_symbols=("SOXL",), risk_symbols=("SOXL",),
@@ -1834,7 +1834,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertIs(command_store.current_state(terminal), ExecutionCommandState.CANCELLED)
 
     def test_queued_stale_live_command_blocks_without_store_or_broker_writes(self):
-        from application.durable_execution_commands import build_live_execution_command
+        from longbridge_platform.application.durable_execution_commands import build_live_execution_command
 
         plan = _build_plan(
             strategy_symbols=("SOXL",), risk_symbols=("SOXL",),
@@ -1904,7 +1904,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(rebalance_service.list_live_execution_commands(command_store)), 2)
 
     def test_completed_session_soxl_consumes_today_once_and_blocks_unmarked_old_queue(self):
-        from application.durable_execution_commands import build_live_execution_command
+        from longbridge_platform.application.durable_execution_commands import build_live_execution_command
 
         plan = _build_plan(
             strategy_symbols=("SOXL",), risk_symbols=("SOXL",),
@@ -2001,7 +2001,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(len(orders), 1)
 
     def test_live_order_detail_normalizes_real_sdk_enum_and_checks_identity(self):
-        from application.longbridge_execution import fetch_live_order_status
+        from longbridge_platform.application.longbridge_execution import fetch_live_order_status
         from longport.openapi import OrderStatus
         context = types.SimpleNamespace(order_detail=Mock(return_value=types.SimpleNamespace(
             order_id="broker-1", status=OrderStatus.Filled,
@@ -2167,7 +2167,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         self.assertEqual(sent_messages, [])
 
     def test_observed_paper_validation_requires_journal_before_bootstrap(self):
-        from application.validation_cycle_observation import observe
+        from longbridge_platform.application.validation_cycle_observation import observe
 
         good_store = types.SimpleNamespace(has_marker=lambda _: False, has_prior_execution_report=lambda **_: False)
         bootstrap = Mock(side_effect=RuntimeError("bootstrap reached"))
@@ -2200,7 +2200,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         bootstrap.assert_called_once()
 
     def test_observed_paper_validation_rejects_enabled_writers_before_bootstrap(self):
-        from application.validation_cycle_observation import observe
+        from longbridge_platform.application.validation_cycle_observation import observe
 
         store = types.SimpleNamespace(has_marker=lambda _: False, has_prior_execution_report=lambda **_: False)
         bootstrap = Mock(side_effect=RuntimeError("bootstrap reached"))
@@ -2219,7 +2219,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         bootstrap.assert_called_once()
 
     def test_observed_paper_validation_rejects_unreadable_journal(self):
-        from application.validation_cycle_observation import observe
+        from longbridge_platform.application.validation_cycle_observation import observe
 
         plan = _build_plan(
             strategy_symbols=("SOXX",), risk_symbols=("SOXX",), targets={"SOXX": 500.0},
@@ -2295,7 +2295,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         store.record_outcome.assert_not_called()
 
     def test_observed_cycle_without_dates_stops_before_execution_or_writes(self):
-        from application.validation_cycle_observation import observe
+        from longbridge_platform.application.validation_cycle_observation import observe
 
         plan = _build_plan(
             strategy_symbols=("SOXX",), risk_symbols=("SOXX",), targets={"SOXX": 500.0},
@@ -2340,7 +2340,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
         runtime.notify_issue.assert_not_called()
 
     def test_observed_cycle_consumes_strict_cloud_report_scan(self):
-        from application.validation_cycle_observation import observe
+        from longbridge_platform.application.validation_cycle_observation import observe
         from quant_platform_kit.cloud.gcp_provider import GcpObjectStore
 
         plan = _build_plan(
@@ -2701,7 +2701,7 @@ class RebalanceServiceNotificationTests(unittest.TestCase):
 
         # These cases exercise the legacy message renderer and trading result.
         # Delivery policy is covered independently by the per-run candidate tests.
-        self.enterContext(patch("notifications.unified.prepare_cycle", side_effect=lambda _result, *, config, publisher, notify_issue: (False, publisher)))
+        self.enterContext(patch("longbridge_platform.notifications.unified.prepare_cycle", side_effect=lambda _result, *, config, publisher, notify_issue: (False, publisher)))
 
         if isinstance(refreshed_plan, (list, tuple)):
             plan_side_effect = [plan, *refreshed_plan]
@@ -4239,7 +4239,7 @@ class RequiredExecutionClaimTests(unittest.TestCase):
                 self.assertEqual((order["symbol"], order["side"], order["quantity"]), (intent.symbol, intent.side, intent.quantity))
                 self.assertEqual(order["status"], "unknown")
                 self.assertEqual(order["submission_status"], "unknown")
-                from application.execution_receipt_adapter import attach_cycle_execution_receipt
+                from longbridge_platform.application.execution_receipt_adapter import attach_cycle_execution_receipt
                 report = {
                     "platform": "longbridge", "strategy_profile": self.config.strategy_profile,
                     "dry_run": False, "runtime_target": {"execution_mode": "paper"},
@@ -4502,7 +4502,7 @@ class RuntimeNotificationPolicyTests(unittest.TestCase):
 
     def _run_notification_case(self, *, execution=None, dry_run=False, action=False,
                                pending=(), preview=(), reasons=(), result_reasons=()):
-        from notifications import unified
+        from longbridge_platform.notifications import unified
         from test_daily_policy_offline import Memory, setup
 
         env, report = setup()

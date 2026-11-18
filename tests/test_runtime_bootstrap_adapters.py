@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from application.runtime_bootstrap_adapters import build_runtime_bootstrap
+from longbridge_platform.application.runtime_bootstrap_adapters import build_runtime_bootstrap
 
 
 def test_build_runtime_bootstrap_refreshes_token_and_builds_contexts():

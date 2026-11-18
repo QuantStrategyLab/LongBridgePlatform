@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from quant_platform_kit.common import build_runtime_assembly, build_runtime_target
-from application.runtime_reporting_adapters import build_runtime_reporting_adapters
+from longbridge_platform.application.runtime_reporting_adapters import build_runtime_reporting_adapters
 
 
 def test_runtime_reporting_adapters_start_run_builds_context_and_report():

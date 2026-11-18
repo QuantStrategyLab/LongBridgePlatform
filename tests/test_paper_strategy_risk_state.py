@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from application.paper_strategy_risk_state import (
+from longbridge_platform.application.paper_strategy_risk_state import (
     PAPER_STRATEGY_RISK_STATE_OBSERVATION_SCHEMA_VERSION,
     record_paper_strategy_risk_state_transition,
     resolve_paper_strategy_risk_state_enabled,

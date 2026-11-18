@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 
-from strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
+from longbridge_platform.strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
 
 
 ROOT = Path(__file__).resolve().parents[1]

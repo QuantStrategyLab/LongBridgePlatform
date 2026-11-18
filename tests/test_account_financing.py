@@ -5,12 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from application.account_financing import (
+from longbridge_platform.application.account_financing import (
     FinancingPayloadError,
     project_native_financing,
     validate_financing_payload,
 )
-from application.account_snapshot import (
+from longbridge_platform.application.account_snapshot import (
     begin_natural_cycle_history,
     cycle_history_observation,
     end_natural_cycle_history,

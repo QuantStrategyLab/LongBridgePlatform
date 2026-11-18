@@ -10,7 +10,11 @@ LongBridge 兼容的券商连接执行，并在真实下单前经过区域化的
 
 > 投资有风险。本项目不构成投资建议，仅用于学习、研究和工程审阅。
 
-固定依赖中的港股策略政策已无可选策略。`hk_global_etf_tactical_rotation` 和 `hk_low_vol_dividend_quality_snapshot` 均拒绝新选择，包括 dry-run 切换计划；历史策略元数据和适配器仍保留。美股策略版本及现有部署配置不变。
+## 这个仓库是什么
+
+LongBridgePlatform 是 QuantStrategyLab 在美股与港股方向的 LongBridge 执行层。它消费策略仓和 snapshot 仓发布的策略 profile 与 snapshot 产物，并将其转换为 LongBridge 兼容的订单、通知和对账输出。
+
+策略研究和策略资格判断留在对应策略仓库中。在当前固定依赖的港股策略政策下，没有可选的港股 profile，`hk_global_etf_tactical_rotation` 和 `hk_low_vol_dividend_quality_snapshot` 的新选择（包括 dry-run 切换计划）均会被拒绝；历史目录元数据和适配器仍保留，美股策略支持与现有部署配置继续按现有规则运行。
 
 ## QSL 架构角色
 
@@ -61,7 +65,7 @@ composer 将它设为 false。这个选项不会恢复成功预览的通知。
 既有 transition-key 去重，不另增周期消息。订单钩子、issue 通知、执行标记和 claim、
 策略与风险决策、数量和状态，以及 scanner 仅告警策略都保持原有语义。
 
-`main.py` 中最终执行报告的持久化失败只记日志，没有专用 issue 通知。执行标记和
+`src/longbridge_platform/http_routes.py`（由 `src/longbridge_platform/main.py` 重导出）中最终执行报告的持久化失败只记日志，没有专用 issue 通知。执行标记和
 持久命令的持久化失败仍沿用已有 issue 通知。显式 `validation_only` 调用方使用静默
 周期通知 sink，V7 validation 也静默 issue 通知。这些隔离验证路径的分类结果
 不能证明 sink 实际送达错误通知。
@@ -80,6 +84,7 @@ composer 将它设为 false。这个选项不会恢复成功预览的通知。
 
 ## 仓库结构
 
+- `src/longbridge_platform/`：可安装的运行时包（`application/`、`entrypoints/`、`notifications/`、`strategy/`、`main.py` 及策略与运行时策略模块）。
 - `config/`：公开非敏感 runtime-target manifest。
 - `tests/`：单元测试、契约测试和回归测试。
 - `docs/`：运行手册、设计说明、证据和集成契约。
@@ -91,14 +96,18 @@ composer 将它设为 false。这个选项不会恢复成功预览的通知。
 
 ```bash
 uv sync --frozen --extra test
+uv pip check
 uv run --no-sync ruff check --exclude external .
 uv run --no-sync python scripts/check_qpk_pin_consistency.py
+uv run --no-sync python -m pytest -q
 ```
 
 ## 延伸文档
 
+- [文档索引](docs/README.md)
 - [`docs/hk-equity-runtime.md`](docs/hk-equity-runtime.md)
 - [`docs/runtime-target-manifest.md`](docs/runtime-target-manifest.md)：公开 runtime-target manifest 契约、动态 workflow matrix 渲染与 Environment 启停边界
+- [显示名称配置](docs/display-names.md)
 
 ## 社区和安全
 
@@ -113,5 +122,3 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 ## 许可证
 
 详见 [LICENSE](LICENSE)。
-
-显示与通知名称配置：[显示名称](docs/display-names.md)。

@@ -5,7 +5,7 @@ import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
-from notifications import unified
+from longbridge_platform.notifications import unified
 
 class Memory:
     def __init__(self):

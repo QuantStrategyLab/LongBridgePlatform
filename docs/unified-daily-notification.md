@@ -18,7 +18,7 @@ candidate availability or notification delivery.
 
 QPK source reference: `2b04882058666ebc81d1650d93fa2105ec4ba3d8` (notification modules only).
 
-The notification-only QPK source snapshot in `notifications/digest_snapshot/` avoids an
+The notification-only QPK source snapshot in `src/longbridge_platform/notifications/digest_snapshot/` avoids an
 unrelated trading dependency upgrade. Keep these four modules byte-identical
 to the reviewed QPK notification modules. Existing QPK/strategy pins, order
 execution, funding, risk, account enablement and durable report writes are unchanged.

@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from application.validation_cycle_observation import require_matching_journal_source
+from longbridge_platform.application.validation_cycle_observation import require_matching_journal_source
 
 
 class ValidationJournalSourceTests(unittest.TestCase):

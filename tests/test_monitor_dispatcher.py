@@ -1,6 +1,6 @@
 import datetime as dt
 
-from application.monitor_dispatcher import dispatch_due_monitors
+from longbridge_platform.application.monitor_dispatcher import dispatch_due_monitors
 
 
 def test_dispatch_due_monitors_selects_probe_window():

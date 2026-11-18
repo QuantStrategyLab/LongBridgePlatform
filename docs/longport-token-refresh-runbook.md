@@ -38,7 +38,7 @@ Never log or commit secret **values**; this runbook only names resources.
 ### What exists
 
 - QPK: `quant_platform_kit.longbridge.auth.refresh_token_if_needed` calls Legacy `GET https://openapi.longportapp.com/v1/token/refresh` with HMAC headers, then writes the new token to SM when `code == 0`.
-- Platform: `TOKEN_REFRESH_THRESHOLD_DAYS = 30` in `main.py`; `LongBridgeRuntimeBootstrap.build_contexts()` invokes refresh before building quote/trade contexts.
+- Platform: `TOKEN_REFRESH_THRESHOLD_DAYS = 30` in `src/longbridge_platform/runtime_wiring.py` (re-exported by `src/longbridge_platform/main.py`); `LongBridgeRuntimeBootstrap.build_contexts()` invokes refresh before building quote/trade contexts.
 - Read-only paths **intentionally skip** refresh: `build_read_only_contexts`, account-snapshot metadata read, paper command consumer, and HK/SG history probe branch that uses `build_account_snapshot_broker_contexts()`.
 
 ### Why tokens still expired
@@ -99,9 +99,9 @@ Constraints this plan respects: no `independent_get` / ingress changes, no produ
 
 ## Related code pointers
 
-- Platform bootstrap: `application/runtime_bootstrap_adapters.py`
-- Composer read-only vs refresh: `application/runtime_composer.py`
-- Probe history branch (no refresh): `main.py` `run_probe`
+- Platform bootstrap: `src/longbridge_platform/application/runtime_bootstrap_adapters.py`
+- Composer read-only vs refresh: `src/longbridge_platform/application/runtime_composer.py`
+- Probe history branch (no refresh): `src/longbridge_platform/http_routes.py` (`run_probe`, re-exported by `src/longbridge_platform/main.py`)
 - Rotate workflow: `.github/workflows/rotate-longport-secrets.yml`
 - Read-only expiry inspect: `.github/workflows/inspect-longport-token-expiry.yml` + `scripts/inspect_longport_token_expiry.py`
 - Pre-expiry refresh job (manual, dry-run default): `.github/workflows/refresh-longport-token.yml` + `scripts/refresh_longport_access_token.py`

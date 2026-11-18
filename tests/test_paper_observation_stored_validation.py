@@ -10,6 +10,10 @@ import sys
 
 import pytest
 
+_REPO_ROOT = str(Path(__file__).resolve().parents[1])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 from scripts.paper_observation.core import ObservationError, validate_stored
 from test_paper_cloud_observation import NOW, MemoryStore, collector, payload
 

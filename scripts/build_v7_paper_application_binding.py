@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-from application.v7_paper_application import V7PaperApplicationError, build_v7_runtime_binding
+from longbridge_platform.application.v7_paper_application import V7PaperApplicationError, build_v7_runtime_binding
 
 
 def main() -> int:

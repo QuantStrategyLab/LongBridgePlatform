@@ -29,8 +29,8 @@ Unmatched paths and dynamic imports remain unresolved, never presumed safe.
   size limits produce INCOMPLETE rather than a false clean report. The report is
   advisory, so it returns zero after successfully writing that warning. Test or
   infrastructure failures still fail the workflow; inspect the actual summary.
-- Normal local startup wires `main.build_composer` through
-  `application/runtime_bootstrap_adapters.py`'s
+- Normal local startup wires `longbridge_platform.main.build_composer` through
+  `src/longbridge_platform/application/runtime_bootstrap_adapters.py`'s
   `LongBridgeRuntimeBootstrap.build_contexts` to the injected upstream refresh
   helper. Account-snapshot contexts bypass refresh. These are explicit local
   review notes to revalidate when wiring changes, not generated reachability proof.
@@ -77,7 +77,7 @@ round trip; they do not describe the broker-row aggregation path.
 Run this with the repository's frozen dependencies:
 
 ```sh
-PYTHONPATH=. uv run --no-sync python -m pytest -q tests/test_candidate_dependency_compatibility.py
+uv run --no-sync python -m pytest -q tests/test_candidate_dependency_compatibility.py
 ```
 
 The observed serving QPK `03ab459d95c456e46315952932544cdd8e286510` and UES

@@ -14,6 +14,8 @@ backtest_high_offense/
 research/backtests/
 
 *.egg-info/
+build/
+dist/
 
 # Keep AI rule files and shared engineering conventions tracked even when a
 # personal global ignore excludes Markdown.

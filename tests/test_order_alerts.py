@@ -1,11 +1,11 @@
-from notifications.events import NotificationPublisher
-from notifications.order_alerts import (
+from longbridge_platform.notifications.events import NotificationPublisher
+from longbridge_platform.notifications.order_alerts import (
     build_order_lifecycle_event,
     monitor_submitted_order_status,
     publish_order_lifecycle_event,
     render_order_lifecycle_message,
 )
-from notifications.telegram import build_translator
+from longbridge_platform.notifications.telegram import build_translator
 
 
 def test_render_order_lifecycle_message_localizes_order_fill_for_zh():

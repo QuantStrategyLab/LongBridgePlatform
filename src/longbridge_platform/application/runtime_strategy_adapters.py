@@ -1,0 +1,449 @@
+"""Builder helpers for LongBridge strategy evaluation adapters."""
+
+from __future__ import annotations
+
+from collections.abc import Collection, Mapping, Callable
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from quant_platform_kit.common.strategy_plugins import (
+    build_strategy_plugin_alert_messages,
+    build_strategy_plugin_error_notification_lines,
+    build_strategy_plugin_notification_lines,
+    should_alert_strategy_plugin_signal,
+    translate_strategy_plugin_value,
+)
+from quant_platform_kit.common.strategy_contracts import PositionTarget, StrategyDecision
+from quant_platform_kit.risk.contracts import CandidateRiskIdentity
+from quant_platform_kit.risk.gate import (
+    apply_risk_gate,
+    assess_with_evidence,
+    enrich_decision_risk_diagnostics,
+)
+from quant_platform_kit.risk.portfolio_diagnostics import extract_portfolio_risk_diagnostics
+
+from longbridge_platform.strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
+
+
+def _completed_xnys_session_date(now: datetime | None = None) -> str:
+    """Resolve the latest completed XNYS session, including early closes."""
+    import pandas as pd
+    import pandas_market_calendars as mcal
+
+    instant = now or datetime.now(timezone.utc)
+    instant = pd.Timestamp(instant)
+    instant = instant.tz_localize("UTC") if instant.tzinfo is None else instant.tz_convert("UTC")
+    schedule = mcal.get_calendar("NYSE").schedule(
+        start_date=(instant - timedelta(days=10)).date(), end_date=instant.date()
+    )
+    completed = schedule[schedule["market_close"] <= instant]
+    if completed.empty:
+        raise RuntimeError("no completed XNYS session is available")
+    return str(completed.index[-1].date())
+
+
+def _next_xnys_session_date(session_date: str) -> str:
+    import pandas_market_calendars as mcal
+
+    schedule = mcal.get_calendar("NYSE").schedule(start_date=session_date, end_date=(datetime.fromisoformat(session_date) + timedelta(days=10)).date())
+    sessions = [str(index.date()) for index in schedule.index]
+    return next(date for date in sessions if date > session_date)
+
+
+def _typed_execution_candidate(materials: Mapping[str, Any]) -> CandidateRiskIdentity | None:
+    candidate = materials.get("candidate_risk_identity")
+    if isinstance(candidate, CandidateRiskIdentity):
+        return candidate
+    if not isinstance(candidate, Mapping):
+        return None
+    try:
+        return CandidateRiskIdentity(
+            strategy_profile=candidate["strategy_profile"],
+            account_mode=candidate["account_mode"],
+            strategy_revision=candidate["strategy_revision"],
+            runner_revision=candidate["runner_revision"],
+            config_sha256=candidate["config_sha256"],
+            input_manifest_sha256=candidate["input_manifest_sha256"],
+            authority_receipt_sha256=candidate["authority_receipt_sha256"],
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _get_direct_market_history_profiles() -> frozenset[str]:
+    try:
+        from hk_equity_strategies import get_direct_market_history_profiles
+    except (ImportError, AttributeError):  # pragma: no cover - compatibility fallback
+        return frozenset()
+    return frozenset(
+        str(profile).strip().lower()
+        for profile in get_direct_market_history_profiles()
+    )
+
+
+def _requires_materialized_market_history(strategy_profile: str) -> bool:
+    return str(strategy_profile or "").strip().lower() in _get_direct_market_history_profiles()
+
+
+def _loaded_history_to_rows(history):
+    if (
+        hasattr(history, "items")
+        and not hasattr(history, "columns")
+        and not isinstance(history, Mapping)
+    ):
+        return [
+            {"date": date_value, "close": close_value}
+            for date_value, close_value in history.items()
+        ]
+    return history
+
+
+@dataclass(frozen=True)
+class LongBridgeRuntimeStrategyAdapters:
+    strategy_runtime: Any
+    strategy_profile: str
+    strategy_runtime_config: Mapping[str, Any]
+    available_inputs: Collection[str]
+    benchmark_symbol: str
+    signal_text_fn: Callable[[str], str]
+    translator: Callable[..., str]
+    broker_adapters: Any
+    calculate_rotation_indicators_fn: Callable[..., Any]
+    build_strategy_evaluation_inputs_fn: Callable[..., dict[str, Any]]
+    map_strategy_decision_to_plan_fn: Callable[..., dict[str, Any]]
+    execution_policy: Mapping[str, Any] | None = None
+    execution_materials: Mapping[str, Any] | None = None
+    build_strategy_plugin_report_payload_fn: Callable[..., dict[str, Any]] | None = None
+    load_configured_strategy_plugin_signals_fn: Callable[..., Any] | None = None
+    parse_strategy_plugin_mounts_fn: Callable[..., Any] | None = None
+
+    def load_strategy_plugin_signals(self, raw_mounts):
+        if not raw_mounts or self.parse_strategy_plugin_mounts_fn is None or self.load_configured_strategy_plugin_signals_fn is None:
+            return (), None
+        try:
+            mounts = self.parse_strategy_plugin_mounts_fn(raw_mounts)
+            if not mounts:
+                return (), None
+            return (
+                self.load_configured_strategy_plugin_signals_fn(
+                    mounts,
+                    strategy_profile=self.strategy_profile,
+                ),
+                None,
+            )
+        except Exception as exc:
+            return (), f"{type(exc).__name__}: {exc}"
+
+    def attach_strategy_plugin_report(self, report, *, signals, error: str | None = None):
+        if signals and self.build_strategy_plugin_report_payload_fn is not None:
+            report.setdefault("summary", {}).update(self.build_strategy_plugin_report_payload_fn(signals))
+        if error:
+            report.setdefault("diagnostics", {})["strategy_plugin_error"] = error
+
+    def translate_strategy_plugin_value(self, category: str, raw_value: str | None) -> str:
+        return translate_strategy_plugin_value(category, raw_value, translator=self.translator)
+
+    def build_strategy_plugin_notification_lines(self, signals) -> tuple[str, ...]:
+        return build_strategy_plugin_notification_lines(signals, translator=self.translator)
+
+    def build_strategy_plugin_error_notification_lines(self, error) -> tuple[str, ...]:
+        return build_strategy_plugin_error_notification_lines(error, translator=self.translator)
+
+    def should_alert_strategy_plugin_signal(self, signal) -> bool:
+        return should_alert_strategy_plugin_signal(signal)
+
+    def build_strategy_plugin_alert_messages(self, signals):
+        return build_strategy_plugin_alert_messages(
+            signals,
+            translator=self.translator,
+            strategy_label=self.strategy_profile,
+        )
+
+    def calculate_strategy_indicators(self, quote_context):
+        available_inputs = set(self.available_inputs)
+        if "feature_snapshot" in available_inputs and not (
+            {"benchmark_history", "qqq_history", "derived_indicators", "indicators"} & available_inputs
+        ):
+            return {}
+        if "market_history" in available_inputs or "benchmark_history" in available_inputs or "qqq_history" in available_inputs:
+            market_data_port = self.broker_adapters.build_market_data_port(quote_context)
+        if "market_history" in available_inputs:
+            market_history = (
+                self._build_materialized_market_history(market_data_port)
+                if _requires_materialized_market_history(self.strategy_profile)
+                else self.broker_adapters.build_market_history_loader(market_data_port)
+            )
+            market_inputs = {
+                "market_history": market_history,
+            }
+            if "benchmark_history" in available_inputs:
+                market_inputs["benchmark_history"] = self.broker_adapters.build_price_history(
+                    market_data_port,
+                    self.benchmark_symbol,
+                )
+            if "qqq_history" in available_inputs:
+                market_inputs["qqq_history"] = self.broker_adapters.build_price_history(
+                    market_data_port,
+                    self.benchmark_symbol,
+                )
+            return market_inputs
+        if "benchmark_history" in available_inputs or "qqq_history" in available_inputs:
+            return self.broker_adapters.build_price_history(market_data_port, self.benchmark_symbol)
+        trend_ma_window = int(self.strategy_runtime_config.get("trend_ma_window", 150))
+        if self.strategy_profile == "soxl_soxx_trend_income":
+            return self.calculate_rotation_indicators_fn(
+                quote_context,
+                trend_window=trend_ma_window,
+                completed_session_date=_completed_xnys_session_date(),
+            )
+        return self.calculate_rotation_indicators_fn(quote_context, trend_window=trend_ma_window)
+
+    def _market_history_symbols(self) -> tuple[str, ...]:
+        raw_symbols = (
+            self.strategy_runtime_config.get("universe_symbols")
+            or getattr(self.broker_adapters, "strategy_symbols", ())
+            or getattr(self.strategy_runtime, "managed_symbols", ())
+        )
+        if isinstance(raw_symbols, str):
+            raw_symbols = raw_symbols.replace(";", ",").split(",")
+        return tuple(
+            dict.fromkeys(
+                str(symbol).strip()
+                for symbol in raw_symbols
+                if str(symbol).strip()
+            )
+        )
+
+    def _build_materialized_market_history(self, market_data_port):
+        load_market_history = self.broker_adapters.build_market_history_loader(market_data_port)
+        return {
+            symbol: _loaded_history_to_rows(load_market_history(None, symbol))
+            for symbol in self._market_history_symbols()
+        }
+
+    def _apply_v7_validation_risk_gate(self, decision, *, snapshot):
+        if self.strategy_profile != V7_LONGTERM_COMPOUNDING_PROFILE:
+            return decision
+        if getattr(self.strategy_runtime, "uses_evidence_execution", False):
+            return decision
+        risk_snapshot = snapshot
+        stamp_portfolio_risk_metadata = getattr(
+            self.strategy_runtime,
+            "_stamp_portfolio_risk_metadata",
+            None,
+        )
+        if snapshot is not None and callable(stamp_portfolio_risk_metadata):
+            risk_snapshot = stamp_portfolio_risk_metadata(
+                {"portfolio_snapshot": snapshot}
+            )["portfolio_snapshot"]
+        build_capital_base_capabilities = getattr(
+            self.strategy_runtime,
+            "_build_capital_base_capabilities",
+            None,
+        )
+        capabilities = (
+            build_capital_base_capabilities({"portfolio_snapshot": risk_snapshot})
+            if callable(build_capital_base_capabilities)
+            else {}
+        )
+        gated = apply_risk_gate(
+            decision,
+            portfolio_snapshot=risk_snapshot,
+            max_single_weight=0.20,
+            enforce_value_target_exposure=True,
+            **capabilities,
+        )
+        # RiskEngine must be able to add rejection diagnostics without losing
+        # the research-only markers that keep this candidate non-executable.
+        markers = {
+            marker: decision.diagnostics[marker]
+            for marker in ("no_order", "execution_authorized")
+            if marker in decision.diagnostics and marker not in gated.diagnostics
+        }
+        if markers:
+            gated = replace(gated, diagnostics={**dict(gated.diagnostics), **markers})
+        return gated
+
+    def resolve_rebalance_plan(self, *, indicators, snapshot=None, account_state=None):
+        available_inputs = set(self.available_inputs)
+        resolved_snapshot = snapshot
+        if resolved_snapshot is None and account_state is not None:
+            resolved_snapshot = self.broker_adapters.build_portfolio_snapshot_from_account_state(account_state)
+        resolved_account_state = account_state
+        if resolved_account_state is None and "account_state" in available_inputs and resolved_snapshot is not None:
+            resolved_account_state = self.broker_adapters.build_account_state_from_snapshot(resolved_snapshot)
+        market_inputs = {
+            "market_history": indicators,
+            "derived_indicators": indicators,
+            "indicators": indicators,
+            "benchmark_history": indicators,
+            "qqq_history": indicators,
+        }
+        if isinstance(indicators, dict) and any(
+            key in indicators for key in ("market_history", "benchmark_history", "qqq_history")
+        ):
+            market_inputs.update(indicators)
+        evaluation_inputs = self.build_strategy_evaluation_inputs_fn(
+            available_inputs=available_inputs,
+            market_inputs=market_inputs,
+            portfolio_snapshot=resolved_snapshot,
+            account_state=resolved_account_state,
+            translator=self.translator,
+            signal_text_fn=self.signal_text_fn,
+        )
+        evaluation = self.strategy_runtime.evaluate(**evaluation_inputs)
+        decision = self._apply_v7_validation_risk_gate(
+            evaluation.decision,
+            snapshot=resolved_snapshot,
+        )
+        runtime_metadata = dict(getattr(evaluation, "metadata", None) or {})
+        completed = indicators.get("completed_session") if isinstance(indicators, Mapping) else None
+        if (
+            self.strategy_profile == "soxl_soxx_trend_income"
+            and isinstance(completed, Mapping)
+            and completed.get("date")
+        ):
+            signal_date = str(completed["date"])
+            annotations = dict(runtime_metadata.get("execution_annotations") or {})
+            annotations.update({"signal_date": signal_date, "effective_date": _next_xnys_session_date(signal_date)})
+            runtime_metadata["execution_annotations"] = annotations
+        if self.execution_policy is not None:
+            runtime_metadata["longbridge_execution_policy"] = dict(self.execution_policy)
+        plan = self.map_strategy_decision_to_plan_fn(
+            decision,
+            account_state=resolved_account_state if "account_state" in available_inputs else None,
+            snapshot=resolved_snapshot,
+            strategy_profile=self.strategy_profile,
+            runtime_metadata=runtime_metadata,
+        )
+        # This is deliberately an opt-in production SOXL path. The mapper may
+        # retain strategy diagnostics over runtime annotations, so stamp the
+        # final mapped execution payload that becomes the immutable command.
+        if self.strategy_profile == "soxl_soxx_trend_income" and isinstance(completed, Mapping) and completed.get("date"):
+            execution = plan.get("execution") if isinstance(plan, Mapping) else None
+            if isinstance(execution, dict):
+                execution.update({
+                    "signal_date": signal_date,
+                    "effective_date": _next_xnys_session_date(signal_date),
+                    "completed_session_date": signal_date,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                })
+        return plan
+
+    def resolve_frozen_rebalance_plan(self, *, allocation, execution, snapshot):
+        """Re-map one stored target decision against a fresh broker snapshot."""
+        snapshot = self.strategy_runtime._stamp_portfolio_risk_metadata(  # noqa: SLF001
+            {"portfolio_snapshot": snapshot}
+        )["portfolio_snapshot"]
+        targets = dict(allocation.get("targets") or {})
+        roles = {}
+        for field, role in (
+            ("risk_symbols", "risk"),
+            ("income_symbols", "income"),
+            ("safe_haven_symbols", "safe_haven"),
+        ):
+            for symbol in allocation.get(field, ()) or ():
+                roles[str(symbol).strip().upper()] = role
+        frozen_execution_annotations = dict(execution)
+        if "signal_effective_after_trading_days" in frozen_execution_annotations:
+            frozen_execution_annotations["signal_effective_after_trading_days"] = int(
+                frozen_execution_annotations["signal_effective_after_trading_days"]
+            )
+        frozen_diagnostics = {"execution_annotations": frozen_execution_annotations}
+        for marker in ("no_order", "execution_authorized"):
+            if marker in execution:
+                frozen_diagnostics[marker] = execution[marker]
+        decision = StrategyDecision(
+            positions=tuple(
+                PositionTarget(
+                    symbol=str(symbol).strip().upper(),
+                    target_value=float(target),
+                    role=roles.get(str(symbol).strip().upper()),
+                )
+                for symbol, target in sorted(targets.items())
+            ),
+            diagnostics=frozen_diagnostics,
+        )
+        # Preserve the same portfolio diagnostics enrichment as the UES gate.
+        diagnostics = extract_portfolio_risk_diagnostics(snapshot)
+        decision = enrich_decision_risk_diagnostics(
+            decision,
+            unrealized_pnl_pct=diagnostics.get("unrealized_pnl_pct"),
+            consecutive_losses=diagnostics.get("consecutive_losses"),
+        )
+        capabilities = self.strategy_runtime._build_capital_base_capabilities(  # noqa: SLF001
+            {"portfolio_snapshot": snapshot}
+        )
+        if getattr(self.strategy_runtime, "uses_evidence_execution", False):
+            materials = dict(self.execution_materials or {})
+            candidate = _typed_execution_candidate(materials)
+            result = assess_with_evidence(
+                decision,
+                snapshot,
+                scope="ACCOUNT",
+                mandate_provenance=materials.get("mandate_provenance"),
+                market_data=dict(materials.get("market_data") or {}),
+                candidate_identity=candidate,
+                risk_control_state=materials.get("risk_control_state"),
+                capital_base=capabilities.get("capital_base"),
+                capital_base_binding=capabilities.get("capital_base_binding"),
+            )
+            decision = result.decision
+        else:
+            decision = apply_risk_gate(
+                decision,
+                portfolio_snapshot=snapshot,
+                max_single_weight=0.20,
+                enforce_value_target_exposure=True,
+                **capabilities,
+            )
+        runtime_metadata = {"execution_annotations": frozen_execution_annotations}
+        if self.execution_policy is not None:
+            runtime_metadata["longbridge_execution_policy"] = dict(self.execution_policy)
+        return self.map_strategy_decision_to_plan_fn(
+            decision,
+            snapshot=snapshot,
+            account_state=None,
+            strategy_profile=self.strategy_profile,
+            runtime_metadata=runtime_metadata,
+        )
+
+
+def build_runtime_strategy_adapters(
+    *,
+    strategy_runtime: Any,
+    strategy_profile: str,
+    strategy_runtime_config: Mapping[str, Any],
+    available_inputs: Collection[str],
+    benchmark_symbol: str,
+    signal_text_fn: Callable[[str], str],
+    translator: Callable[..., str],
+    broker_adapters: Any,
+    calculate_rotation_indicators_fn: Callable[..., Any],
+    build_strategy_evaluation_inputs_fn: Callable[..., dict[str, Any]],
+    map_strategy_decision_to_plan_fn: Callable[..., dict[str, Any]],
+    execution_policy: Mapping[str, Any] | None = None,
+    execution_materials: Mapping[str, Any] | None = None,
+    build_strategy_plugin_report_payload_fn: Callable[..., dict[str, Any]] | None = None,
+    load_configured_strategy_plugin_signals_fn: Callable[..., Any] | None = None,
+    parse_strategy_plugin_mounts_fn: Callable[..., Any] | None = None,
+) -> LongBridgeRuntimeStrategyAdapters:
+    return LongBridgeRuntimeStrategyAdapters(
+        strategy_runtime=strategy_runtime,
+        strategy_profile=str(strategy_profile),
+        strategy_runtime_config=dict(strategy_runtime_config),
+        available_inputs=tuple(available_inputs),
+        benchmark_symbol=str(benchmark_symbol),
+        signal_text_fn=signal_text_fn,
+        translator=translator,
+        broker_adapters=broker_adapters,
+        calculate_rotation_indicators_fn=calculate_rotation_indicators_fn,
+        build_strategy_evaluation_inputs_fn=build_strategy_evaluation_inputs_fn,
+        map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan_fn,
+        execution_policy=dict(execution_policy) if execution_policy is not None else None,
+        execution_materials=dict(execution_materials) if execution_materials is not None else None,
+        build_strategy_plugin_report_payload_fn=build_strategy_plugin_report_payload_fn,
+        load_configured_strategy_plugin_signals_fn=load_configured_strategy_plugin_signals_fn,
+        parse_strategy_plugin_mounts_fn=parse_strategy_plugin_mounts_fn,
+    )

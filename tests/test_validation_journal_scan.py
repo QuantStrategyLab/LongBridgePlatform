@@ -5,7 +5,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from application.validation_cycle_observation import strict_prior_report_exists
+from longbridge_platform.application.validation_cycle_observation import strict_prior_report_exists
 from quant_platform_kit.cloud.gcp_provider import GcpObjectStore
 
 
@@ -90,7 +90,7 @@ class StrictReportTests(unittest.TestCase):
     def test_local_nested_entries_share_cloud_budget(self):
         prefix = 'gs://bucket/root/longbridge/strategy/PAPER/'
         cloud = FakeGcp({prefix + 'one.txt': '', prefix + 'two.txt': ''})
-        with patch('application.validation_cycle_observation.STRICT_REPORT_SCAN_LIMIT', 3):
+        with patch('longbridge_platform.application.validation_cycle_observation.STRICT_REPORT_SCAN_LIMIT', 3):
             with self.assertRaisesRegex(RuntimeError, '^validation_journal_read_failed$'):
                 self.query(cloud)
 
@@ -119,7 +119,7 @@ class StrictReportTests(unittest.TestCase):
             if path == 'prior.json':
                 raise PermissionError('synthetic local failure')
             return real_open(path, *args, **kwargs)
-        with patch('application.validation_cycle_observation.os.open', side_effect=deny_report):
+        with patch('longbridge_platform.application.validation_cycle_observation.os.open', side_effect=deny_report):
             with self.assertRaisesRegex(RuntimeError, '^validation_journal_read_failed$'):
                 self.query(cloud)
         self.assertIsNone(cloud.prefix)
@@ -163,7 +163,7 @@ class StrictReportTests(unittest.TestCase):
             for i in range(3):
                 yield SimpleNamespace(name=f'{prefix}{i}.txt')
         cloud._client = SimpleNamespace(bucket=lambda _bucket: SimpleNamespace(list_blobs=blobs))
-        with patch('application.validation_cycle_observation.STRICT_REPORT_SCAN_LIMIT', 4):
+        with patch('longbridge_platform.application.validation_cycle_observation.STRICT_REPORT_SCAN_LIMIT', 4):
             with self.assertRaisesRegex(RuntimeError, '^validation_journal_read_failed$'):
                 self.query(cloud)
         self.assertEqual(observed, [('root/longbridge/strategy/PAPER/', 3)])
@@ -197,7 +197,7 @@ class StrictReportTests(unittest.TestCase):
     def test_scan_limit_is_unknown_not_negative(self):
         prefix = 'gs://bucket/root/longbridge/strategy/PAPER/'
         cloud = FakeGcp({f'{prefix}{i}.json': report(signal='2025-01-01') for i in range(3)})
-        with patch('application.validation_cycle_observation.STRICT_REPORT_SCAN_LIMIT', 4):
+        with patch('longbridge_platform.application.validation_cycle_observation.STRICT_REPORT_SCAN_LIMIT', 4):
             with self.assertRaisesRegex(RuntimeError, '^validation_journal_read_failed$'):
                 self.query(cloud)
 

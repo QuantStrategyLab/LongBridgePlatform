@@ -83,7 +83,7 @@ def test_installed_api_preserves_final_tranche_and_preview_only(installed_dca_ca
 def test_adapter_consumes_installed_api_and_rejects_sg(installed_dca_case, monkeypatch):
     from us_equity_strategies.plain_dca import evaluate_dca_period
 
-    from application.plain_dca_paper_adapter import (
+    from longbridge_platform.application.plain_dca_paper_adapter import (
         PlainDcaPaperError,
         consume_plain_dca_preview,
     )
@@ -91,7 +91,7 @@ def test_adapter_consumes_installed_api_and_rejects_sg(installed_dca_case, monke
 
     service = "fake-paper-service"
     paper = SimpleNamespace(id="paper", environment="longbridge-paper", mode="paper", service=service)
-    monkeypatch.setattr("application.plain_dca_paper_adapter.load_runtime_target_manifest",
+    monkeypatch.setattr("longbridge_platform.application.plain_dca_paper_adapter.load_runtime_target_manifest",
                         lambda: SimpleNamespace(targets=(paper,)))
     now = installed_dca_case["now"]
     readback = {"observed_at": now, "valid_until": now+timedelta(minutes=1),

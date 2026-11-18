@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from application.signal_snapshot import build_signal_snapshot
+from longbridge_platform.application.signal_snapshot import build_signal_snapshot
 
 
 class SignalSnapshotTests(unittest.TestCase):

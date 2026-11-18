@@ -21,12 +21,13 @@ from pathlib import Path
 from typing import Any
 
 _ROOT = Path(__file__).resolve().parents[1]
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+for _path in (_ROOT, _ROOT / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 from scripts.reconcile_cloud_runtime import ReconcileError, observe_ready_revision, serving_traffic_rows
 from scripts.record_daily_account_snapshot import _PROJECT_ID, _Rejected, _TARGET_ID, _gcs_prefix
-from strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
+from longbridge_platform.strategy_registry import LONGBRIDGE_PLATFORM, resolve_strategy_definition
 from scripts.verify_notification_overlay import BASE_COMMIT as OVERLAY_BASE, OVERLAY_COMMIT, PATCH_SHA256
 
 
@@ -538,7 +539,7 @@ def _require_sghk_candidate_identity(
         raise AdmissionError("candidate target does not match the approved account", reason='target_identity_invalid')
     target_id, scope = expected
     try:
-        from application.runtime_target_manifest import load_runtime_target_manifest
+        from longbridge_platform.application.runtime_target_manifest import load_runtime_target_manifest
 
         matches = [item for item in load_runtime_target_manifest().targets if item.id == target_id]
     except Exception:

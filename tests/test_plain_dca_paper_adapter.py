@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from application.plain_dca_paper_adapter import (
+from longbridge_platform.application.plain_dca_paper_adapter import (
     PlainDcaPaperError, check_plain_dca_paper_binding, consume_plain_dca_preview,
 )
 
@@ -20,7 +20,7 @@ NOW = datetime(2026, 11, 5, tzinfo=timezone.utc)
 def synthetic_paper_manifest(monkeypatch):
     paper = SimpleNamespace(id="paper", environment="longbridge-paper", mode="paper",
                             service="fake-paper-service")
-    monkeypatch.setattr("application.plain_dca_paper_adapter.load_runtime_target_manifest",
+    monkeypatch.setattr("longbridge_platform.application.plain_dca_paper_adapter.load_runtime_target_manifest",
                         lambda: SimpleNamespace(targets=(paper,)))
 
 

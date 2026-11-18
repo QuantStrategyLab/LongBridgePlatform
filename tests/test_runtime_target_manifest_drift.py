@@ -14,7 +14,7 @@ drift = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = drift
 _spec.loader.exec_module(drift)
 
-from application.runtime_target_manifest import (  # noqa: E402
+from longbridge_platform.application.runtime_target_manifest import (  # noqa: E402
     load_runtime_target_manifest,
     validate_runtime_target_manifest,
 )

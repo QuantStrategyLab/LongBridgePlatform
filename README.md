@@ -12,7 +12,11 @@ English | [简体中文](README.zh-CN.md)
 
 > Investing involves risk. This project does not provide investment advice and is for education, research, and engineering review only.
 
-The pinned HK strategy policy has no selectable profiles. New selection of `hk_global_etf_tactical_rotation` and `hk_low_vol_dividend_quality_snapshot` is rejected, including dry-run switch plans. Historical catalog metadata and adapters remain available. US strategy pins and existing deployment configuration are unchanged.
+## What this repository is
+
+LongBridgePlatform is QuantStrategyLab's LongBridge execution layer for US and HK equities. It consumes strategy profiles and snapshot artifacts published by the strategy and snapshot repositories and translates them into LongBridge-compatible orders, notifications, and reconciliation reports.
+
+Strategy research and eligibility decisions live outside this repository. Under the pinned HK strategy policy, no HK profiles are selectable and new selection of `hk_global_etf_tactical_rotation` and `hk_low_vol_dividend_quality_snapshot` is rejected (including dry-run switch plans), while historical catalog metadata and adapters remain available alongside active US strategy support.
 
 ## QSL architecture role
 
@@ -75,7 +79,8 @@ keeps its existing transition-key dedup path instead of gaining another cycle
 message. Order hooks, issue notifications, execution markers/claims, strategy
 and risk decisions, quantity/state, and scanner alerts-only policy are unchanged.
 
-Final execution-report persistence failures in `main.py` are logged rather than
+Final execution-report persistence failures in `src/longbridge_platform/http_routes.py`
+(re-exported by `src/longbridge_platform/main.py`) are logged rather than
 sent through a dedicated issue notification. Marker and durable-command
 persistence failures have their existing issue notifications. Explicit
 `validation_only` callers already request a silent cycle sink, and V7 validation
@@ -96,6 +101,7 @@ Direct runtime profiles can usually run from market history or portfolio state. 
 
 ## Repository layout
 
+- `src/longbridge_platform/`: installable runtime package (`application/`, `entrypoints/`, `notifications/`, `strategy/`, `main.py`, and strategy and runtime policy modules).
 - `config/`: public non-sensitive runtime-target manifest.
 - `tests/`: unit, contract, and regression tests.
 - `docs/`: runbooks, design notes, evidence, and integration contracts.
@@ -107,14 +113,18 @@ Direct runtime profiles can usually run from market history or portfolio state. 
 
 ```bash
 uv sync --frozen --extra test
+uv pip check
 uv run --no-sync ruff check --exclude external .
 uv run --no-sync python scripts/check_qpk_pin_consistency.py
+uv run --no-sync python -m pytest -q
 ```
 
 ## Useful docs
 
+- [Documentation index](docs/README.md)
 - [`docs/hk-equity-runtime.md`](docs/hk-equity-runtime.md)
 - [`docs/runtime-target-manifest.md`](docs/runtime-target-manifest.md): public runtime-target manifest contract, dynamic workflow matrix rendering, and Environment enablement boundary
+- [Configurable display names](docs/display-names.md)
 
 ## Community and security
 
@@ -129,5 +139,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). AI assistants and maintainers follow [AG
 ## License
 
 See [LICENSE](LICENSE).
-
-Display/notification naming configuration: [display names](docs/display-names.md).

@@ -15,10 +15,7 @@ Run. Consumes QuantPlatformKit and UsEquityStrategies at pinned revisions.
 
 ## Layout
 
-- `application/` — execution, reconciliation and runtime services.
-- `entrypoints/`, `main.py` — service entry points.
-- `strategy/` — strategy loading and registry.
-- `notifications/` — notification composition.
+- `src/longbridge_platform/` — installable runtime package (`application/`, `entrypoints/`, `notifications/`, `strategy/`, `main.py`, and strategy/runtime policy modules).
 - `scripts/`, `config/` — operator and deployment tooling.
 - `docs/` — runtime, token-refresh, isolation and notification contracts.
 - `tests/` — offline regression and workflow contract tests.
@@ -32,7 +29,7 @@ the CI-only setup steps.
 python -m pip install --upgrade pip uv
 uv sync --frozen --extra test
 uv run --no-sync ruff check --exclude external .
-PYTHONPATH=. uv run --no-sync python -m pytest -q tests
+uv run --no-sync python -m pytest -q tests
 ```
 
 CI also checks the locked shared refs, the QPK pin and the bounded deployment

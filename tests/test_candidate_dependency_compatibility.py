@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 import unittest
 from types import SimpleNamespace
 
-from application.longbridge_portfolio import fetch_strategy_account_state
+from longbridge_platform.application.longbridge_portfolio import fetch_strategy_account_state
 
-from application.runtime_broker_adapters import LongBridgeBrokerAdapters
+from longbridge_platform.application.runtime_broker_adapters import LongBridgeBrokerAdapters
 from quant_platform_kit.common.models import PortfolioSnapshot, Position
 from quant_platform_kit.risk.portfolio_diagnostics import extract_portfolio_risk_diagnostics
 

@@ -2208,7 +2208,7 @@ def test_manual_snapshot_only_skips_heartbeat_notifications_and_runtime_publishe
 
 @pytest.mark.parametrize("namespace_kind", ["project_id", "project_number"])
 def test_independent_observer_can_use_another_private_deployment_without_manifest(monkeypatch, namespace_kind):
-    from application import runtime_target_manifest
+    from longbridge_platform.application import runtime_target_manifest
 
     monkeypatch.setattr(runtime_target_manifest, "load_runtime_target_manifest", lambda: pytest.fail("private deployment must not use public mappings"))
     env = _independent_env(

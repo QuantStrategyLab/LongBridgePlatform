@@ -14,8 +14,8 @@ from quant_platform_kit.common.strategy_contracts import (
     StrategyRuntimeAdapter,
 )
 from quant_platform_kit.risk.contracts import RuntimeRiskLimits
-import strategy_runtime as strategy_runtime_module
-from runtime_config_support import PlatformRuntimeSettings, load_platform_runtime_settings
+import longbridge_platform.strategy_runtime as strategy_runtime_module
+from longbridge_platform.runtime_config_support import PlatformRuntimeSettings, load_platform_runtime_settings
 
 
 class _SoxlEntrypoint:

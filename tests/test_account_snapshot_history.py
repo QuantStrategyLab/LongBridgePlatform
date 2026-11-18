@@ -4,7 +4,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 import pytest
 
-from application.account_snapshot import (
+from longbridge_platform.application.account_snapshot import (
     begin_natural_cycle_history,
     cycle_history_observation,
     end_natural_cycle_history,
@@ -110,7 +110,7 @@ def test_capture_failure_is_not_retried_and_context_is_reset():
 
 
 def test_stock_capture_keeps_full_inventory_once_and_discards_private_fields():
-    from application.longbridge_portfolio import fetch_strategy_account_state
+    from longbridge_platform.application.longbridge_portfolio import fetch_strategy_account_state
     response = SimpleNamespace(channels=[SimpleNamespace(account_channel="private-channel", positions=[
         SimpleNamespace(symbol="EXAMPLE.US", currency="USD", quantity=Decimal("3.250"), cost_price="123", account_id="private"),
         SimpleNamespace(symbol="OTHER.HK", currency="HKD", quantity=Decimal("7")),

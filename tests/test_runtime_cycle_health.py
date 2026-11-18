@@ -12,7 +12,7 @@ from quant_platform_kit.common.execution_receipts import build_execution_receipt
 from quant_platform_kit.common.broker_reconciliation import (
     build_broker_reconciliation_evidence,
 )
-from application.broker_reconciliation import LongBridgeReconciliationCandidate
+from longbridge_platform.application.broker_reconciliation import LongBridgeReconciliationCandidate
 from scripts.runtime_cycle_health import (
     CycleContext,
     build_cycle_health,

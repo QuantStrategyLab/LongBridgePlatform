@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from application.execution_state import (  # noqa: E402
+from longbridge_platform.application.execution_state import (  # noqa: E402
     ExecutionMarkerStore,
     resolve_execution_dedup_enabled,
 )

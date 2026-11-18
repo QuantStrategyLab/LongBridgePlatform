@@ -6,9 +6,9 @@ import pandas as pd
 from unittest.mock import patch
 
 from quant_platform_kit.common.runtime_target import build_runtime_target
-from runtime_config_support import PlatformRuntimeSettings
-from strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
-from strategy_runtime import LoadedStrategyRuntime
+from longbridge_platform.runtime_config_support import PlatformRuntimeSettings
+from longbridge_platform.strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
+from longbridge_platform.strategy_runtime import LoadedStrategyRuntime
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -17,7 +17,7 @@ HK_STRATEGIES_SRC = ROOT.parent / "HkEquityStrategies" / "src"
 if str(HK_STRATEGIES_SRC) not in sys.path:
     sys.path.insert(0, str(HK_STRATEGIES_SRC))
 
-from application.runtime_strategy_adapters import build_runtime_strategy_adapters
+from longbridge_platform.application.runtime_strategy_adapters import build_runtime_strategy_adapters
 
 
 V7_PROFILE = V7_LONGTERM_COMPOUNDING_PROFILE
@@ -215,10 +215,10 @@ def test_v7_loaded_runtime_uses_real_entrypoint_risk_gate_and_mapper(monkeypatch
     sys.path.insert(0, str(ROOT / "tests"))
     from test_v7_paper_application import _protected_env, _record
     from test_v7_paper_preview import _available_inputs
-    from application.v7_paper_application import build_v7_runtime_binding
-    from decision_mapper import map_strategy_decision_to_plan
+    from longbridge_platform.application.v7_paper_application import build_v7_runtime_binding
+    from longbridge_platform.decision_mapper import map_strategy_decision_to_plan
     from quant_platform_kit.common.runtime_inputs import build_strategy_evaluation_inputs
-    from strategy_loader import (
+    from longbridge_platform.strategy_loader import (
         load_strategy_entrypoint_for_profile,
         load_strategy_runtime_adapter_for_profile,
     )
@@ -368,7 +368,7 @@ def test_frozen_plan_reapplies_risk_gate_and_maps_only_the_original_target() -> 
     snapshot = object()
 
     with patch(
-        "application.runtime_strategy_adapters.apply_risk_gate",
+        "longbridge_platform.application.runtime_strategy_adapters.apply_risk_gate",
         side_effect=lambda decision, **kwargs: (observed.setdefault("risk_kwargs", kwargs), decision)[1],
     ):
         result = adapters.resolve_frozen_rebalance_plan(
@@ -523,7 +523,7 @@ def test_runtime_strategy_adapters_builds_escalated_plugin_alert_message():
 
 def test_completed_session_soxl_overrides_mapper_annotations_on_final_plan(monkeypatch):
     from datetime import datetime, timezone
-    from decision_mapper import map_strategy_decision_to_plan
+    from longbridge_platform.decision_mapper import map_strategy_decision_to_plan
     from quant_platform_kit.common.strategy_contracts import PositionTarget, StrategyDecision
 
     class BrokerAdapters:
@@ -564,7 +564,7 @@ def test_completed_session_soxl_overrides_mapper_annotations_on_final_plan(monke
         map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan,
     )
     monkeypatch.setattr(
-        "application.runtime_strategy_adapters._next_xnys_session_date",
+        "longbridge_platform.application.runtime_strategy_adapters._next_xnys_session_date",
         lambda value: "2026-07-06" if value == "2026-07-02" else None,
     )
     before = datetime.now(timezone.utc)
@@ -607,7 +607,7 @@ def test_completed_session_does_not_change_non_soxl_mapper_output():
 
 def test_completed_xnys_session_respects_close_holiday_and_weekend():
     from datetime import datetime, timezone
-    from application.runtime_strategy_adapters import _completed_xnys_session_date
+    from longbridge_platform.application.runtime_strategy_adapters import _completed_xnys_session_date
 
     # 2026-11-27 is the XNYS early-close session after Thanksgiving.
     # At the production 15:45 New York schedule on the Monday after the

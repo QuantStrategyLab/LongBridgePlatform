@@ -149,6 +149,9 @@ jobs:
           assert resolve_hk_canonical_profile("hk_global_etf_tactical_rotation") == "hk_global_etf_tactical_rotation"
           PY
 
+      - name: Verify Python dependencies
+        run: uv pip check
+
       - name: Run ruff
         run: |
           set -euo pipefail
@@ -171,4 +174,22 @@ jobs:
       - name: Run unit tests
         run: |
           set -euo pipefail
-          PYTHONPATH=. uv run --no-sync python -m pytest -q tests --cov --cov-report=term --cov-report=xml
+          uv run --no-sync python -m pytest -q tests --cov --cov-report=term --cov-report=xml
+
+      - name: Build package and verify wheel layout
+        run: |
+          set -euo pipefail
+          uv run --no-sync python -m build --outdir "$RUNNER_TEMP/dist"
+          uv run --no-sync python - "$RUNNER_TEMP/dist" <<'PY'
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          dist_dir = Path(sys.argv[1])
+          wheels = list(dist_dir.glob("*.whl"))
+          assert len(wheels) == 1, wheels
+          with zipfile.ZipFile(wheels[0]) as zf:
+              top_levels = {name.split("/", 1)[0] for name in zf.namelist()}
+          non_dist_info = {name for name in top_levels if not name.endswith(".dist-info")}
+          assert non_dist_info == {"longbridge_platform"}, sorted(top_levels)
+          PY

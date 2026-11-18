@@ -12,7 +12,7 @@ QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
 if QPK_SRC.exists() and str(QPK_SRC) not in sys.path:
     sys.path.insert(0, str(QPK_SRC))
 
-from application.account_identity import observe_longbridge_account_identity
+from longbridge_platform.application.account_identity import observe_longbridge_account_identity
 
 
 def test_longbridge_identity_observer_uses_broker_account_channels_only():

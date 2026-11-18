@@ -12,10 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from application.broker_reconciliation import (  # noqa: E402
+from longbridge_platform.application.broker_reconciliation import (  # noqa: E402
     LongBridgeReconciliationCandidate,
 )
-from application.local_admission_preflight import evaluate_local_admission  # noqa: E402
+from longbridge_platform.application.local_admission_preflight import evaluate_local_admission  # noqa: E402
 from quant_platform_kit.common.broker_reconciliation import (  # noqa: E402
     build_broker_reconciliation_evidence,
 )

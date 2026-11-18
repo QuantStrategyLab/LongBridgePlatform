@@ -9,8 +9,9 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for _path in (ROOT, ROOT / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 PLATFORM_KIT_SRC = ROOT.parent / "QuantPlatformKit" / "src"
 if str(PLATFORM_KIT_SRC) not in sys.path:
     sys.path.insert(0, str(PLATFORM_KIT_SRC))
@@ -52,10 +53,10 @@ def install_stub_modules():
     requests_module = types.ModuleType("requests")
     requests_module.post = lambda *args, **kwargs: None
 
-    cloud_run_module = types.ModuleType("entrypoints.cloud_run")
+    cloud_run_module = types.ModuleType("longbridge_platform.entrypoints.cloud_run")
     cloud_run_module.is_market_open_now = lambda **_kwargs: True
 
-    runtime_config_support_module = types.ModuleType("runtime_config_support")
+    runtime_config_support_module = types.ModuleType("longbridge_platform.runtime_config_support")
     runtime_config_support_module.load_platform_runtime_settings = lambda **_kwargs: types.SimpleNamespace(
         project_id=None,
         secret_name="longport-token-hk",
@@ -139,7 +140,7 @@ def install_stub_modules():
 
     pandas_market_calendars = types.ModuleType("pandas_market_calendars")
 
-    strategy_runtime_module = types.ModuleType("strategy_runtime")
+    strategy_runtime_module = types.ModuleType("longbridge_platform.strategy_runtime")
     strategy_runtime_module.load_strategy_runtime = lambda *_args, **_kwargs: types.SimpleNamespace(
         merged_runtime_config={"trend_ma_window": 150},
         managed_symbols=("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"),
@@ -174,7 +175,7 @@ def install_stub_modules():
     catalog_module = types.ModuleType("us_equity_strategies.catalog")
     catalog_module.resolve_canonical_profile = lambda profile: profile
 
-    strategy_registry_module = types.ModuleType("strategy_registry")
+    strategy_registry_module = types.ModuleType("longbridge_platform.strategy_registry")
     strategy_registry_module.LONGBRIDGE_PLATFORM = "longbridge"
     strategy_registry_module.V7_LONGTERM_COMPOUNDING_PROFILE = (
         "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
@@ -190,8 +191,8 @@ def install_stub_modules():
     modules = {
         "flask": flask_module,
         "requests": requests_module,
-        "entrypoints.cloud_run": cloud_run_module,
-        "runtime_config_support": runtime_config_support_module,
+        "longbridge_platform.entrypoints.cloud_run": cloud_run_module,
+        "longbridge_platform.runtime_config_support": runtime_config_support_module,
         "quant_platform_kit.longbridge": qpk_longbridge_module,
         "quant_platform_kit.longbridge.market_data": qpk_longbridge_market_data_module,
         "google": google_module,
@@ -204,13 +205,13 @@ def install_stub_modules():
         "google.cloud.secretmanager_v1": google_secretmanager_module,
         "pandas": pandas_module,
         "pandas_market_calendars": pandas_market_calendars,
-        "strategy_runtime": strategy_runtime_module,
+        "longbridge_platform.strategy_runtime": strategy_runtime_module,
         "longport": longport_module,
         "longport.openapi": openapi_module,
         "us_equity_strategies": us_equity_strategies_module,
         "us_equity_strategies.cash_only_equity": cash_only_equity_module,
         "us_equity_strategies.catalog": catalog_module,
-        "strategy_registry": strategy_registry_module,
+        "longbridge_platform.strategy_registry": strategy_registry_module,
     }
     original = {name: sys.modules.get(name) for name in modules}
     sys.modules.update(modules)
@@ -222,6 +223,20 @@ def install_stub_modules():
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = previous
+        pkg = sys.modules.get("longbridge_platform")
+        entrypoints_pkg = sys.modules.get("longbridge_platform.entrypoints")
+        for parent, attr, full_name in (
+            (pkg, "runtime_config_support", "longbridge_platform.runtime_config_support"),
+            (pkg, "strategy_runtime", "longbridge_platform.strategy_runtime"),
+            (pkg, "strategy_registry", "longbridge_platform.strategy_registry"),
+            (entrypoints_pkg, "cloud_run", "longbridge_platform.entrypoints.cloud_run"),
+        ):
+            if parent is not None:
+                previous = original[full_name]
+                if previous is None:
+                    parent.__dict__.pop(attr, None)
+                else:
+                    setattr(parent, attr, previous)
 
 
 class SharedChatIdTests(unittest.TestCase):
@@ -238,8 +253,8 @@ class SharedChatIdTests(unittest.TestCase):
                 },
                 clear=False,
             ):
-                sys.modules.pop("main", None)
-                module = importlib.import_module("main")
+                sys.modules.pop("longbridge_platform.main", None)
+                module = importlib.import_module("longbridge_platform.main")
 
         self.assertEqual(module.TG_CHAT_ID, "shared-chat-id")
 
