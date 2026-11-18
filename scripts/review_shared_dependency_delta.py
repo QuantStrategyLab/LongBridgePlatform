@@ -25,8 +25,8 @@ FLAGS = {
     "scheduler / automation": ("scheduler", "schedule", "watch/", "automation"),
 }
 CALL_NOTES = (
-    "Local review note (not automatically proven): main.build_composer injects "
-    "refresh_token_if_needed into application/runtime_bootstrap_adapters.py "
+    "Local review note (not automatically proven): longbridge_platform.main.build_composer injects "
+    "refresh_token_if_needed into src/longbridge_platform/application/runtime_bootstrap_adapters.py "
     "LongBridgeRuntimeBootstrap.build_contexts. That normal startup path can reach upstream "
     "longbridge/auth.py and token/Secret Manager writes. The separate read-only "
     "account-snapshot context path bypasses refresh; that does not make normal startup read-only."

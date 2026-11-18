@@ -7,8 +7,8 @@ import json
 
 import pytest
 
-from application.plain_dca_paper_adapter import PlainDcaPaperError
-from application.plain_dca_paper_scheduler import scheduled_plain_dca_preview
+from longbridge_platform.application.plain_dca_paper_adapter import PlainDcaPaperError
+from longbridge_platform.application.plain_dca_paper_scheduler import scheduled_plain_dca_preview
 
 pytest_plugins = ("test_plain_dca_dependency",)
 
@@ -19,7 +19,7 @@ NOW = datetime(2026, 11, 5, tzinfo=timezone.utc)
 def synthetic_paper_manifest(monkeypatch):
     paper = SimpleNamespace(id="paper", environment="longbridge-paper", mode="paper",
                             service="fake-paper-service")
-    monkeypatch.setattr("application.plain_dca_paper_adapter.load_runtime_target_manifest",
+    monkeypatch.setattr("longbridge_platform.application.plain_dca_paper_adapter.load_runtime_target_manifest",
                         lambda: SimpleNamespace(targets=(paper,)))
 
 
@@ -72,7 +72,7 @@ def test_binding_failure_prevents_fact_reads(patch):
 
 
 def test_enabled_offline_tick_rechecks_binding_after_fact_read(monkeypatch):
-    from application import plain_dca_paper_adapter as adapter
+    from longbridge_platform.application import plain_dca_paper_adapter as adapter
     from test_plain_dca_paper_adapter import Preview
 
     planner = Mock(return_value=Preview())

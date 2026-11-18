@@ -808,7 +808,11 @@ else:
         "GCP_PROJECT_ID": "synthetic-project", "GCP_ARTIFACT_REGISTRY_HOSTNAME": "registry.invalid",
         "GCP_ARTIFACT_REGISTRY_REPOSITORY": "synthetic-images", "IMAGE_DIGEST": "sha256:" + "b" * 64,
         "GITHUB_WORKSPACE": str(Path(sys.argv[1]).resolve().parents[2]),
-        "ADMISSION_PYTHON": str(Path(sys.argv[1]).resolve().parents[2] / ".venv" / "bin" / "python"),
+        "ADMISSION_PYTHON": (
+            str(Path(sys.argv[1]).resolve().parents[2] / ".venv" / "bin" / "python")
+            if (Path(sys.argv[1]).resolve().parents[2] / ".venv" / "bin" / "python").exists()
+            else sys.executable
+        ),
     }
     candidate = "0b939723c1db3ef59175535998b470cbcd4b8824"
     http_snapshot_candidate = "d8314a61df697cae1dd03a78ddc5c2fc4179ec67"

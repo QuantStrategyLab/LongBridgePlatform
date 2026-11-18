@@ -4,7 +4,7 @@ import unittest
 class StrategyLoaderTests(unittest.TestCase):
     def test_load_strategy_entrypoint_resolves_global_etf_rotation(self):
         try:
-            from strategy_loader import load_strategy_entrypoint_for_profile
+            from longbridge_platform.strategy_loader import load_strategy_entrypoint_for_profile
 
             entrypoint = load_strategy_entrypoint_for_profile("global_etf_rotation")
         except ModuleNotFoundError as exc:
@@ -17,7 +17,7 @@ class StrategyLoaderTests(unittest.TestCase):
 
     def test_load_strategy_entrypoint_resolves_russell_top50_strategy(self):
         try:
-            from strategy_loader import load_strategy_entrypoint_for_profile
+            from longbridge_platform.strategy_loader import load_strategy_entrypoint_for_profile
 
             entrypoint = load_strategy_entrypoint_for_profile("russell_top50_leader_rotation")
         except ModuleNotFoundError as exc:
@@ -30,7 +30,7 @@ class StrategyLoaderTests(unittest.TestCase):
 
     def test_load_strategy_entrypoint_resolves_soxl_soxx_trend_income(self):
         try:
-            from strategy_loader import load_strategy_entrypoint_for_profile
+            from longbridge_platform.strategy_loader import load_strategy_entrypoint_for_profile
 
             entrypoint = load_strategy_entrypoint_for_profile("soxl_soxx_trend_income")
         except ModuleNotFoundError as exc:
@@ -46,7 +46,7 @@ class StrategyLoaderTests(unittest.TestCase):
 
     def test_load_strategy_entrypoint_rejects_archived_mega_cap_dynamic_top20(self):
         try:
-            from strategy_loader import load_strategy_entrypoint_for_profile
+            from longbridge_platform.strategy_loader import load_strategy_entrypoint_for_profile
 
             with self.assertRaises(ValueError):
                 load_strategy_entrypoint_for_profile("mega_cap_leader_rotation_dynamic_top20")
@@ -57,7 +57,7 @@ class StrategyLoaderTests(unittest.TestCase):
 
     def test_load_strategy_entrypoint_rejects_archived_dynamic_mega_leveraged_pullback(self):
         try:
-            from strategy_loader import load_strategy_entrypoint_for_profile
+            from longbridge_platform.strategy_loader import load_strategy_entrypoint_for_profile
 
             with self.assertRaises(ValueError):
                 load_strategy_entrypoint_for_profile("dynamic_mega_leveraged_pullback")
@@ -68,7 +68,7 @@ class StrategyLoaderTests(unittest.TestCase):
 
     def test_load_strategy_entrypoint_rejects_legacy_soxl_alias(self):
         try:
-            from strategy_loader import load_strategy_entrypoint_for_profile
+            from longbridge_platform.strategy_loader import load_strategy_entrypoint_for_profile
 
             with self.assertRaises(ValueError):
                 load_strategy_entrypoint_for_profile("semiconductor_trend_income")
@@ -78,7 +78,7 @@ class StrategyLoaderTests(unittest.TestCase):
             raise
 
     def test_load_strategy_runtime_adapter_declares_available_inputs(self):
-        from strategy_loader import load_strategy_runtime_adapter_for_profile
+        from longbridge_platform.strategy_loader import load_strategy_runtime_adapter_for_profile
 
         adapter = load_strategy_runtime_adapter_for_profile("soxl_soxx_trend_income")
 
@@ -89,7 +89,7 @@ class StrategyLoaderTests(unittest.TestCase):
         self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
 
     def test_load_strategy_runtime_adapter_declares_global_etf_inputs(self):
-        from strategy_loader import load_strategy_runtime_adapter_for_profile
+        from longbridge_platform.strategy_loader import load_strategy_runtime_adapter_for_profile
 
         adapter = load_strategy_runtime_adapter_for_profile("global_etf_rotation")
 
@@ -100,7 +100,7 @@ class StrategyLoaderTests(unittest.TestCase):
         self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
 
     def test_load_strategy_runtime_adapter_declares_russell_top50_inputs(self):
-        from strategy_loader import load_strategy_runtime_adapter_for_profile
+        from longbridge_platform.strategy_loader import load_strategy_runtime_adapter_for_profile
 
         adapter = load_strategy_runtime_adapter_for_profile("russell_top50_leader_rotation")
 
@@ -112,19 +112,19 @@ class StrategyLoaderTests(unittest.TestCase):
         self.assertEqual(adapter.status_icon, "👑")
 
     def test_load_strategy_runtime_adapter_rejects_archived_mega_cap_inputs(self):
-        from strategy_loader import load_strategy_runtime_adapter_for_profile
+        from longbridge_platform.strategy_loader import load_strategy_runtime_adapter_for_profile
 
         with self.assertRaises(ValueError):
             load_strategy_runtime_adapter_for_profile("mega_cap_leader_rotation_dynamic_top20")
 
     def test_load_strategy_runtime_adapter_rejects_archived_dynamic_mega_leveraged_inputs(self):
-        from strategy_loader import load_strategy_runtime_adapter_for_profile
+        from longbridge_platform.strategy_loader import load_strategy_runtime_adapter_for_profile
 
         with self.assertRaises(ValueError):
             load_strategy_runtime_adapter_for_profile("dynamic_mega_leveraged_pullback")
 
     def test_load_strategy_runtime_adapter_declares_hybrid_inputs(self):
-        from strategy_loader import load_strategy_runtime_adapter_for_profile
+        from longbridge_platform.strategy_loader import load_strategy_runtime_adapter_for_profile
 
         adapter = load_strategy_runtime_adapter_for_profile("tqqq_growth_income")
 
@@ -135,7 +135,7 @@ class StrategyLoaderTests(unittest.TestCase):
         self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
 
     def test_load_strategy_runtime_adapter_rejects_research_only_tech_snapshot_inputs(self):
-        from strategy_loader import load_strategy_runtime_adapter_for_profile
+        from longbridge_platform.strategy_loader import load_strategy_runtime_adapter_for_profile
 
         with self.assertRaises(ValueError):
             load_strategy_runtime_adapter_for_profile("tech_communication_pullback_enhancement")

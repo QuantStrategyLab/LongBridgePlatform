@@ -22,10 +22,11 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for _path in (ROOT, ROOT / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
-from notifications.telegram import build_prefixer, build_sender  # noqa: E402
+from longbridge_platform.notifications.telegram import build_prefixer, build_sender  # noqa: E402
 from scripts.send_paper_notification_canary import (  # noqa: E402
     resolve_telegram_chat_id,
     resolve_telegram_token,

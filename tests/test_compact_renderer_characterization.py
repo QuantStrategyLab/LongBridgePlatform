@@ -4,7 +4,7 @@ from contextlib import ExitStack
 import unittest
 from unittest.mock import patch
 
-from notifications import renderers
+from longbridge_platform.notifications import renderers
 
 
 class CompactRendererCharacterizationTests(unittest.TestCase):

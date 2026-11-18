@@ -6,14 +6,14 @@ import socket
 
 import pytest
 
-from application import rebalance_service
-from application.account_new_risk_gate_support import set_cycle_snapshot
-from application.execution_state import ExecutionMarkerStore
-from application.durable_execution_commands import build_live_execution_command
-from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
-from application.paper_strategy_risk_state import record_paper_strategy_risk_state_transition
-from decision_mapper import map_strategy_decision_to_plan
-from notifications.telegram import build_translator
+from longbridge_platform.application import rebalance_service
+from longbridge_platform.application.account_new_risk_gate_support import set_cycle_snapshot
+from longbridge_platform.application.execution_state import ExecutionMarkerStore
+from longbridge_platform.application.durable_execution_commands import build_live_execution_command
+from longbridge_platform.application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
+from longbridge_platform.application.paper_strategy_risk_state import record_paper_strategy_risk_state_transition
+from longbridge_platform.decision_mapper import map_strategy_decision_to_plan
+from longbridge_platform.notifications.telegram import build_translator
 from quant_platform_kit.common.models import ExecutionReport, PortfolioSnapshot, Position, QuoteSnapshot
 from quant_platform_kit.common.execution_commands import ExecutionCommandState, ExecutionCommandStore
 from quant_platform_kit.common.port_adapters import (
@@ -63,11 +63,11 @@ def offline_ports(monkeypatch, tmp_path):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "synthetic-disabled")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "synthetic-disabled")
     monkeypatch.setattr(
-        "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+        "longbridge_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
-        "application.execution_service.maybe_publish_attention_for_admission",
+        "longbridge_platform.application.execution_service.maybe_publish_attention_for_admission",
         lambda *_args, **_kwargs: {"sent": 0, "skipped": 0, "failed": 0},
     )
     monkeypatch.setattr(rebalance_service, "try_record_platform_execution", lambda *_a, **_k: None)

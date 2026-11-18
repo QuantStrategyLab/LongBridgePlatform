@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from application.rebalance_service import _defer_cycle_notification
+from longbridge_platform.application.rebalance_service import _defer_cycle_notification
 
 
 def test_only_healthy_confirmed_cycles_defer_and_pending_remains_live(monkeypatch):

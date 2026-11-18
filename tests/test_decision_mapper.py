@@ -7,7 +7,7 @@ from quant_platform_kit.common.strategy_contracts import (
     StrategyDecision,
 )
 
-from decision_mapper import map_strategy_decision_to_plan
+from longbridge_platform.decision_mapper import map_strategy_decision_to_plan
 
 
 class DecisionMapperTests(unittest.TestCase):

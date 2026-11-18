@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from application.durable_execution_commands import (  # noqa: E402
+from longbridge_platform.application.durable_execution_commands import (  # noqa: E402
     build_live_execution_command,
     build_paper_execution_decision_digest,
     build_paper_execution_command,
@@ -19,10 +19,10 @@ from application.durable_execution_commands import (  # noqa: E402
     resolve_paper_execution_command_producer_enabled,
     resolve_live_execution_command_enabled,
 )
-from application.rebalance_service import _validate_live_command_binding  # noqa: E402
+from longbridge_platform.application.rebalance_service import _validate_live_command_binding  # noqa: E402
 from quant_platform_kit.common.paper_execution_admission import build_paper_risk_admission_receipt
 from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt
-from strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
+from longbridge_platform.strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
 
 
 def _execution() -> dict[str, object]:

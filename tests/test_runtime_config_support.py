@@ -20,7 +20,7 @@ for candidate in (QPK_SRC, UES_SRC, HES_SRC):
 SCRIPT_PATH = ROOT / "scripts" / "print_strategy_profile_status.py"
 SWITCH_PLAN_SCRIPT_PATH = ROOT / "scripts" / "print_strategy_switch_env_plan.py"
 
-from runtime_config_support import (
+from longbridge_platform.runtime_config_support import (
     DEFAULT_ACCOUNT_REGION,
     DEFAULT_LONGPORT_SECRET_NAME,
     DEFAULT_MARKET,
@@ -42,7 +42,7 @@ from runtime_config_support import (
     infer_market,
     load_platform_runtime_settings,
 )
-from strategy_registry import (
+from longbridge_platform.strategy_registry import (
     HK_EQUITY_DOMAIN,
     LONGBRIDGE_PLATFORM,
     US_EQUITY_DOMAIN,
@@ -238,7 +238,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             self.assertNotIn(profile, profiles)
 
     def test_platform_policy_accepts_future_hk_equity_domain(self):
-        from strategy_registry import PLATFORM_SUPPORTED_DOMAINS
+        from longbridge_platform.strategy_registry import PLATFORM_SUPPORTED_DOMAINS
 
         self.assertIn(HK_EQUITY_DOMAIN, PLATFORM_SUPPORTED_DOMAINS[LONGBRIDGE_PLATFORM])
         self.assertIn(US_EQUITY_DOMAIN, PLATFORM_SUPPORTED_DOMAINS[LONGBRIDGE_PLATFORM])

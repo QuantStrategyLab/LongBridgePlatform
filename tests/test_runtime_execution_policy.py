@@ -50,7 +50,7 @@ _FAKE_CAPABILITY_MATRIX = PlatformCapabilityMatrix(
     supported_capabilities=frozenset(),
 )
 
-_fake_registry = types.ModuleType("strategy_registry")
+_fake_registry = types.ModuleType("longbridge_platform.strategy_registry")
 _fake_registry.PLATFORM_CAPABILITY_MATRIX = _FAKE_CAPABILITY_MATRIX
 _fake_registry.STRATEGY_CATALOG = _FAKE_CATALOG
 
@@ -58,17 +58,22 @@ _fake_registry.STRATEGY_CATALOG = _FAKE_CATALOG
 class RuntimeExecutionPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls._original_registry = sys.modules.get("strategy_registry")
-        sys.modules["strategy_registry"] = _fake_registry
-        policy = importlib.import_module("runtime_execution_policy")
+        cls._original_registry = sys.modules.get("longbridge_platform.strategy_registry")
+        sys.modules["longbridge_platform.strategy_registry"] = _fake_registry
+        policy = importlib.import_module("longbridge_platform.runtime_execution_policy")
         cls._policy = importlib.reload(policy)
 
     @classmethod
     def tearDownClass(cls) -> None:
+        pkg = sys.modules.get("longbridge_platform")
         if cls._original_registry is None:
-            sys.modules.pop("strategy_registry", None)
+            sys.modules.pop("longbridge_platform.strategy_registry", None)
+            if pkg is not None and "strategy_registry" in pkg.__dict__:
+                delattr(pkg, "strategy_registry")
         else:
-            sys.modules["strategy_registry"] = cls._original_registry
+            sys.modules["longbridge_platform.strategy_registry"] = cls._original_registry
+            if pkg is not None:
+                setattr(pkg, "strategy_registry", cls._original_registry)
 
     def test_dca_profiles_are_deferred_on_longbridge(self) -> None:
         for profile in ("nasdaq_sp500_smart_dca", "ibit_smart_dca"):

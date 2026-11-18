@@ -8,7 +8,7 @@ import unittest
 from dataclasses import dataclass
 from unittest.mock import patch
 
-from application.startup_config import (
+from longbridge_platform.application.startup_config import (
     normalize_monitor_dispatch_targets,
     normalize_plugin_mounts_strategy,
     overlay_env,

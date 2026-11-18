@@ -9,9 +9,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from quant_platform_kit.common import build_runtime_target  # noqa: E402
-from application import runtime_composer as runtime_composer_module
-from application.runtime_composer import LongBridgeRuntimeComposer
-from strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
+from longbridge_platform.application import runtime_composer as runtime_composer_module
+from longbridge_platform.application.runtime_composer import LongBridgeRuntimeComposer
+from longbridge_platform.strategy_registry import V7_LONGTERM_COMPOUNDING_PROFILE
 
 
 def _build_live_command_test_composer(*, dry_run_only, dry_run_only_override=None):

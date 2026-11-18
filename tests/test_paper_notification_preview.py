@@ -17,10 +17,10 @@ SCRIPT_PATH = ROOT / "scripts" / "send_paper_notification_preview.py"
 
 _FORBIDDEN_IMPORT_ROOTS = (
     "longport",
-    "application.longbridge_execution",
-    "application.longbridge_portfolio",
-    "application.execution_service",
-    "application.broker_reconciliation",
+    "longbridge_platform.application.longbridge_execution",
+    "longbridge_platform.application.longbridge_portfolio",
+    "longbridge_platform.application.execution_service",
+    "longbridge_platform.application.broker_reconciliation",
 )
 
 
@@ -140,7 +140,7 @@ def test_preview_script_has_no_broker_or_execution_imports():
             name == forbidden or name.startswith(f"{forbidden}.") for name in imported
         )
     assert "longport" not in imported
-    assert "notifications.telegram" in imported
+    assert "longbridge_platform.notifications.telegram" in imported
     assert "scripts.send_paper_notification_canary" in imported
 
 

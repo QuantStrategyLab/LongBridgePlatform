@@ -170,6 +170,7 @@ def test_heartbeat_script_does_not_import_project_runtime_dependencies() -> None
     script = (ROOT / "scripts/execution_report_heartbeat.py").read_text()
 
     assert "from runtime_config_support import" not in script
+    assert "longbridge_platform.runtime_config_support" not in script
 
 
 def test_account_snapshot_sync_uses_matrix_identity_and_preserves_heartbeat_failure():

@@ -17,7 +17,7 @@ import json
 import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from application.broker_reconciliation import (
+from longbridge_platform.application.broker_reconciliation import (
     LongBridgeReconciliationCandidate,
     validate_reconciliation_candidate,
 )

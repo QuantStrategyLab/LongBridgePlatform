@@ -11,7 +11,7 @@ import re
 import subprocess
 from datetime import UTC, datetime
 
-from application.runtime_target_manifest import load_runtime_target_manifest
+from longbridge_platform.application.runtime_target_manifest import load_runtime_target_manifest
 
 
 class ReadbackError(ValueError):

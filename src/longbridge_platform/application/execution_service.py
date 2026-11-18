@@ -1,0 +1,1939 @@
+"""Order execution helpers for LongBridgePlatform."""
+
+from __future__ import annotations
+
+import traceback
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
+
+from longbridge_platform.application.account_new_risk_gate_support import (
+    apply_combined_scale_to_allocation_targets,
+    build_account_new_risk_snapshot,
+    build_snapshot_from_portfolio,
+    evaluate_portfolio_new_risk_admission,
+    is_account_new_risk_gate_enabled,
+    maybe_publish_attention_for_admission,
+    new_risk_buy_prohibited,
+    set_cycle_snapshot,
+)
+from quant_platform_kit.common.cash_sweep import (
+    estimate_cash_sweep_sale_quantity_to_fund_buy,
+    should_sell_cash_sweep_to_fund_whole_share_buy,
+)
+from quant_platform_kit.common.small_account_compatibility import (
+    DEFAULT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS as QPK_DEFAULT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS,
+    DEFAULT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL as QPK_DEFAULT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL,
+    DEFAULT_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL as QPK_DEFAULT_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL,
+    SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD as QPK_SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD,
+    apply_small_account_cash_compatibility,
+    build_small_account_allocation_drift_notes,
+    format_small_account_allocation_drift_notes,
+    format_small_account_cash_substitution_notes,
+)
+from quant_platform_kit.common.quantity import (
+    floor_to_quantity_step,
+    format_quantity,
+    normalize_order_quantity,
+)
+from quant_platform_kit.common.models import OrderIntent
+
+
+@dataclass(frozen=True)
+class ExecutionCycleResult:
+    plan: dict
+    portfolio: dict
+    execution: dict
+    allocation: dict
+    logs: tuple[str, ...]
+    skip_logs: tuple[str, ...]
+    note_logs: tuple[str, ...]
+    action_done: bool
+    dry_run_orders: tuple[dict, ...] = ()
+    pending_orders: tuple[dict, ...] = ()
+    quote_snapshots: tuple[dict, ...] = ()
+    notification_attention_reason_codes: tuple[str, ...] = ()
+
+
+DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
+# Shared with other platforms via QPK; LB-only ratio overrides (e.g. SOXX) are
+# merged on top below so they don't drift from the shared defaults.
+SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD = QPK_SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD
+MIN_FRACTIONAL_BUY_NOTIONAL_USD = 1.0
+DEFAULT_BUY_QUANTITY_STEP = 1.0
+FRACTIONAL_BUY_QUANTITY_STEP = 0.0001
+SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS = QPK_DEFAULT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS
+SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL = {
+    **QPK_DEFAULT_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL,
+    "SOXX": 0.90,  # LB-only override; not in QPK shared defaults
+}
+SMALL_ACCOUNT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL = {
+    **QPK_DEFAULT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL,
+    "SOXX": 0.90,  # LB-only override; not in QPK shared defaults
+}
+
+
+def _is_truthy(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _format_optional_equity(value) -> str:
+    try:
+        return f"${float(value):,.0f}"
+    except (TypeError, ValueError):
+        return "unknown"
+
+
+def _limit_buy_premium_for_symbol(symbol, default_premium, premium_by_symbol=None) -> float:
+    normalized_symbol = str(symbol or "").strip().upper()
+    try:
+        fallback = float(default_premium)
+    except (TypeError, ValueError):
+        fallback = 1.005
+    if not isinstance(premium_by_symbol, dict):
+        return fallback
+    raw_value = premium_by_symbol.get(normalized_symbol)
+    if raw_value is None:
+        return fallback
+    try:
+        premium = float(raw_value)
+    except (TypeError, ValueError):
+        return fallback
+    return premium if premium > 0.0 else fallback
+
+
+def _limit_buy_price(symbol, price, default_premium, premium_by_symbol=None) -> float:
+    return round(
+        float(price) * _limit_buy_premium_for_symbol(symbol, default_premium, premium_by_symbol),
+        2,
+    )
+
+
+def _noop_sleep(_seconds):
+    return None
+
+
+def _coerce_order_quantity(value):
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return value
+
+
+def _serialize_quote_snapshot(snapshot) -> dict:
+    return {
+        "symbol": str(getattr(snapshot, "symbol", "") or "").strip().upper(),
+        "as_of": str(getattr(snapshot, "as_of", "") or ""),
+        "last_price": float(getattr(snapshot, "last_price", 0.0) or 0.0),
+        "bid_price": getattr(snapshot, "bid_price", None),
+        "ask_price": getattr(snapshot, "ask_price", None),
+        "currency": str(getattr(snapshot, "currency", "") or "").strip(),
+    }
+
+
+def _safe_haven_cash_symbols(*, portfolio: dict, allocation: dict) -> tuple[str, ...]:
+    symbols: list[str] = []
+    for symbol in allocation.get("safe_haven_symbols", ()):
+        normalized = str(symbol or "").strip().upper()
+        if normalized:
+            symbols.append(normalized)
+    cash_sweep_symbol = str(portfolio.get("cash_sweep_symbol") or "").strip().upper()
+    if cash_sweep_symbol:
+        symbols.append(cash_sweep_symbol)
+    return tuple(dict.fromkeys(symbols))
+
+
+def _normalize_float_map(raw: object) -> dict[str, float]:
+    return {
+        str(symbol or "").strip().upper(): float(value or 0.0)
+        for symbol, value in dict(raw or {}).items()
+    }
+
+
+def _candidate_risk_income_symbols(
+    allocation: Mapping,
+    *,
+    portfolio: Mapping | None = None,
+    targets: Mapping | None = None,
+) -> tuple[str, ...]:
+    candidate_symbols = tuple(
+        dict.fromkeys(
+            str(symbol or "").strip().upper()
+            for symbol in tuple(allocation.get("risk_symbols", ()))
+            + tuple(allocation.get("income_symbols", ()))
+            if str(symbol or "").strip()
+        )
+    )
+    if candidate_symbols:
+        return candidate_symbols
+    safe_haven_symbols = set(
+        _safe_haven_cash_symbols(portfolio=dict(portfolio or {}), allocation=dict(allocation or {}))
+    )
+    target_source = targets if targets is not None else dict(allocation.get("targets") or {})
+    return tuple(
+        normalized
+        for symbol in target_source
+        if (normalized := str(symbol or "").strip().upper()) and normalized not in safe_haven_symbols
+    )
+
+
+def _small_account_drift_reference_targets(allocation: Mapping, *, portfolio: Mapping | None = None) -> dict:
+    allocation = dict(allocation or {})
+    targets = _normalize_float_map(allocation.get("targets"))
+    candidate_symbols = _candidate_risk_income_symbols(
+        allocation,
+        portfolio=portfolio,
+        targets=targets,
+    )
+    return {symbol: targets.get(symbol, 0.0) for symbol in candidate_symbols if symbol in targets}
+
+
+def _positive_target_total(targets: dict) -> float:
+    total = 0.0
+    for value in dict(targets or {}).values():
+        try:
+            total += max(0.0, float(value or 0.0))
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+
+def _execution_is_blocked(*, plan, execution, allocation) -> bool:
+    # QPK's legacy and evidence gates both project their final action here.
+    # A missing/unknown action must never authorize the mapper's raw targets.
+    if (execution or {}).get("risk_gate") != "APPROVE":
+        return True
+    payloads = (
+        dict(execution or {}),
+        dict((plan or {}).get("execution") or {}),
+        dict(allocation or {}),
+    )
+    for payload in payloads:
+        if bool(payload.get("no_execute")):
+            return True
+        if "risk_gate" in payload and payload["risk_gate"] != "APPROVE":
+            return True
+        if payload.get("no_order") is True or payload.get("execution_authorized") is False:
+            return True
+        flags = payload.get("risk_flags") or ()
+        if isinstance(flags, str):
+            flags = (flags,)
+        flag_set = {str(flag) for flag in flags}
+        if "no_execute" in flag_set:
+            return True
+        if any(str(flag).startswith("rejected:") for flag in flag_set):
+            return True
+    return False
+
+
+def _apply_safe_haven_cash_substitution(
+    *,
+    plan,
+    portfolio,
+    allocation,
+    threshold_usd,
+) -> tuple[dict, dict]:
+    threshold = max(0.0, float(threshold_usd or 0.0))
+    target_values = {
+        str(symbol).strip().upper(): float(value or 0.0)
+        for symbol, value in dict(allocation.get("targets") or {}).items()
+    }
+    if threshold <= 0.0:
+        return dict(plan or {}), {**dict(allocation or {}), "targets": target_values}
+
+    changed = False
+    for symbol in _safe_haven_cash_symbols(portfolio=portfolio, allocation=allocation):
+        target_value = float(target_values.get(symbol, 0.0) or 0.0)
+        if 0.0 < target_value < threshold:
+            target_values[symbol] = 0.0
+            changed = True
+    adjusted_allocation = {**dict(allocation or {}), "targets": target_values}
+    adjusted_plan = dict(plan or {})
+    if changed:
+        adjusted_plan["allocation"] = adjusted_allocation
+    return adjusted_plan, adjusted_allocation
+
+
+def _should_retain_existing_whole_share(symbol, *, target_value, price) -> bool:
+    normalized_symbol = str(symbol or "").strip().upper()
+    if normalized_symbol in SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS:
+        return True
+
+    min_target_share_ratio = (
+        SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL.get(normalized_symbol)
+    )
+    if min_target_share_ratio is None:
+        return False
+    quote_price = max(0.0, float(price or 0.0))
+    if quote_price <= 0.0:
+        return False
+    return max(0.0, float(target_value or 0.0)) >= quote_price * float(min_target_share_ratio)
+
+
+def _should_bootstrap_whole_share_buy(symbol, *, target_value, limit_price) -> bool:
+    normalized_symbol = str(symbol or "").strip().upper()
+    min_target_share_ratio = (
+        SMALL_ACCOUNT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL.get(normalized_symbol)
+    )
+    if min_target_share_ratio is None:
+        return False
+    effective_limit_price = max(0.0, float(limit_price or 0.0))
+    if effective_limit_price <= 0.0:
+        return False
+    return max(0.0, float(target_value or 0.0)) >= effective_limit_price * float(min_target_share_ratio)
+
+
+def _should_top_up_existing_whole_share_buy(
+    symbol,
+    *,
+    target_value,
+    current_value,
+    quantity=0.0,
+    limit_price,
+    quantity_step: float = 1.0,
+) -> bool:
+    del symbol
+    if abs(float(quantity_step or 0.0) - 1.0) > 1e-9:
+        return False
+    held_quantity = max(0.0, float(quantity or 0.0))
+    effective_limit_price = max(0.0, float(limit_price or 0.0))
+    if held_quantity < 1.0 or effective_limit_price <= 0.0:
+        return False
+    remaining_value = max(0.0, float(target_value or 0.0) - float(current_value or 0.0))
+    if remaining_value <= 0.0 or remaining_value >= effective_limit_price:
+        return False
+    held_whole_shares = int(held_quantity)
+    if held_whole_shares <= 0:
+        return False
+    target_quantity = max(0.0, float(target_value or 0.0)) / effective_limit_price
+    return target_quantity >= held_whole_shares + 0.5
+
+
+def _planned_whole_share_buy_quantity(
+    symbol,
+    *,
+    target_value,
+    current_value,
+    quantity=0.0,
+    buy_budget,
+    available_buying_power,
+    ref_price,
+    quantity_step: float = 1.0,
+    allow_top_up=False,
+):
+    effective_ref_price = max(0.0, float(ref_price or 0.0))
+    if effective_ref_price <= 0.0:
+        return 0
+    planned_quantity = _normalize_buy_quantity(
+        max(0.0, float(buy_budget or 0.0)) / effective_ref_price,
+        quantity_step=quantity_step,
+    )
+    if planned_quantity > 0:
+        return planned_quantity
+    if not allow_top_up:
+        return 0
+    if max(0.0, float(available_buying_power or 0.0)) < effective_ref_price:
+        return 0
+    if _should_top_up_existing_whole_share_buy(
+        symbol,
+        target_value=target_value,
+        current_value=current_value,
+        quantity=quantity,
+        limit_price=effective_ref_price,
+        quantity_step=quantity_step,
+    ):
+        return _normalize_buy_quantity(1.0, quantity_step=quantity_step)
+    return 0
+
+
+def _filled_sell_release_value(
+    *,
+    trade_context,
+    submitted_sell_orders,
+    fetch_order_status,
+) -> float:
+    if fetch_order_status is None:
+        return 0.0
+    released_value = 0.0
+    for order in tuple(submitted_sell_orders or ()):
+        broker_order_id = str((order or {}).get("broker_order_id") or "").strip()
+        if not broker_order_id:
+            continue
+        try:
+            status_payload = fetch_order_status(trade_context, broker_order_id)
+        except Exception:
+            continue
+        if not isinstance(status_payload, Mapping):
+            continue
+        status = str(status_payload.get("status") or "").strip()
+        try:
+            executed_qty = max(0.0, float(status_payload.get("executed_qty") or 0.0))
+            executed_price = max(0.0, float(status_payload.get("executed_price") or 0.0))
+        except (TypeError, ValueError):
+            continue
+        if status not in {"Filled", "PartiallyFilled", "Partial"} and executed_qty <= 0.0:
+            continue
+        released_value += executed_qty * executed_price
+    return released_value
+
+
+def _normalize_cash_by_currency(raw_cash) -> dict[str, float]:
+    if not isinstance(raw_cash, Mapping):
+        return {}
+    cash_by_currency: dict[str, float] = {}
+    for currency, amount in raw_cash.items():
+        normalized_currency = str(currency or "").strip().upper()
+        if not normalized_currency:
+            continue
+        cash_by_currency[normalized_currency] = float(amount)
+    return cash_by_currency
+
+
+def _format_cash_by_currency(cash_by_currency: Mapping[str, float]) -> str:
+    parts = []
+    for currency in sorted(cash_by_currency, key=lambda value: (value != "USD", value)):
+        amount = float(cash_by_currency[currency])
+        if amount == 0.0:
+            continue
+        parts.append(f"{currency} {amount:,.2f}")
+    return ", ".join(parts)
+
+
+def _has_positive_non_usd_cash(cash_by_currency: Mapping[str, float]) -> bool:
+    return any(
+        currency != "USD" and float(amount) > 0.0
+        for currency, amount in cash_by_currency.items()
+    )
+
+
+def record_skip_log(skip_logs, *, translator, with_prefix, kind, detail):
+    message = translator(kind, detail=detail)
+    skip_logs.append(message)
+    print(with_prefix(message), flush=True)
+
+
+def record_note_log(note_logs, *, translator, with_prefix, kind, **kwargs):
+    detail = translator(kind, **kwargs)
+    message = translator("buy_deferred", detail=detail)
+    note_logs.append(message)
+    print(with_prefix(message), flush=True)
+
+
+def _small_account_cash_substitution_note_key(note) -> str:
+    if not isinstance(note, Mapping):
+        return ""
+    symbol = str(note.get("symbol") or "").strip().upper()
+    if not symbol:
+        return ""
+    cash_symbols = tuple(
+        dict.fromkeys(
+            str(cash_symbol or "").strip().upper()
+            for cash_symbol in tuple(note.get("cash_symbols") or ())
+            if str(cash_symbol or "").strip()
+        )
+    )
+    cash_symbols_key = ",".join(cash_symbols) if cash_symbols else "__cash__"
+    return f"small_account_cash_substitution:{symbol}:{cash_symbols_key}"
+
+
+def record_small_account_cash_substitution_notes(
+    note_logs,
+    *,
+    allocation,
+    translator,
+    with_prefix,
+    seen_keys,
+    symbol_suffix=".US",
+):
+    for raw_note in tuple(allocation.get("small_account_whole_share_cash_notes") or ()):
+        messages = format_small_account_cash_substitution_notes(
+            (raw_note,),
+            translator=translator,
+            symbol_suffix=symbol_suffix,
+        )
+        if not messages:
+            continue
+        message = messages[0]
+        note_key = _small_account_cash_substitution_note_key(raw_note) or message
+        if note_key in seen_keys or message in seen_keys:
+            continue
+        seen_keys.add(note_key)
+        seen_keys.add(message)
+        note_logs.append(message)
+        print(with_prefix(message), flush=True)
+
+
+def _format_symbol_with_suffix(symbol, *, suffix=".US") -> str:
+    normalized = str(symbol or "").strip().upper()
+    if not normalized:
+        return normalized
+    if "." in normalized:
+        return normalized
+    normalized_suffix = str(suffix or "").strip().upper()
+    return f"{normalized}{normalized_suffix}" if normalized_suffix else normalized
+
+
+def format_small_account_whole_share_bootstrap_notes(
+    symbols,
+    *,
+    translator,
+    symbol_suffix=".US",
+) -> tuple[str, ...]:
+    normalized_symbols = tuple(
+        dict.fromkeys(
+            _format_symbol_with_suffix(symbol, suffix=symbol_suffix)
+            for symbol in tuple(symbols or ())
+            if str(symbol or "").strip()
+        )
+    )
+    if not normalized_symbols:
+        return ()
+    try:
+        message = translator(
+            "buy_lifted_small_account_whole_share",
+            symbols=", ".join(normalized_symbols),
+        )
+    except Exception:
+        message = ""
+    if not message or message == "buy_lifted_small_account_whole_share":
+        message = (
+            f"ℹ️ [买入说明] {', '.join(normalized_symbols)} 目标金额接近 1 股；"
+            "小账户整数股兼容，本轮允许按 1 股下单"
+        )
+    return (message,)
+
+
+def record_small_account_whole_share_bootstrap_notes(
+    note_logs,
+    *,
+    allocation,
+    translator,
+    with_prefix,
+    seen_keys,
+    symbol_suffix=".US",
+):
+    for message in format_small_account_whole_share_bootstrap_notes(
+        tuple(allocation.get("small_account_whole_share_bootstrap_symbols") or ()),
+        translator=translator,
+        symbol_suffix=symbol_suffix,
+    ):
+        note_key = f"small_account_bootstrap:{message}"
+        if note_key in seen_keys or message in seen_keys:
+            continue
+        seen_keys.add(note_key)
+        seen_keys.add(message)
+        note_logs.append(message)
+        print(with_prefix(message), flush=True)
+
+
+def _floor_whole_share_quantity(quantity):
+    return normalize_order_quantity(floor_to_quantity_step(quantity, 1.0))
+
+
+def _floor_lot_quantity(quantity, *, lot_size: int = 100):
+    """Floor to the nearest board lot for HK stocks."""
+    step = float(max(1, int(lot_size)))
+    return normalize_order_quantity(floor_to_quantity_step(float(quantity), step))
+
+
+def _normalize_trade_quantity(quantity, *, lot_size: int = 1):
+    raw_quantity = max(0.0, float(quantity or 0.0))
+    if raw_quantity <= 0.0:
+        return 0
+    if lot_size > 1:
+        return _floor_lot_quantity(raw_quantity, lot_size=lot_size)
+    return _floor_whole_share_quantity(raw_quantity)
+
+
+def _normalize_buy_quantity(quantity, *, quantity_step: float):
+    raw_quantity = max(0.0, float(quantity or 0.0))
+    if raw_quantity <= 0.0:
+        return 0
+    return normalize_order_quantity(floor_to_quantity_step(raw_quantity, quantity_step))
+
+
+def _market_symbol(symbol, *, symbol_suffix=".US"):
+    normalized = str(symbol or "").strip().upper()
+    if not normalized:
+        return normalized
+    if "." in normalized:
+        return normalized
+    suffix = str(symbol_suffix or "").strip().upper()
+    return f"{normalized}{suffix}" if suffix else normalized
+
+
+def _sell_order_quantity(
+    *,
+    current_value,
+    target_value,
+    price,
+    sellable_quantity,
+    lot_size: int = 1,
+):
+    sellable = max(0.0, float(sellable_quantity or 0.0))
+    if sellable <= 0.0:
+        return 0
+
+    target = max(0.0, float(target_value or 0.0))
+    if target <= 0.0:
+        return _normalize_trade_quantity(sellable, lot_size=lot_size)
+
+    sell_value = max(0.0, float(current_value or 0.0) - target)
+    if sell_value <= 0.0 or float(price or 0.0) <= 0.0:
+        return 0
+    return _normalize_trade_quantity(
+        min(sell_value / float(price), sellable),
+        lot_size=lot_size,
+    )
+
+
+def _sell_delta_exceeds_floor(
+    *,
+    current_value,
+    target_value,
+    threshold_value,
+    min_trade_value,
+) -> bool:
+    current = max(0.0, float(current_value or 0.0))
+    target = max(0.0, float(target_value or 0.0))
+    diff = current - target
+    if diff <= max(0.0, float(threshold_value or 0.0)):
+        return False
+    if target <= 0.0:
+        return True
+    return diff > max(0.0, float(min_trade_value or 0.0))
+
+
+def safe_quote_last_price(symbol, *, market_data_port, notify_issue, quote_recorder=None):
+    try:
+        snapshot = market_data_port.get_quote(symbol)
+        if quote_recorder is not None:
+            quote_recorder(snapshot)
+        return float(snapshot.last_price)
+    except Exception as exc:
+        notify_issue("Quote failed", f"Symbol: {symbol}\n{exc}")
+        return None
+
+
+def _apply_small_account_whole_share_compatibility(
+    *,
+    plan,
+    allocation,
+    strategy_assets,
+    market_data_port,
+    notify_issue,
+    symbol_suffix=".US",
+    limit_buy_premium=1.005,
+    limit_buy_premium_by_symbol=None,
+) -> tuple[dict, dict]:
+    target_values = dict(allocation.get("targets") or {})
+    portfolio = dict((plan or {}).get("portfolio") or {})
+    candidate_symbols = _candidate_risk_income_symbols(
+        allocation,
+        portfolio=portfolio,
+        targets=target_values,
+    )
+    quote_prices = {}
+    for symbol in candidate_symbols:
+        try:
+            price = float(market_data_port.get_quote(_market_symbol(symbol, symbol_suffix=symbol_suffix)).last_price)
+        except Exception:
+            continue
+        if price > 0.0:
+            quote_prices[symbol] = price
+    retained_symbols = []
+    bootstrap_symbols = []
+    execution = dict((plan or {}).get("execution") or {})
+    _liquid_cash = float(portfolio.get("liquid_cash", 0.0) or 0.0)
+    _reserved_cash = float(execution.get("reserved_cash", 0.0) or 0.0)
+    _estimated_buying_power = max(0.0, _liquid_cash - _reserved_cash)
+    quantities = _normalize_float_map(portfolio.get("quantities"))
+    compatibility_targets = _normalize_float_map(target_values)
+    for symbol in candidate_symbols:
+        target_value = max(0.0, float(compatibility_targets.get(symbol, 0.0) or 0.0))
+        price = max(0.0, float(quote_prices.get(symbol, 0.0) or 0.0))
+        limit_price = (
+            _limit_buy_price(symbol, price, limit_buy_premium, limit_buy_premium_by_symbol)
+            if price > 0.0
+            else 0.0
+        )
+        # Skip bootstrap if the account cannot afford even 1 share at limit price.
+        _can_afford_one_share = limit_price > 0.0 and _estimated_buying_power >= limit_price
+        if (
+            _should_retain_existing_whole_share(symbol, target_value=target_value, price=price)
+            and price > 0.0
+            and 0.0 < target_value < price
+            and quantities.get(symbol, 0.0) >= 1.0
+        ):
+            compatibility_targets[symbol] = price
+            retained_symbols.append(symbol)
+            continue
+        if (
+            quantities.get(symbol, 0.0) <= 0.0
+            and 0.0 < target_value < limit_price
+            and _can_afford_one_share
+            and _should_bootstrap_whole_share_buy(symbol, target_value=target_value, limit_price=limit_price)
+        ):
+            compatibility_targets[symbol] = limit_price
+            bootstrap_symbols.append(symbol)
+    safe_haven_symbols = _safe_haven_cash_symbols(
+        portfolio=portfolio,
+        allocation=allocation,
+    )
+    compatibility = apply_small_account_cash_compatibility(
+        compatibility_targets,
+        quote_prices,
+        candidate_symbols=candidate_symbols,
+        safe_haven_cash_symbols=safe_haven_symbols,
+        quantity_step=1.0,
+        cash_substitute_limit_usd=SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD,
+    )
+    adjusted_targets = compatibility.targets
+    substituted = compatibility.whole_share_substituted_symbols
+    safe_haven_substituted = compatibility.safe_haven_cash_substituted_symbols
+    cash_substitution_notes = tuple(compatibility.cash_substitution_notes or ())
+    if substituted and not cash_substitution_notes:
+        cash_substitution_notes = tuple(
+            {
+                "symbol": symbol,
+                "target_value": max(0.0, float(target_values.get(symbol, 0.0) or 0.0)),
+                "price": max(0.0, float(quote_prices.get(symbol, 0.0) or 0.0)),
+                "cash_symbols": tuple(safe_haven_substituted),
+            }
+            for symbol in substituted
+            if max(0.0, float(target_values.get(symbol, 0.0) or 0.0)) > 0.0
+            and max(0.0, float(quote_prices.get(symbol, 0.0) or 0.0)) > 0.0
+        )
+    adjusted_allocation = {**dict(allocation or {}), "targets": adjusted_targets}
+    adjusted_allocation.pop("small_account_whole_share_cash_notes", None)
+    if substituted:
+        adjusted_allocation["small_account_whole_share_substituted_symbols"] = substituted
+    if safe_haven_substituted:
+        adjusted_allocation["small_account_safe_haven_cash_substituted_symbols"] = tuple(safe_haven_substituted)
+    if retained_symbols:
+        adjusted_allocation["small_account_existing_whole_share_retained_symbols"] = tuple(
+            dict.fromkeys(retained_symbols)
+        )
+    if bootstrap_symbols:
+        adjusted_allocation["small_account_whole_share_bootstrap_symbols"] = tuple(
+            dict.fromkeys(bootstrap_symbols)
+        )
+    if cash_substitution_notes:
+        adjusted_allocation["small_account_whole_share_cash_notes"] = cash_substitution_notes
+    adjusted_plan = dict(plan or {})
+    if substituted or safe_haven_substituted or retained_symbols or bootstrap_symbols:
+        adjusted_plan["allocation"] = adjusted_allocation
+    return adjusted_plan, adjusted_allocation
+
+
+def estimate_cash_buy_quantity_safe(
+    trade_context,
+    symbol,
+    order_kind,
+    ref_price,
+    *,
+    estimate_max_purchase_quantity,
+    notify_issue,
+    estimate_kwargs=None,
+):
+    try:
+        return estimate_max_purchase_quantity(
+            trade_context,
+            symbol,
+            order_kind=order_kind,
+            ref_price=ref_price,
+            **dict(estimate_kwargs or {}),
+        )
+    except Exception:
+        notify_issue(
+            "Estimate max buy failed",
+            f"Symbol: {symbol}\nOrderKind: {order_kind}\n{traceback.format_exc()}",
+        )
+        return None
+
+
+def _estimate_buy_quantity_candidate(
+    trade_context,
+    symbol,
+    order_kind,
+    ref_price,
+    *,
+    can_buy_value,
+    estimate_max_purchase_quantity,
+    notify_issue,
+    dry_run_only=False,
+    quantity_step=DEFAULT_BUY_QUANTITY_STEP,
+    estimate_kwargs=None,
+):
+    budget_quantity = floor_to_quantity_step(can_buy_value / ref_price, quantity_step)
+    cash_limit_quantity = estimate_cash_buy_quantity_safe(
+        trade_context,
+        symbol,
+        order_kind,
+        ref_price,
+        estimate_max_purchase_quantity=estimate_max_purchase_quantity,
+        notify_issue=notify_issue,
+        estimate_kwargs=estimate_kwargs,
+    )
+    if cash_limit_quantity is None:
+        return None
+    candidate_quantity = _normalize_buy_quantity(
+        min(budget_quantity, float(cash_limit_quantity)),
+        quantity_step=quantity_step,
+    )
+    return candidate_quantity, budget_quantity, float(cash_limit_quantity)
+
+
+def _emit_note(note_logs: list[str], message: str, *, with_prefix) -> None:
+    note_logs.append(message)
+    print(with_prefix(message), flush=True)
+
+
+def _current_min_trade_floor(
+    execution: Mapping,
+    *,
+    fractional_buy_execution: bool,
+    min_order_notional: float,
+) -> float:
+    floor = MIN_FRACTIONAL_BUY_NOTIONAL_USD if fractional_buy_execution else min_order_notional
+    return max(float(execution["current_min_trade"]), floor)
+
+
+def _buy_reference_price(
+    symbol: str,
+    price: float,
+    *,
+    is_limit_order: bool,
+    limit_buy_premium: float,
+    limit_buy_premium_by_symbol,
+) -> float:
+    if is_limit_order:
+        return _limit_buy_price(symbol, price, limit_buy_premium, limit_buy_premium_by_symbol)
+    return round(price, 2)
+
+
+def _evaluate_cycle_account_new_risk(
+    portfolio: Mapping,
+    *,
+    execution: Mapping,
+) -> tuple[dict, Any, Any]:
+    portfolio_copy = dict(portfolio)
+    portfolio_copy["account_new_risk_snapshot"] = build_account_new_risk_snapshot(
+        portfolio_copy,
+        execution=execution,
+    )
+    admission = evaluate_portfolio_new_risk_admission(portfolio_copy, execution=execution)
+    cycle_snapshot = build_snapshot_from_portfolio(portfolio_copy, execution=execution)
+    set_cycle_snapshot(cycle_snapshot)
+    return portfolio_copy, admission, cycle_snapshot
+
+
+def _prepare_cycle_targets_and_notes(
+    *,
+    plan: dict,
+    portfolio: dict,
+    allocation: dict,
+    threshold_usd: float,
+    fractional_buy_execution: bool,
+    market_data_port,
+    notify_issue,
+    symbol_suffix: str,
+    limit_buy_premium: float,
+    limit_buy_premium_by_symbol,
+    note_logs: list[str],
+    translator,
+    with_prefix,
+    small_account_cash_note_keys: set[str],
+    small_account_bootstrap_note_keys: set[str],
+) -> tuple[dict, dict, dict]:
+    plan, allocation = _apply_safe_haven_cash_substitution(
+        plan=plan,
+        portfolio=portfolio,
+        allocation=allocation,
+        threshold_usd=threshold_usd,
+    )
+    reference_targets = _small_account_drift_reference_targets(
+        allocation,
+        portfolio=portfolio,
+    )
+    if not fractional_buy_execution:
+        plan, allocation = _apply_small_account_whole_share_compatibility(
+            plan=plan,
+            allocation=allocation,
+            strategy_assets=tuple(allocation["strategy_symbols"]),
+            market_data_port=market_data_port,
+            notify_issue=notify_issue,
+            symbol_suffix=symbol_suffix,
+            limit_buy_premium=limit_buy_premium,
+            limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+        )
+    record_small_account_cash_substitution_notes(
+        note_logs,
+        allocation=allocation,
+        translator=translator,
+        with_prefix=with_prefix,
+        seen_keys=small_account_cash_note_keys,
+        symbol_suffix=symbol_suffix,
+    )
+    record_small_account_whole_share_bootstrap_notes(
+        note_logs,
+        allocation=allocation,
+        translator=translator,
+        with_prefix=with_prefix,
+        seen_keys=small_account_bootstrap_note_keys,
+        symbol_suffix=symbol_suffix,
+    )
+    return plan, allocation, reference_targets
+
+
+def _refresh_post_sell_snapshots(
+    *,
+    fetch_replanned_state,
+    trade_context,
+    submitted_sell_orders: list[dict[str, Any]],
+    fetch_order_status,
+    sleeper,
+    refresh_attempts: int,
+    refresh_interval: float,
+    previous_investable_cash: float,
+    account_new_risk_buy_blocked: bool,
+    account_new_risk_reason_codes: tuple[str, ...],
+    cycle_combined_scale: float | None,
+    submission_halted: bool,
+):
+    best_investable_cash = previous_investable_cash
+    projected_sell_release_value = 0.0
+    refreshed_state = None
+    for attempt in range(refresh_attempts):
+        if attempt > 0:
+            sleeper(refresh_interval)
+        refreshed_state = fetch_replanned_state()
+        refreshed_plan, refreshed_portfolio, refreshed_execution, refreshed_allocation = refreshed_state
+        # Every observed refresh constrains this cycle, even when its
+        # cash forecast is lower than an earlier observation's.
+        if _execution_is_blocked(
+            plan=refreshed_plan, execution=refreshed_execution, allocation=refreshed_allocation,
+        ):
+            submission_halted = True
+        if is_account_new_risk_gate_enabled():
+            refreshed_portfolio, refreshed_admission, _ = _evaluate_cycle_account_new_risk(
+                refreshed_portfolio,
+                execution=refreshed_execution,
+            )
+            account_new_risk_buy_blocked = (
+                account_new_risk_buy_blocked or new_risk_buy_prohibited(refreshed_admission)
+            )
+            account_new_risk_reason_codes = tuple(dict.fromkeys(
+                (*account_new_risk_reason_codes, *refreshed_admission.reason_codes)
+            ))
+            refreshed_scale = refreshed_admission.combined_scale
+            if refreshed_scale is not None:
+                cycle_combined_scale = (
+                    refreshed_scale if cycle_combined_scale is None
+                    else min(cycle_combined_scale, refreshed_scale)
+                )
+            refreshed_state = (
+                refreshed_plan, refreshed_portfolio, refreshed_execution, refreshed_allocation,
+            )
+        refreshed_investable_cash = float(refreshed_execution["investable_cash"])
+        projected_sell_release_value = max(
+            projected_sell_release_value,
+            _filled_sell_release_value(
+                trade_context=trade_context,
+                submitted_sell_orders=submitted_sell_orders,
+                fetch_order_status=fetch_order_status,
+            ),
+        )
+        best_investable_cash = max(best_investable_cash, refreshed_investable_cash)
+        if refreshed_investable_cash > previous_investable_cash:
+            break
+    return (
+        refreshed_state,
+        best_investable_cash,
+        projected_sell_release_value,
+        submission_halted,
+        account_new_risk_buy_blocked,
+        account_new_risk_reason_codes,
+        cycle_combined_scale,
+    )
+
+
+def execute_rebalance_cycle(
+    *,
+    trade_context,
+    plan,
+    portfolio,
+    execution,
+    allocation,
+    fetch_replanned_state,
+    market_data_port,
+    estimate_max_purchase_quantity,
+    execution_port,
+    fetch_order_status=None,
+    post_submit_order=None,
+    notify_issue,
+    translator,
+    with_prefix,
+    limit_sell_discount,
+    limit_buy_premium,
+    limit_buy_premium_by_symbol=None,
+    dry_run_only=False,
+    symbol_suffix=".US",
+    post_sell_refresh_attempts=1,
+    post_sell_refresh_interval_sec=0.0,
+    sleeper=_noop_sleep,
+    min_order_notional_usd=0.0,
+    safe_haven_cash_substitute_threshold_usd=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
+    cash_only_execution=True,
+    fractional_buy_execution: bool = False,
+    buy_quantity_step: float = DEFAULT_BUY_QUANTITY_STEP,
+    lot_sizes: dict[str, int] | None = None,
+    notional_buy_compat_mode: bool = False,
+) -> ExecutionCycleResult:
+    logs: list[str] = []
+    skip_logs: list[str] = []
+    note_logs: list[str] = []
+    submitted_orders: list[dict] = []
+    dry_run_orders: list[dict] = []
+    pending_orders: list[dict] = []
+    submitted_sell_orders: list[dict[str, Any]] = []
+    quote_snapshots_by_symbol: dict[str, dict] = {}
+    small_account_cash_note_keys: set[str] = set()
+    small_account_bootstrap_note_keys: set[str] = set()
+    action_done = False
+    sell_submitted = False
+    submission_halted = False
+    pending_sell_release_symbols: list[str] = []
+    threshold_value = float(execution["trade_threshold_value"])
+    limit_order_symbols = set(
+        allocation.get("risk_symbols", ()) + allocation.get("income_symbols", ())
+    )
+
+    def market_symbol(symbol):
+        return _market_symbol(symbol, symbol_suffix=symbol_suffix)
+
+    _lot_map: dict[str, int] = dict(lot_sizes or {})
+    def _lot_for(symbol: str) -> int:
+        """Return the board-lot size for *symbol* (≥1), falling back to 1."""
+        if not _lot_map:
+            return 1
+        key = str(symbol or "").strip().upper()
+        lot = _lot_map.get(key)
+        if lot is not None:
+            return max(1, lot)
+        if "." in key:
+            lot = _lot_map.get(key.split(".")[0])
+            if lot is not None:
+                return max(1, lot)
+        return 1
+
+    def record_quote_snapshot(snapshot) -> None:
+        payload = _serialize_quote_snapshot(snapshot)
+        symbol = payload.get("symbol")
+        if symbol:
+            quote_snapshots_by_symbol[symbol] = payload
+
+    strategy_assets = tuple(allocation["strategy_symbols"])
+    market_values = dict(portfolio["market_values"])
+    quantities = dict(portfolio["quantities"])
+    sellable_quantities = dict(portfolio["sellable_quantities"])
+    allocation_drift_base_market_values = dict(market_values)
+    allocation_drift_base_quantities = dict(quantities)
+    allocation_drift_base_cash = float(portfolio.get("liquid_cash", 0.0) or 0.0)
+    # Evaluate new-risk axes before no_execute short-circuit so dry-run/Cloud Logging
+    # still observe COMPLETE/VERIFIED/CLOSED (or the fail-closed disposition).
+    account_new_risk_buy_blocked = False
+    account_new_risk_reason_codes: tuple[str, ...] = ()
+    cycle_combined_scale = None
+    if is_account_new_risk_gate_enabled():
+        portfolio, admission, account_new_risk_cycle_snapshot = _evaluate_cycle_account_new_risk(
+            portfolio,
+            execution=execution,
+        )
+        account_new_risk_buy_blocked = new_risk_buy_prohibited(admission)
+        account_new_risk_reason_codes = tuple(admission.reason_codes)
+        cycle_combined_scale = admission.combined_scale
+        gate_diagnostic_message = (
+            "[Account new-risk gate] "
+            f"disposition={admission.disposition.value} "
+            f"observation={account_new_risk_cycle_snapshot.observation_status} "
+            f"reconciliation={account_new_risk_cycle_snapshot.reconciliation_status} "
+            f"breaker={account_new_risk_cycle_snapshot.circuit_breaker_state} "
+            f"reasons={','.join(account_new_risk_reason_codes) or 'NONE'}"
+        )
+        print(with_prefix(gate_diagnostic_message), flush=True)
+        if dry_run_only:
+            # Dry-run verification reports need this axis proof; live heartbeat/
+            # trade notifications stay unchanged (console diagnostic above still fires).
+            note_logs.append(gate_diagnostic_message)
+        attention_counts = maybe_publish_attention_for_admission(
+            admission,
+            portfolio=portfolio,
+            execution=execution,
+            snapshot=account_new_risk_cycle_snapshot,
+        )
+        attention_message = (
+            "[Attention notify] "
+            f"sent={attention_counts.get('sent', 0)} "
+            f"skipped={attention_counts.get('skipped', 0)} "
+            f"failed={attention_counts.get('failed', 0)}"
+        )
+        print(with_prefix(attention_message), flush=True)
+        if dry_run_only:
+            note_logs.append(attention_message)
+        allocation = apply_combined_scale_to_allocation_targets(
+            allocation,
+            admission.combined_scale,
+        )
+        if admission.combined_scale is not None:
+            scale_message = (
+                f"[Envelope scale] combined_scale={admission.combined_scale} "
+                "applied_to_allocation_targets"
+            )
+            print(with_prefix(scale_message), flush=True)
+            if dry_run_only:
+                note_logs.append(scale_message)
+    else:
+        set_cycle_snapshot(None)
+    if _execution_is_blocked(plan=plan, execution=execution, allocation=allocation):
+        blocked_execution = dict(execution or {})
+        blocked_execution["no_execute"] = True
+        return ExecutionCycleResult(
+            plan=dict(plan or {}),
+            portfolio=dict(portfolio or {}),
+            execution=blocked_execution,
+            allocation=dict(allocation or {}),
+            logs=tuple(logs),
+            skip_logs=tuple(skip_logs),
+            note_logs=tuple(note_logs),
+            action_done=False,
+        )
+    cash_sweep_symbol = str(portfolio.get("cash_sweep_symbol") or "").strip().upper()
+    estimate_kwargs = {"fractional_shares": True} if fractional_buy_execution else {}
+    del buy_quantity_step  # Preserved in signature for caller compatibility.
+
+    if notional_buy_compat_mode:
+        compat_note = translator(
+            "buy_deferred",
+            detail=translator(
+                "dca_notional_to_whole_share_compat",
+            ),
+        )
+        _emit_note(note_logs, compat_note, with_prefix=with_prefix)
+
+    def _buy_step_for(symbol: str) -> float:
+        """Return the per-symbol buy quantity step, falling back to lot_size or 1."""
+        if fractional_buy_execution:
+            return FRACTIONAL_BUY_QUANTITY_STEP
+        lot = _lot_for(symbol)
+        return float(lot) if lot > 1 else DEFAULT_BUY_QUANTITY_STEP
+
+    plan, allocation, small_account_reference_target_values = _prepare_cycle_targets_and_notes(
+        plan=plan,
+        portfolio=portfolio,
+        allocation=allocation,
+        threshold_usd=safe_haven_cash_substitute_threshold_usd,
+        fractional_buy_execution=fractional_buy_execution,
+        market_data_port=market_data_port,
+        notify_issue=notify_issue,
+        symbol_suffix=symbol_suffix,
+        limit_buy_premium=limit_buy_premium,
+        limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+        note_logs=note_logs,
+        translator=translator,
+        with_prefix=with_prefix,
+        small_account_cash_note_keys=small_account_cash_note_keys,
+        small_account_bootstrap_note_keys=small_account_bootstrap_note_keys,
+    )
+    target_values = dict(allocation["targets"])
+    small_account_buy_blocked = _is_truthy(execution.get("small_account_warning"))
+    small_account_portfolio_equity = execution.get("portfolio_total_equity")
+    small_account_min_equity = execution.get("min_recommended_equity_usd")
+    available_cash = float(portfolio["liquid_cash"])
+    cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
+    investable_cash = float(execution["investable_cash"])
+    min_order_notional = max(0.0, float(min_order_notional_usd or 0.0))
+    current_min_trade = _current_min_trade_floor(
+        execution,
+        fractional_buy_execution=fractional_buy_execution,
+        min_order_notional=min_order_notional,
+    )
+    dry_run_sale_proceeds = 0.0
+    cash_sweep_sold_this_cycle = False
+
+    def append_order_id_suffix(log_message, order_id):
+        order_id_text = str(order_id or "").strip()
+        if not order_id_text:
+            return log_message
+        suffix = str(translator("order_id_suffix", order_id=order_id_text)).strip()
+        if not suffix or suffix == "order_id_suffix":
+            suffix = f"[order_id={order_id_text}]"
+        return f"{log_message} {suffix}"
+
+    def notify_submission_issue(title, detail):
+        try:
+            notify_issue(title, detail)
+        except Exception:
+            print("order_notification_failed", flush=True)
+
+    def submit_order_via_port(symbol, order_type, side, quantity, log_message, *, submitted_price=None):
+        nonlocal submission_halted
+        if submission_halted:
+            return False
+        if fractional_buy_execution and side == "buy":
+            normalized_quantity = _normalize_buy_quantity(
+                quantity,
+                quantity_step=_buy_step_for(symbol),
+            )
+        else:
+            sym_lot = _lot_for(symbol)
+            if sym_lot > 1:
+                normalized_quantity = _floor_lot_quantity(quantity, lot_size=sym_lot)
+            else:
+                normalized_quantity = _floor_whole_share_quantity(quantity)
+        order_intent = OrderIntent(
+            symbol=symbol,
+            side=side,
+            quantity=normalized_quantity,
+            order_type=order_type,
+            limit_price=float(submitted_price) if submitted_price is not None else None,
+        )
+        side_text = "Buy" if side == "buy" else "Sell"
+        if float(order_intent.quantity or 0.0) <= 0.0:
+            notify_issue(
+                "Order submit skipped",
+                f"Symbol: {symbol} Side: {side_text} Qty: {quantity} Type: {order_type} Price: {submitted_price if submitted_price is not None else 'MO'}",
+            )
+            return False
+        submit_exception: Exception | None = None
+        try:
+            report = execution_port.submit_order(order_intent)
+        except Exception as exc:
+            submit_exception = exc
+            print(
+                f"order_submit_exception Symbol: {symbol} Side: {side_text} "
+                f"Qty: {order_intent.quantity} Type: {order_type}\n{traceback.format_exc()}",
+                flush=True,
+            )
+            report = None
+        status = str(getattr(report, "status", "") or "").strip().lower()
+        if status == "rejected":
+            notify_submission_issue("Order submit failed", "order_rejected")
+            return False
+
+        known_submission = status in {"submitted", "accepted", "filled", "partially_filled"}
+        if not known_submission:
+            submission_halted = True
+        order_payload = {
+            "symbol": str(symbol or "").strip().upper(),
+            "side": str(side or "").strip().lower(),
+            "quantity": float(order_intent.quantity or 0.0),
+            "order_type": str(order_type or "").strip().lower(),
+            "status": "pending_reconciliation" if known_submission else "unknown",
+            "submission_status": status if known_submission else "unknown",
+        }
+        if submitted_price is not None:
+            order_payload["price"] = round(float(submitted_price), 4)
+            if order_type == "limit":
+                order_payload["limit_price"] = round(float(submitted_price), 4)
+        broker_order_id = getattr(report, "broker_order_id", None)
+        if broker_order_id:
+            order_payload["broker_order_id"] = broker_order_id
+        if known_submission:
+            order_payload["filled_quantity"] = report.filled_quantity
+            if report.average_fill_price is not None:
+                order_payload["average_fill_price"] = report.average_fill_price
+        # Preserve the broker fact before notifications or other fallible post-submit work.
+        pending_orders.append(order_payload)
+        if not known_submission:
+            detail = "broker_outcome_unknown_reconciliation_required"
+            if submit_exception is not None:
+                # Notification channels only carry the exception type; full details
+                # stay in the local execution log to avoid leaking broker internals.
+                detail = f"{detail}\nsubmit_exception: {type(submit_exception).__name__}"
+            notify_submission_issue("Order submit failed", detail)
+            return False
+        submitted_orders.append(order_payload)
+        if str(side or "").strip().lower() == "sell":
+            submitted_sell_orders.append(order_payload)
+        try:
+            log_with_order_id = append_order_id_suffix(log_message, broker_order_id)
+            pending_log = translator("order_pending_confirmation", detail=log_with_order_id)
+            logs.append(pending_log)
+            print(with_prefix(pending_log), flush=True)
+            if post_submit_order is not None:
+                post_submit_order(trade_context, order_intent, report)
+        except Exception:
+            submission_halted = True
+            print(
+                f"order_post_submit_hook_exception Symbol: {symbol} Side: {side_text}\n{traceback.format_exc()}",
+                flush=True,
+            )
+            notify_submission_issue("Order post-submit hook failed", "post_submit_processing_failed_reconciliation_required")
+        return True
+
+    def record_dry_run(symbol, side, quantity, price, *, order_type):
+        price_text = f"${price:.2f}" if price is not None else translator("order_type_market")
+        side_key = "side_buy" if str(side).lower() == "buy" else "side_sell"
+        order_type_key = "order_type_limit" if order_type == "limit" else "order_type_market"
+        order_payload = {
+            "symbol": str(symbol or "").strip().upper(),
+            "side": str(side or "").strip().lower(),
+            "quantity": _coerce_order_quantity(quantity),
+            "order_type": str(order_type or "").strip().lower(),
+            "status": "dry_run",
+        }
+        if price is not None:
+            order_payload["price"] = round(float(price), 4)
+            if order_type == "limit":
+                order_payload["limit_price"] = round(float(price), 4)
+        dry_run_orders.append(order_payload)
+        message = translator(
+            "dry_run_order",
+            side=translator(side_key),
+            symbol=symbol,
+            qty=quantity,
+            price=price_text,
+            order_type=translator(order_type_key),
+        )
+        logs.append(message)
+        print(with_prefix(message), flush=True)
+        return True
+
+    def dispatch_order(symbol: str, *, side: str, order_type: str, quantity, price: float, log_message: str) -> bool:
+        quantity_text = format_quantity(quantity)
+        effective_price = price if order_type == "limit" else round(price, 2)
+        if dry_run_only:
+            return record_dry_run(
+                market_symbol(symbol),
+                side,
+                quantity_text,
+                effective_price,
+                order_type=order_type,
+            )
+        return submit_order_via_port(
+            market_symbol(symbol),
+            order_type,
+            side,
+            quantity,
+            log_message,
+            submitted_price=price if order_type == "limit" else None,
+        )
+
+    for symbol in strategy_assets:
+        if submission_halted:
+            break
+        if _sell_delta_exceeds_floor(
+            current_value=market_values[symbol],
+            target_value=target_values[symbol],
+            threshold_value=threshold_value,
+            min_trade_value=current_min_trade,
+        ):
+            price = safe_quote_last_price(
+                market_symbol(symbol),
+                market_data_port=market_data_port,
+                notify_issue=notify_issue,
+                quote_recorder=record_quote_snapshot,
+            )
+            if price is None:
+                continue
+            quantity = _sell_order_quantity(
+                current_value=market_values[symbol],
+                target_value=target_values[symbol],
+                price=price,
+                sellable_quantity=sellable_quantities[symbol],
+                lot_size=_lot_for(symbol),
+            )
+            if quantity > 0:
+                quantity_text = format_quantity(quantity)
+                if symbol in limit_order_symbols:
+                    limit_price = round(price * limit_sell_discount, 2)
+                    submitted = dispatch_order(
+                        symbol,
+                        side="sell",
+                        order_type="limit",
+                        quantity=quantity,
+                        price=limit_price,
+                        log_message=translator("limit_sell", symbol=symbol, qty=quantity_text, price=limit_price),
+                    )
+                else:
+                    market_price = round(price, 2)
+                    submitted = dispatch_order(
+                        symbol,
+                        side="sell",
+                        order_type="market",
+                        quantity=quantity,
+                        price=market_price,
+                        log_message=translator("market_sell", symbol=symbol, qty=quantity_text, price=market_price),
+                    )
+                    if dry_run_only and submitted:
+                        dry_run_sale_proceeds += float(quantity) * market_price
+
+                if submission_halted and not submitted:
+                    break
+                if submitted:
+                    action_done = True
+                    sell_submitted = True
+                    if symbol == cash_sweep_symbol:
+                        cash_sweep_sold_this_cycle = True
+                elif sellable_quantities[symbol] <= 0 and quantities[symbol] > 0:
+                    record_skip_log(
+                        skip_logs,
+                        translator=translator,
+                        with_prefix=with_prefix,
+                        kind="sell_skipped",
+                        detail=translator(
+                            "sell_skip_no_sellable_detail",
+                            symbol=market_symbol(symbol),
+                            diff=f"{abs(market_values[symbol] - target_values[symbol]):.2f}",
+                            held=format_quantity(quantities[symbol]),
+                            sellable=format_quantity(sellable_quantities[symbol]),
+                        ),
+                    )
+                elif sellable_quantities[symbol] > 0:
+                    pending_sell_release_symbols.append(symbol)
+                    record_skip_log(
+                        skip_logs,
+                        translator=translator,
+                        with_prefix=with_prefix,
+                        kind="sell_skipped",
+                        detail=translator(
+                            "sell_skip_whole_share_detail",
+                            symbol=market_symbol(symbol),
+                            diff=f"{max(0.0, market_values[symbol] - target_values[symbol]):.2f}",
+                        ),
+                    )
+
+    buy_candidates = [
+        symbol
+        for symbol in strategy_assets
+        if (target_values[symbol] - market_values[symbol]) > threshold_value
+        and abs(target_values[symbol] - market_values[symbol]) > current_min_trade
+    ]
+    funding_buy_candidates = [
+        symbol
+        for symbol in buy_candidates
+        if symbol != cash_sweep_symbol
+    ]
+    if small_account_buy_blocked or account_new_risk_buy_blocked:
+        funding_buy_candidates = []
+    if (
+        not submission_halted
+        and not sell_submitted
+        and funding_buy_candidates
+        and cash_sweep_symbol
+        and sellable_quantities.get(cash_sweep_symbol, 0.0) > 0.0
+    ):
+        sweep_price = safe_quote_last_price(
+            market_symbol(cash_sweep_symbol),
+            market_data_port=market_data_port,
+            notify_issue=notify_issue,
+            quote_recorder=record_quote_snapshot,
+        )
+        if sweep_price is not None and sweep_price > 0.0:
+            funding_needs = []
+            for buy_symbol in funding_buy_candidates:
+                buy_price = safe_quote_last_price(
+                    market_symbol(buy_symbol),
+                    market_data_port=market_data_port,
+                    notify_issue=notify_issue,
+                    quote_recorder=record_quote_snapshot,
+                )
+                if buy_price is None:
+                    continue
+                funding_needs.append(
+                    (
+                        target_values[buy_symbol] - market_values[buy_symbol],
+                        _buy_reference_price(
+                            buy_symbol,
+                            buy_price,
+                            is_limit_order=buy_symbol in limit_order_symbols,
+                            limit_buy_premium=limit_buy_premium,
+                            limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+                        ),
+                    )
+                )
+            if should_sell_cash_sweep_to_fund_whole_share_buy(
+                float(sellable_quantities[cash_sweep_symbol]),
+                sweep_price,
+                investable_cash,
+                funding_needs,
+            ):
+                sweep_quantity = float(sellable_quantities[cash_sweep_symbol])
+                sweep_market_price = round(sweep_price, 2)
+                submitted = dispatch_order(
+                    cash_sweep_symbol,
+                    side="sell",
+                    order_type="market",
+                    quantity=sweep_quantity,
+                    price=sweep_market_price,
+                    log_message=translator(
+                        "market_sell",
+                        symbol=cash_sweep_symbol,
+                        qty=format_quantity(sweep_quantity),
+                        price=sweep_market_price,
+                    ),
+                )
+                if dry_run_only and submitted:
+                    dry_run_sale_proceeds += float(sweep_quantity) * sweep_market_price
+                if submitted:
+                    action_done = True
+                    sell_submitted = True
+                    cash_sweep_sold_this_cycle = True
+
+    if sell_submitted and not submission_halted:
+        if dry_run_only and dry_run_sale_proceeds > 0.0:
+            simulated_cash = float(dry_run_sale_proceeds)
+            available_cash = max(0.0, available_cash + simulated_cash)
+            investable_cash = max(0.0, investable_cash + simulated_cash)
+            validation_message = (
+                f"🧪 验证回款已入账: cash=${simulated_cash:.2f} "
+                f"investable=${investable_cash:.2f}"
+            )
+            _emit_note(note_logs, validation_message, with_prefix=with_prefix)
+        else:
+            previous_investable_cash = investable_cash
+            (
+                refreshed_state,
+                best_investable_cash,
+                projected_sell_release_value,
+                submission_halted,
+                account_new_risk_buy_blocked,
+                account_new_risk_reason_codes,
+                cycle_combined_scale,
+            ) = _refresh_post_sell_snapshots(
+                fetch_replanned_state=fetch_replanned_state,
+                trade_context=trade_context,
+                submitted_sell_orders=submitted_sell_orders,
+                fetch_order_status=fetch_order_status,
+                sleeper=sleeper,
+                refresh_attempts=max(1, int(post_sell_refresh_attempts or 1)),
+                refresh_interval=max(0.0, float(post_sell_refresh_interval_sec or 0.0)),
+                previous_investable_cash=previous_investable_cash,
+                account_new_risk_buy_blocked=account_new_risk_buy_blocked,
+                account_new_risk_reason_codes=account_new_risk_reason_codes,
+                cycle_combined_scale=cycle_combined_scale,
+                submission_halted=submission_halted,
+            )
+            # Use the latest producer plan for risk/targets; retain the best
+            # cash forecast only for funding and the already-known sell facts.
+            plan, portfolio, execution, allocation = refreshed_state
+            if submission_halted:
+                execution = {**execution, "no_execute": True}
+            if is_account_new_risk_gate_enabled():
+                allocation = apply_combined_scale_to_allocation_targets(
+                    allocation, cycle_combined_scale,
+                )
+            plan, allocation, small_account_reference_target_values = _prepare_cycle_targets_and_notes(
+                plan=plan,
+                portfolio=portfolio,
+                allocation=allocation,
+                threshold_usd=safe_haven_cash_substitute_threshold_usd,
+                fractional_buy_execution=fractional_buy_execution,
+                market_data_port=market_data_port,
+                notify_issue=notify_issue,
+                symbol_suffix=symbol_suffix,
+                limit_buy_premium=limit_buy_premium,
+                limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+                note_logs=note_logs,
+                translator=translator,
+                with_prefix=with_prefix,
+                small_account_cash_note_keys=small_account_cash_note_keys,
+                small_account_bootstrap_note_keys=small_account_bootstrap_note_keys,
+            )
+            threshold_value = float(execution["trade_threshold_value"])
+            limit_order_symbols = set(
+                allocation.get("risk_symbols", ()) + allocation.get("income_symbols", ())
+            )
+            strategy_assets = tuple(allocation["strategy_symbols"])
+            market_values = dict(portfolio["market_values"])
+            quantities = dict(portfolio["quantities"])
+            sellable_quantities = dict(portfolio["sellable_quantities"])
+            target_values = dict(allocation["targets"])
+            available_cash = float(portfolio["liquid_cash"])
+            cash_by_currency = _normalize_cash_by_currency(portfolio.get("cash_by_currency"))
+            investable_cash = max(
+                float(execution["investable_cash"]),
+                best_investable_cash,
+                previous_investable_cash + projected_sell_release_value,
+            )
+            current_min_trade = _current_min_trade_floor(
+                execution,
+                fractional_buy_execution=fractional_buy_execution,
+                min_order_notional=min_order_notional,
+            )
+
+    if (
+        available_cash <= 0.0
+        and investable_cash <= 0.0
+        and _has_positive_non_usd_cash(cash_by_currency)
+    ):
+        record_note_log(
+            note_logs,
+            translator=translator,
+            with_prefix=with_prefix,
+            kind="buy_deferred_non_usd_cash",
+            available=f"{available_cash:.2f}",
+            investable=f"{investable_cash:.2f}",
+            currencies=_format_cash_by_currency(cash_by_currency),
+        )
+
+    buy_candidates = [
+        symbol
+        for symbol in strategy_assets
+        if (target_values[symbol] - market_values[symbol]) > threshold_value
+        and abs(target_values[symbol] - market_values[symbol]) > current_min_trade
+    ]
+    if submission_halted:
+        buy_candidates = []
+    buys_blocked_reason: str | None = None
+    if small_account_buy_blocked and buy_candidates:
+        buys_blocked_reason = "small_account_below_recommended_equity"
+        _emit_note(
+            note_logs,
+            translator(
+                "buy_deferred_small_account",
+                portfolio_equity=_format_optional_equity(small_account_portfolio_equity),
+                min_recommended_equity=_format_optional_equity(small_account_min_equity),
+            ),
+            with_prefix=with_prefix,
+        )
+        buy_candidates = []
+    elif account_new_risk_buy_blocked and buy_candidates:
+        buys_blocked_reason = "account_new_risk_gate"
+        reason_text = ", ".join(account_new_risk_reason_codes) or "NEW_RISK_PROHIBITED"
+        _emit_note(
+            note_logs,
+            translator(
+                "buy_deferred",
+                detail=f"[Account new-risk gate] {reason_text}",
+            ),
+            with_prefix=with_prefix,
+        )
+        buy_candidates = []
+    elif cash_only_execution and buy_candidates and pending_sell_release_symbols:
+        estimated_buy_cost = 0.0
+        for symbol in buy_candidates:
+            diff = target_values[symbol] - market_values[symbol]
+            can_buy_value = min(diff, investable_cash)
+            price = safe_quote_last_price(
+                market_symbol(symbol),
+                market_data_port=market_data_port,
+                notify_issue=notify_issue,
+                quote_recorder=record_quote_snapshot,
+            )
+            if price is None:
+                continue
+            if fractional_buy_execution:
+                if can_buy_value >= MIN_FRACTIONAL_BUY_NOTIONAL_USD:
+                    estimated_buy_cost += can_buy_value
+                continue
+            ref_price = _buy_reference_price(
+                symbol,
+                price,
+                is_limit_order=(symbol in limit_order_symbols or symbol == cash_sweep_symbol),
+                limit_buy_premium=limit_buy_premium,
+                limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+            )
+            quantity = _planned_whole_share_buy_quantity(
+                symbol,
+                target_value=target_values[symbol],
+                current_value=market_values[symbol],
+                quantity=quantities.get(symbol, 0.0),
+                buy_budget=can_buy_value,
+                available_buying_power=investable_cash,
+                ref_price=ref_price,
+                quantity_step=_buy_step_for(market_symbol(symbol)),
+                allow_top_up=sell_submitted,
+            )
+            if quantity > 0:
+                estimated_buy_cost += quantity * ref_price
+        if estimated_buy_cost > investable_cash:
+            buys_blocked_reason = "pending_sell_release"
+            _emit_note(
+                note_logs,
+                translator(
+                    "buy_deferred_pending_sell_release",
+                    symbols=", ".join(pending_sell_release_symbols),
+                ),
+                with_prefix=with_prefix,
+            )
+            buy_candidates = []
+    if cash_only_execution and buy_candidates and available_cash < 0 and buys_blocked_reason is None:
+        buys_blocked_reason = "negative_cash"
+        _emit_note(
+            note_logs,
+            translator(
+                "buy_deferred_negative_cash",
+                cash=f"{available_cash:.2f}",
+            ),
+            with_prefix=with_prefix,
+        )
+        buy_candidates = []
+    elif buy_candidates and investable_cash <= 0:
+        buy_candidates = []
+
+    for symbol in buy_candidates:
+        if submission_halted:
+            break
+        diff = target_values[symbol] - market_values[symbol]
+        price = safe_quote_last_price(
+            market_symbol(symbol),
+            market_data_port=market_data_port,
+            notify_issue=notify_issue,
+            quote_recorder=record_quote_snapshot,
+        )
+        if price is None:
+            continue
+        can_buy_value = min(diff, investable_cash)
+        planned_quantity = 0
+        effective_can_buy_value = can_buy_value
+        is_limit_order = (
+            False
+            if fractional_buy_execution
+            else (symbol in limit_order_symbols or symbol == cash_sweep_symbol)
+        )
+        ref_price = _buy_reference_price(
+            symbol,
+            price,
+            is_limit_order=is_limit_order,
+            limit_buy_premium=limit_buy_premium,
+            limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+        )
+        if not fractional_buy_execution:
+            planned_quantity = _planned_whole_share_buy_quantity(
+                symbol,
+                target_value=target_values[symbol],
+                current_value=market_values[symbol],
+                quantity=quantities.get(symbol, 0.0),
+                buy_budget=can_buy_value,
+                available_buying_power=investable_cash,
+                ref_price=ref_price,
+                quantity_step=_buy_step_for(market_symbol(symbol)),
+                allow_top_up=sell_submitted,
+            )
+            if planned_quantity > 0:
+                effective_can_buy_value = max(can_buy_value, planned_quantity * ref_price)
+        can_afford_buy = (
+            can_buy_value >= MIN_FRACTIONAL_BUY_NOTIONAL_USD
+            if fractional_buy_execution
+            else planned_quantity > 0
+        )
+        if can_afford_buy:
+            limit_order_kind = "limit" if is_limit_order else "market"
+            limit_candidate = _estimate_buy_quantity_candidate(
+                trade_context,
+                market_symbol(symbol),
+                limit_order_kind,
+                ref_price,
+                can_buy_value=effective_can_buy_value,
+                estimate_max_purchase_quantity=estimate_max_purchase_quantity,
+                notify_issue=notify_issue,
+                dry_run_only=dry_run_only,
+                quantity_step=_buy_step_for(market_symbol(symbol)),
+                estimate_kwargs=estimate_kwargs,
+            )
+            if limit_candidate is None:
+                continue
+            limit_candidate_quantity, limit_budget_quantity, _ = limit_candidate
+            quantity = _normalize_buy_quantity(
+                limit_candidate_quantity,
+                quantity_step=_buy_step_for(market_symbol(symbol)),
+            )
+            if quantity <= 0:
+                record_note_log(
+                    note_logs,
+                    translator=translator,
+                    with_prefix=with_prefix,
+                    kind="buy_deferred_cash_limit",
+                    symbol=market_symbol(symbol),
+                    diff=f"{diff:.2f}",
+                    budget_qty=format_quantity(limit_budget_quantity),
+                )
+                continue
+
+            quantity_text = format_quantity(quantity)
+            if limit_order_kind == "limit":
+                submitted = dispatch_order(
+                    symbol,
+                    side="buy",
+                    order_type="limit",
+                    quantity=quantity,
+                    price=ref_price,
+                    log_message=translator("limit_buy", symbol=symbol, qty=quantity_text, price=ref_price),
+                )
+                cost_estimate = quantity * ref_price
+            else:
+                market_price = round(price, 2)
+                submitted = dispatch_order(
+                    symbol,
+                    side="buy",
+                    order_type="market",
+                    quantity=quantity,
+                    price=market_price,
+                    log_message=translator("market_buy", symbol=symbol, qty=quantity_text, price=market_price),
+                )
+                cost_estimate = quantity * price
+
+            if submitted:
+                investable_cash = max(0, investable_cash - cost_estimate)
+                action_done = True
+        else:
+            if diff <= investable_cash:
+                note_kind = "buy_deferred_small_target_gap"
+                note_kwargs = {
+                    "symbol": market_symbol(symbol),
+                    "diff": f"{diff:.2f}",
+                    "price": f"{price:.2f}",
+                }
+            else:
+                note_kind = "buy_deferred_small_cash"
+                note_kwargs = {
+                    "symbol": market_symbol(symbol),
+                    "diff": f"{diff:.2f}",
+                    "investable": f"{investable_cash:.2f}",
+                    "price": f"{price:.2f}",
+                }
+            record_note_log(
+                note_logs,
+                translator=translator,
+                with_prefix=with_prefix,
+                kind=note_kind,
+                **note_kwargs,
+            )
+
+    cash_sweep_substituted_to_cash = bool(
+        allocation.get("small_account_safe_haven_cash_substituted_symbols")
+    )
+    if (
+        not submission_halted
+        and not cash_sweep_sold_this_cycle
+        and cash_sweep_symbol
+        and cash_sweep_symbol in strategy_assets
+        and not small_account_buy_blocked
+        and (
+            float(target_values.get(cash_sweep_symbol, 0.0) or 0.0) > 0.0
+            or not cash_sweep_substituted_to_cash
+        )
+    ):
+        cash_sweep_price = safe_quote_last_price(
+            market_symbol(cash_sweep_symbol),
+            market_data_port=market_data_port,
+            notify_issue=notify_issue,
+            quote_recorder=record_quote_snapshot,
+        )
+        if cash_sweep_price is not None and cash_sweep_price > 0.0 and investable_cash > cash_sweep_price * 2:
+            substitution_threshold = max(
+                0.0,
+                float(safe_haven_cash_substitute_threshold_usd or 0.0),
+            )
+            if substitution_threshold <= 0.0 or investable_cash >= substitution_threshold:
+                ref_price = _limit_buy_price(
+                    cash_sweep_symbol,
+                    cash_sweep_price,
+                    limit_buy_premium,
+                    limit_buy_premium_by_symbol,
+                )
+                budget_quantity = floor_to_quantity_step(investable_cash / ref_price, 1.0)
+                cash_limit_quantity = estimate_cash_buy_quantity_safe(
+                    trade_context,
+                    market_symbol(cash_sweep_symbol),
+                    "limit",
+                    ref_price,
+                    estimate_max_purchase_quantity=estimate_max_purchase_quantity,
+                    notify_issue=notify_issue,
+                )
+                if cash_limit_quantity is None:
+                    quantity = 0
+                else:
+                    quantity = _normalize_trade_quantity(
+                        min(budget_quantity, float(cash_limit_quantity)),
+                        lot_size=_lot_for(cash_sweep_symbol),
+                    )
+            else:
+                quantity = 0
+            if quantity > 0:
+                quantity_text = format_quantity(quantity)
+                submitted = dispatch_order(
+                    cash_sweep_symbol,
+                    side="buy",
+                    order_type="limit",
+                    quantity=quantity,
+                    price=ref_price,
+                    log_message=translator(
+                        "limit_buy",
+                        symbol=cash_sweep_symbol,
+                        qty=quantity_text,
+                        price=ref_price,
+                    ),
+                )
+                if submitted:
+                    rebuy_message = translator(
+                        "cash_sweep_rebuy",
+                        symbol=market_symbol(cash_sweep_symbol),
+                        qty=quantity_text,
+                        price=f"{ref_price:.2f}",
+                    )
+                    _emit_note(note_logs, rebuy_message, with_prefix=with_prefix)
+                    action_done = True
+            elif substitution_threshold <= 0.0 or investable_cash >= substitution_threshold:
+                record_note_log(
+                    note_logs,
+                    translator=translator,
+                    with_prefix=with_prefix,
+                    kind="buy_deferred_cash_sweep_cash_limit",
+                    symbol=market_symbol(cash_sweep_symbol),
+                    investable=f"{investable_cash:.2f}",
+                    budget_qty=format_quantity(budget_quantity),
+                )
+
+    reference_prices = {
+        str(payload.get("symbol") or "").strip().upper(): float(payload.get("last_price") or 0.0)
+        for payload in quote_snapshots_by_symbol.values()
+        if str(payload.get("symbol") or "").strip()
+    }
+    total_value = float(portfolio.get("total_strategy_equity") or portfolio.get("total_equity") or 0.0)
+    drift_notes = build_small_account_allocation_drift_notes(
+        target_values=small_account_reference_target_values,
+        current_values=allocation_drift_base_market_values,
+        current_quantities=allocation_drift_base_quantities,
+        prices=reference_prices,
+        submitted_orders=tuple(submitted_orders) + tuple(dry_run_orders),
+        total_value=total_value,
+        cash_value=allocation_drift_base_cash,
+        symbol_suffix=symbol_suffix,
+    )
+    note_logs.extend(
+        format_small_account_allocation_drift_notes(
+            drift_notes,
+            translator=translator,
+            symbol_suffix=symbol_suffix,
+        )
+    )
+
+    set_cycle_snapshot(None)
+    return ExecutionCycleResult(
+        plan=dict(plan or {}),
+        portfolio=dict(portfolio or {}),
+        execution=dict(execution or {}),
+        allocation=dict(allocation or {}),
+        logs=tuple(logs),
+        skip_logs=tuple(skip_logs),
+        note_logs=tuple(note_logs),
+        action_done=action_done,
+        dry_run_orders=tuple(dry_run_orders),
+        pending_orders=tuple(pending_orders),
+        quote_snapshots=tuple(quote_snapshots_by_symbol.values()),
+        # Account-new-risk attention already owns transition dedup. Do not emit
+        # a second per-cycle notification for that same gate.
+        notification_attention_reason_codes=(
+            (buys_blocked_reason,)
+            if buys_blocked_reason in {
+                "small_account_below_recommended_equity", "negative_cash", "pending_sell_release"
+            }
+            else ()
+        ),
+    )

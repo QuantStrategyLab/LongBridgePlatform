@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-from application.runtime_notification_adapters import build_runtime_notification_adapters
-from notifications.telegram import build_translator
+from longbridge_platform.application.runtime_notification_adapters import build_runtime_notification_adapters
+from longbridge_platform.notifications.telegram import build_translator
 
 
 def test_runtime_notification_adapters_publish_cycle_notification_uses_log_and_send_sinks():

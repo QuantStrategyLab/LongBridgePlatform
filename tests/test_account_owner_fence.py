@@ -9,10 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from application.execution_state import ExecutionMarkerStore, claim_account_owner
-from application.rebalance_service import _resolve_physical_account_id
-from application.runtime_dependencies import LongBridgeRebalanceConfig
-from notifications.telegram import build_translator
+from longbridge_platform.application.execution_state import ExecutionMarkerStore, claim_account_owner
+from longbridge_platform.application.rebalance_service import _resolve_physical_account_id
+from longbridge_platform.application.runtime_dependencies import LongBridgeRebalanceConfig
+from longbridge_platform.notifications.telegram import build_translator
 
 
 class AccountOwnerFenceTests(unittest.TestCase):
@@ -65,7 +65,7 @@ class AccountOwnerFenceTests(unittest.TestCase):
 
 class ConfiguredPhysicalAccountIdTests(unittest.TestCase):
     def test_prefers_explicit_env_and_falls_back_to_longport_secret(self):
-        from application.runtime_composer import _resolve_configured_physical_account_id
+        from longbridge_platform.application.runtime_composer import _resolve_configured_physical_account_id
 
         def reader(name, default=""):
             values = {

@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-import runtime_config_support as config
+import longbridge_platform.runtime_config_support as config
 from test_runtime_config_support import SAMPLE_STRATEGY_PROFILE, runtime_target_json
 
 
@@ -442,7 +442,7 @@ def test_positive_float_override_keeps_existing_nonfinite_behavior(raw, load_set
     (config.V7_LONGTERM_COMPOUNDING_PROFILE, "[]", "V7 application binding must be an object"),
 ])
 def test_v7_binding_is_only_read_for_v7(profile, raw, expected, load_settings, resolver):
-    from application.v7_paper_application import V7PaperApplicationError
+    from longbridge_platform.application.v7_paper_application import V7PaperApplicationError
 
     os.environ[U] = json.dumps(target_payload(strategy_profile=profile))
     os.environ["LONGBRIDGE_V7_PAPER_APPLICATION_JSON"] = raw

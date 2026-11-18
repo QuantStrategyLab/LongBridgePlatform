@@ -11,11 +11,11 @@ from unittest.mock import patch
 
 import pytest
 
-from application import rebalance_service as service
-from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
-from notifications.telegram import build_translator
+from longbridge_platform.application import rebalance_service as service
+from longbridge_platform.application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
+from longbridge_platform.notifications.telegram import build_translator
 from scripts import execution_report_heartbeat as heartbeat
-from notifications import unified
+from longbridge_platform.notifications import unified
 
 
 def cycle_case(case, language, *, notification_report=None):
@@ -383,8 +383,8 @@ def test_partial_candidate_conflict_keeps_earlier_alert_and_unknown_counts():
 
 def test_snapshot_matches_the_pinned_qpk_contract():
     import hashlib
-    from notifications.digest_snapshot import UNIFIED_CONTRACT_SHA256, UNIFIED_CONTRACT_QPK_SHA
-    path = Path(__file__).parents[1] / "notifications" / "digest_snapshot" / "unified_contract.py"
+    from longbridge_platform.notifications.digest_snapshot import UNIFIED_CONTRACT_SHA256, UNIFIED_CONTRACT_QPK_SHA
+    path = Path(__file__).parents[1] / "src" / "longbridge_platform" / "notifications" / "digest_snapshot" / "unified_contract.py"
     assert hashlib.sha256(path.read_bytes()).hexdigest() == UNIFIED_CONTRACT_SHA256
     assert UNIFIED_CONTRACT_QPK_SHA == "2b04882058666ebc81d1650d93fa2105ec4ba3d8"
 
@@ -514,7 +514,7 @@ def test_new_cycle_reason_alerts_and_healthy_run_recovers_all_observed_reasons()
 def test_gcs_adapter_uses_atomic_generations_and_does_not_retry_uncertain_writes(monkeypatch):
     from google.api_core.exceptions import NotFound, PreconditionFailed, Forbidden
     from google.cloud import storage
-    from notifications.unified_store import GCSNotificationStore
+    from longbridge_platform.notifications.unified_store import GCSNotificationStore
     objects, operations = {}, []
     class Blob:
         def __init__(self, uri):
@@ -642,7 +642,7 @@ def test_runtime_incident_recovery_requires_successfully_persisted_terminal_proo
 
 
 def test_runtime_issue_callback_dedupes_categories_and_recovers_after_a_clean_run(monkeypatch):
-    from application.runtime_notification_adapters import build_runtime_notification_adapters
+    from longbridge_platform.application.runtime_notification_adapters import build_runtime_notification_adapters
     env = binding_env("sg", "SG", False)
     fake_stores(monkeypatch)
     sent = []

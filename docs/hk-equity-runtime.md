@@ -14,7 +14,7 @@ QuantStrategyLab 现有平台仓库里，能做港股股票交易运行时接入
 
 ## 运行时设计
 
-平台运行时已具备港股市场维度，并接入 `HkEquityStrategies` 的港股 profile 元数据。平台可选的港股 profile 由 `strategy_registry.get_platform_profile_status_matrix()` 从当前策略目录生成，**不要在文档或代码里手写清单**：
+平台运行时已具备港股市场维度，并接入 `HkEquityStrategies` 的港股 profile 元数据。平台可选的港股 profile 由 `longbridge_platform.strategy_registry.get_platform_profile_status_matrix()` 从当前策略目录生成，**不要在文档或代码里手写清单**：
 
 ```bash
 uv run --no-sync python scripts/print_strategy_profile_status.py

@@ -19,7 +19,7 @@ QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
 if QPK_SRC.exists() and str(QPK_SRC) not in sys.path:
     sys.path.insert(0, str(QPK_SRC))
 
-from application import broker_reconciliation as reconciliation
+from longbridge_platform.application import broker_reconciliation as reconciliation
 
 
 def _unavailable_source_binding():

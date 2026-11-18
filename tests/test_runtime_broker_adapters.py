@@ -11,7 +11,7 @@ PLATFORM_KIT_SRC = ROOT.parent / "QuantPlatformKit" / "src"
 if str(PLATFORM_KIT_SRC) not in sys.path:
     sys.path.insert(0, str(PLATFORM_KIT_SRC))
 
-from application.runtime_broker_adapters import build_runtime_broker_adapters
+from longbridge_platform.application.runtime_broker_adapters import build_runtime_broker_adapters
 from quant_platform_kit.common.models import ExecutionReport, OrderIntent
 
 

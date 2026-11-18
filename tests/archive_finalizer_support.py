@@ -10,11 +10,11 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from application import rebalance_service as service
-from application import runtime_composer as composer_module
-from application.runtime_composer import LongBridgeRuntimeComposer
-from notifications import unified
-from notifications.telegram import build_translator
+from longbridge_platform.application import rebalance_service as service
+from longbridge_platform.application import runtime_composer as composer_module
+from longbridge_platform.application.runtime_composer import LongBridgeRuntimeComposer
+from longbridge_platform.notifications import unified
+from longbridge_platform.notifications.telegram import build_translator
 
 ROOT = Path(__file__).resolve().parents[1]
 QRS_SHA = "bd3dc79f10b2c0b8048721695885c3f9333a53c6"
@@ -221,7 +221,7 @@ def run_cycle(monkeypatch, case, *, report, authorized=False):
         unified_notifications = unified
 
     summarize = function_from(
-        (ROOT / "http_routes.py").read_text(),
+        (ROOT / "src" / "longbridge_platform" / "http_routes.py").read_text(),
         "_summarize_cycle_result_for_report",
         {"unified_notifications": unified, "main": _MainProxy()},
     )

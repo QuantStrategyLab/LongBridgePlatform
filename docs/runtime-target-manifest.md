@@ -210,7 +210,7 @@ ownership and cloud mutations atomic.
 
 ## Plain-DCA Phase 1 consumer binding
 
-`application.plain_dca_paper_adapter.consume_plain_dca_preview` consumes the UES
+`longbridge_platform.application.plain_dca_paper_adapter.consume_plain_dca_preview` consumes the UES
 `evaluate_dca_period` preview interface for `nasdaq100_buy_and_hold` and
 `sp500_buy_and_hold`. It is an explicit library entry point; no route, scheduler,
 strategy registry, deployment workflow or order writer is attached to it.
@@ -267,7 +267,7 @@ constant, approved candidate or protected application binding is changed.
 
 ### Disabled scheduler hook
 
-`scheduled_plain_dca_preview` in `application.plain_dca_paper_scheduler` connects
+`scheduled_plain_dca_preview` in `longbridge_platform.application.plain_dca_paper_scheduler` connects
 an injected scheduler tick to the Phase 1 consumer. It defaults to `enabled=False`
 and returns without reading protected state or fetching facts. An offline enabled
 tick checks the paper binding before reading the frozen inputs, then re-reads

@@ -40,18 +40,18 @@ def _should_add_local_src(candidate: Path) -> bool:
     return True
 
 
-for candidate in (ROOT, QPK_SRC, UES_SRC, HES_SRC):
+for candidate in (ROOT, ROOT / "src", QPK_SRC, UES_SRC, HES_SRC):
     if not _should_add_local_src(candidate):
         continue
     candidate_str = str(candidate)
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
 
-from application.runtime_composer import build_durable_physical_account_id  # noqa: E402
+from longbridge_platform.application.runtime_composer import build_durable_physical_account_id  # noqa: E402
 from scripts.vendor.cloud_run_tags import CONTRACT_VERSION, headroom  # noqa: E402
 
 
-from strategy_registry import (  # noqa: E402
+from longbridge_platform.strategy_registry import (  # noqa: E402
     LONGBRIDGE_PLATFORM,
     describe_platform_runtime_requirements,
     get_platform_profile_status_matrix,

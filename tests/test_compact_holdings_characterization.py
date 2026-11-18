@@ -2,7 +2,7 @@
 
 import unittest
 
-from notifications.compact_adapter import adapt_compact_sections
+from longbridge_platform.notifications.compact_adapter import adapt_compact_sections
 
 
 class CompactHoldingsCharacterizationTests(unittest.TestCase):

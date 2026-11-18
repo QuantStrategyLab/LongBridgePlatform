@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from application.v7_paper_application import (
+from longbridge_platform.application.v7_paper_application import (
     _application_contract,
     _validate_application_record,
     V7_CONFIG_SHA256,
@@ -19,7 +19,7 @@ from application.v7_paper_application import (
     build_v7_runtime_binding,
     load_v7_paper_application_binding,
 )
-from decision_mapper import map_strategy_decision_to_plan
+from longbridge_platform.decision_mapper import map_strategy_decision_to_plan
 from quant_platform_kit.common.capital_base import (
     CapitalBaseBinding,
     CapitalScope,
@@ -234,8 +234,8 @@ def test_v7_binding_can_carry_validated_paper_execution_materials_without_unpaus
 def test_formal_loader_consumes_json_execution_materials_but_keeps_paused_guard(monkeypatch) -> None:
     from quant_platform_kit.common.models import PortfolioSnapshot
     from quant_platform_kit.common.runtime_target import build_runtime_target
-    from runtime_config_support import PlatformRuntimeSettings
-    from strategy_runtime import load_strategy_runtime
+    from longbridge_platform.runtime_config_support import PlatformRuntimeSettings
+    from longbridge_platform.strategy_runtime import load_strategy_runtime
 
     snapshot = PortfolioSnapshot(
         as_of=FIXED_FRIDAY,
@@ -384,7 +384,7 @@ def test_qsl_application_origin_is_fixed() -> None:
 
 def _loaded_v7_readback(monkeypatch):
     from quant_platform_kit.common.runtime_target import build_runtime_target
-    from strategy_loader import load_strategy_entrypoint_for_profile, load_strategy_runtime_adapter_for_profile
+    from longbridge_platform.strategy_loader import load_strategy_entrypoint_for_profile, load_strategy_runtime_adapter_for_profile
     from us_equity_strategies import get_strategy_entrypoint
 
     binding = build_v7_runtime_binding(_record(), protected_env=_protected_env())
@@ -413,7 +413,7 @@ def _loaded_v7_readback(monkeypatch):
 
 
 def test_loaded_version_readback_uses_process_identity_and_stays_paused(monkeypatch) -> None:
-    from application import v7_paper_application
+    from longbridge_platform.application import v7_paper_application
 
     original = v7_paper_application._installed_revision
     monkeypatch.setattr(
@@ -430,7 +430,7 @@ def test_loaded_version_readback_uses_process_identity_and_stays_paused(monkeypa
 
 
 def test_plain_dca_installed_pin_does_not_renew_v7_approval(monkeypatch) -> None:
-    from application import v7_paper_application
+    from longbridge_platform.application import v7_paper_application
 
     # Exercise the real installed package: M03 adoption cannot alter V7 authority.
     assert v7_paper_application._installed_revision("us-equity-strategies") == "1d087fa424972d5d5ab02c4650ce9f039cb6711f"
@@ -443,7 +443,7 @@ def test_plain_dca_installed_pin_does_not_renew_v7_approval(monkeypatch) -> None
     "8412d8338879f335ef8830678c2733e02e53e7c7", "a" * 40, "", None,
 ])
 def test_loaded_version_readback_rejects_unapproved_ues(monkeypatch, observed_revision) -> None:
-    from application import v7_paper_application
+    from longbridge_platform.application import v7_paper_application
 
     original = v7_paper_application._installed_revision
     monkeypatch.setattr(
@@ -455,7 +455,7 @@ def test_loaded_version_readback_rejects_unapproved_ues(monkeypatch, observed_re
 
 
 def test_bound_v7_loader_is_opt_in_and_normal_loader_stays_fail_closed(monkeypatch) -> None:
-    from strategy_loader import load_strategy_entrypoint_for_profile
+    from longbridge_platform.strategy_loader import load_strategy_entrypoint_for_profile
 
     with pytest.raises(ValueError):
         load_strategy_entrypoint_for_profile(V7_PAPER_PROFILE)
@@ -498,10 +498,10 @@ def test_bound_v7_decision_mapper_preserves_research_block_markers(monkeypatch) 
 
 
 def test_bound_v7_loaded_runtime_to_rebalance_isolated_validation_has_zero_writes(monkeypatch) -> None:
-    from application import rebalance_service
-    from application.runtime_composer import LongBridgeRuntimeComposer
-    from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
-    from application.runtime_strategy_adapters import build_runtime_strategy_adapters
+    from longbridge_platform.application import rebalance_service
+    from longbridge_platform.application.runtime_composer import LongBridgeRuntimeComposer
+    from longbridge_platform.application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
+    from longbridge_platform.application.runtime_strategy_adapters import build_runtime_strategy_adapters
     from quant_platform_kit.common.models import QuoteSnapshot
     from quant_platform_kit.common.port_adapters import (
         CallableExecutionPort,
@@ -511,14 +511,14 @@ def test_bound_v7_loaded_runtime_to_rebalance_isolated_validation_has_zero_write
     )
     from quant_platform_kit.common.runtime_inputs import build_strategy_evaluation_inputs
     from quant_platform_kit.common.runtime_target import build_runtime_target
-    from runtime_config_support import PlatformRuntimeSettings
-    from strategy_loader import (
+    from longbridge_platform.runtime_config_support import PlatformRuntimeSettings
+    from longbridge_platform.strategy_loader import (
         load_strategy_entrypoint_for_profile,
         load_strategy_runtime_adapter_for_profile,
     )
-    from strategy_runtime import LoadedStrategyRuntime
+    from longbridge_platform.strategy_runtime import LoadedStrategyRuntime
     from test_v7_paper_preview import _available_inputs
-    from notifications.telegram import build_translator
+    from longbridge_platform.notifications.telegram import build_translator
 
     binding = build_v7_runtime_binding(_record(), protected_env=_protected_env())
     monkeypatch.setenv("LONGBRIDGE_V7_PAPER_APPLICATION_JSON", json.dumps(binding))
@@ -684,12 +684,12 @@ def test_bound_v7_loaded_runtime_to_rebalance_isolated_validation_has_zero_write
 
 
 def test_v7_evidence_runtime_to_rebalance_uses_real_risk_and_fake_broker(monkeypatch, tmp_path) -> None:
-    from application import rebalance_service
-    from application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
-    from application.runtime_strategy_adapters import build_runtime_strategy_adapters
+    from longbridge_platform.application import rebalance_service
+    from longbridge_platform.application.runtime_dependencies import LongBridgeRebalanceConfig, LongBridgeRebalanceRuntime
+    from longbridge_platform.application.runtime_strategy_adapters import build_runtime_strategy_adapters
     from quant_platform_kit.common.models import ExecutionReport, PortfolioSnapshot, QuoteSnapshot
     from quant_platform_kit.common.execution_commands import ExecutionCommandStore
-    from application.execution_state import ExecutionMarkerStore
+    from longbridge_platform.application.execution_state import ExecutionMarkerStore
     from quant_platform_kit.common.port_adapters import (
         CallableExecutionPort,
         CallableMarketDataPort,
@@ -698,12 +698,12 @@ def test_v7_evidence_runtime_to_rebalance_uses_real_risk_and_fake_broker(monkeyp
     )
     from quant_platform_kit.common.runtime_inputs import build_strategy_evaluation_inputs
     from quant_platform_kit.common.runtime_target import build_runtime_target
-    from runtime_config_support import PlatformRuntimeSettings
-    from strategy_loader import load_strategy_entrypoint_for_profile, load_strategy_runtime_adapter_for_profile
-    import strategy_runtime as strategy_runtime_module
-    from strategy_runtime import LoadedStrategyRuntime
+    from longbridge_platform.runtime_config_support import PlatformRuntimeSettings
+    from longbridge_platform.strategy_loader import load_strategy_entrypoint_for_profile, load_strategy_runtime_adapter_for_profile
+    import longbridge_platform.strategy_runtime as strategy_runtime_module
+    from longbridge_platform.strategy_runtime import LoadedStrategyRuntime
     from test_v7_paper_preview import _available_inputs
-    from notifications.telegram import build_translator
+    from longbridge_platform.notifications.telegram import build_translator
 
     try:
         from us_equity_strategies.entrypoints import soxl_soxx_core_only_p2_v7_execution_entrypoint
@@ -901,7 +901,7 @@ def test_v7_evidence_runtime_to_rebalance_uses_real_risk_and_fake_broker(monkeyp
 
 
 def test_runtime_settings_accept_only_bound_v7_and_force_disabled_paper_target(monkeypatch) -> None:
-    from runtime_config_support import load_platform_runtime_settings
+    from longbridge_platform.runtime_config_support import load_platform_runtime_settings
 
     binding = build_v7_runtime_binding(_record(), protected_env=_protected_env())
     monkeypatch.setenv("LONGBRIDGE_V7_PAPER_APPLICATION_JSON", json.dumps(binding))

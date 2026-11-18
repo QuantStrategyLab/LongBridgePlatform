@@ -27,4 +27,4 @@ RUN python -m pip install --upgrade pip uv \
 
 # Keep the application timeout below Cloud Run/Scheduler's 600-second ceiling so
 # Gunicorn can return a controlled failure instead of being killed at the edge.
-CMD ["gunicorn", "--bind", ":8080", "--workers", "1", "--threads", "1", "--timeout", "570", "main:app"]
+CMD ["gunicorn", "--bind", ":8080", "--workers", "1", "--threads", "1", "--timeout", "570", "longbridge_platform.main:app"]

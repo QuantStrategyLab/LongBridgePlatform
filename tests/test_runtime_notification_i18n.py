@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from notifications.telegram import build_translator
+from longbridge_platform.notifications.telegram import build_translator
 
 
 @pytest.mark.parametrize("locale", ["zh-CN", "zh_TW", "ZH-hans", " zh "])
@@ -22,7 +22,7 @@ def runtime_function(name, **overrides):
         "_publish_runtime_failure_notification": "notifications_runtime.py",
         "_publish_runtime_failure_notification_legacy": "notifications_runtime.py",
     }.get(name, "main.py")
-    tree = ast.parse((root / source_name).read_text())
+    tree = ast.parse((root / "src" / "longbridge_platform" / source_name).read_text())
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
     namespace = dict(os=os, request=SimpleNamespace(method="GET", path="/main"),
                      NOTIFY_LANG="zh-CN", SERVICE_NAME="Test service", SECRET_NAME="Test secret alias",

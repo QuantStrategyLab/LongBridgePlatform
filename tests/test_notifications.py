@@ -7,15 +7,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from notifications.telegram import (
+from longbridge_platform.notifications.telegram import (
     build_issue_notifier,
     build_prefixer,
     build_sender,
     build_strategy_display_name,
     build_translator,
 )
-from notifications.renderers import render_heartbeat_notification, render_rebalance_notification
-from strategy_registry import SUPPORTED_STRATEGY_PROFILES
+from longbridge_platform.notifications.renderers import render_heartbeat_notification, render_rebalance_notification
+from longbridge_platform.strategy_registry import SUPPORTED_STRATEGY_PROFILES
 
 
 class FakeRequests:

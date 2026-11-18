@@ -12,8 +12,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for _path in (ROOT, ROOT / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 PLATFORM_KIT_SRC = ROOT.parent / "QuantPlatformKit" / "src"
 if str(PLATFORM_KIT_SRC) not in sys.path:
     sys.path.insert(0, str(PLATFORM_KIT_SRC))
@@ -61,10 +62,10 @@ def install_stub_modules(*, notify_lang="en"):
     requests_module = types.ModuleType("requests")
     requests_module.post = lambda *args, **kwargs: None
 
-    cloud_run_module = types.ModuleType("entrypoints.cloud_run")
+    cloud_run_module = types.ModuleType("longbridge_platform.entrypoints.cloud_run")
     cloud_run_module.is_market_open_now = lambda **_kwargs: True
 
-    runtime_config_support_module = types.ModuleType("runtime_config_support")
+    runtime_config_support_module = types.ModuleType("longbridge_platform.runtime_config_support")
     runtime_config_support_module.load_platform_runtime_settings = lambda **_kwargs: types.SimpleNamespace(
         project_id=None,
         secret_name="longport-token-hk",
@@ -150,7 +151,7 @@ def install_stub_modules(*, notify_lang="en"):
 
     pandas_market_calendars = types.ModuleType("pandas_market_calendars")
 
-    strategy_runtime_module = types.ModuleType("strategy_runtime")
+    strategy_runtime_module = types.ModuleType("longbridge_platform.strategy_runtime")
     strategy_runtime_module.load_strategy_runtime = lambda *_args, **_kwargs: types.SimpleNamespace(
         merged_runtime_config={"trend_ma_window": 150},
         managed_symbols=("SOXL", "SOXX", "BOXX", "QQQI", "SPYI"),
@@ -186,7 +187,7 @@ def install_stub_modules(*, notify_lang="en"):
     catalog_module = types.ModuleType("us_equity_strategies.catalog")
     catalog_module.resolve_canonical_profile = lambda profile: profile
 
-    strategy_registry_module = types.ModuleType("strategy_registry")
+    strategy_registry_module = types.ModuleType("longbridge_platform.strategy_registry")
     strategy_registry_module.LONGBRIDGE_PLATFORM = "longbridge"
     strategy_registry_module.V7_LONGTERM_COMPOUNDING_PROFILE = (
         "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve"
@@ -202,8 +203,8 @@ def install_stub_modules(*, notify_lang="en"):
     modules = {
         "flask": flask_module,
         "requests": requests_module,
-        "entrypoints.cloud_run": cloud_run_module,
-        "runtime_config_support": runtime_config_support_module,
+        "longbridge_platform.entrypoints.cloud_run": cloud_run_module,
+        "longbridge_platform.runtime_config_support": runtime_config_support_module,
         "quant_platform_kit.longbridge": qpk_longbridge_module,
         "quant_platform_kit.longbridge.market_data": qpk_longbridge_market_data_module,
         "google": google_module,
@@ -216,13 +217,13 @@ def install_stub_modules(*, notify_lang="en"):
         "google.cloud.secretmanager_v1": google_secretmanager_module,
         "pandas": pandas_module,
         "pandas_market_calendars": pandas_market_calendars,
-        "strategy_runtime": strategy_runtime_module,
+        "longbridge_platform.strategy_runtime": strategy_runtime_module,
         "longport": longport_module,
         "longport.openapi": openapi_module,
         "us_equity_strategies": us_equity_strategies_module,
         "us_equity_strategies.cash_only_equity": cash_only_equity_module,
         "us_equity_strategies.catalog": catalog_module,
-        "strategy_registry": strategy_registry_module,
+        "longbridge_platform.strategy_registry": strategy_registry_module,
     }
     original = {name: sys.modules.get(name) for name in modules}
     sys.modules.update(modules)
@@ -234,6 +235,20 @@ def install_stub_modules(*, notify_lang="en"):
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = previous
+        pkg = sys.modules.get("longbridge_platform")
+        entrypoints_pkg = sys.modules.get("longbridge_platform.entrypoints")
+        for parent, attr, full_name in (
+            (pkg, "runtime_config_support", "longbridge_platform.runtime_config_support"),
+            (pkg, "strategy_runtime", "longbridge_platform.strategy_runtime"),
+            (pkg, "strategy_registry", "longbridge_platform.strategy_registry"),
+            (entrypoints_pkg, "cloud_run", "longbridge_platform.entrypoints.cloud_run"),
+        ):
+            if parent is not None:
+                previous = original[full_name]
+                if previous is None:
+                    parent.__dict__.pop(attr, None)
+                else:
+                    setattr(parent, attr, previous)
 
 
 def load_module(*, notify_lang="en"):
@@ -245,8 +260,8 @@ def load_module(*, notify_lang="en"):
             },
             clear=False,
         ):
-            sys.modules.pop("main", None)
-            return importlib.import_module("main")
+            sys.modules.pop("longbridge_platform.main", None)
+            return importlib.import_module("longbridge_platform.main")
 
 
 class RequestHandlingTests(unittest.TestCase):
@@ -546,7 +561,7 @@ class RequestHandlingTests(unittest.TestCase):
                      "durable_execution_command_live_enabled"):
             with self.subTest(flag=flag):
                 module = load_module()
-                from application.runtime_composer import LongBridgeRuntimeComposer
+                from longbridge_platform.application.runtime_composer import LongBridgeRuntimeComposer
                 calls = []
                 class Bootstrap:
                     def __call__(self):
@@ -609,8 +624,8 @@ class RequestHandlingTests(unittest.TestCase):
         from contextlib import nullcontext, redirect_stdout
 
         module = load_module()
-        from application import runtime_strategy_adapters
-        from application.runtime_composer import LongBridgeRuntimeComposer
+        from longbridge_platform.application import runtime_strategy_adapters
+        from longbridge_platform.application.runtime_composer import LongBridgeRuntimeComposer
 
         observations = []
         def fail_indicators(*_args, **_kwargs):
@@ -751,8 +766,8 @@ class RequestHandlingTests(unittest.TestCase):
         from contextlib import nullcontext, redirect_stdout
 
         module = load_module()
-        from application.runtime_composer import LongBridgeRuntimeComposer
-        from application.validation_cycle_observation import ValidationSubmitBlocked, current
+        from longbridge_platform.application.runtime_composer import LongBridgeRuntimeComposer
+        from longbridge_platform.application.validation_cycle_observation import ValidationSubmitBlocked, current
         notifications, forwarded = [], []
         original = module.build_composer(dry_run_only_override=True)
         original_submit = original.broker_adapters.submit_order_fn
@@ -848,7 +863,7 @@ class RequestHandlingTests(unittest.TestCase):
         from contextlib import redirect_stdout
 
         module = load_module()
-        from application.runtime_composer import LongBridgeRuntimeComposer
+        from longbridge_platform.application.runtime_composer import LongBridgeRuntimeComposer
         report = {"status": "pending", "dry_run": True}
         reporting = types.SimpleNamespace(
             report_gcs_prefix_uri="gs://test/reports",
@@ -895,7 +910,7 @@ class RequestHandlingTests(unittest.TestCase):
         from contextlib import nullcontext, redirect_stdout
 
         module = load_module()
-        from application.runtime_composer import LongBridgeRuntimeComposer
+        from longbridge_platform.application.runtime_composer import LongBridgeRuntimeComposer
         sent = []
         report = {"status": "pending", "dry_run": True}
         reporting = types.SimpleNamespace(
@@ -946,7 +961,7 @@ class RequestHandlingTests(unittest.TestCase):
         from contextlib import nullcontext, redirect_stdout
 
         module = load_module()
-        from application.runtime_composer import LongBridgeRuntimeComposer
+        from longbridge_platform.application.runtime_composer import LongBridgeRuntimeComposer
         sent = []
         report = {"status": "pending", "dry_run": True}
         reporting = types.SimpleNamespace(
@@ -1139,7 +1154,7 @@ class RequestHandlingTests(unittest.TestCase):
 
     def test_account_snapshot_main_path_builds_only_read_only_contexts(self):
         module = load_module()
-        from application import broker_reconciliation as reconciliation_module
+        from longbridge_platform.application import broker_reconciliation as reconciliation_module
 
         observed = {"metadata_reads": 0}
         version_name = "projects/snapshot-project/secrets/longport-token-hk/versions/4"
@@ -1248,7 +1263,7 @@ class RequestHandlingTests(unittest.TestCase):
 
     def test_account_snapshot_endpoint_stays_unbound_without_deployment_revision(self):
         module = load_module()
-        from application import broker_reconciliation as reconciliation_module
+        from longbridge_platform.application import broker_reconciliation as reconciliation_module
 
         observed = {"metadata_reads": 0}
 
@@ -1364,7 +1379,7 @@ class RequestHandlingTests(unittest.TestCase):
 
     def test_account_snapshot_without_metadata_reads_configured_store_once(self):
         module = load_module()
-        from application import broker_reconciliation as reconciliation_module
+        from longbridge_platform.application import broker_reconciliation as reconciliation_module
 
         observed = {"store_reads": 0, "secret_reads": 0}
 
@@ -1492,7 +1507,7 @@ class RequestHandlingTests(unittest.TestCase):
 
     def test_broker_reconciliation_uses_only_read_only_context_builder(self):
         module = load_module()
-        from application import broker_reconciliation as reconciliation_module
+        from longbridge_platform.application import broker_reconciliation as reconciliation_module
 
         observed = {}
 
@@ -1623,10 +1638,10 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(observed["report"]["summary"]["positions_count"], 1)
 
     def test_probe_archives_real_portfolio_balance_once_with_bound_source(self):
-        from application.broker_reconciliation import build_account_snapshot_source_binding
-        from application.account_snapshot import cycle_history_observation
-        from application.runtime_bootstrap_adapters import LongBridgeRuntimeBootstrap
-        from application.runtime_composer import LongBridgeRuntimeComposer
+        from longbridge_platform.application.broker_reconciliation import build_account_snapshot_source_binding
+        from longbridge_platform.application.account_snapshot import cycle_history_observation
+        from longbridge_platform.application.runtime_bootstrap_adapters import LongBridgeRuntimeBootstrap
+        from longbridge_platform.application.runtime_composer import LongBridgeRuntimeComposer
         from scripts import record_daily_account_snapshot as history
 
         module = load_module()
@@ -1755,8 +1770,8 @@ class RequestHandlingTests(unittest.TestCase):
     def test_probe_unknown_history_upload_fails_closed_without_re_read_or_archive_success(self):
         import io
         from contextlib import redirect_stdout
-        from application.broker_reconciliation import build_account_snapshot_source_binding
-        from application.account_snapshot import cycle_history_observation
+        from longbridge_platform.application.broker_reconciliation import build_account_snapshot_source_binding
+        from longbridge_platform.application.account_snapshot import cycle_history_observation
 
         module = load_module()
         events, balance_calls, upload_calls, notifications = [], [], [], []
@@ -2570,7 +2585,7 @@ class SanitizedRuntimeErrorTests(unittest.TestCase):
     marker = "SYNTHETIC_SECRET_DO_NOT_EMIT"
 
     def test_paper_only_live_conflict_reports_configuration_phase_without_running_cycle(self):
-        from application.durable_execution_commands import resolve_paper_execution_command_producer_enabled
+        from longbridge_platform.application.durable_execution_commands import resolve_paper_execution_command_producer_enabled
 
         for language in ("zh-CN", "en"):
             with self.subTest(language=language):

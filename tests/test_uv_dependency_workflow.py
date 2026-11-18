@@ -20,14 +20,17 @@ def test_ci_docker_and_env_sync_use_uv_lock() -> None:
 
     assert lockfile.startswith("version = ")
     assert "uv sync --frozen --extra test" in ci
+    assert "uv pip check" in ci
     assert "from quant_platform_kit.strategy_lifecycle.live_equity import stamp_consecutive_losses_on_snapshot" in ci
     assert "uv run --no-sync ruff check --exclude external ." in ci
     assert "uv run --no-sync python external/QuantPlatformKit/scripts/check_qpk_pin_consistency.py" in ci
+    assert "uv run --no-sync python -m build" in ci
     assert "uv sync --frozen --no-dev" in env_sync
     assert "uv run --no-sync python scripts/build_cloud_run_env_sync_plan.py --json" in env_sync
     assert "COPY . ." in dockerfile
     assert dockerfile.index("COPY . .") < dockerfile.index("uv sync --frozen --no-dev")
     assert "uv sync --frozen --no-dev" in dockerfile
+    assert "longbridge_platform.main:app" in dockerfile
     assert "python -m pip install -r requirements.txt" not in dockerfile
     assert "--no-install-project" not in ci
     assert "--no-install-project" not in env_sync

@@ -10,8 +10,8 @@ from datetime import datetime, timezone
 import pytest
 
 import archive_finalizer_support as support
-from application.runtime_reporting_adapters import build_runtime_reporting_adapters
-from notifications import unified
+from longbridge_platform.application.runtime_reporting_adapters import build_runtime_reporting_adapters
+from longbridge_platform.notifications import unified
 from quant_platform_kit.common import runtime_reports
 from quant_platform_kit.common.runtime_target import resolve_runtime_target_from_env
 

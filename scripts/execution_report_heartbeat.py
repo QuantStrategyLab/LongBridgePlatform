@@ -14,7 +14,7 @@ import urllib.request
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from notifications import unified as unified_notifications
+from longbridge_platform.notifications import unified as unified_notifications
 
 from quant_platform_kit.common.operational_notification_localization import (
     format_operational_alert,

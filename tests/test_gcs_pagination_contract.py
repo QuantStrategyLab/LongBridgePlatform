@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from application.validation_cycle_observation import strict_prior_report_exists
+from longbridge_platform.application.validation_cycle_observation import strict_prior_report_exists
 from quant_platform_kit.cloud.gcp_provider import GcpObjectStore
 
 
@@ -51,7 +51,7 @@ class GcsPaginationContractTests(unittest.TestCase):
             self.fail("scanner requested a third page")
 
         with patch.object(client._connection, "api_request", side_effect=api_request), \
-             patch("application.validation_cycle_observation.STRICT_REPORT_SCAN_LIMIT", 4):
+             patch("longbridge_platform.application.validation_cycle_observation.STRICT_REPORT_SCAN_LIMIT", 4):
             with self.assertRaisesRegex(RuntimeError, "^validation_journal_read_failed$"):
                 strict_prior_report_exists(marker_store, platform="longbridge", strategy_profile="strategy",
                                            account_scope="PAPER", signal_date="2026-01-31",

@@ -2,9 +2,12 @@
 from __future__ import annotations
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+_ROOT = Path(__file__).resolve().parents[1]
+for _path in (_ROOT, _ROOT / "src"):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 if __name__ == "__main__":
-    from notifications.unified import emit_archived
+    from longbridge_platform.notifications.unified import emit_archived
     import os
     import json
     try:

@@ -54,7 +54,10 @@ def main():
     if hashlib.sha256(raw).hexdigest() != args.serving_module_sha256:
         raise ValueError("serving_module_digest_mismatch")
     root = Path(__file__).resolve().parents[1]
-    result = overlay(raw.decode(), (root / "application/broker_reconciliation.py").read_text())
+    result = overlay(
+        raw.decode(),
+        (root / "src/longbridge_platform/application/broker_reconciliation.py").read_text(),
+    )
     args.output.mkdir(parents=True, exist_ok=False)
     (args.output / "application").mkdir()
     (args.output / "application/broker_reconciliation.py").write_text(result)

@@ -20,7 +20,7 @@ for qpk_src in (QPK_DRIFT_WORKTREE_SRC, QPK_SRC, QPK_PIN_WORKTREE_SRC):
     if (qpk_src / "quant_platform_kit").exists() and str(qpk_src) not in sys.path:
         sys.path.insert(0, str(qpk_src))
 
-from application.account_new_risk_gate_support import (
+from longbridge_platform.application.account_new_risk_gate_support import (
     ACCOUNT_NEW_RISK_GATE_ENV,
     apply_combined_scale_to_allocation_targets,
     build_account_new_risk_snapshot,
@@ -32,9 +32,9 @@ from application.account_new_risk_gate_support import (
     resolve_max_daily_loss_usd,
     set_cycle_snapshot,
 )
-from application.execution_service import execute_rebalance_cycle
-from application.longbridge_execution import submit_order
-from notifications.telegram import build_translator
+from longbridge_platform.application.execution_service import execute_rebalance_cycle
+from longbridge_platform.application.longbridge_execution import submit_order
+from longbridge_platform.notifications.telegram import build_translator
 from quant_platform_kit.common.models import ExecutionReport, QuoteSnapshot
 from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort
 from quant_platform_kit.risk.account_new_risk_gate import NewRiskDisposition
@@ -77,7 +77,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             },
         )
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "longbridge_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value=None,
         ):
             result = evaluate_portfolio_new_risk_admission(portfolio)
@@ -101,7 +101,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             },
         }
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "longbridge_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value=None,
         ):
             snapshot = build_snapshot_from_portfolio(portfolio)
@@ -119,7 +119,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             "account_new_risk_snapshot": {"daily_loss_usd": float("nan")},
         }
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "longbridge_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value=None,
         ):
             result = evaluate_portfolio_new_risk_admission(portfolio)
@@ -133,7 +133,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             "account_new_risk_snapshot": {"max_daily_loss_usd": 100.0},
         }
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "longbridge_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value=None,
         ):
             result = evaluate_portfolio_new_risk_admission(portfolio)
@@ -150,7 +150,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             {"LONGBRIDGE_MAX_DAILY_LOSS_USD": "0", "MAX_DAILY_LOSS_USD": "250"},
             clear=False,
         ), patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "longbridge_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value=None,
         ):
             self.assertEqual(resolve_max_daily_loss_usd(portfolio), 250.0)
@@ -188,7 +188,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
     def test_absent_production_drift_status_still_allows_when_healthy(self) -> None:
         portfolio = {"total_strategy_equity": 50_000.0}
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "longbridge_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value=None,
         ):
             result = evaluate_portfolio_new_risk_admission(portfolio)
@@ -197,7 +197,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
     def test_store_critical_production_drift_prohibits_when_status_absent(self) -> None:
         portfolio = {"total_strategy_equity": 50_000.0}
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "longbridge_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value="critical",
         ) as store_resolver:
             result = evaluate_portfolio_new_risk_admission(portfolio)
@@ -211,7 +211,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             "account_new_risk_snapshot": {"production_drift_status": "critical"},
         }
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "longbridge_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value="review",
         ) as store_resolver:
             result = evaluate_portfolio_new_risk_admission(portfolio)
@@ -236,7 +236,9 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         self.assertTrue(new_risk_buy_prohibited(evaluate_portfolio_new_risk_admission(portfolio)))
 
     def test_rebalance_service_has_no_research_store_drift_injection(self) -> None:
-        source = (ROOT / "application" / "rebalance_service.py").read_text(encoding="utf-8")
+        source = (
+            ROOT / "src" / "longbridge_platform" / "application" / "rebalance_service.py"
+        ).read_text(encoding="utf-8")
         self.assertNotIn("maybe_inject_production_drift_status", source)
         self.assertNotIn("resolve_production_drift_status_from_store", source)
 
@@ -284,7 +286,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         """Healthy resolved equity alone now derives cycle-health axes (ALLOW)."""
         portfolio = {"total_strategy_equity": 50_000.0}
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "longbridge_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value=None,
         ):
             result = evaluate_portfolio_new_risk_admission(portfolio)
@@ -362,7 +364,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             attempts["count"] += 1
             return ExecutionReport(symbol="SOXL", side="buy", quantity=1.0, status="submitted")
 
-        with patch("application.longbridge_execution._qpk_submit_order", fake_submit):
+        with patch("longbridge_platform.application.longbridge_execution._qpk_submit_order", fake_submit):
             report = submit_order(
                 object(),
                 "SOXL.US",
@@ -396,7 +398,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             submitted.update(kwargs)
             return ExecutionReport(symbol="SOXL", side="buy", quantity=kwargs["quantity"], status="submitted")
 
-        with patch("application.longbridge_execution._qpk_submit_order", fake_submit):
+        with patch("longbridge_platform.application.longbridge_execution._qpk_submit_order", fake_submit):
             submit_order(
                 object(),
                 "SOXL.US",
@@ -415,7 +417,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             submitted.update(kwargs)
             return ExecutionReport(symbol="SOXL", side="sell", quantity=kwargs["quantity"], status="submitted")
 
-        with patch("application.longbridge_execution._qpk_submit_order", fake_submit):
+        with patch("longbridge_platform.application.longbridge_execution._qpk_submit_order", fake_submit):
             report = submit_order(
                 object(),
                 "SOXL.US",
@@ -446,7 +448,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             attempts["count"] += 1
             return ExecutionReport(symbol="SOXL", side="buy", quantity=1.0, status="submitted")
 
-        with patch("application.longbridge_execution._qpk_submit_order", fake_submit):
+        with patch("longbridge_platform.application.longbridge_execution._qpk_submit_order", fake_submit):
             report = submit_order(
                 object(),
                 "SOXL.US",
@@ -467,7 +469,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             attempts["count"] += 1
             return ExecutionReport(symbol="SOXL", side="buy", quantity=1.0, status="submitted")
 
-        with patch("application.longbridge_execution._qpk_submit_order", fake_submit):
+        with patch("longbridge_platform.application.longbridge_execution._qpk_submit_order", fake_submit):
             report = submit_order(
                 object(),
                 "SOXL.US",
