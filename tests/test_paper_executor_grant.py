@@ -247,7 +247,7 @@ def test_mapping_channel_uses_six_environment_secrets_not_rest_api():
     job_header, steps = workflow.split("    steps:\n", 1)
     assert all(key + ":" not in job_header for key in mappings)
     first = steps.split("      - name:")[1]
-    assert "uses: actions/github-script@v8" in first
+    assert "uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd" in first
     assert "environments/{environment_name}/variables/{name}" not in first
     assert "actions/variables/{name}" not in first
     assert "github.request" not in first
