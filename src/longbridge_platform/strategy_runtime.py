@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata as importlib_metadata
 import os
 import json
 from dataclasses import dataclass, field, replace
