@@ -1,7 +1,25 @@
 target-version = "py311"
 
-[lint.per-file-ignores]
-"tests/*.py" = ["E402", "E401"]
-
 [lint]
-ignore = ["E701", "E702", "E741", "F841", "F821", "B008", "F401", "F601", "E402", "E401"]
+extend-select = ["B", "C901"]
+ignore = ["E701", "E702", "E741", "F841", "B008", "F401", "E402", "E401"]
+
+[lint.mccabe]
+max-complexity = 15
+
+[lint.per-file-ignores]
+"tests/**/*.py" = ["E402", "E401", "B", "C901"]
+"scripts/**/*.py" = ["B", "C901"]
+"research/**/*.py" = ["B", "C901"]
+"release-overlays/**/*.py" = ["B", "C901"]
+"src/longbridge_platform/application/broker_reconciliation.py" = ["C901"]
+"src/longbridge_platform/application/execution_service.py" = ["C901"]
+"src/longbridge_platform/application/longbridge_portfolio.py" = ["C901"]
+"src/longbridge_platform/application/paper_execution_command_consumer.py" = ["C901"]
+"src/longbridge_platform/application/rebalance_service.py" = ["C901"]
+"src/longbridge_platform/application/v7_paper_application.py" = ["C901"]
+"src/longbridge_platform/application/validation_cycle_observation.py" = ["B", "C901"]
+"src/longbridge_platform/http_routes.py" = ["C901"]
+"src/longbridge_platform/notifications/digest_snapshot/digest_archive.py" = ["C901"]
+"src/longbridge_platform/notifications/unified.py" = ["C901"]
+"src/longbridge_platform/runtime_wiring.py" = ["B"]

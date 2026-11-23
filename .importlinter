@@ -1,0 +1,11 @@
+[importlinter]
+root_package = longbridge_platform
+
+[importlinter:contract:application_no_entrypoints]
+name = Application must not import entrypoints or http_routes
+type = forbidden
+source_modules =
+    longbridge_platform.application
+forbidden_modules =
+    longbridge_platform.entrypoints
+    longbridge_platform.http_routes
