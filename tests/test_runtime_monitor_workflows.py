@@ -52,10 +52,10 @@ def test_runtime_monitor_workflows_retry_gcp_authentication() -> None:
         if name == "execution-report-heartbeat.yml":
             heartbeat = workflow[workflow.index("  heartbeat:") : workflow.index("  inspect-account-snapshot:")]
             inspection = workflow[workflow.index("  inspect-account-snapshot:") :]
-            assert heartbeat.count("google-github-actions/auth@v3") == 2
-            assert inspection.count("google-github-actions/auth@v3") == 1
+            assert heartbeat.count("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093") == 2
+            assert inspection.count("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093") == 1
         else:
-            assert workflow.count("google-github-actions/auth@v3") == 2
+            assert workflow.count("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093") == 2
         assert "id: gcp_auth_primary" in workflow
         assert "continue-on-error: true" in workflow
         assert "steps.gcp_auth_primary.outcome == 'failure'" in workflow

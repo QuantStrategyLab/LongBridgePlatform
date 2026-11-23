@@ -44,7 +44,7 @@ jobs:
           printf '::add-mask::%s\n' "$account_name"
           printf '::add-mask::%s\n' "$project"
           printf 'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT=%s\n' "$account" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -53,11 +53,11 @@ jobs:
           set -euo pipefail
           test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-      - uses: google-github-actions/auth@v3
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ secrets.PAPER_READBACK_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.PAPER_READBACK_SERVICE_ACCOUNT }}
-      - uses: google-github-actions/setup-gcloud@v3
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
         with:
           project_id: ${{ vars.PAPER_READBACK_PROJECT_ID }}
           version: ">= 416.0.0"

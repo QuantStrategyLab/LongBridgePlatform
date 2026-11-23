@@ -139,5 +139,5 @@ def test_workflow_static_safety_constraints():
     ):
         assert forbidden not in WORKFLOW
 
-    assert WORKFLOW.count("google-github-actions/auth@v3") <= 1
+    assert WORKFLOW.count("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093") <= 1
     assert WORKFLOW.count("Send one notification canary") == 1

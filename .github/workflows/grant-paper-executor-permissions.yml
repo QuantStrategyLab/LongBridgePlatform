@@ -60,7 +60,7 @@ jobs:
       # The secrets context cannot attest physical storage scope: independent
       # Environment-only provisioning evidence remains an operational prerequisite.
       - name: Mask protected mappings before exposing step environment
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           MAPPING_GCP_PROJECT_ID: ${{ secrets.PAPER_GRANT_ENVELOPE_GCP_PROJECT_ID }}
           MAPPING_PAPER_SCHEDULER_GET_PROJECT_ID: ${{ secrets.PAPER_GRANT_ENVELOPE_PAPER_SCHEDULER_GET_PROJECT_ID }}
@@ -124,7 +124,7 @@ jobs:
             }
             for (const [name, value] of mappings) core.exportVariable(name, value);
       - name: Verify Environment approval protection remains configured
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             let data;
@@ -140,7 +140,7 @@ jobs:
               throw new Error('Required Environment approval protection is missing');
             }
       - name: Checkout exact protected revision
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -154,12 +154,12 @@ jobs:
               raise SystemExit('BLOCKED: bootstrap WIF mapping missing')
           PY
       - name: Authenticate existing authorized bootstrap identity
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ env.PAPER_IAM_BOOTSTRAP_WIF_PROVIDER }}
           service_account: ${{ env.PAPER_IAM_BOOTSTRAP_SERVICE_ACCOUNT }}
       - name: Set up cloud client
-        uses: google-github-actions/setup-gcloud@v3
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
       - name: Read plan and apply only the fixed delta when separately authorized
