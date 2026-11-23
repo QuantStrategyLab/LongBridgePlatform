@@ -277,7 +277,7 @@ def run_strategy(*, force_run: bool=False, validation_only: bool=False, validati
         if observation is None and (not (validation_only and main._v7_application_candidate_bound())):
             try:
 
-                def publish_failure():
+                def publish_failure(exc=exc):
                     return notification_adapters.publish_cycle_notification(detailed_text=main._compact_error_notification(exc, phase=failure_phase), compact_text=main._compact_error_notification(exc, phase=failure_phase))
                 main.unified_notifications.dispatch_immediate(publish_failure, kind='real_error', incident=f'runtime_failure:{failure_phase}:{failure_reason}', report=report, actually_ran=True)
             except Exception as notification_exc:
@@ -387,7 +387,7 @@ def run_probe(*, response_body: str='Probe OK'):
         err = main._compact_error_notification(exc, title=main.t('health_probe_title'), prefix=main.t('health_probe_error_prefix'), phase='health_probe')
         if composer is not None:
 
-            def publish_probe_failure():
+            def publish_probe_failure(exc=exc):
                 return composer.build_notification_adapters().publish_cycle_notification(detailed_text=err, compact_text=main._compact_error_notification(exc, title=main.t('health_probe_title'), prefix=main.t('health_probe_error_prefix'), phase='health_probe'))
             main.unified_notifications.dispatch_immediate(publish_probe_failure, kind='real_error', incident='runtime_failure:health_probe', report=report)
         else:
