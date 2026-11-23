@@ -1,0 +1,19 @@
+{
+  "include": [
+    "src/longbridge_platform/application/account_financing.py",
+    "src/longbridge_platform/application/plain_dca_paper_scheduler.py",
+    "src/longbridge_platform/application/runtime_bootstrap_adapters.py",
+    "src/longbridge_platform/application/runtime_target_manifest.py",
+    "src/longbridge_platform/application/signal_snapshot.py"
+  ],
+  "extraPaths": [
+    "src",
+    "external/QuantPlatformKit/src",
+    "external/UsEquityStrategies/src",
+    "external/HkEquityStrategies/src"
+  ],
+  "pythonVersion": "3.11",
+  "venvPath": ".",
+  "venv": ".venv",
+  "typeCheckingMode": "basic"
+}
