@@ -11,9 +11,15 @@ from longbridge_platform.application.account_new_risk_gate_support import (
     apply_combined_scale_to_allocation_targets,
     build_account_new_risk_snapshot,
     build_snapshot_from_portfolio,
+    copy_fuse_telemetry,
+    evaluate_cycle_new_risk_admission,
     evaluate_portfolio_new_risk_admission,
-    is_account_new_risk_gate_enabled,
+    fuse_telemetry_from_admission,
+    get_cycle_snapshot,
+    is_effective_new_risk_gate_enabled,
+    last_attention_delivery_confirmed,
     maybe_publish_attention_for_admission,
+    merge_fuse_telemetry,
     new_risk_buy_prohibited,
     set_cycle_snapshot,
 )
@@ -819,15 +825,23 @@ def _evaluate_cycle_account_new_risk(
     portfolio: Mapping,
     *,
     execution: Mapping,
+    require_fuse: bool = False,
 ) -> tuple[dict, Any, Any]:
     portfolio_copy = dict(portfolio)
+    if require_fuse:
+        portfolio_copy["fuse_enabled"] = True
+        metadata = portfolio_copy.get("metadata")
+        if isinstance(metadata, Mapping) and "fuse_enabled" in metadata:
+            updated_metadata = dict(metadata)
+            updated_metadata["fuse_enabled"] = True
+            portfolio_copy["metadata"] = updated_metadata
     portfolio_copy["account_new_risk_snapshot"] = build_account_new_risk_snapshot(
         portfolio_copy,
         execution=execution,
     )
     admission = evaluate_portfolio_new_risk_admission(portfolio_copy, execution=execution)
     cycle_snapshot = build_snapshot_from_portfolio(portfolio_copy, execution=execution)
-    set_cycle_snapshot(cycle_snapshot)
+    set_cycle_snapshot(cycle_snapshot, portfolio=portfolio_copy, execution=execution)
     return portfolio_copy, admission, cycle_snapshot
 
 
@@ -902,11 +916,16 @@ def _refresh_post_sell_snapshots(
     account_new_risk_buy_blocked: bool,
     account_new_risk_reason_codes: tuple[str, ...],
     cycle_combined_scale: float | None,
+    cycle_fuse_active: bool,
+    cycle_fuse_telemetry: dict[str, Any],
     submission_halted: bool,
 ):
     best_investable_cash = previous_investable_cash
     projected_sell_release_value = 0.0
     refreshed_state = None
+    latest_refreshed_snapshot = None
+    latest_refreshed_portfolio = None
+    latest_refreshed_execution = None
     for attempt in range(refresh_attempts):
         if attempt > 0:
             sleeper(refresh_interval)
@@ -918,10 +937,13 @@ def _refresh_post_sell_snapshots(
             plan=refreshed_plan, execution=refreshed_execution, allocation=refreshed_allocation,
         ):
             submission_halted = True
-        if is_account_new_risk_gate_enabled():
-            refreshed_portfolio, refreshed_admission, _ = _evaluate_cycle_account_new_risk(
+        if cycle_fuse_active or is_effective_new_risk_gate_enabled(
+            refreshed_portfolio, execution=refreshed_execution
+        ):
+            refreshed_portfolio, refreshed_admission, refreshed_snapshot = _evaluate_cycle_account_new_risk(
                 refreshed_portfolio,
                 execution=refreshed_execution,
+                require_fuse=cycle_fuse_active,
             )
             account_new_risk_buy_blocked = (
                 account_new_risk_buy_blocked or new_risk_buy_prohibited(refreshed_admission)
@@ -929,12 +951,20 @@ def _refresh_post_sell_snapshots(
             account_new_risk_reason_codes = tuple(dict.fromkeys(
                 (*account_new_risk_reason_codes, *refreshed_admission.reason_codes)
             ))
+            cycle_fuse_active = cycle_fuse_active or bool(refreshed_snapshot.fuse_enabled)
+            cycle_fuse_telemetry = merge_fuse_telemetry(
+                cycle_fuse_telemetry,
+                fuse_telemetry_from_admission(refreshed_admission),
+            )
             refreshed_scale = refreshed_admission.combined_scale
             if refreshed_scale is not None:
                 cycle_combined_scale = (
                     refreshed_scale if cycle_combined_scale is None
                     else min(cycle_combined_scale, refreshed_scale)
                 )
+            latest_refreshed_snapshot = refreshed_snapshot
+            latest_refreshed_portfolio = refreshed_portfolio
+            latest_refreshed_execution = refreshed_execution
             refreshed_state = (
                 refreshed_plan, refreshed_portfolio, refreshed_execution, refreshed_allocation,
             )
@@ -950,6 +980,12 @@ def _refresh_post_sell_snapshots(
         best_investable_cash = max(best_investable_cash, refreshed_investable_cash)
         if refreshed_investable_cash > previous_investable_cash:
             break
+    if latest_refreshed_snapshot is not None:
+        set_cycle_snapshot(
+            latest_refreshed_snapshot,
+            portfolio=latest_refreshed_portfolio,
+            execution=latest_refreshed_execution,
+        )
     return (
         refreshed_state,
         best_investable_cash,
@@ -958,10 +994,80 @@ def _refresh_post_sell_snapshots(
         account_new_risk_buy_blocked,
         account_new_risk_reason_codes,
         cycle_combined_scale,
+        cycle_fuse_active,
+        cycle_fuse_telemetry,
     )
 
 
 def execute_rebalance_cycle(
+    *,
+    trade_context,
+    plan,
+    portfolio,
+    execution,
+    allocation,
+    fetch_replanned_state,
+    market_data_port,
+    estimate_max_purchase_quantity,
+    execution_port,
+    fetch_order_status=None,
+    post_submit_order=None,
+    notify_issue,
+    translator,
+    with_prefix,
+    limit_sell_discount,
+    limit_buy_premium,
+    limit_buy_premium_by_symbol=None,
+    dry_run_only=False,
+    symbol_suffix=".US",
+    post_sell_refresh_attempts=1,
+    post_sell_refresh_interval_sec=0.0,
+    sleeper=_noop_sleep,
+    min_order_notional_usd=0.0,
+    safe_haven_cash_substitute_threshold_usd=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
+    cash_only_execution=True,
+    fractional_buy_execution: bool = False,
+    buy_quantity_step: float = DEFAULT_BUY_QUANTITY_STEP,
+    lot_sizes: dict[str, int] | None = None,
+    notional_buy_compat_mode: bool = False,
+) -> ExecutionCycleResult:
+    try:
+        return _execute_rebalance_cycle_impl(
+            trade_context=trade_context,
+            plan=plan,
+            portfolio=portfolio,
+            execution=execution,
+            allocation=allocation,
+            fetch_replanned_state=fetch_replanned_state,
+            market_data_port=market_data_port,
+            estimate_max_purchase_quantity=estimate_max_purchase_quantity,
+            execution_port=execution_port,
+            fetch_order_status=fetch_order_status,
+            post_submit_order=post_submit_order,
+            notify_issue=notify_issue,
+            translator=translator,
+            with_prefix=with_prefix,
+            limit_sell_discount=limit_sell_discount,
+            limit_buy_premium=limit_buy_premium,
+            limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+            dry_run_only=dry_run_only,
+            symbol_suffix=symbol_suffix,
+            post_sell_refresh_attempts=post_sell_refresh_attempts,
+            post_sell_refresh_interval_sec=post_sell_refresh_interval_sec,
+            sleeper=sleeper,
+            min_order_notional_usd=min_order_notional_usd,
+            safe_haven_cash_substitute_threshold_usd=safe_haven_cash_substitute_threshold_usd,
+            cash_only_execution=cash_only_execution,
+            fractional_buy_execution=fractional_buy_execution,
+            buy_quantity_step=buy_quantity_step,
+            lot_sizes=lot_sizes,
+            notional_buy_compat_mode=notional_buy_compat_mode,
+        )
+    finally:
+        set_cycle_snapshot(None)
+
+
+def _execute_rebalance_cycle_impl(
     *,
     trade_context,
     plan,
@@ -1046,9 +1152,14 @@ def execute_rebalance_cycle(
     # Evaluate new-risk axes before no_execute short-circuit so dry-run/Cloud Logging
     # still observe COMPLETE/VERIFIED/CLOSED (or the fail-closed disposition).
     account_new_risk_buy_blocked = False
+    account_new_risk_initial_attention_notified = False
+    initial_buy_attempt_blocked = False
     account_new_risk_reason_codes: tuple[str, ...] = ()
     cycle_combined_scale = None
-    if is_account_new_risk_gate_enabled():
+    cycle_fuse_active = False
+    cycle_fuse_telemetry: dict[str, Any] = {}
+    submit_time_buy_blocked = False
+    if is_effective_new_risk_gate_enabled(portfolio, execution=execution):
         portfolio, admission, account_new_risk_cycle_snapshot = _evaluate_cycle_account_new_risk(
             portfolio,
             execution=execution,
@@ -1056,6 +1167,8 @@ def execute_rebalance_cycle(
         account_new_risk_buy_blocked = new_risk_buy_prohibited(admission)
         account_new_risk_reason_codes = tuple(admission.reason_codes)
         cycle_combined_scale = admission.combined_scale
+        cycle_fuse_active = bool(account_new_risk_cycle_snapshot.fuse_enabled)
+        cycle_fuse_telemetry = fuse_telemetry_from_admission(admission)
         gate_diagnostic_message = (
             "[Account new-risk gate] "
             f"disposition={admission.disposition.value} "
@@ -1074,6 +1187,13 @@ def execute_rebalance_cycle(
             portfolio=portfolio,
             execution=execution,
             snapshot=account_new_risk_cycle_snapshot,
+        )
+        account_new_risk_initial_attention_notified = bool(
+            account_new_risk_buy_blocked
+            and (
+                int(attention_counts.get("sent", 0) or 0) > 0
+                or last_attention_delivery_confirmed()
+            )
         )
         attention_message = (
             "[Attention notify] "
@@ -1101,6 +1221,8 @@ def execute_rebalance_cycle(
     if _execution_is_blocked(plan=plan, execution=execution, allocation=allocation):
         blocked_execution = dict(execution or {})
         blocked_execution["no_execute"] = True
+        copy_fuse_telemetry(blocked_execution, cycle_fuse_telemetry)
+        set_cycle_snapshot(None)
         return ExecutionCycleResult(
             plan=dict(plan or {}),
             portfolio=dict(portfolio or {}),
@@ -1304,6 +1426,33 @@ def execute_rebalance_cycle(
         return True
 
     def dispatch_order(symbol: str, *, side: str, order_type: str, quantity, price: float, log_message: str) -> bool:
+        nonlocal account_new_risk_buy_blocked, account_new_risk_reason_codes, cycle_fuse_telemetry, submit_time_buy_blocked, initial_buy_attempt_blocked
+        side_normalized = str(side or "").strip().lower()
+        if side_normalized == "buy" and (
+            account_new_risk_buy_blocked
+            or is_effective_new_risk_gate_enabled(snapshot=get_cycle_snapshot())
+        ):
+            if account_new_risk_buy_blocked:
+                initial_buy_attempt_blocked = True
+                return False
+            submit_admission = evaluate_cycle_new_risk_admission()
+            cycle_fuse_telemetry = merge_fuse_telemetry(
+                cycle_fuse_telemetry,
+                fuse_telemetry_from_admission(submit_admission),
+            )
+            if new_risk_buy_prohibited(submit_admission):
+                account_new_risk_buy_blocked = True
+                submit_time_buy_blocked = True
+                account_new_risk_reason_codes = tuple(
+                    dict.fromkeys((*account_new_risk_reason_codes, *submit_admission.reason_codes))
+                )
+                reason_text = ", ".join(submit_admission.reason_codes) or "NEW_RISK_PROHIBITED"
+                _emit_note(
+                    note_logs,
+                    translator("buy_deferred", detail=f"[Account new-risk gate] {reason_text}"),
+                    with_prefix=with_prefix,
+                )
+                return False
         quantity_text = format_quantity(quantity)
         effective_price = price if order_type == "limit" else round(price, 2)
         if dry_run_only:
@@ -1504,6 +1653,8 @@ def execute_rebalance_cycle(
                 account_new_risk_buy_blocked,
                 account_new_risk_reason_codes,
                 cycle_combined_scale,
+                cycle_fuse_active,
+                cycle_fuse_telemetry,
             ) = _refresh_post_sell_snapshots(
                 fetch_replanned_state=fetch_replanned_state,
                 trade_context=trade_context,
@@ -1516,6 +1667,8 @@ def execute_rebalance_cycle(
                 account_new_risk_buy_blocked=account_new_risk_buy_blocked,
                 account_new_risk_reason_codes=account_new_risk_reason_codes,
                 cycle_combined_scale=cycle_combined_scale,
+                cycle_fuse_active=cycle_fuse_active,
+                cycle_fuse_telemetry=cycle_fuse_telemetry,
                 submission_halted=submission_halted,
             )
             # Use the latest producer plan for risk/targets; retain the best
@@ -1523,7 +1676,9 @@ def execute_rebalance_cycle(
             plan, portfolio, execution, allocation = refreshed_state
             if submission_halted:
                 execution = {**execution, "no_execute": True}
-            if is_account_new_risk_gate_enabled():
+            if cycle_fuse_active or cycle_combined_scale is not None or is_effective_new_risk_gate_enabled(
+                portfolio, execution=execution
+            ):
                 allocation = apply_combined_scale_to_allocation_targets(
                     allocation, cycle_combined_scale,
                 )
@@ -1915,10 +2070,22 @@ def execute_rebalance_cycle(
     )
 
     set_cycle_snapshot(None)
+    result_execution = dict(execution or {})
+    copy_fuse_telemetry(result_execution, cycle_fuse_telemetry)
+    if (
+        (submit_time_buy_blocked or buys_blocked_reason == "account_new_risk_gate" or initial_buy_attempt_blocked)
+        and not pending_orders
+        and not dry_run_orders
+    ):
+        result_execution["execution_status"] = "blocked"
+        if account_new_risk_reason_codes:
+            result_execution["account_new_risk_reason_codes"] = list(account_new_risk_reason_codes)
+        if account_new_risk_initial_attention_notified and not submit_time_buy_blocked:
+            result_execution["account_new_risk_gate_attention_notified"] = True
     return ExecutionCycleResult(
         plan=dict(plan or {}),
         portfolio=dict(portfolio or {}),
-        execution=dict(execution or {}),
+        execution=result_execution,
         allocation=dict(allocation or {}),
         logs=tuple(logs),
         skip_logs=tuple(skip_logs),

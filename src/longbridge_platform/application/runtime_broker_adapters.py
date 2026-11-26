@@ -179,15 +179,24 @@ class LongBridgeBrokerAdapters:
         ]
 
     def build_portfolio_snapshot_from_account_state(self, account_state):
+        metadata = {
+            "account_hash": self.account_hash,
+            "broker_capital": account_state.get("broker_capital"),
+            "heartbeat_account_snapshot": account_state.get("heartbeat_account_snapshot"),
+            "position_currency_by_symbol": account_state.get("position_currency_by_symbol"),
+        }
+        for key in (
+            "fuse_enabled",
+            "fuse_readback",
+            "market_timezone",
+            "market",
+        ):
+            if key in account_state:
+                metadata[key] = account_state[key]
         return build_portfolio_snapshot_from_account_state(
             account_state,
             strategy_symbols=self.strategy_symbols,
-            metadata={
-                "account_hash": self.account_hash,
-                "broker_capital": account_state.get("broker_capital"),
-                "heartbeat_account_snapshot": account_state.get("heartbeat_account_snapshot"),
-                "position_currency_by_symbol": account_state.get("position_currency_by_symbol"),
-            },
+            metadata=metadata,
         )
 
     def build_account_state_from_snapshot(self, snapshot):

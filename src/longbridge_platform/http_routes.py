@@ -162,6 +162,9 @@ def _summarize_cycle_result_for_report(cycle_result, *, dry_run: bool) -> dict:
     account_identity = execution.get('account_identity')
     if isinstance(account_identity, dict):
         summary['account_identity'] = dict(account_identity)
+    from longbridge_platform.application.account_new_risk_gate_support import copy_fuse_telemetry
+
+    copy_fuse_telemetry(summary, execution)
     _, summary['notification_digest'] = main.unified_notifications.cycle_facts(cycle_result, dry_run=dry_run)
     return summary
 
