@@ -365,7 +365,7 @@ def test_qsl_application_record_uses_nested_claim_transport(monkeypatch) -> None
 
     monkeypatch.setattr(transport, "_request", fake_request)
     transport.post_claim(
-        base_url="https://qsl-strategy-switch-console.pigbibi.workers.dev",
+        base_url="https://console.example.com",
         token="secret-token",
         record=record,
         run_id="200",
@@ -375,11 +375,25 @@ def test_qsl_application_record_uses_nested_claim_transport(monkeypatch) -> None
     assert "claim_token" not in calls[0]["payload"]
 
 
-def test_qsl_application_origin_is_fixed() -> None:
+def test_qsl_application_origin_is_bound_to_configured_origin() -> None:
     from scripts.v7_paper_application_http import ApplicationTransportError, _endpoint
 
-    with pytest.raises(ApplicationTransportError):
-        _endpoint("https://attacker.example", str(uuid.uuid4()))
+    application_id = str(uuid.uuid4())
+    assert _endpoint("https://console.example.com", application_id) == (
+        f"https://console.example.com/api/internal/research-promotion-application/{application_id}"
+    )
+    for origin in (
+        "",
+        "http://console.example.com",
+        "https://user:pass@console.example.com",
+        "https://console.example.com:8443",
+        "https://console.example.com/other",
+        "https://console.example.com/?redirect=1",
+        "https://console.example.com/#fragment",
+        "https://127.0.0.1",
+    ):
+        with pytest.raises(ApplicationTransportError):
+            _endpoint(origin, application_id)
 
 
 def _loaded_v7_readback(monkeypatch):

@@ -103,6 +103,7 @@ jobs:
       - name: Create one truthful daily projection and verify QRS ACK
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+          RUNTIME_DAILY_SYNC_URL: ${{ vars.RUNTIME_DAILY_SYNC_URL }}
         run: |
           if [ "${DAILY_MODE}" = "preflight" ]; then
             uv run --no-sync python -m scripts.publish_daily_runtime_projection --live-preflight

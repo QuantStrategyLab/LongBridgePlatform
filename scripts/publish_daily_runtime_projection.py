@@ -48,7 +48,6 @@ _RUNTIME_DAILY_SYNC_MAX_BODY_BYTES = 64 * 1024
 _RUNTIME_DAILY_SYNC_MAX_RESPONSE_BYTES = 64 * 1024
 _HTTPS_HOST = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _RUNTIME_DAILY_SYNC_TARGET_KEY = "longbridge-quant-paper-service|russell_top50_leader_rotation|paper"
-_ONE_SHOT_SYNC_URL = "https://qsl-strategy-switch-console.pigbibi.workers.dev/api/runtime-daily/sync"
 
 
 class _Rejected(Exception):
@@ -236,7 +235,8 @@ def _one_shot_environment(
     scoped = {
         **env, "RUNTIME_DAILY_PROJECTION_ENABLED": "true", "RUNTIME_DAILY_PROJECTION_TARGET_ID": env.get("RUNTIME_HEARTBEAT_ACCOUNT_SCOPE", "").lower() if live else "paper",
         "RUNTIME_DAILY_PROJECTION_GCS_PREFIX": prefix, "RUNTIME_DAILY_SYNC_ENABLED": "true",
-        "RUNTIME_DAILY_SYNC_URL": _ONE_SHOT_SYNC_URL,
+        # The console origin comes from protected configuration, never from source.
+        "RUNTIME_DAILY_SYNC_URL": _runtime_daily_sync_url(str(env.get("RUNTIME_DAILY_SYNC_URL") or "")),
     }
     target = _select_target(scoped, live=live)
     if not env.get("CLOUD_RUN_SERVICE") or target.get("service") != env["CLOUD_RUN_SERVICE"]:
@@ -825,7 +825,8 @@ def _verify_receiver_token(env: Mapping[str, str], http_post: Callable[..., Any]
         if http_post is None:
             import requests
             http_post = requests.post
-        response = http_post(_ONE_SHOT_SYNC_URL, headers={"Authorization": f"Bearer {token}",
+        url = _runtime_daily_sync_url(str(env.get("RUNTIME_DAILY_SYNC_URL") or ""))
+        response = http_post(url, headers={"Authorization": f"Bearer {token}",
                              "Content-Type": "application/json"}, data=b"{",
                              timeout=_RUNTIME_DAILY_SYNC_TIMEOUT_SECONDS,
                              allow_redirects=False, stream=True)

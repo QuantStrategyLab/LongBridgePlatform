@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -13,7 +14,8 @@ import uuid
 from collections.abc import Mapping
 from pathlib import Path
 
-_EXPECTED_HOST = "qsl-strategy-switch-console.pigbibi.workers.dev"
+# The console origin comes from protected configuration (vars.QSL_CONTROL_PLANE_SYNC_URL).
+_HTTPS_HOST = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _PATH_PREFIX = "/api/internal/research-promotion-application/"
 
 
@@ -32,7 +34,7 @@ def _endpoint(base_url: str, application_id: str) -> str:
     parsed = urllib.parse.urlsplit(base_url.strip())
     if (
         parsed.scheme != "https"
-        or parsed.hostname != _EXPECTED_HOST
+        or _HTTPS_HOST.fullmatch(parsed.hostname or "") is None
         or parsed.port is not None
         or parsed.username
         or parsed.password
@@ -42,7 +44,7 @@ def _endpoint(base_url: str, application_id: str) -> str:
     ):
         raise ApplicationTransportError("invalid control-plane origin")
     return urllib.parse.urljoin(
-        f"https://{_EXPECTED_HOST}/",
+        f"https://{parsed.hostname}/",
         f"{_PATH_PREFIX}{urllib.parse.quote(_application_id(application_id), safe='')}",
     )
 

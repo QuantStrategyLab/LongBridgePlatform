@@ -1928,7 +1928,7 @@ def _one_shot_publish(
     objects = [] if report is None else [{"url": "gs://synthetic-existing/reports/run.json", "metadata": {"updated": OBSERVED.isoformat()}}]
     def post(url, **kwargs):
         observed["post"] += 1
-        assert url == publisher._ONE_SHOT_SYNC_URL
+        assert url == "https://qrs.example.com/api/runtime-daily/sync"
         assert kwargs["allow_redirects"] is False
         assert kwargs["data"].decode() == blob.uploads[0]["data"]
         if http_post is not None:
@@ -2015,12 +2015,12 @@ def test_one_shot_report_root_preserves_bucket_root_compatibility(value):
 def test_single_observation_uses_protected_output_prefix_separate_from_report_root():
     original = _one_shot_env(
         RUNTIME_DAILY_PROJECTION_GCS_PREFIX="gs://synthetic-existing/runtime_daily",
-        RUNTIME_DAILY_SYNC_URL="https://unapproved.example.com/api/runtime-daily/sync",
+        RUNTIME_DAILY_SYNC_URL="https://qrs.example.com/api/runtime-daily/sync",
     )
     scoped = publisher._one_shot_environment(original, report_root_uri="gs://synthetic-existing/reports")
     assert scoped["RUNTIME_DAILY_PROJECTION_GCS_PREFIX"] == "gs://synthetic-existing/runtime_daily"
     assert scoped["RUNTIME_DAILY_PROJECTION_GCS_PREFIX"] != "gs://synthetic-existing/reports/runtime_daily"
-    assert scoped["RUNTIME_DAILY_SYNC_URL"] == publisher._ONE_SHOT_SYNC_URL
+    assert scoped["RUNTIME_DAILY_SYNC_URL"] == "https://qrs.example.com/api/runtime-daily/sync"
     assert scoped["RUNTIME_TARGET_ENABLED"] == original["RUNTIME_TARGET_ENABLED"] == "false"
 
 
