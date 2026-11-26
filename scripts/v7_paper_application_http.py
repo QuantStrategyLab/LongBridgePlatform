@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import urllib.error
@@ -31,22 +32,30 @@ def _application_id(value: str) -> str:
 
 
 def _endpoint(base_url: str, application_id: str) -> str:
-    parsed = urllib.parse.urlsplit(base_url.strip())
+    # The bearer token goes only to the origin approved separately in QSL_CONSOLE_ORIGIN.
+    approved = os.environ.get("QSL_CONSOLE_ORIGIN", "")
+    parsed = urllib.parse.urlsplit(base_url)
+    origin = f"https://{parsed.hostname}"
     if (
-        parsed.scheme != "https"
-        or _HTTPS_HOST.fullmatch(parsed.hostname or "") is None
-        or parsed.port is not None
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-        or parsed.path not in {"", "/"}
+        _HTTPS_HOST.fullmatch(parsed.hostname or "") is None
+        or base_url not in {origin, origin + "/"}
+        or approved != origin
     ):
         raise ApplicationTransportError("invalid control-plane origin")
     return urllib.parse.urljoin(
-        f"https://{parsed.hostname}/",
+        f"{origin}/",
         f"{_PATH_PREFIX}{urllib.parse.quote(_application_id(application_id), safe='')}",
     )
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Authenticated control-plane calls never follow a redirect."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_open = urllib.request.build_opener(_NoRedirect()).open
 
 
 def _request(*, method: str, url: str, token: str, payload: Mapping[str, object] | None = None) -> dict[str, object]:
@@ -59,7 +68,7 @@ def _request(*, method: str, url: str, token: str, payload: Mapping[str, object]
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with _open(request, timeout=20) as response:
             raw = response.read(256 * 1024)
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
         raise ApplicationTransportError("control-plane request failed") from exc
@@ -163,7 +172,7 @@ def main() -> int:
     parser.add_argument("--attempt", required=True)
     args = parser.parse_args()
     try:
-        token = __import__("os").environ.get("EXECUTION_EVIDENCE_SYNC_TOKEN", "")
+        token = os.environ.get("EXECUTION_EVIDENCE_SYNC_TOKEN", "")
         if args.operation == "fetch":
             result = fetch(base_url=args.base_url, token=token, application_id=args.application_id or "")
         else:

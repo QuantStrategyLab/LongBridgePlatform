@@ -34,6 +34,12 @@ FIXED_FRIDAY = datetime(2026, 9, 11, 21, 0, tzinfo=timezone.utc)
 FIXED_MONDAY = datetime(2026, 9, 14, 21, 0, tzinfo=timezone.utc)
 
 
+
+@pytest.fixture(autouse=True)
+def _approved_console_origin(monkeypatch):
+    monkeypatch.setenv("QSL_CONSOLE_ORIGIN", "https://console.example.com")
+
+
 def _record(**overrides):
     record = {
         "application_id": str(uuid.uuid4()),
@@ -375,7 +381,7 @@ def test_qsl_application_record_uses_nested_claim_transport(monkeypatch) -> None
     assert "claim_token" not in calls[0]["payload"]
 
 
-def test_qsl_application_origin_is_bound_to_configured_origin() -> None:
+def test_qsl_application_origin_is_bound_to_configured_origin(monkeypatch) -> None:
     from scripts.v7_paper_application_http import ApplicationTransportError, _endpoint
 
     application_id = str(uuid.uuid4())
@@ -386,14 +392,40 @@ def test_qsl_application_origin_is_bound_to_configured_origin() -> None:
         "",
         "http://console.example.com",
         "https://user:pass@console.example.com",
+        "https://@console.example.com",
         "https://console.example.com:8443",
         "https://console.example.com/other",
-        "https://console.example.com/?redirect=1",
+        "https://console.example.com/?",
         "https://console.example.com/#fragment",
+        "https://Console.example.com",
+        " https://console.example.com",
+        "https://console.exa\tmple.com",
         "https://127.0.0.1",
+        "https://other.example.com",
     ):
         with pytest.raises(ApplicationTransportError):
             _endpoint(origin, application_id)
+    monkeypatch.delenv("QSL_CONSOLE_ORIGIN")
+    with pytest.raises(ApplicationTransportError):
+        _endpoint("https://console.example.com", application_id)
+
+
+def test_qsl_application_request_does_not_follow_redirects() -> None:
+    import email.message
+    import io
+    import urllib.request
+
+    from scripts import v7_paper_application_http as transport
+
+    request = urllib.request.Request("https://console.example.com/a", headers={"Authorization": "Bearer synthetic"})
+    headers = email.message.Message()
+    headers["Location"] = "https://other.example.com/b"
+    assert transport._NoRedirect().redirect_request(
+        request, io.BytesIO(), 302, "Found", headers, "https://other.example.com/b"
+    ) is None
+    handlers = transport._open.__self__.handlers
+    assert any(isinstance(handler, transport._NoRedirect) for handler in handlers)
+    assert not any(type(handler) is urllib.request.HTTPRedirectHandler for handler in handlers)
 
 
 def _loaded_v7_readback(monkeypatch):
