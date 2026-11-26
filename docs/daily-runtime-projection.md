@@ -90,6 +90,8 @@ heartbeat 的告警、返回码和交易链不变。这个步骤不调用 heartb
 
 该同步仍默认关闭；此前的只读核验记录（非本次线上配置确认）显示 LongBridge PAPER 环境当时尚无 `RUNTIME_DAILY_SYNC_ENABLED` 或 `RUNTIME_DAILY_SYNC_URL` variable。它复用已有 execution-evidence secret 名称，不新增 secret。真实报告前缀、桶权限及第一份对象仍需在获准身份上验收。bot 送达不在这一步。
 
+一次性 PAPER/实盘日记录、接收端 token 探测和 heartbeat 实盘步骤都从 `RUNTIME_DAILY_SYNC_URL` 读取完整同步地址（形如 `https://console.example.com/api/runtime-daily/sync`），源码不再固定控制台主机；该变量缺失或格式不精确时拒绝执行，不发送 token。V7 PAPER 申请流程另读 `QSL_CONTROL_PLANE_SYNC_URL`（纯来源地址，形如 `https://console.example.com`）和 `QSL_CONSOLE_ORIGIN`（同一纯来源地址）；两者不一致、请求被重定向或变量缺失时均不发送 token。两个变量格式不同，不能填同一个值。
+
 ## 一次性 PAPER 日记录
 
 原有每日 heartbeat 的日报步骤复用下述已验证的 PAPER 只读入口；只有原环境的 `RUNTIME_DAILY_PROJECTION_ENABLED` 与 `RUNTIME_DAILY_SYNC_ENABLED` 同为 `true` 才执行。输出前缀从原受保护 secret 取得，原 `20 22 * * *` 时刻不变。每次生成独立观测对象并核对 QRS ACK；这不补造交易调度证明，运行计划未确认时继续保留 incomplete。自然定时结果与手动单次发布结果分别验收。

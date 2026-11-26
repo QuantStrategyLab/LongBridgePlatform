@@ -51,7 +51,9 @@ def test_workflow_preserves_paper_pause_and_real_loaded_readback() -> None:
 
 def test_workflow_uses_nested_claims_and_marks_post_claim_failures_uncertain() -> None:
     assert "scripts.v7_paper_application_http claim" in WORKFLOW
-    assert "scripts.v7_paper_application_http result" in WORKFLOW
+    assert 'cp scripts/v7_paper_application_http.py "$work/transport/"' in WORKFLOW
+    assert WORKFLOW.count('transport/v7_paper_application_http.py" result') == 2
+    assert "scripts.v7_paper_application_http result" not in WORKFLOW
     assert "status uncertain" in WORKFLOW
     assert "failure() && steps.claim.outcome == 'success'" in WORKFLOW
     assert "--token" not in WORKFLOW

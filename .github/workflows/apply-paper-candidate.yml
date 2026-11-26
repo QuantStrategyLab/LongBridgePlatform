@@ -44,7 +44,8 @@ jobs:
       LONGBRIDGE_PHYSICAL_ACCOUNT_ID: ${{ vars.LONGBRIDGE_PHYSICAL_ACCOUNT_ID }}
       GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
       GCP_ARTIFACT_REGISTRY_REPOSITORY: ${{ vars.GCP_ARTIFACT_REGISTRY_REPOSITORY || 'cloud-run-source-deploy' }}
-      QSL_CONTROL_PLANE_SYNC_URL: ${{ vars.QSL_CONTROL_PLANE_SYNC_URL || 'https://qsl-strategy-switch-console.pigbibi.workers.dev' }}
+      QSL_CONTROL_PLANE_SYNC_URL: ${{ vars.QSL_CONTROL_PLANE_SYNC_URL }}
+      QSL_CONSOLE_ORIGIN: ${{ vars.QSL_CONSOLE_ORIGIN }}
       EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
     steps:
       - name: Checkout protected main
@@ -83,6 +84,10 @@ jobs:
           chmod 700 "$work"
           echo "work=$work" >> "$GITHUB_OUTPUT"
           umask 077
+          # Keep this revision's transport: later steps check out the candidate commit,
+          # whose older transport may not accept the configured console origin.
+          mkdir "$work/transport"
+          cp scripts/v7_paper_application_http.py "$work/transport/"
           uv run python -m scripts.v7_paper_application_http fetch \
             --base-url "$QSL_CONTROL_PLANE_SYNC_URL" \
             --application-id "$APPLICATION_ID" \
@@ -248,7 +253,7 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          uv run python -m scripts.v7_paper_application_http result \
+          python3 -I "${{ steps.application.outputs.work }}/transport/v7_paper_application_http.py" result \
             --base-url "$QSL_CONTROL_PLANE_SYNC_URL" \
             --record-file "${{ steps.application.outputs.work }}/application.json" \
             --readback-file "${{ steps.application.outputs.work }}/readback-inner.json" \
@@ -261,7 +266,7 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          uv run python -m scripts.v7_paper_application_http result \
+          python3 -I "${{ steps.application.outputs.work }}/transport/v7_paper_application_http.py" result \
             --base-url "$QSL_CONTROL_PLANE_SYNC_URL" \
             --record-file "${{ steps.application.outputs.work }}/application.json" \
             --status uncertain --run-id "$RUN_ID" --attempt "$RUN_ATTEMPT" >/dev/null
