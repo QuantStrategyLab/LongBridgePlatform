@@ -615,7 +615,7 @@ def test_risk_attention_persists_transitions_without_raw_strategy_keys(monkeypat
             with unified.bind_report(report):
                 assert unified.publish_attention(decision, recover=recover, telegram_sender=send)["sent"] == expected
     assert len(sent) == 3 and all("synthetic-core" not in text and "synthetic-uid" not in text for text in sent)
-    assert all(("未命名策略" in text) if language == "zh" else ("Unnamed strategy" in text) for text in sent)
+    assert all(("LongBridge · 账户未知 · 策略" in text) if language == "zh" else ("LongBridge · Account unknown · Strategy" in text) for text in sent)
 
 
 def test_runtime_incident_recovery_requires_successfully_persisted_terminal_proof(monkeypatch):

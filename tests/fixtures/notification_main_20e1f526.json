@@ -250,7 +250,7 @@
           ],
           [
             "send",
-            "[执行回执心跳] synthetic\n检查范围：过去 36 小时\n问题：\n- 过去 36 小时内没有新的执行回执"
+            "[执行回执心跳] synthetic\n【结果】\n需核对；告警不代表订单或成交结果\n【范围】\n检查范围：过去 36 小时\n【证据】\n问题：\n- 过去 36 小时内没有新的执行回执\n运行记录：未提供运行链接\n【覆盖】\n范围仅限本次检查；订单：未知；成交：未知\n【下一步】\n核对该次运行、回执和缺失来源；保持现有执行限制。"
           ]
         ],
         "exit_code": 1
@@ -277,7 +277,7 @@
           ],
           [
             "send",
-            "[执行回执心跳] synthetic\n检查范围：过去 36 小时\n问题：\n- 缺少可接受的执行回执：synthetic-service\n最近检查的回执（原文）：\n- 2026-10-16T22:40:00+00:00 gs://synthetic-reports/archive/longbridge/core/2026-10/test.json rejected execution_status=blocked"
+            "[执行回执心跳] synthetic\n【结果】\n需核对；告警不代表订单或成交结果\n【范围】\n检查范围：过去 36 小时\n【证据】\n问题：\n- 缺少可接受的执行回执：synthetic-service\n最近检查的回执（原文）：\n- 2026-10-16T22:40:00+00:00 gs://synthetic-reports/archive/longbridge/core/2026-10/test.json rejected execution_status=blocked\n运行记录：未提供运行链接\n【覆盖】\n范围仅限本次检查；订单：未知；成交：未知\n【下一步】\n核对该次运行、回执和缺失来源；保持现有执行限制。"
           ]
         ],
         "exit_code": 1
@@ -744,7 +744,7 @@
           ],
           [
             "send",
-            "[Execution Report Heartbeat] synthetic\nLookback: 36 hours\nIssues:\n- No new execution report in the last 36 hours"
+            "[Execution Report Heartbeat] synthetic\n[Result]\nNeeds review; an alert does not establish order or fill outcomes\n[Scope]\nLookback: 36 hours\n[Evidence]\nIssues:\n- No new execution report in the last 36 hours\nRun record: run link not provided\n[Coverage]\nThis check only; orders: unknown; fills: unknown\n[Next step]\nReview the source run, receipt and missing sources; retain existing execution restrictions."
           ]
         ],
         "exit_code": 1
@@ -771,7 +771,7 @@
           ],
           [
             "send",
-            "[Execution Report Heartbeat] synthetic\nLookback: 36 hours\nIssues:\n- Missing acceptable execution report: synthetic-service\nRecent reports (original):\n- 2026-10-16T22:40:00+00:00 gs://synthetic-reports/archive/longbridge/core/2026-10/test.json rejected execution_status=blocked"
+            "[Execution Report Heartbeat] synthetic\n[Result]\nNeeds review; an alert does not establish order or fill outcomes\n[Scope]\nLookback: 36 hours\n[Evidence]\nIssues:\n- Missing acceptable execution report: synthetic-service\nRecent reports (original):\n- 2026-10-16T22:40:00+00:00 gs://synthetic-reports/archive/longbridge/core/2026-10/test.json rejected execution_status=blocked\nRun record: run link not provided\n[Coverage]\nThis check only; orders: unknown; fills: unknown\n[Next step]\nReview the source run, receipt and missing sources; retain existing execution restrictions."
           ]
         ],
         "exit_code": 1

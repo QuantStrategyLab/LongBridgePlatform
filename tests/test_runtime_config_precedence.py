@@ -230,7 +230,7 @@ def test_risk_helper_makes_top_level_copy_only():
 @pytest.mark.parametrize("qsl,plain,expected", [
     (None, None, True), (None, "true", True), (None, "false", False),
     ("true", "false", True), ("false", "true", False),
-    ("", "false", False), (" ", "false", True), ("maybe", "true", False),
+    ("", "false", False), (" ", "false", True),
     ("YES", None, True), ("1", None, True), ("on", None, True), ("y", None, True),
 ])
 def test_dry_run_alias_truth_table(dry_run, qsl, plain, expected, load_settings, resolver):
@@ -250,6 +250,15 @@ def test_dry_run_alias_truth_table(dry_run, qsl, plain, expected, load_settings,
         assert settings.dry_run_only is expected
         assert settings.runtime_target.dry_run_only is dry_run
         resolver.assert_called_once_with()
+
+
+def test_dry_run_alias_invalid_bool_fails_closed(load_settings, resolver):
+    os.environ[U] = json.dumps(target_payload(dry_run_only=False, execution_mode="live"))
+    os.environ["QSL_LONGBRIDGE_DRY_RUN_ONLY"] = "maybe"
+    os.environ["LONGBRIDGE_DRY_RUN_ONLY"] = "true"
+    with pytest.raises(ValueError, match="must be boolean"):
+        load_settings()
+    resolver.assert_not_called()
 
 
 @pytest.mark.parametrize("qsl,plain,expected", [
@@ -389,11 +398,16 @@ def test_safe_haven_threshold_keeps_existing_clamp(qsl, plain, expected, load_se
     ({"QSL_LONGBRIDGE_CASH_ONLY_EXECUTION": "false", "LONGBRIDGE_CASH_ONLY_EXECUTION": "true"}, False),
     ({"QSL_LONGBRIDGE_CASH_ONLY_EXECUTION": " ", "LONGBRIDGE_CASH_ONLY_EXECUTION": "false", "CASH_ONLY_EXECUTION": "true"}, True),
     ({"QSL_LONGBRIDGE_CASH_ONLY_EXECUTION": "", "LONGBRIDGE_CASH_ONLY_EXECUTION": "false"}, False),
-    ({"LONGBRIDGE_CASH_ONLY_EXECUTION": "maybe"}, False),
 ])
 def test_cash_only_platform_pair_precedes_generic_pair(values, expected, load_settings):
     os.environ.update(values)
     assert load_settings().cash_only_execution is expected
+
+
+def test_cash_only_invalid_bool_fails_closed(load_settings):
+    os.environ["LONGBRIDGE_CASH_ONLY_EXECUTION"] = "maybe"
+    with pytest.raises(ValueError, match="must be boolean"):
+        load_settings()
 
 
 @pytest.mark.parametrize("name,field,qsl,plain,expected", [

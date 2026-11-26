@@ -5,10 +5,15 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+from collections.abc import Mapping
 from datetime import datetime
 from functools import partial
 
 from longbridge_platform.application import validation_cycle_observation
+from longbridge_platform.application.account_new_risk_gate_support import (
+    attach_snapshot_fuse_metadata,
+    copy_fuse_telemetry,
+)
 from longbridge_platform.application.execution_service import (
     ExecutionCycleResult,
     _execution_is_blocked,
@@ -79,19 +84,18 @@ def _record_platform_execution_telemetry(
     execution = dict(execution_result.execution or {})
     portfolio = dict(execution_result.portfolio or {})
     pending_orders = tuple(getattr(execution_result, "pending_orders", ()) or ())
-    try_record_platform_execution(
-        profile,
-        {
-            "platform": "longbridge",
-            "action_done": bool(execution_result.action_done) and not pending_orders,
-            "broker_submission_done": bool(execution_result.action_done),
-            "orders_pending_count": len(pending_orders),
-            "effective_date": execution.get("effective_date"),
-            "signal_date": execution.get("signal_date"),
-            "dry_run_only": bool(getattr(config, "dry_run_only", False)),
-            "total_equity": portfolio.get("total_strategy_equity") or portfolio.get("total_equity"),
-        },
-    )
+    telemetry_payload = {
+        "platform": "longbridge",
+        "action_done": bool(execution_result.action_done) and not pending_orders,
+        "broker_submission_done": bool(execution_result.action_done),
+        "orders_pending_count": len(pending_orders),
+        "effective_date": execution.get("effective_date"),
+        "signal_date": execution.get("signal_date"),
+        "dry_run_only": bool(getattr(config, "dry_run_only", False)),
+        "total_equity": portfolio.get("total_strategy_equity") or portfolio.get("total_equity"),
+    }
+    copy_fuse_telemetry(telemetry_payload, execution)
+    try_record_platform_execution(profile, telemetry_payload)
 
 
 def _plan_portfolio(plan):
@@ -209,6 +213,17 @@ def _record_live_command_outcome(*, command, store, result) -> None:
         "orders_count": len(pending),
         "orders": orders,
     }
+    exec_payload = dict(getattr(result, "execution", {}) or {})
+    exec_status = str(exec_payload.get("execution_status") or "").strip().lower()
+    if exec_status == "blocked":
+        details["execution_status"] = "blocked"
+        reason_codes = list(
+            exec_payload.get("fuse_readback_reason_codes")
+            or exec_payload.get("account_new_risk_reason_codes")
+            or ()
+        )
+        if reason_codes:
+            details["reason_codes"] = reason_codes
     if pending and all(str(item.get("submission_status") or "").lower() == "filled" for item in pending):
         for state in (
             ExecutionCommandState.SUBMITTED,
@@ -239,7 +254,7 @@ def _record_live_command_outcome(*, command, store, result) -> None:
         ExecutionCommandState.RECONCILIATION_REQUIRED
         if pending or result.action_done
         else ExecutionCommandState.REJECTED
-        if result.execution.get("no_execute")
+        if (result.execution.get("no_execute") or exec_status == "blocked")
         else ExecutionCommandState.CANCELLED
     )
     store.append_event(command, next_state=next_state, details=details)
@@ -567,6 +582,12 @@ def _has_notification_attention(*, config, result: ExecutionCycleResult) -> bool
                 "", "no_op", "no_action", "completed", "executed", "dry_run",
                 "dry_run_completed", "already_recorded",
             }:
+                if (
+                    key == "execution_status"
+                    and status == "blocked"
+                    and scope.get("account_new_risk_gate_attention_notified")
+                ):
+                    continue
                 return True
         if str(scope.get("risk_gate") or "").strip().upper() in {
             "REJECT", "REJECTED", "BLOCK", "BLOCKED", "DENY", "DENIED"
@@ -697,6 +718,7 @@ def run_strategy(
             snapshot=current_snapshot,
         )
         current_portfolio = _plan_portfolio(current_plan)
+        attach_snapshot_fuse_metadata(current_portfolio, current_snapshot)
         current_execution = _plan_execution(current_plan)
         current_allocation = _plan_allocation(current_plan)
         if current_allocation.get("target_mode") != "value":
@@ -716,9 +738,11 @@ def run_strategy(
                 execution=frozen_execution,
                 snapshot=current_snapshot,
             )
+            current_portfolio = _plan_portfolio(return_plan)
+            attach_snapshot_fuse_metadata(current_portfolio, current_snapshot)
             return (
                 return_plan,
-                _plan_portfolio(return_plan),
+                current_portfolio,
                 _plan_execution(return_plan),
                 _plan_allocation(return_plan),
             )
@@ -925,7 +949,9 @@ def run_strategy(
             if not callable(resolver):
                 raise RuntimeError("frozen live decision resolver is required")
             frozen_plan = resolver(allocation=frozen_allocation, execution=frozen_execution, snapshot=initial_snapshot)
-            selected_plan = (frozen_plan, _plan_portfolio(frozen_plan), _plan_execution(frozen_plan), _plan_allocation(frozen_plan))
+            frozen_portfolio = _plan_portfolio(frozen_plan)
+            attach_snapshot_fuse_metadata(frozen_portfolio, initial_snapshot)
+            selected_plan = (frozen_plan, frozen_portfolio, _plan_execution(frozen_plan), _plan_allocation(frozen_plan))
             if not live_command_blocked:
                 if _execution_is_blocked(
                     plan=frozen_plan, execution=selected_plan[2], allocation=selected_plan[3],

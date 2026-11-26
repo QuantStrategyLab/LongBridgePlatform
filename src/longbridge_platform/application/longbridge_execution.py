@@ -4,7 +4,8 @@ from typing import Any
 
 from longbridge_platform.application.account_new_risk_gate_support import (
     evaluate_cycle_new_risk_admission,
-    is_account_new_risk_gate_enabled,
+    get_cycle_snapshot,
+    is_effective_new_risk_gate_enabled,
     new_risk_buy_prohibited,
 )
 from quant_platform_kit.common.models import ExecutionReport
@@ -53,7 +54,7 @@ def submit_order(
     quantity_step: float = 1.0,
 ) -> ExecutionReport:
     side_normalized = str(side or "").strip().lower()
-    if is_account_new_risk_gate_enabled() and side_normalized == "buy":
+    if is_effective_new_risk_gate_enabled(snapshot=get_cycle_snapshot()) and side_normalized == "buy":
         admission = evaluate_cycle_new_risk_admission()
         if new_risk_buy_prohibited(admission):
             return ExecutionReport(
