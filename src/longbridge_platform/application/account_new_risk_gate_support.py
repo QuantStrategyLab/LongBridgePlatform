@@ -751,11 +751,9 @@ def maybe_publish_attention_for_admission(
             recover=(not prohibited and not operational_uncertain and snapshot is not None
                      and str(snapshot.observation_status) == "COMPLETE"
                      and str(snapshot.reconciliation_status) == "VERIFIED"))
-        _LAST_ATTENTION_CONFIRMED.set(
-            int(counts.get("failed", 0) or 0) == 0
-            and int(counts.get("sent", 0) or 0) + int(counts.get("skipped", 0) or 0) > 0
-            and decision.level.value in {"action", "halt"}
-        )
+        # Unified `publish_attention` folds send/transport failures into `skipped`,
+        # so only `sent > 0` proves confirmed delivery there.
+        _LAST_ATTENTION_CONFIRMED.set(int(counts.get("sent", 0) or 0) > 0)
         return counts
     counts = publish_attention_telegram_transition(
         decision=decision,

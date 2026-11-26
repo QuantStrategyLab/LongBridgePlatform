@@ -1153,6 +1153,7 @@ def _execute_rebalance_cycle_impl(
     # still observe COMPLETE/VERIFIED/CLOSED (or the fail-closed disposition).
     account_new_risk_buy_blocked = False
     account_new_risk_initial_attention_notified = False
+    initial_buy_attempt_blocked = False
     account_new_risk_reason_codes: tuple[str, ...] = ()
     cycle_combined_scale = None
     cycle_fuse_active = False
@@ -1425,13 +1426,14 @@ def _execute_rebalance_cycle_impl(
         return True
 
     def dispatch_order(symbol: str, *, side: str, order_type: str, quantity, price: float, log_message: str) -> bool:
-        nonlocal account_new_risk_buy_blocked, account_new_risk_reason_codes, cycle_fuse_telemetry, submit_time_buy_blocked
+        nonlocal account_new_risk_buy_blocked, account_new_risk_reason_codes, cycle_fuse_telemetry, submit_time_buy_blocked, initial_buy_attempt_blocked
         side_normalized = str(side or "").strip().lower()
         if side_normalized == "buy" and (
             account_new_risk_buy_blocked
             or is_effective_new_risk_gate_enabled(snapshot=get_cycle_snapshot())
         ):
             if account_new_risk_buy_blocked:
+                initial_buy_attempt_blocked = True
                 return False
             submit_admission = evaluate_cycle_new_risk_admission()
             cycle_fuse_telemetry = merge_fuse_telemetry(
@@ -2071,7 +2073,7 @@ def _execute_rebalance_cycle_impl(
     result_execution = dict(execution or {})
     copy_fuse_telemetry(result_execution, cycle_fuse_telemetry)
     if (
-        (submit_time_buy_blocked or buys_blocked_reason == "account_new_risk_gate")
+        (submit_time_buy_blocked or buys_blocked_reason == "account_new_risk_gate" or initial_buy_attempt_blocked)
         and not pending_orders
         and not dry_run_orders
     ):

@@ -1304,6 +1304,72 @@ class Fuse2SharedReadbackTests(unittest.TestCase):
             )
         )
 
+        # Unified skipped=1 (ambiguous failed/suppressed) does NOT mark delivery confirmed.
+        with (
+            patch("longbridge_platform.notifications.unified.enabled", return_value=True),
+            patch(
+                "longbridge_platform.notifications.unified.publish_attention",
+                return_value={"sent": 0, "skipped": 1, "failed": 0},
+            ),
+            patch.object(gate, "resolve_production_drift_status_from_store", return_value=None),
+        ):
+            from quant_platform_kit.risk.account_new_risk_gate import NewRiskAdmissionResult
+
+            adm = NewRiskAdmissionResult(
+                disposition=NewRiskDisposition.NEW_RISK_PROHIBITED,
+                reason_codes=("FUSE_LATCHED_BLOCKED",),
+            )
+            gate.maybe_publish_attention_for_admission(adm, portfolio=plan_blk["portfolio"])
+            self.assertFalse(gate.last_attention_delivery_confirmed())
+
+        # Cash-sweep-only buy attempt (ordinary target below threshold) marks blocked + REJECTED without losing confirmed dedup.
+        plan_sweep_only = {
+            **plan_blk,
+            "portfolio": {
+                **plan_blk["portfolio"],
+                "market_values": {"SOXL": 400.0, "BOXX": 0.0},
+            },
+            "execution": {
+                **plan_blk["execution"],
+                "investable_cash": 1000.0,
+            },
+        }
+        with (
+            patch.object(gate, "resolve_production_drift_status_from_store", return_value=None),
+            patch.object(gate, "_current_fuse_trade_date", return_value="2026-12-09"),
+            patch.object(
+                execution_service,
+                "maybe_publish_attention_for_admission",
+                return_value={"sent": 1, "skipped": 0, "failed": 0},
+            ),
+        ):
+            res_sweep_only = execute_rebalance_cycle(
+                trade_context=object(),
+                plan=plan_sweep_only,
+                portfolio=dict(plan_sweep_only["portfolio"]),
+                execution=dict(plan_sweep_only["execution"]),
+                allocation=dict(plan_sweep_only["allocation"]),
+                fetch_replanned_state=lambda: (plan_sweep_only, dict(plan_sweep_only["portfolio"]), dict(plan_sweep_only["execution"]), dict(plan_sweep_only["allocation"])),
+                market_data_port=CallableMarketDataPort(
+                    quote_loader=lambda s: QuoteSnapshot(symbol=s, as_of="2026-12-09", last_price=100.0)
+                ),
+                estimate_max_purchase_quantity=lambda *_a, **_kw: 5,
+                execution_port=AccountNewRiskGateExecutionCycleTests()._execution_port([]),
+                notify_issue=lambda *_a: None,
+                translator=build_translator("en"),
+                with_prefix=lambda m: m,
+                limit_sell_discount=0.995,
+                limit_buy_premium=1.0,
+            )
+        self.assertEqual(res_sweep_only.execution.get("execution_status"), "blocked")
+        self.assertIn("FUSE_LATCHED_BLOCKED", res_sweep_only.execution.get("account_new_risk_reason_codes", []))
+        self.assertFalse(
+            rebalance_service._has_notification_attention(
+                config=type("C", (), {"notification_attention_reason_codes": ()})(),
+                result=res_sweep_only,
+            )
+        )
+
         # Failed attention delivery (or unconfigured telegram) retains blocked heartbeat attention.
         with (
             patch.object(gate, "resolve_production_drift_status_from_store", return_value=None),
