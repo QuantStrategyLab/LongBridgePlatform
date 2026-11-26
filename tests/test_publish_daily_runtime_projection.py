@@ -2471,5 +2471,6 @@ def test_scheduled_live_daily_uses_existing_heartbeat_without_new_schedule():
     assert "steps.gcp_auth_retry.outcome == 'success'" in step
     assert "secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID" in step
     assert "secrets.EXECUTION_EVIDENCE_SYNC_TOKEN" in step
+    assert "RUNTIME_DAILY_SYNC_URL: ${{ vars.RUNTIME_DAILY_SYNC_URL }}" in step
     assert "--one-shot-live" in step and "continue-on-error: true" in step
     assert workflow.count('cron:') == 1

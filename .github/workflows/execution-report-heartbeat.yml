@@ -307,6 +307,7 @@ jobs:
         env:
           ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID: ${{ secrets.ACCOUNT_HISTORY_EXPECTED_SOURCE_BINDING_ID }}
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+          RUNTIME_DAILY_SYNC_URL: ${{ vars.RUNTIME_DAILY_SYNC_URL }}
           GOOGLE_CLOUD_PROJECT: ${{ env.GCP_PROJECT_ID }}
         run: uv run --no-sync python -m scripts.publish_daily_runtime_projection --one-shot-live
 
