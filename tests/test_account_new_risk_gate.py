@@ -1542,6 +1542,37 @@ class Fuse2SharedReadbackTests(unittest.TestCase):
         cmd_events = cmd_store.events(due_cmd)
         self.assertIn("FUSE_LATCHED_BLOCKED", cmd_events[-1].details.get("reason_codes", []))
 
+    def test_fuse3_state_path_readback_allow_and_fail_closed(self) -> None:
+        import json
+        import tempfile
+        from longbridge_platform.application import account_new_risk_gate_support as gate
+
+        base_portfolio = {
+            "total_equity": 50_000.0,
+            "peak_equity_usd": 50_000.0,
+            "account_new_risk_snapshot": {
+                "observation_status": "COMPLETE",
+                "reconciliation_status": "VERIFIED",
+                "circuit_breaker_state": "CLOSED",
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_file = Path(tmpdir) / "fuse_readback.json"
+            state_file.write_text(json.dumps(_synthetic_fuse_record("2026-12-09")), encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"FUSE_READBACK_STATE_PATH": str(state_file)}, clear=False),
+                patch.object(gate, "resolve_production_drift_status_from_store", return_value=None),
+                patch.object(gate, "_current_fuse_trade_date", return_value="2026-12-09"),
+            ):
+                allowed = evaluate_portfolio_new_risk_admission(base_portfolio)
+                self.assertEqual(allowed.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
+
+                state_file.unlink()
+                os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "0"
+                blocked = evaluate_portfolio_new_risk_admission(base_portfolio)
+                self.assertEqual(blocked.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+                self.assertIn("FUSE_READBACK_MISSING_FAIL_CLOSED", blocked.reason_codes)
+
 
 if __name__ == "__main__":
     unittest.main()
