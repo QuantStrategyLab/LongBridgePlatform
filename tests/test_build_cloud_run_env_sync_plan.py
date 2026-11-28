@@ -14,7 +14,7 @@ SYNC_PLAN_SCRIPT_PATH = ROOT / "scripts" / "build_cloud_run_env_sync_plan.py"
 
 def test_workflow_exports_lifecycle_store_settings():
     workflow = (ROOT / ".github/workflows/sync-cloud-run-env.yml").read_text()
-    assert "      LIFECYCLE_PERFORMANCE_BUCKET: ${{ vars.LIFECYCLE_PERFORMANCE_BUCKET }}" in workflow
+    assert "      LIFECYCLE_PERFORMANCE_BUCKET: ${{ secrets.LIFECYCLE_PERFORMANCE_BUCKET }}" in workflow
     plan_step = workflow.split("id: strategy_requirements", 1)[1].split("\n      - name:", 1)[0]
     assert "          GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT || env.GCP_PROJECT_ID }}" in plan_step
 
